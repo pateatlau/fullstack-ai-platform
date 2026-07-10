@@ -28,7 +28,7 @@ function ChatPageContent() {
     onError: (error) => {
       const id = currentMessageIdRef.current
       if (id) {
-        const message = error instanceof Error ? error.message : error.message
+        const message = error.message
         dispatch({ type: 'STREAM_ERROR', id, message })
       }
       currentMessageIdRef.current = null
