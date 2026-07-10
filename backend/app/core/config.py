@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
 
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-1.5-flash"
+    gemini_model: str = "gemini-3.1-flash-lite"
 
     cors_allowed_origins: str = "http://localhost:5173"
 
