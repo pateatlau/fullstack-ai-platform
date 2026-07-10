@@ -1,11 +1,13 @@
 from typing import cast
 
 import pytest
+from fastapi import Request, Response
 from httpx import ASGITransport, AsyncClient
 from pytest import MonkeyPatch
+from starlette.types import Message, Scope
 
 from app.core.config import Settings
-from app.main import app
+from app.main import MAX_REQUEST_BODY_BYTES, app, enforce_request_size
 from app.schemas.chat import ChatMessageSchema
 from app.providers.factory import ProviderFactory
 from tests.fakes import FakeProvider
@@ -100,3 +102,42 @@ async def test_chat_endpoint_normalizes_provider_errors(
             "message": "Upstream provider failed.",
         }
     }
+
+
+@pytest.mark.anyio
+async def test_request_size_guard_rejects_large_chunked_body() -> None:
+    oversized_body = b"x" * (MAX_REQUEST_BODY_BYTES + 1)
+    messages: list[Message] = [
+        {"type": "http.request", "body": oversized_body, "more_body": False}
+    ]
+
+    async def receive() -> Message:
+        if messages:
+            return messages.pop(0)
+        return {"type": "http.disconnect"}
+
+    scope: Scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/chat",
+        "raw_path": b"/api/chat",
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+    request = Request(scope, receive)
+
+    async def call_next(limited_request: Request) -> Response:
+        await limited_request.body()
+        return Response(status_code=204)
+
+    response = await enforce_request_size(request, call_next)
+
+    assert response.status_code == 413
+    assert response.body == (
+        b'{"error":{"code":"validation_error","message":"Request body exceeds '
+        b'the 16384 byte limit. Reduce message size and retry."}}'
+    )

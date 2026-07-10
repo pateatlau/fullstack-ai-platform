@@ -3,16 +3,19 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.core.config import get_settings
+from app.core.config import Settings
 
 Role = Literal["system", "user", "assistant"]
 ProviderName = Literal["openai", "gemini"]
-MAX_MESSAGE_LENGTH = get_settings().max_message_length
+
+
+def _max_message_length() -> int:
+    return Settings().max_message_length
 
 
 class ChatMessageSchema(BaseModel):
     role: Role
-    content: str = Field(min_length=1, max_length=MAX_MESSAGE_LENGTH)
+    content: str = Field(min_length=1)
 
     @field_validator("content")
     @classmethod
@@ -20,6 +23,11 @@ class ChatMessageSchema(BaseModel):
         trimmed = value.strip()
         if not trimmed:
             raise ValueError("message content must not be blank")
+        max_message_length = _max_message_length()
+        if len(trimmed) > max_message_length:
+            raise ValueError(
+                f"message content must be at most {max_message_length} characters"
+            )
         return trimmed
 
 

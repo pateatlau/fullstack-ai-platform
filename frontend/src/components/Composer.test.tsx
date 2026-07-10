@@ -31,14 +31,23 @@ function createStreamResponse(chunks: string[], chunkDelayMs = 0): Response {
   )
 }
 
-function createAbortableStreamResponse(chunks: string[], chunkDelayMs: number): Response {
+function createAbortableStreamResponse(
+  chunks: string[],
+  chunkDelayMs: number,
+  signal?: AbortSignal,
+): Response {
   const encoder = new TextEncoder()
+  let aborted = signal?.aborted ?? false
+
+  const abort = () => {
+    aborted = true
+  }
+
+  signal?.addEventListener('abort', abort, { once: true })
 
   return new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
-        let aborted = false
-
         const maybePush = (index: number) => {
           if (aborted) {
             controller.close()
@@ -55,12 +64,10 @@ function createAbortableStreamResponse(chunks: string[], chunkDelayMs: number): 
         }
 
         maybePush(0)
-
-        return () => {
-          aborted = true
-        }
       },
       cancel() {
+        aborted = true
+        signal?.removeEventListener('abort', abort)
         return undefined
       },
     }),
@@ -114,10 +121,6 @@ describe('Composer behavior', () => {
     const fetchMock = vi
       .fn()
       .mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        init?.signal?.addEventListener('abort', () => {
-          // no-op: the stream checks cancellation by stopping future chunks
-        })
-
         return createAbortableStreamResponse(
           [
             'event: start\ndata: {"type":"start","id":"resp_2","timestamp":"t0"}\n\n',
@@ -126,6 +129,7 @@ describe('Composer behavior', () => {
             'event: end\ndata: {"type":"end","id":"resp_2","finish_reason":"stop","timestamp":"t3"}\n\n',
           ],
           40,
+          init?.signal,
         )
       })
     vi.stubGlobal('fetch', fetchMock)

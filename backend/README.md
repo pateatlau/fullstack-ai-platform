@@ -122,6 +122,7 @@ Known backend error codes:
 - `internal_error`
 
 For `/api/chat/stream`, those errors are emitted as SSE `error` frames after the stream starts.
+Validation failures are returned as JSON responses before streaming begins.
 
 ## Validation Guards
 

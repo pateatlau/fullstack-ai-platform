@@ -1,12 +1,13 @@
 import asyncio
 import logging
 import uuid
-from typing import AsyncIterator
+from collections.abc import Awaitable, Callable
+from typing import AsyncIterator, Protocol, cast
 
 from fastapi import Request
 
 from app.core.config import Settings, get_settings
-from app.providers.base import LLMProvider
+from app.providers.base import LLMProvider, ProviderChunk
 from app.providers.factory import ProviderFactory
 from app.schemas.chat import (
     ChatRequestSchema,
@@ -19,6 +20,14 @@ from app.schemas.chat import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class ClosableAsyncIterator(Protocol):
+    def __aiter__(self) -> AsyncIterator[ProviderChunk]: ...
+
+    async def __anext__(self) -> ProviderChunk: ...
+
+    async def aclose(self) -> None: ...
 
 
 class ChatServiceError(Exception):
@@ -131,6 +140,8 @@ class ChatService:
         """
         provider, model, _ = self._resolve_provider(request)
         response_id = f"resp_{uuid.uuid4().hex[:12]}"
+        provider_stream: AsyncIterator[ProviderChunk] | None = None
+        closable_provider_stream: ClosableAsyncIterator | None = None
 
         yield _format_sse("start", StartFrame(id=response_id))
 
@@ -138,6 +149,9 @@ class ChatService:
             provider_stream = provider.stream_chat(
                 request.messages, model, request.temperature
             ).__aiter__()
+            closable_provider_stream = cast(
+                ClosableAsyncIterator | None, provider_stream
+            )
             finish_reason = "stop"
             while True:
                 if await http_request.is_disconnected():
@@ -177,3 +191,11 @@ class ChatService:
                     message=app_error.message,
                 ),
             )
+        finally:
+            if closable_provider_stream is not None:
+                close_stream = cast(
+                    Callable[[], Awaitable[None]] | None,
+                    getattr(closable_provider_stream, "aclose", None),
+                )
+                if callable(close_stream):
+                    await close_stream()

@@ -1,4 +1,5 @@
 import { useRef } from 'react'
+import { ChatApiError } from '../api/chatClient'
 import { ChatProvider, useChatContext } from '../context/ChatContext'
 import { useChatStream } from '../hooks/useChatStream'
 import { MessageList } from '../components/MessageList'
@@ -65,8 +66,9 @@ function ChatPageContent() {
     },
     onError: (error) => {
       const id = currentMessageIdRef.current
+      const chunkError = isChunkError(error)
 
-      if (isChunkError(error)) {
+      if (chunkError) {
         const localMessageId = streamMessageMapRef.current.get(error.id) ?? id
         if (localMessageId) {
           dispatch({
@@ -79,14 +81,31 @@ function ChatPageContent() {
           dispatch({ type: 'SET_ERROR', message: error.message })
         }
         streamMessageMapRef.current.delete(error.id)
-      } else if (id) {
-        dispatch({
-          type: 'INTERRUPT_MESSAGE',
-          id,
-          message: 'The connection dropped before the response finished. Retry to send again.',
-        })
       } else {
-        dispatch({ type: 'SET_ERROR', message: toConnectionErrorMessage(error) })
+        if (error instanceof ChatApiError) {
+          if (id) {
+            dispatch({
+              type: 'STREAM_ERROR',
+              id,
+              message: error.message,
+              code: error.code,
+            })
+          } else {
+            dispatch({ type: 'SET_ERROR', message: error.message })
+          }
+        } else if (id) {
+          dispatch({
+            type: 'INTERRUPT_MESSAGE',
+            id,
+            message: 'The connection dropped before the response finished. Retry to send again.',
+          })
+        } else {
+          dispatch({ type: 'SET_ERROR', message: toConnectionErrorMessage(error) })
+        }
+
+        if (currentStreamIdRef.current) {
+          streamMessageMapRef.current.delete(currentStreamIdRef.current)
+        }
       }
 
       currentMessageIdRef.current = null
@@ -159,7 +178,11 @@ function ChatPageContent() {
 
   return (
     <div className="chat-page">
-      {state.error ? <div className="chat-banner">{state.error}</div> : null}
+      {state.error ? (
+        <div className="chat-banner" role="alert">
+          {state.error}
+        </div>
+      ) : null}
       <MessageList messages={state.messages} onRetryMessage={handleRetry} />
       <Composer onSend={handleSend} onStop={handleStop} isStreaming={isStreaming} />
     </div>

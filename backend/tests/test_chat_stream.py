@@ -45,6 +45,7 @@ class RecordingProvider(FakeProvider):
     def __init__(self) -> None:
         super().__init__("first second")
         self.chunks_seen = 0
+        self.closed = False
 
     async def stream_chat(
         self,
@@ -56,9 +57,12 @@ class RecordingProvider(FakeProvider):
             ProviderChunk(content="first ", finish_reason=None),
             ProviderChunk(content="second", finish_reason="stop"),
         )
-        for chunk in chunks:
-            self.chunks_seen += 1
-            yield chunk
+        try:
+            for chunk in chunks:
+                self.chunks_seen += 1
+                yield chunk
+        finally:
+            self.closed = True
 
 
 class DisconnectAfterFirstChunkRequest:
@@ -165,3 +169,4 @@ def test_chat_service_stops_streaming_when_client_disconnects(
 
     assert [event for event, _ in frames] == ["start", "delta"]
     assert provider.chunks_seen == 1
+    assert provider.closed is True
