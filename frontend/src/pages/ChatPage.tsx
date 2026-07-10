@@ -1,39 +1,39 @@
-import { useRef } from 'react';
-import { ChatProvider, useChatContext } from '../context/ChatContext';
-import { useChatStream } from '../hooks/useChatStream';
-import { MessageList } from '../components/MessageList';
-import { Composer } from '../components/Composer';
-import type { Message } from '../types/chat';
+import { useRef } from 'react'
+import { ChatProvider, useChatContext } from '../context/ChatContext'
+import { useChatStream } from '../hooks/useChatStream'
+import { MessageList } from '../components/MessageList'
+import { Composer } from '../components/Composer'
+import type { Message } from '../types/chat'
 
 function ChatPageContent() {
-  const { state, dispatch } = useChatContext();
-  const currentMessageIdRef = useRef<string | null>(null);
+  const { state, dispatch } = useChatContext()
+  const currentMessageIdRef = useRef<string | null>(null)
 
   const { start, stop, isStreaming } = useChatStream({
     onStart: (chunk) => {
-      currentMessageIdRef.current = chunk.id;
+      currentMessageIdRef.current = chunk.id
       dispatch({
         type: 'START_MESSAGE',
         id: chunk.id,
         createdAt: chunk.timestamp,
-      });
+      })
     },
     onDelta: (chunk) => {
-      dispatch({ type: 'APPEND_DELTA', id: chunk.id, content: chunk.content });
+      dispatch({ type: 'APPEND_DELTA', id: chunk.id, content: chunk.content })
     },
     onEnd: (chunk) => {
-      dispatch({ type: 'END_MESSAGE', id: chunk.id });
-      currentMessageIdRef.current = null;
+      dispatch({ type: 'END_MESSAGE', id: chunk.id })
+      currentMessageIdRef.current = null
     },
     onError: (error) => {
-      const id = currentMessageIdRef.current;
+      const id = currentMessageIdRef.current
       if (id) {
-        const message = error instanceof Error ? error.message : error.message;
-        dispatch({ type: 'STREAM_ERROR', id, message });
+        const message = error instanceof Error ? error.message : error.message
+        dispatch({ type: 'STREAM_ERROR', id, message })
       }
-      currentMessageIdRef.current = null;
+      currentMessageIdRef.current = null
     },
-  });
+  })
 
   const handleSend = (content: string) => {
     const userMessage: Message = {
@@ -42,37 +42,31 @@ function ChatPageContent() {
       content,
       status: 'complete',
       createdAt: new Date().toISOString(),
-    };
-    dispatch({ type: 'ADD_USER_MESSAGE', message: userMessage });
+    }
+    dispatch({ type: 'ADD_USER_MESSAGE', message: userMessage })
 
-    const history = [...state.messages, userMessage].map(
-      ({ role, content: text }) => ({
-        role,
-        content: text,
-      }),
-    );
-    void start({ messages: history });
-  };
+    const history = [...state.messages, userMessage].map(({ role, content: text }) => ({
+      role,
+      content: text,
+    }))
+    void start({ messages: history })
+  }
 
   const handleStop = () => {
-    stop();
-    const id = currentMessageIdRef.current;
+    stop()
+    const id = currentMessageIdRef.current
     if (id) {
-      dispatch({ type: 'STOP_MESSAGE', id });
-      currentMessageIdRef.current = null;
+      dispatch({ type: 'STOP_MESSAGE', id })
+      currentMessageIdRef.current = null
     }
-  };
+  }
 
   return (
     <div className="chat-page">
       <MessageList messages={state.messages} />
-      <Composer
-        onSend={handleSend}
-        onStop={handleStop}
-        isStreaming={isStreaming}
-      />
+      <Composer onSend={handleSend} onStop={handleStop} isStreaming={isStreaming} />
     </div>
-  );
+  )
 }
 
 export function ChatPage() {
@@ -80,5 +74,5 @@ export function ChatPage() {
     <ChatProvider>
       <ChatPageContent />
     </ChatProvider>
-  );
+  )
 }
