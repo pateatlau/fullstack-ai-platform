@@ -145,6 +145,50 @@ describe('POST /api/chat/stream', () => {
     expect(frames.at(-1)?.data.code).toBe('provider_error');
     expect(frames.at(-1)?.data.message).toBe('Upstream provider failed.');
   });
+
+  it('emits a provider_timeout error frame when streaming stalls', async () => {
+    class HangingProvider extends FakeProvider {
+      override streamChat(): AsyncIterable<ProviderChunk> {
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              async next() {
+                return await new Promise<IteratorResult<ProviderChunk>>(() => {});
+              },
+            };
+          },
+        };
+      }
+    }
+
+    const config = parseConfig({
+      APP_ENV: 'test',
+      LLM_PROVIDER: 'openai',
+      OPENAI_API_KEY: 'test-key',
+      OPENAI_MODEL: 'gpt-4o-mini',
+      MAX_MESSAGE_LENGTH: '4000',
+      REQUEST_TIMEOUT_SECONDS: '1',
+    });
+
+    const app = createApp(config, {
+      providerOverrides: {
+        openai: new HangingProvider('unused'),
+      },
+    });
+
+    const response = await request(app)
+      .post('/api/chat/stream')
+      .send({
+        messages: [{ role: 'user', content: 'Hello' }],
+      });
+
+    const frames = parseSseFrames(response.text);
+
+    expect(response.status).toBe(200);
+    expect(frames.map((frame) => frame.event)).toEqual(['start', 'error']);
+    expect(frames.at(-1)?.data.code).toBe('provider_timeout');
+    expect(frames.at(-1)?.data.message).toBe('Upstream provider timed out.');
+  });
 });
 
 describe('ChatService.streamChat', () => {

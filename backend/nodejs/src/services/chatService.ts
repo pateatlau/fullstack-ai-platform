@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { clearTimeout, setTimeout } from 'node:timers';
 
 import { AppError } from '../core/errors.js';
 import type { AppConfig } from '../core/config.js';
@@ -102,6 +103,32 @@ function createErrorFrame(id: string, error: AppError): StreamErrorFrame {
   };
 }
 
+function createTimeoutError(): Error {
+  const error = new Error('Upstream provider timed out.');
+  error.name = 'TimeoutError';
+  return error;
+}
+
+async function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutSeconds: number,
+  onTimeout?: () => void,
+): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      onTimeout?.();
+      reject(createTimeoutError());
+    }, timeoutSeconds * 1000);
+
+    operation
+      .then(resolve)
+      .catch(reject)
+      .finally(() => {
+        clearTimeout(timeout);
+      });
+  });
+}
+
 async function isDisconnected(check?: DisconnectCheck): Promise<boolean> {
   if (!check) {
     return false;
@@ -129,10 +156,9 @@ export class ChatService {
     const provider = this.providerFactory.getProvider(providerName);
 
     try {
-      const content = await provider.completeChat(
-        request.messages,
-        model,
-        request.temperature,
+      const content = await withTimeout(
+        provider.completeChat(request.messages, model, request.temperature),
+        this.config.requestTimeoutSeconds,
       );
 
       return chatResponseSchema.parse({
@@ -181,7 +207,13 @@ export class ChatService {
           return;
         }
 
-        const result = await iterator.next();
+        const result = await withTimeout(
+          iterator.next(),
+          this.config.requestTimeoutSeconds,
+          () => {
+            abortController.abort();
+          },
+        );
 
         if (result.done) {
           break;

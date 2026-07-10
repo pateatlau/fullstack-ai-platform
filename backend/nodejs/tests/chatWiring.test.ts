@@ -119,6 +119,41 @@ describe('provider wiring', () => {
     });
   });
 
+  it('returns provider_timeout when provider completion exceeds request timeout', async () => {
+    class HangingProvider extends FakeProvider {
+      override async completeChat(): Promise<string> {
+        return await new Promise<string>(() => {});
+      }
+    }
+
+    const config = parseConfig({
+      APP_ENV: 'test',
+      LLM_PROVIDER: 'openai',
+      OPENAI_API_KEY: 'test-key',
+      MAX_MESSAGE_LENGTH: '4000',
+      REQUEST_TIMEOUT_SECONDS: '1',
+    });
+    const app = createApp(config, {
+      providerOverrides: {
+        openai: new HangingProvider('unused'),
+      },
+    });
+
+    const response = await request(app)
+      .post('/api/chat')
+      .send({
+        messages: [{ role: 'user', content: 'Hello' }],
+      });
+
+    expect(response.status).toBe(504);
+    expect(response.body).toEqual({
+      error: {
+        code: 'provider_timeout',
+        message: 'Upstream provider timed out.',
+      },
+    });
+  });
+
   it('uses the config-selected Gemini provider without router changes', async () => {
     const config = parseConfig({
       APP_ENV: 'test',
