@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     """Env-driven application configuration.
 
     Values are read from environment variables (or a local `.env` file in
-    development). See `backend/.env.example` for the full list.
+    development). See `backend/python/.env.example` for the full list.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -41,12 +41,12 @@ class Settings(BaseSettings):
         if self.llm_provider == "openai" and not self.openai_api_key:
             raise ValueError(
                 "LLM_PROVIDER is 'openai' but OPENAI_API_KEY is not set. "
-                "Set it in backend/.env (see .env.example)."
+                "Set it in backend/python/.env (see .env.example)."
             )
         if self.llm_provider == "gemini" and not self.gemini_api_key:
             raise ValueError(
                 "LLM_PROVIDER is 'gemini' but GEMINI_API_KEY is not set. "
-                "Set it in backend/.env (see .env.example)."
+                "Set it in backend/python/.env (see .env.example)."
             )
 
 
