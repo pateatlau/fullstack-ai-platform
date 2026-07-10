@@ -24,8 +24,6 @@ app.include_router(health.router)
 app.include_router(chat.router)
 
 
-
 @app.get("/")
 async def root():
     return {"message": "Welcome to the Chatbot Backend!"}
-

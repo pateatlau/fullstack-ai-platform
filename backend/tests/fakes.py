@@ -24,7 +24,9 @@ class FakeProvider:
     ) -> AsyncIterator[ProviderChunk]:
         words = self.response.split(" ")
         for i, word in enumerate(words):
-            await asyncio.sleep(0.05)  # simulate token pacing for manual SSE verification
+            await asyncio.sleep(
+                0.05
+            )  # simulate token pacing for manual SSE verification
             is_last = i == len(words) - 1
             content = word if is_last else f"{word} "
             yield ProviderChunk(

@@ -19,7 +19,9 @@ class _FakeResponse:
 
 
 class _FakeModels:
-    def generate_content(self, model: str, contents: str, config: dict) -> _FakeResponse:
+    def generate_content(
+        self, model: str, contents: str, config: dict
+    ) -> _FakeResponse:
         assert model
         assert contents
         assert "temperature" in config
