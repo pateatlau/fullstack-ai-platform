@@ -47,6 +47,8 @@ App runs at `http://localhost:5173` by default.
 npm run dev      # start dev server
 npm run test     # run vitest
 npm run lint     # run eslint
+npm run format   # run prettier write
+npm run format:check # run prettier check
 npm run build    # type-check + production build
 npm run preview  # preview production build
 ```

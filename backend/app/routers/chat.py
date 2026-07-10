@@ -14,10 +14,11 @@ async def create_chat(request: ChatRequestSchema) -> ChatResponseSchema:
 
 
 @router.post("/api/chat/stream")
-async def create_chat_stream(request: ChatRequestSchema, http_request: Request) -> StreamingResponse:
+async def create_chat_stream(
+    request: ChatRequestSchema, http_request: Request
+) -> StreamingResponse:
     service = ChatService()
     return StreamingResponse(
         service.stream_chat(request, http_request),
         media_type="text/event-stream",
     )
-

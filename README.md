@@ -19,6 +19,44 @@ A full-stack streaming chatbot project with:
 - Health endpoint: `GET /api/health`
 - Provider abstraction: switch between OpenAI/Gemini without frontend changes
 
+## System Design Diagram
+
+```mermaid
+flowchart LR
+  subgraph Client["React Client (Vite + TS)"]
+    UI["Chat UI\nMessageList / Composer"]
+    Hook["useChatStream hook\nfetch + SSE parser + AbortController"]
+  end
+
+  subgraph API["FastAPI Backend"]
+    Router["chat router\nGET /api/health\nPOST /api/chat\nPOST /api/chat/stream"]
+    Service["ChatService\n(validates, orchestrates)"]
+    Factory["ProviderFactory\n(reads LLM_PROVIDER env)"]
+  end
+
+  subgraph Providers["LLM Provider Adapters"]
+    Base[["LLMProvider interface"]]
+    OpenAIAdapter["OpenAIProvider"]
+    GeminiAdapter["GeminiProvider"]
+  end
+
+  subgraph External["External APIs"]
+    OpenAI[("OpenAI API")]
+    Gemini[("Gemini API")]
+  end
+
+  subgraph Future["Future (post-V1)"]
+    DB[("Persistence:\nsessions / messages")]
+  end
+
+  UI --> Hook --> Router
+  Router --> Service --> Factory
+  Factory --> Base
+  Base --> OpenAIAdapter --> OpenAI
+  Base --> GeminiAdapter --> Gemini
+  Service -. future .-> DB
+```
+
 ## Prerequisites
 
 - Python 3.12+
@@ -120,7 +158,11 @@ Returns `text/event-stream` with frames: `start`, `delta`, `end`, and `error`.
 
 ```bash
 cd backend
-uv run pytest -q
+make run
+make lint
+make format
+make format-check
+make test
 ```
 
 ### Frontend
@@ -129,6 +171,8 @@ uv run pytest -q
 cd frontend
 npm run test
 npm run lint
+npm run format
+npm run format:check
 npm run build
 ```
 

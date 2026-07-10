@@ -49,11 +49,13 @@ class OpenAIProvider:
         model: str,
         temperature: float = 0.7,
     ) -> AsyncIterator[ProviderChunk]:
-        stream: AsyncStream[ChatCompletionChunk] = await self._client.chat.completions.create(
-            model=model,
-            messages=_to_openai_messages(messages),
-            temperature=temperature,
-            stream=True,
+        stream: AsyncStream[ChatCompletionChunk] = (
+            await self._client.chat.completions.create(
+                model=model,
+                messages=_to_openai_messages(messages),
+                temperature=temperature,
+                stream=True,
+            )
         )
         async for event in stream:
             if not event.choices:

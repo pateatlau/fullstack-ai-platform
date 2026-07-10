@@ -31,10 +31,20 @@ cp .env.example .env
 uv sync
 ```
 
+## Shortcut Commands
+
+```bash
+make run
+make lint
+make format
+make format-check
+make test
+```
+
 ## Run
 
 ```bash
-uv run uvicorn app.main:app --reload --port 8000
+make run
 ```
 
 ## Environment Variables
@@ -80,7 +90,7 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
 ## Tests
 
 ```bash
-uv run pytest -q
+make test
 ```
 
 Gemini provider-focused test:

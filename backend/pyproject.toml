@@ -10,3 +10,9 @@ dependencies = [
     "pydantic-settings>=2.14.2",
     "uvicorn[standard]>=0.51.0",
 ]
+
+[dependency-groups]
+dev = [
+    "black>=26.5.1",
+    "ruff>=0.15.21",
+]

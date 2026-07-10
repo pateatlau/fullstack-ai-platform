@@ -1,8 +1,8 @@
-import type { ChatChunk } from '../types/chat';
+import type { ChatChunk } from '../types/chat'
 
 export interface SseFrame {
-  event: string;
-  data: ChatChunk;
+  event: string
+  data: ChatChunk
 }
 
 /**
@@ -13,45 +13,45 @@ export interface SseFrame {
  * is available, then parses the `data:` line as JSON.
  */
 export class SseParser {
-  private buffer = '';
+  private buffer = ''
 
   feed(chunk: string): SseFrame[] {
-    this.buffer += chunk;
-    const frames: SseFrame[] = [];
+    this.buffer += chunk
+    const frames: SseFrame[] = []
 
-    let boundary = this.buffer.indexOf('\n\n');
+    let boundary = this.buffer.indexOf('\n\n')
     while (boundary !== -1) {
-      const rawFrame = this.buffer.slice(0, boundary);
-      this.buffer = this.buffer.slice(boundary + 2);
+      const rawFrame = this.buffer.slice(0, boundary)
+      this.buffer = this.buffer.slice(boundary + 2)
 
-      const frame = parseFrame(rawFrame);
+      const frame = parseFrame(rawFrame)
       if (frame) {
-        frames.push(frame);
+        frames.push(frame)
       }
 
-      boundary = this.buffer.indexOf('\n\n');
+      boundary = this.buffer.indexOf('\n\n')
     }
 
-    return frames;
+    return frames
   }
 }
 
 function parseFrame(raw: string): SseFrame | null {
-  let event = 'message';
-  let dataLine: string | null = null;
+  let event = 'message'
+  let dataLine: string | null = null
 
   for (const line of raw.split('\n')) {
     if (line.startsWith('event:')) {
-      event = line.slice('event:'.length).trim();
+      event = line.slice('event:'.length).trim()
     } else if (line.startsWith('data:')) {
-      dataLine = line.slice('data:'.length).trim();
+      dataLine = line.slice('data:'.length).trim()
     }
   }
 
   if (dataLine === null) {
-    return null;
+    return null
   }
 
-  const data = JSON.parse(dataLine) as ChatChunk;
-  return { event, data };
+  const data = JSON.parse(dataLine) as ChatChunk
+  return { event, data }
 }

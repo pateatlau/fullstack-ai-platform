@@ -1,14 +1,14 @@
-import type { Message } from '../types/chat';
+import type { Message } from '../types/chat'
 
 export interface ChatState {
-  messages: Message[];
-  error: string | null;
+  messages: Message[]
+  error: string | null
 }
 
 export const initialChatState: ChatState = {
   messages: [],
   error: null,
-};
+}
 
 export type ChatAction =
   | { type: 'ADD_USER_MESSAGE'; message: Message }
@@ -16,7 +16,7 @@ export type ChatAction =
   | { type: 'APPEND_DELTA'; id: string; content: string }
   | { type: 'END_MESSAGE'; id: string }
   | { type: 'STOP_MESSAGE'; id: string }
-  | { type: 'STREAM_ERROR'; id: string; message: string };
+  | { type: 'STREAM_ERROR'; id: string; message: string }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
@@ -24,7 +24,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         messages: [...state.messages, action.message],
-      };
+      }
 
     case 'START_MESSAGE':
       return {
@@ -40,7 +40,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             createdAt: action.createdAt,
           },
         ],
-      };
+      }
 
     case 'APPEND_DELTA':
       return {
@@ -50,27 +50,23 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             ? { ...message, content: message.content + action.content }
             : message,
         ),
-      };
+      }
 
     case 'END_MESSAGE':
       return {
         ...state,
         messages: state.messages.map((message) =>
-          message.id === action.id
-            ? { ...message, status: 'complete' }
-            : message,
+          message.id === action.id ? { ...message, status: 'complete' } : message,
         ),
-      };
+      }
 
     case 'STOP_MESSAGE':
       return {
         ...state,
         messages: state.messages.map((message) =>
-          message.id === action.id
-            ? { ...message, status: 'stopped' }
-            : message,
+          message.id === action.id ? { ...message, status: 'stopped' } : message,
         ),
-      };
+      }
 
     case 'STREAM_ERROR':
       return {
@@ -79,9 +75,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         messages: state.messages.map((message) =>
           message.id === action.id ? { ...message, status: 'error' } : message,
         ),
-      };
+      }
 
     default:
-      return state;
+      return state
   }
 }
