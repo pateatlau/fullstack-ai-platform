@@ -1,0 +1,75 @@
+# Pre-commit hooks configuration for fullstack AI platform
+# Install: pre-commit install
+# Run all: pre-commit run --all-files
+# Skip on commit: git commit --no-verify
+
+default_language_version:
+  python: python3.12
+
+repos:
+  # Shared general checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+        exclude: tsconfig.*\.json
+
+  # Frontend: prettier and eslint
+  - repo: local
+    hooks:
+      - id: frontend-prettier
+        name: frontend-prettier
+        entry: bash -c 'cd frontend && npm run format'
+        language: system
+        files: ^frontend/.*\.(js|jsx|ts|tsx|json|md|css)$
+        exclude: ^frontend/(node_modules|dist|build)/
+        pass_filenames: false
+
+      - id: frontend-eslint
+        name: frontend-eslint
+        entry: bash -c 'cd frontend && npm run lint'
+        language: system
+        files: ^frontend/.*\.[jt]sx?$
+        exclude: ^frontend/(node_modules|dist|build)/
+        pass_filenames: false
+
+  # Node backend: prettier and eslint
+  - repo: local
+    hooks:
+      - id: backend-nodejs-prettier
+        name: backend-nodejs-prettier
+        entry: bash -c 'cd backend-nodejs && npm run format'
+        language: system
+        files: ^backend-nodejs/.*\.(js|jsx|ts|tsx|json|md|css)$
+        exclude: ^backend-nodejs/(node_modules|dist|build)/
+        pass_filenames: false
+
+      - id: backend-nodejs-eslint
+        name: backend-nodejs-eslint
+        entry: bash -c 'cd backend-nodejs && npm run lint'
+        language: system
+        files: ^backend-nodejs/.*\.[jt]sx?$
+        exclude: ^backend-nodejs/(node_modules|dist|build)/
+        pass_filenames: false
+
+  # Python backend: ruff check and black format check
+  - repo: local
+    hooks:
+      - id: backend-python-ruff-check
+        name: backend-python-ruff-check
+        entry: bash -c 'cd backend-python && uv run ruff check --fix app tests'
+        language: system
+        files: ^backend-python/.*\.py$
+        exclude: ^backend-python/(__pycache__|\.venv|venv)/
+        pass_filenames: false
+
+      - id: backend-python-black-check
+        name: backend-python-black-check
+        entry: bash -c 'cd backend-python && uv run black app tests'
+        language: system
+        files: ^backend-python/.*\.py$
+        exclude: ^backend-python/(__pycache__|\.venv|venv)/
+        pass_filenames: false
