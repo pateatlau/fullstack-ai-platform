@@ -1,4 +1,4 @@
-# Backend (FastAPI)
+# Python AI Service
 
 FastAPI backend for the chatbot project.
 

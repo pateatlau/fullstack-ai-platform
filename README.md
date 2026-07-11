@@ -1,4 +1,4 @@
-# Basic Chatbot (React + Python/Node Backends)
+# Fullstack AI Platform
 
 A full-stack streaming chatbot project with:
 

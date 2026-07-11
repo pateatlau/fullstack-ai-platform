@@ -1,4 +1,4 @@
-# Frontend (React + TypeScript + Vite)
+# Frontend Application
 
 Streaming chat UI for the Basic Chatbot project.
 
