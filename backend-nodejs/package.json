@@ -1,5 +1,5 @@
 {
-  "name": "chatbot-backend-nodejs",
+  "name": "nodejs-api-service",
   "private": true,
   "version": "0.1.0",
   "type": "module",
