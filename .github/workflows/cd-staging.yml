@@ -13,9 +13,7 @@ concurrency:
   group: cd-staging
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  checks: write
+permissions: {}
 
 env:
   REGISTRY: ghcr.io
@@ -25,20 +23,58 @@ jobs:
     name: Prepare Staging Deployment Metadata
     runs-on: ubuntu-latest
     if: github.event.workflow_run.conclusion == 'success'
+    permissions:
+      contents: read
     outputs:
+      should_deploy: ${{ steps.gate.outputs.should_deploy }}
+      latest_main_sha: ${{ steps.gate.outputs.latest_main_sha }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
       owner: ${{ steps.meta.outputs.owner }}
       started_at: ${{ steps.meta.outputs.started_at }}
       backend_image: ${{ steps.meta.outputs.backend_image }}
       frontend_image: ${{ steps.meta.outputs.frontend_image }}
     steps:
+      - name: Gate deployment to latest main revision
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+
+            const latestMainSha = branch.data.commit.sha;
+            const triggerSha = '${{ github.event.workflow_run.head_sha }}';
+            const shouldDeploy = latestMainSha === triggerSha ? 'true' : 'false';
+
+            core.setOutput('latest_main_sha', latestMainSha);
+            core.setOutput('should_deploy', shouldDeploy);
+
+      - name: Note stale workflow_run skip
+        if: steps.gate.outputs.should_deploy != 'true'
+        shell: bash
+        run: |
+          {
+            echo "### Staging Deploy Skipped"
+            echo "- Reason: A newer commit is already on main"
+            echo "- Trigger SHA: ${{ github.event.workflow_run.head_sha }}"
+            echo "- Latest main SHA: ${{ steps.gate.outputs.latest_main_sha }}"
+            echo "- Action: No deployment hooks invoked for this stale run"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Compose immutable artifact references
         id: meta
+        if: steps.gate.outputs.should_deploy == 'true'
+        env:
+          TRIGGER_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         shell: bash
         run: |
           owner_raw='${{ github.event.workflow_run.repository.owner.login }}'
           owner="${owner_raw,,}"
-          image_tag="sha-${{ github.event.workflow_run.head_sha }}"
+          image_tag="sha-${SOURCE_SHA}"
           started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           backend_image="${{ env.REGISTRY }}/${owner}/fullstack-ai-platform-backend-nodejs:${image_tag}"
           frontend_image="${{ env.REGISTRY }}/${owner}/fullstack-ai-platform-frontend:${image_tag}"
@@ -52,8 +88,8 @@ jobs:
           {
             echo "### Staging Deploy Metadata"
             echo "- Environment: staging"
-            echo "- Trigger workflow: ${{ github.event.workflow_run.name }}"
-            echo "- Source SHA: ${{ github.event.workflow_run.head_sha }}"
+            echo "- Trigger workflow: ${TRIGGER_WORKFLOW_NAME}"
+            echo "- Source SHA: ${SOURCE_SHA}"
             echo "- Immutable backend image: ${backend_image}"
             echo "- Immutable frontend image: ${frontend_image}"
             echo "- Started at (UTC): ${started_at}"
@@ -64,6 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     needs: preflight
+    if: needs.preflight.outputs.should_deploy == 'true'
     steps:
       - name: Validate staging backend contract
         env:
@@ -89,19 +126,23 @@ jobs:
           STARTED_AT: ${{ needs.preflight.outputs.started_at }}
         shell: bash
         run: |
-          payload="$(cat <<JSON
-          {
-            \"environment\": \"staging\",
-            \"service\": \"backend-nodejs\",
-            \"image\": \"${BACKEND_IMAGE}\",
-            \"artifactTag\": \"${IMAGE_TAG}\",
-            \"sourceSha\": \"${SOURCE_SHA}\",
-            \"timestamp\": \"${STARTED_AT}\"
-          }
-          JSON
-          )"
+          payload="$(jq -n \
+            --arg environment "staging" \
+            --arg service "backend-nodejs" \
+            --arg image "$BACKEND_IMAGE" \
+            --arg artifactTag "$IMAGE_TAG" \
+            --arg sourceSha "$SOURCE_SHA" \
+            --arg timestamp "$STARTED_AT" \
+            '{
+              environment: $environment,
+              service: $service,
+              image: $image,
+              artifactTag: $artifactTag,
+              sourceSha: $sourceSha,
+              timestamp: $timestamp
+            }')"
 
-          curl --fail-with-body --silent --show-error \
+          curl --fail-with-body --silent --show-error --connect-timeout 10 --max-time 60 \
             -X POST "$DEPLOY_WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
             --data "$payload"
@@ -111,6 +152,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [preflight, deploy-backend]
     environment: staging
+    if: needs.preflight.outputs.should_deploy == 'true'
     steps:
       - name: Validate backend healthcheck variable
         env:
@@ -128,7 +170,7 @@ jobs:
         shell: bash
         run: |
           for attempt in {1..20}; do
-            if curl --fail-with-body --silent --show-error "$BACKEND_HEALTHCHECK_URL"; then
+            if curl --fail-with-body --silent --show-error --connect-timeout 5 --max-time 10 "$BACKEND_HEALTHCHECK_URL"; then
               {
                 echo "### Backend Verification"
                 echo "- Endpoint: $BACKEND_HEALTHCHECK_URL"
@@ -150,6 +192,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     needs: [preflight, verify-backend]
+    if: needs.preflight.outputs.should_deploy == 'true'
     steps:
       - name: Validate staging frontend contract
         env:
@@ -176,20 +219,25 @@ jobs:
           STAGING_API_BASE_URL: ${{ vars.STAGING_API_BASE_URL }}
         shell: bash
         run: |
-          payload="$(cat <<JSON
-          {
-            \"environment\": \"staging\",
-            \"service\": \"frontend\",
-            \"image\": \"${FRONTEND_IMAGE}\",
-            \"artifactTag\": \"${IMAGE_TAG}\",
-            \"sourceSha\": \"${SOURCE_SHA}\",
-            \"timestamp\": \"${STARTED_AT}\",
-            \"viteApiBaseUrl\": \"${STAGING_API_BASE_URL}\"
-          }
-          JSON
-          )"
+          payload="$(jq -n \
+            --arg environment "staging" \
+            --arg service "frontend" \
+            --arg image "$FRONTEND_IMAGE" \
+            --arg artifactTag "$IMAGE_TAG" \
+            --arg sourceSha "$SOURCE_SHA" \
+            --arg timestamp "$STARTED_AT" \
+            --arg viteApiBaseUrl "$STAGING_API_BASE_URL" \
+            '{
+              environment: $environment,
+              service: $service,
+              image: $image,
+              artifactTag: $artifactTag,
+              sourceSha: $sourceSha,
+              timestamp: $timestamp,
+              viteApiBaseUrl: $viteApiBaseUrl
+            }')"
 
-          curl --fail-with-body --silent --show-error \
+          curl --fail-with-body --silent --show-error --connect-timeout 10 --max-time 60 \
             -X POST "$DEPLOY_WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
             --data "$payload"
@@ -199,6 +247,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [preflight, deploy-frontend]
     environment: staging
+    if: needs.preflight.outputs.should_deploy == 'true'
     steps:
       - name: Validate frontend healthcheck variable
         env:
@@ -216,7 +265,7 @@ jobs:
         shell: bash
         run: |
           for attempt in {1..20}; do
-            if curl --fail-with-body --silent --show-error "$FRONTEND_HEALTHCHECK_URL"; then
+            if curl --fail-with-body --silent --show-error --connect-timeout 5 --max-time 10 "$FRONTEND_HEALTHCHECK_URL"; then
               {
                 echo "### Frontend Verification"
                 echo "- Endpoint: $FRONTEND_HEALTHCHECK_URL"
@@ -236,11 +285,21 @@ jobs:
   report:
     name: Publish Staging Deployment Check
     runs-on: ubuntu-latest
-    if: always() && github.event.workflow_run.conclusion == 'success'
+    environment: staging
+    if: always() && github.event.workflow_run.conclusion == 'success' && needs.preflight.outputs.should_deploy == 'true'
     needs: [preflight, verify-backend, verify-frontend]
+    permissions:
+      checks: write
     steps:
       - name: Publish deployment check-run
         uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          BACKEND_IMAGE: ${{ needs.preflight.outputs.backend_image }}
+          FRONTEND_IMAGE: ${{ needs.preflight.outputs.frontend_image }}
+          STARTED_AT: ${{ needs.preflight.outputs.started_at }}
+          BACKEND_HEALTH_ENDPOINT: ${{ vars.STAGING_BACKEND_HEALTHCHECK_URL }}
+          FRONTEND_HEALTH_ENDPOINT: ${{ vars.STAGING_FRONTEND_HEALTHCHECK_URL }}
         with:
           script: |
             const success = [
@@ -250,12 +309,12 @@ jobs:
 
             const summary = [
               'Environment: staging',
-              `Source SHA: ${{ github.event.workflow_run.head_sha }}`,
-              `Backend image: ${{ needs.preflight.outputs.backend_image }}`,
-              `Frontend image: ${{ needs.preflight.outputs.frontend_image }}`,
-              `Started at: ${{ needs.preflight.outputs.started_at }}`,
-              `Backend health endpoint: ${{ vars.STAGING_BACKEND_HEALTHCHECK_URL }}`,
-              `Frontend health endpoint: ${{ vars.STAGING_FRONTEND_HEALTHCHECK_URL }}`,
+              `Source SHA: ${process.env.SOURCE_SHA}`,
+              `Backend image: ${process.env.BACKEND_IMAGE}`,
+              `Frontend image: ${process.env.FRONTEND_IMAGE}`,
+              `Started at: ${process.env.STARTED_AT}`,
+              `Backend health endpoint: ${process.env.BACKEND_HEALTH_ENDPOINT}`,
+              `Frontend health endpoint: ${process.env.FRONTEND_HEALTH_ENDPOINT}`,
               `Verification result: ${success ? 'PASS' : 'FAIL'}`,
             ].join('\n');
 
@@ -263,7 +322,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               name: 'Staging Deployment',
-              head_sha: '${{ github.event.workflow_run.head_sha }}',
+              head_sha: process.env.SOURCE_SHA,
               status: 'completed',
               conclusion: success ? 'success' : 'failure',
               output: {
