@@ -104,48 +104,33 @@ jobs:
     steps:
       - name: Validate staging backend contract
         env:
-          DEPLOY_WEBHOOK_URL: ${{ secrets.STAGING_BACKEND_DEPLOY_WEBHOOK_URL }}
           STAGING_API_BASE_URL: ${{ vars.STAGING_API_BASE_URL }}
         shell: bash
         run: |
-          test -n "$DEPLOY_WEBHOOK_URL" || {
-            echo "Missing secret: STAGING_BACKEND_DEPLOY_WEBHOOK_URL" >&2
-            exit 1
-          }
           test -n "$STAGING_API_BASE_URL" || {
             echo "Missing variable: STAGING_API_BASE_URL" >&2
             exit 1
           }
 
-      - name: Trigger staging backend deploy hook
+      - name: Skip backend deploy hook trigger (Railway auto-deploy)
         env:
-          DEPLOY_WEBHOOK_URL: ${{ secrets.STAGING_BACKEND_DEPLOY_WEBHOOK_URL }}
           BACKEND_IMAGE: ${{ needs.preflight.outputs.backend_image }}
           IMAGE_TAG: ${{ needs.preflight.outputs.image_tag }}
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
           STARTED_AT: ${{ needs.preflight.outputs.started_at }}
+          STAGING_API_BASE_URL: ${{ vars.STAGING_API_BASE_URL }}
         shell: bash
         run: |
-          payload="$(jq -n \
-            --arg environment "staging" \
-            --arg service "backend-nodejs" \
-            --arg image "$BACKEND_IMAGE" \
-            --arg artifactTag "$IMAGE_TAG" \
-            --arg sourceSha "$SOURCE_SHA" \
-            --arg timestamp "$STARTED_AT" \
-            '{
-              environment: $environment,
-              service: $service,
-              image: $image,
-              artifactTag: $artifactTag,
-              sourceSha: $sourceSha,
-              timestamp: $timestamp
-            }')"
-
-          curl --fail-with-body --silent --show-error --connect-timeout 10 --max-time 60 \
-            -X POST "$DEPLOY_WEBHOOK_URL" \
-            -H 'Content-Type: application/json' \
-            --data "$payload"
+          {
+            echo "### Backend Deploy Trigger"
+            echo "- Mode: skipped"
+            echo "- Reason: Railway is configured for GitHub auto-deploy"
+            echo "- Source SHA: ${SOURCE_SHA}"
+            echo "- Artifact tag: ${IMAGE_TAG}"
+            echo "- Expected backend image: ${BACKEND_IMAGE}"
+            echo "- Backend base URL: ${STAGING_API_BASE_URL}"
+            echo "- Recorded at (UTC): ${STARTED_AT}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   verify-backend:
     name: Verify Staging Backend Health
