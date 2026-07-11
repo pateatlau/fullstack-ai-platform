@@ -205,13 +205,13 @@ jobs:
         shell: bash
         run: |
           payload="$(jq -n \
-            --arg environment \"staging\" \
-            --arg service \"frontend\" \
-            --arg image \"$FRONTEND_IMAGE\" \
-            --arg artifactTag \"$IMAGE_TAG\" \
-            --arg sourceSha \"$SOURCE_SHA\" \
-            --arg timestamp \"$STARTED_AT\" \
-            --arg viteApiBaseUrl \"$STAGING_API_BASE_URL\" \
+            --arg environment "staging" \
+            --arg service "frontend" \
+            --arg image "$FRONTEND_IMAGE" \
+            --arg artifactTag "$IMAGE_TAG" \
+            --arg sourceSha "$SOURCE_SHA" \
+            --arg timestamp "$STARTED_AT" \
+            --arg viteApiBaseUrl "$STAGING_API_BASE_URL" \
             '{
               environment: $environment,
               service: $service,
