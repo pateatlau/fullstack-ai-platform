@@ -153,7 +153,9 @@ describe('POST /api/chat/stream', () => {
           [Symbol.asyncIterator]() {
             return {
               async next() {
-                return await new Promise<IteratorResult<ProviderChunk>>(() => {});
+                return await new Promise<IteratorResult<ProviderChunk>>(
+                  () => {},
+                );
               },
             };
           },

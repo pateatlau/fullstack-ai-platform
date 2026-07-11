@@ -134,6 +134,149 @@ uv run python -m ruff check app tests
 uv run python -m pytest -q
 ```
 
+## Developer Onboarding
+
+### Setting Up Pre-Commit Hooks
+
+This repository uses [pre-commit](https://pre-commit.com) to enforce code quality gates locally before commits. Hooks run fast formatting and lint checks across all three app areas (frontend, Node backend, Python backend).
+
+#### Installation (< 10 minutes)
+
+1. **Clone and install dependencies:**
+
+   ```bash
+   git clone <repo>
+   cd fullstack-ai-platform
+
+   # Install dependencies for all apps
+   npm install                    # frontend
+   (cd backend-nodejs && npm install)
+   (cd backend-python && uv sync)
+   ```
+
+2. **Install pre-commit framework and git hooks:**
+
+   ```bash
+   pip install pre-commit
+   # or with uv:
+   uv tool install pre-commit
+
+   # Install git hooks
+   pre-commit install
+   ```
+
+3. **Verify installation:**
+   ```bash
+   pre-commit --version
+   pre-commit run --all-files
+   ```
+
+#### Running Hooks
+
+- **On next commit:** hooks run automatically
+- **Check all files:** `pre-commit run --all-files`
+- **Skip hooks (emergency only):** `git commit --no-verify` (see bypass policy below)
+
+#### What Hooks Check
+
+| Area              | Check                                 | Auto-Fix          | Runtime |
+| ----------------- | ------------------------------------- | ----------------- | ------- |
+| `frontend/`       | Prettier format                       | Yes               | < 1s    |
+| `frontend/`       | ESLint                                | No (requires fix) | < 2s    |
+| `backend-nodejs/` | Prettier format                       | Yes               | < 1s    |
+| `backend-nodejs/` | ESLint                                | No (requires fix) | < 2s    |
+| `backend-python/` | Ruff check + Black format             | Yes               | < 3s    |
+| Shared            | Trailing whitespace, YAML/JSON syntax | Yes               | < 1s    |
+
+**Total typical runtime: < 5 seconds per commit**
+
+### Hook Policy
+
+#### Fast vs Slow Hooks
+
+**Fast hooks (run on every commit):**
+
+- Formatting checks (Prettier, Black)
+- Linting checks (ESLint, Ruff)
+- File validation (trailing whitespace, JSON/YAML syntax)
+- **Why:** Keep developer feedback loop tight, catch issues immediately
+
+**Slow hooks (run in CI only):**
+
+- Full test suites (see `npm test`, `make test`)
+- Build validation (see `npm run build`, `make build`)
+- **Why:** Reserve CI resources for comprehensive validation; developer commits should be fast
+
+#### Bypass Policy
+
+**When you can use `git commit --no-verify`:**
+
+- Emergency hotfix to production with documented follow-up fix
+- Temporary WIP commit that will be squashed/rebased before merge
+- Blocked hook that needs temporary bypass while diagnosed (use sparingly)
+
+**Required PR documentation when bypassing:**
+
+- Add line to PR description: `[hook-bypass] Reason: <brief reason> | Follow-up: <link to follow-up issue or PR>`
+- Example: `[hook-bypass] Reason: Urgent production hotfix | Follow-up: #42`
+
+**Rules:**
+
+- Bypass is exceptional, not routine
+- All bypassed commits must fix issues before merging to `main`
+- Team members may ask to validate hooks before merge approval
+
+### Complete Troubleshooting
+
+#### Installation Issues
+
+| Problem                             | Solution                                                                         |
+| ----------------------------------- | -------------------------------------------------------------------------------- |
+| `pre-commit not found`              | `pip install pre-commit` or `uv tool install pre-commit` (add to PATH if needed) |
+| `permission denied: .git/hooks/...` | Run `chmod +x .git/hooks/pre-commit` or reinstall with `pre-commit install`      |
+| Hooks not running on commit         | Run `pre-commit install` in repo root again                                      |
+
+#### Runtime Issues
+
+| Problem                         | Cause                              | Solution                                              |
+| ------------------------------- | ---------------------------------- | ----------------------------------------------------- |
+| `prettier not found`            | Node dependencies missing          | `npm install` in `frontend/` or `backend-nodejs/`     |
+| `eslint not found`              | Node dependencies missing          | `npm install` in `frontend/` or `backend-nodejs/`     |
+| `ruff not found`                | Python dependencies missing        | `uv sync` in `backend-python/`                        |
+| `black not found`               | Python dependencies missing        | `uv sync` in `backend-python/`                        |
+| Hooks timeout (> 20s)           | Large diff or missing dependencies | Check dependency installation, try smaller commits    |
+| Hooks modify files unexpectedly | Auto-fix hooks reformatting code   | Re-stage auto-fixed files after hook run, then commit |
+
+#### Common Hook Failures
+
+| Hook Failure               | How to Fix                                                                  |
+| -------------------------- | --------------------------------------------------------------------------- |
+| ESLint errors block commit | Fix the issue in code (cannot auto-fix); see ESLint output for details      |
+| Ruff check failures        | Run `cd backend-python && uv run ruff check --fix app tests`, then re-stage |
+| Prettier disagreement      | Re-run `pre-commit run --all-files` to auto-fix, then re-stage              |
+| Black formatting diff      | Re-run `pre-commit run --all-files` to auto-fix, then re-stage              |
+
+#### Getting Help
+
+If hooks remain broken after troubleshooting:
+
+1. Run `pre-commit clean` to reset cache
+2. Reinstall with `pre-commit uninstall && pre-commit install`
+3. Run `pre-commit run --all-files` to see detailed error logs
+4. Check `.pre-commit-config.yaml` for hook configuration
+5. Ask team member or create an issue with full error output
+
+### Onboarding Checklist
+
+- [ ] Clone repo and install app dependencies (npm, uv)
+- [ ] Install pre-commit: `pip install pre-commit` or `uv tool install pre-commit`
+- [ ] Run `pre-commit install` in repo root
+- [ ] Verify: `pre-commit --version` and `pre-commit run --all-files` (should pass)
+- [ ] Make a test commit to confirm hooks run
+- [ ] Ready to develop!
+
+**Expected time: < 10 minutes**
+
 ## Backend Selection
 
 The frontend talks to whichever backend is configured in `frontend/.env`:
