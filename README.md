@@ -297,6 +297,30 @@ Publish rules:
 
 Each image build also uploads a metadata artifact (service, ref, sha, digest, tags/labels) as a provenance baseline.
 
+## PR Quality Gates (Stage C3)
+
+`main` is protected with required CI checks and an up-to-date branch requirement.
+
+Required checks:
+
+- `Frontend PR Checks`
+- `Backend Node.js PR Checks`
+- `Backend Python PR Checks`
+
+Merge policy:
+
+- Merge commits are disabled
+- Linear history is required on `main`
+- Squash merge or rebase merge should be used
+
+Expected PR checklist:
+
+- [ ] Branch is up to date with `main`
+- [ ] Relevant required checks passed for changed app areas
+- [ ] No hook bypass remains unresolved in the PR description
+- [ ] Scope stays within the intended app area or rollout phase
+- [ ] Merge uses squash or rebase, not a merge commit
+
 ## Backend Selection
 
 The frontend talks to whichever backend is configured in `frontend/.env`:
