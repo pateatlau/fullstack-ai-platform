@@ -1,8 +1,7 @@
 .git
 .gitignore
-.env
-.env.local
-.env.test
+.env*
+!.env.required
 __pycache__
 *.pyc
 *.pyo

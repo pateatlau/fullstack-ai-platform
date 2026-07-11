@@ -3,7 +3,7 @@
 # Smoke test checklist for integrated docker-compose stack
 # Validates that frontend, backend, and end-to-end chat flow work correctly
 
-set -e
+set -euo pipefail
 
 FRONTEND_URL="http://localhost"
 BACKEND_URL="http://localhost:8000"
@@ -47,11 +47,11 @@ echo ""
 
 # Test 4: Frontend can reach backend (test if frontend can make requests)
 echo "4. ✓ Testing CORS and cross-origin request from frontend context..."
-CORS_TEST=$(curl -s --max-time $CURL_TIMEOUT -X GET "$BACKEND_URL/api/health" \
+CORS_HEADERS=$(curl -s --max-time $CURL_TIMEOUT -X OPTIONS "$BACKEND_URL/api/chat" \
   -H "Origin: http://localhost" \
   -H "Access-Control-Request-Method: POST" \
-  -o /dev/null -w "%{http_code}")
-if [ "$CORS_TEST" = "200" ]; then
+  -D - -o /dev/null)
+if echo "$CORS_HEADERS" | grep -qi "^access-control-allow-origin: http://localhost"; then
   echo "   ✓ CORS preflight test passed"
 else
   echo "   ✗ CORS preflight test failed (HTTP $CORS_TEST)"

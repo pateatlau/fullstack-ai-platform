@@ -26,7 +26,6 @@ RUN groupadd -g 1001 appuser && useradd -u 1001 -g 1001 appuser
 # Install minimal runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    && pip install --no-cache-dir --upgrade pip uv \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy virtual environment from builder

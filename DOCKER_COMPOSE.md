@@ -182,11 +182,9 @@ docker compose down -v
 
 ### Environment File Precedence
 
-Docker Compose loads variables in this order (later overrides earlier):
-
-1. `.env` file
-2. `.env.compose` file
-3. `-e` flags on command line
+Docker Compose automatically loads variables from `.env` in the project directory.
+To use `.env.compose`, either copy it to `.env` or run `docker compose --env-file .env.compose ...`.
+CLI `-e` flags (and explicit `environment:` entries) override values from the env file.
 
 ## See Also
 

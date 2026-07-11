@@ -11,6 +11,5 @@ dist
 coverage
 .vitest
 tests
-public
 *.test.tsx
 *.test.ts

@@ -8,7 +8,7 @@ WORKDIR /app
 COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* ./
 
 # Install dependencies (including dev)
-RUN npm ci --prefer-offline --no-audit || npm install
+RUN if [ -f package-lock.json ]; then npm ci --prefer-offline --no-audit; else npm install; fi
 
 # Copy source
 COPY . .
@@ -17,7 +17,7 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Runtime
-FROM node:20-alpine
+FROM node:24-alpine
 
 WORKDIR /app
 
@@ -28,7 +28,7 @@ RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* ./
 
 # Install only production dependencies
-RUN npm ci --omit=dev --prefer-offline --no-audit || npm install --omit=dev
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev --prefer-offline --no-audit; else npm install --omit=dev; fi
 
 # Copy compiled app from builder
 COPY --from=builder /app/dist ./dist

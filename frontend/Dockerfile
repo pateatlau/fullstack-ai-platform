@@ -8,7 +8,7 @@ WORKDIR /app
 COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* ./
 
 # Install dependencies (including dev for build)
-RUN npm ci --prefer-offline --no-audit || npm install
+RUN if [ -f package-lock.json ]; then npm ci --prefer-offline --no-audit; else npm install; fi
 
 # Copy source
 COPY . .
