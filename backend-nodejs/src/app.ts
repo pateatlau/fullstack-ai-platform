@@ -25,5 +25,6 @@ export function createApp(config: AppConfig, options: AppOptions = {}) {
   app.use('/api', createChatRouter(config, options.providerOverrides));
   app.use(errorMiddleware);
 
+  // Return the Express app instance for testing or further configuration
   return app;
 }

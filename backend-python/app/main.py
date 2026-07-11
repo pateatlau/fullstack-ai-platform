@@ -117,6 +117,7 @@ async def handle_unexpected_error(_: Request, exc: Exception) -> JSONResponse:
     return _error_response(500, "internal_error", "Unexpected server error.")
 
 
+# Root endpoint for basic health check or welcome message
 @app.get("/")
 async def root():
     return {"message": "Welcome to the Chatbot Backend!"}

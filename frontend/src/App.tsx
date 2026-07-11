@@ -5,4 +5,5 @@ function App() {
   return <ChatPage />
 }
 
+// Export the App component as the default export
 export default App
