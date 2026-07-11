@@ -1,6 +1,6 @@
 # Node Backend: Multi-stage (TypeScript build + JS runtime)
 # Stage 1: Build
-FROM node:24-alpine AS builder
+FROM node:24.0.0-alpine AS builder
 
 WORKDIR /app
 
@@ -17,7 +17,7 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Runtime
-FROM node:24-alpine
+FROM node:24.0.0-alpine
 
 WORKDIR /app
 
