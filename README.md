@@ -277,6 +277,26 @@ If hooks remain broken after troubleshooting:
 
 **Expected time: < 10 minutes**
 
+## CI Image Tagging (Stage C2)
+
+Container images are published by `.github/workflows/build-publish-images.yml` to GHCR:
+
+- `ghcr.io/<owner>/fullstack-ai-platform-frontend`
+- `ghcr.io/<owner>/fullstack-ai-platform-backend-nodejs`
+- `ghcr.io/<owner>/fullstack-ai-platform-backend-python`
+
+Tag strategy:
+
+- Immutable: `sha-<git_sha>`
+- Mutable channels: `main`, `staging`, `prod`
+
+Publish rules:
+
+- Push to `main` publishes changed services with `sha-<git_sha>`, `main`, and `staging`
+- Push of release tags (`v*`, `release-*`) publishes all services from the tagged commit with `sha-<git_sha>` and `prod`
+
+Each image build also uploads a metadata artifact (service, ref, sha, digest, tags/labels) as a provenance baseline.
+
 ## Backend Selection
 
 The frontend talks to whichever backend is configured in `frontend/.env`:
