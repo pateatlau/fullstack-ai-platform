@@ -129,7 +129,7 @@ describe('Composer behavior', () => {
             'event: end\ndata: {"type":"end","id":"resp_2","finish_reason":"stop","timestamp":"t3"}\n\n',
           ],
           40,
-          init?.signal,
+          init?.signal ?? undefined,
         )
       })
     vi.stubGlobal('fetch', fetchMock)

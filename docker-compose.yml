@@ -1,0 +1,93 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: chatbot-frontend
+    ports:
+      - '80:80'
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    depends_on:
+      backend-nodejs:
+        condition: service_healthy
+        required: false
+      backend-python:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test:
+        ['CMD-SHELL', "ps aux | grep 'nginx: master' | grep -v grep || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  backend-nodejs:
+    profiles:
+      - nodejs
+    build:
+      context: ./backend-nodejs
+      dockerfile: Dockerfile
+    container_name: chatbot-backend-nodejs
+    ports:
+      - '8000:8000'
+    environment:
+      NODE_ENV: development
+      PORT: 8000
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
+      CORS_ALLOWED_ORIGINS: http://localhost
+      APP_ENV: development
+      MAX_MESSAGE_LENGTH: 4000
+      REQUEST_TIMEOUT_SECONDS: 30
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--no-verbose',
+          '--tries=1',
+          '--spider',
+          'http://localhost:8000/api/health',
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  backend-python:
+    profiles:
+      - python
+    build:
+      context: ./backend-python
+      dockerfile: Dockerfile
+    container_name: chatbot-backend-python
+    ports:
+      - '8000:8000'
+    environment:
+      PORT: 8000
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
+      CORS_ALLOWED_ORIGINS: http://localhost
+      APP_ENV: development
+      MAX_MESSAGE_LENGTH: 4000
+      REQUEST_TIMEOUT_SECONDS: 30
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
