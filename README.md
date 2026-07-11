@@ -91,7 +91,7 @@ cd backend-python
 cp .env.example .env
 # Fill in API keys in .env
 uv sync
-uv run uvicorn app.main:app --reload --port 8000
+make run
 ```
 
 ### 2) Node Backend
@@ -119,6 +119,20 @@ Python backend default URL: `http://localhost:8000`
 Node backend recommended local URL: `http://localhost:8001`
 
 Before running locally, make sure the selected backend provider has a real API key in the backend `.env` file you are using.
+
+## Cross-Platform Note (Windows)
+
+The Python backend Makefile commands are convenient, but `make` is not installed by default on native Windows.
+
+- WSL2 users can run the same `make` commands shown in this README.
+- Native Windows users can install GNU Make (for example with Chocolatey or Scoop), or run direct alternatives:
+
+```bash
+cd backend-python
+uv run python -m uvicorn app.main:app --reload --port 8000
+uv run python -m ruff check app tests
+uv run python -m pytest -q
+```
 
 ## Backend Selection
 

@@ -68,7 +68,9 @@ async def enforce_request_size(
                         message=REQUEST_BODY_LIMIT_MESSAGE,
                     )
             except ValueError:
-                logger.warning("Ignoring invalid content-length header: %s", content_length)
+                logger.warning(
+                    "Ignoring invalid content-length header: %s", content_length
+                )
 
         received_bytes = 0
 

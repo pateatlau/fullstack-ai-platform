@@ -74,7 +74,12 @@ def normalize_chat_error(exc: Exception) -> ChatServiceError:
         return ProviderTimeoutError()
     if any(
         token in error_name
-        for token in ("ratelimit", "too_many_requests", "toomanyrequests", "resourceexhausted")
+        for token in (
+            "ratelimit",
+            "too_many_requests",
+            "toomanyrequests",
+            "resourceexhausted",
+        )
     ):
         return ProviderRateLimitedError()
     return ProviderError()

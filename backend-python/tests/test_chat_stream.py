@@ -21,10 +21,14 @@ def _parse_sse_frames(payload: str) -> list[tuple[str, dict[str, Any]]]:
         if not block:
             continue
         event = next(
-            line.removeprefix("event: ") for line in block.splitlines() if line.startswith("event: ")
+            line.removeprefix("event: ")
+            for line in block.splitlines()
+            if line.startswith("event: ")
         )
         data = next(
-            line.removeprefix("data: ") for line in block.splitlines() if line.startswith("data: ")
+            line.removeprefix("data: ")
+            for line in block.splitlines()
+            if line.startswith("data: ")
         )
         frames.append((event, json.loads(data)))
     return frames
@@ -109,7 +113,10 @@ async def test_chat_stream_yields_start_delta_and_end(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert [event for event, _ in frames] == ["start", "delta", "delta", "delta", "end"]
-    assert "".join(frame["content"] for event, frame in frames if event == "delta") == "Hello from stream"
+    assert (
+        "".join(frame["content"] for event, frame in frames if event == "delta")
+        == "Hello from stream"
+    )
     assert frames[-1][1]["finish_reason"] == "stop"
 
 

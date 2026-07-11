@@ -57,6 +57,23 @@ make format-check
 make test
 ```
 
+These Make targets intentionally run tooling through `python -m ...` so commands always resolve from the project virtual environment and not from any global Python/Conda PATH entries.
+
+## Windows Note
+
+On native Windows, `make` is not installed by default.
+
+- If you use WSL2, the documented `make` commands should work as-is.
+- If you stay on native Windows, install GNU Make (for example with Chocolatey or Scoop), or run the equivalent commands directly:
+
+```bash
+uv run python -m uvicorn app.main:app --reload --port 8000
+uv run python -m ruff check app tests
+uv run python -m black app tests
+uv run python -m black --check app tests
+uv run python -m pytest -q
+```
+
 ## Run
 
 ```bash
@@ -159,8 +176,8 @@ uv run pytest -q tests/providers/test_gemini_provider.py
 Full backend validation:
 
 ```bash
-uv run pytest
-uv run ruff check app tests
+uv run python -m pytest
+uv run python -m ruff check app tests
 ```
 
 Current backend tests cover:
@@ -179,7 +196,7 @@ Recommended commands:
 
 ```bash
 uv sync
-uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT
+uv run python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
 
 Before deployment, the operator must prepare:
