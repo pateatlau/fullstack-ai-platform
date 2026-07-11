@@ -482,12 +482,11 @@ Typical parity workflow:
 
 ## Deployment Status
 
-Deployment prerequisites and the operator runbook are documented in [docs/plans/chatbot-v1.md](docs/plans/chatbot-v1.md). Actual Render/Vercel deployment is still a manual step because it requires:
+Deployment prerequisites and the operator runbook are documented in [docs/plans/chatbot-v1.md](docs/plans/chatbot-v1.md).
 
-- a connected Git remote
-- Render and Vercel accounts
-- production env vars and provider secrets
-- manual CORS and public-URL validation
+Staging CD automation is now defined in [CD_STAGING.md](CD_STAGING.md) and implemented by `.github/workflows/cd-staging.yml`.
+
+Production deployment remains a manual promotion step pending Stage D2 controls.
 
 ## Notes
 
