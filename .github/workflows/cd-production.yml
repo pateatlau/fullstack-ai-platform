@@ -198,15 +198,9 @@ jobs:
     steps:
       - name: Validate production frontend contract
         env:
-          DEPLOY_WEBHOOK_URL: ${{ secrets.PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL || secrets.PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL_FALLBACK }}
           PRODUCTION_API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || inputs.production_api_base_url }}
         shell: bash
         run: |
-          test -n "$DEPLOY_WEBHOOK_URL" || {
-            echo "Missing secret: PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL" >&2
-            echo "Set production environment secret PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL or repository secret PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL_FALLBACK." >&2
-            exit 1
-          }
           test -n "$PRODUCTION_API_BASE_URL" || {
             echo "Missing variable: PRODUCTION_API_BASE_URL" >&2
             echo "Check Settings -> Environments -> production -> Variables and confirm the exact name is PRODUCTION_API_BASE_URL." >&2
@@ -214,7 +208,7 @@ jobs:
             exit 1
           }
 
-      - name: Trigger production frontend deploy hook
+      - name: Trigger production frontend deploy (webhook or Vercel auto-deploy)
         env:
           DEPLOY_WEBHOOK_URL: ${{ secrets.PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL || secrets.PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL_FALLBACK }}
           FRONTEND_IMAGE: ${{ needs.preflight.outputs.frontend_image }}
@@ -224,6 +218,20 @@ jobs:
           PRODUCTION_API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || inputs.production_api_base_url }}
         shell: bash
         run: |
+          if [[ -z "$DEPLOY_WEBHOOK_URL" ]]; then
+            {
+              echo "### Frontend Deploy Trigger"
+              echo "- Mode: skipped"
+              echo "- Reason: No production frontend deploy webhook configured; Vercel Git auto-deploy is authoritative"
+              echo "- Source SHA: ${SOURCE_SHA}"
+              echo "- Artifact tag: ${IMAGE_TAG}"
+              echo "- Expected frontend image: ${FRONTEND_IMAGE}"
+              echo "- Frontend API base URL: ${PRODUCTION_API_BASE_URL}"
+              echo "- Recorded at (UTC): ${STARTED_AT}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           payload="$(jq -n \
             --arg environment "production" \
             --arg service "frontend" \
@@ -246,6 +254,16 @@ jobs:
             -X POST "$DEPLOY_WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
             --data "$payload"
+
+          {
+            echo "### Frontend Deploy Trigger"
+            echo "- Mode: webhook"
+            echo "- Source SHA: ${SOURCE_SHA}"
+            echo "- Artifact tag: ${IMAGE_TAG}"
+            echo "- Expected frontend image: ${FRONTEND_IMAGE}"
+            echo "- Frontend API base URL: ${PRODUCTION_API_BASE_URL}"
+            echo "- Recorded at (UTC): ${STARTED_AT}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   verify-frontend:
     name: Verify Production Frontend Reachability

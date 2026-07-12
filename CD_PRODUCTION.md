@@ -15,9 +15,12 @@ This document defines the production promotion contract used by `.github/workflo
 
 Create a GitHub Environment named `production` and configure approval protection rules.
 
-Secret:
+Optional secret (frontend deploy webhook):
 
-- `PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL`
+- `PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL` (environment secret), or
+- `PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL_FALLBACK` (repository secret)
+
+If neither secret is configured, the frontend deploy step is skipped gracefully and Vercel Git auto-deploy is treated as authoritative (mirroring the Railway auto-deploy model used for the backend).
 
 Variables:
 
@@ -36,7 +39,7 @@ Recommended URLs:
 2. Workflow validates `source_sha` format and enforces successful `Staging Deployment` check-run.
 3. Backend deploy hook step is skipped when Railway auto-deploy is the backend mode.
 4. Backend health probe validates production `/api/health`.
-5. Frontend deploy hook receives immutable frontend image reference and production API base URL.
+5. Frontend deploy hook receives immutable frontend image reference and production API base URL when a webhook secret is configured; otherwise the step is skipped and Vercel Git auto-deploy is authoritative.
 6. Frontend health probe validates reachability.
 7. Workflow publishes a `Production Deployment` check-run on `source_sha`.
 
