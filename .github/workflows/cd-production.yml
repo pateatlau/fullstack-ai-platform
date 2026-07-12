@@ -198,12 +198,13 @@ jobs:
     steps:
       - name: Validate production frontend contract
         env:
-          DEPLOY_WEBHOOK_URL: ${{ secrets.PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL }}
+          DEPLOY_WEBHOOK_URL: ${{ secrets.PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL != '' && secrets.PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL || secrets.PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL_FALLBACK }}
           PRODUCTION_API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL != '' && vars.PRODUCTION_API_BASE_URL || inputs.production_api_base_url }}
         shell: bash
         run: |
           test -n "$DEPLOY_WEBHOOK_URL" || {
             echo "Missing secret: PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL" >&2
+            echo "Set production environment secret PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL or repository secret PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL_FALLBACK." >&2
             exit 1
           }
           test -n "$PRODUCTION_API_BASE_URL" || {
@@ -215,7 +216,7 @@ jobs:
 
       - name: Trigger production frontend deploy hook
         env:
-          DEPLOY_WEBHOOK_URL: ${{ secrets.PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL }}
+          DEPLOY_WEBHOOK_URL: ${{ secrets.PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL != '' && secrets.PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL || secrets.PRODUCTION_FRONTEND_DEPLOY_WEBHOOK_URL_FALLBACK }}
           FRONTEND_IMAGE: ${{ needs.preflight.outputs.frontend_image }}
           IMAGE_TAG: ${{ needs.preflight.outputs.image_tag }}
           SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
