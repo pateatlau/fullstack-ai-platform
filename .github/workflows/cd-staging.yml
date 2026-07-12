@@ -99,7 +99,7 @@ jobs:
     name: Deploy Staging Backend
     runs-on: ubuntu-latest
     environment: staging
-    needs: preflight
+    needs: [preflight, reserve-db-migration]
     if: needs.preflight.outputs.should_deploy == 'true'
     steps:
       - name: Validate staging backend contract
@@ -130,6 +130,24 @@ jobs:
             echo "- Expected backend image: ${BACKEND_IMAGE}"
             echo "- Backend base URL: ${STAGING_API_BASE_URL}"
             echo "- Recorded at (UTC): ${STARTED_AT}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  reserve-db-migration:
+    name: Reserved Staging DB Migration Stage (No-Op)
+    runs-on: ubuntu-latest
+    environment: staging
+    needs: preflight
+    if: needs.preflight.outputs.should_deploy == 'true'
+    steps:
+      - name: Reserve migration insertion point
+        shell: bash
+        run: |
+          {
+            echo "### DB Migration Stage"
+            echo "- Mode: no-op"
+            echo "- Status: reserved for future database rollout"
+            echo "- Source SHA: ${{ github.event.workflow_run.head_sha }}"
+            echo "- Insertion point: after preflight and before backend deploy"
           } >> "$GITHUB_STEP_SUMMARY"
 
   verify-backend:

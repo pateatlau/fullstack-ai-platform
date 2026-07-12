@@ -28,6 +28,14 @@ Variables:
 - `PRODUCTION_BACKEND_HEALTHCHECK_URL`
 - `PRODUCTION_FRONTEND_HEALTHCHECK_URL`
 
+Reserved database migration contract (Stage D3, future-enabled):
+
+- `PRODUCTION_DB_MIGRATION_EXECUTOR_URL` (environment secret): migration runner webhook/endpoint
+- `PRODUCTION_DB_MIGRATION_TOKEN` (environment secret): bearer token or signed trigger credential
+- `PRODUCTION_DATABASE_URL` (environment secret): database connection string consumed only by migration runtime
+- `PRODUCTION_DB_MIGRATION_TIMEOUT_SECONDS` (environment variable): max runtime budget for migration step
+- `PRODUCTION_DB_MIGRATION_STRATEGY` (environment variable): rollout strategy label (for example `expand-contract`)
+
 Recommended URLs:
 
 - `PRODUCTION_BACKEND_HEALTHCHECK_URL`: `https://<prod-backend-host>/api/health`
@@ -42,6 +50,20 @@ Recommended URLs:
 5. Frontend deploy hook receives immutable frontend image reference and production API base URL when a webhook secret is configured; otherwise the step is skipped and Vercel Git auto-deploy is authoritative.
 6. Frontend health probe validates reachability.
 7. Workflow publishes a `Production Deployment` check-run on `source_sha`.
+
+## Reserved DB Migration Insertion Point and Future Order
+
+Current workflow includes a no-op reserved job named `Reserved Production DB Migration Stage (No-Op)`.
+
+Future production rollout order:
+
+1. Preflight validation and immutable artifact resolution.
+2. DB migration stage runs before application deployment.
+3. Backend deployment and backend health verification.
+4. Frontend deployment and frontend health verification.
+5. Publish `Production Deployment` check-run.
+
+This insertion point keeps promotion deterministic by applying schema changes before app versions that require them.
 
 ## Verification Output Expectations
 
@@ -62,3 +84,12 @@ If production health checks fail after deployment:
 2. Re-run `CD Production Promote` with that known-good `source_sha`.
 3. Re-run health probes for backend then frontend.
 4. Keep failed deployment metadata for audit history; do not retag mutable channels as rollback mechanism.
+
+## Migration Rollback Policy (Future Phase)
+
+If migration execution is enabled in a later phase:
+
+1. Migration failure aborts production deployment before backend/frontend deploy steps.
+2. If app deploy fails after successful migration, redeploy last known-good app artifact compatible with the migrated schema.
+3. Down migrations are manual-only, require change approval, and must use a tested migration-specific rollback script.
+4. Keep migration and deployment metadata immutable for auditability and post-incident analysis.
