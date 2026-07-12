@@ -25,6 +25,14 @@ Variables:
 - `STAGING_BACKEND_HEALTHCHECK_URL`
 - `STAGING_FRONTEND_HEALTHCHECK_URL`
 
+Reserved database migration contract (Stage D3, future-enabled):
+
+- `STAGING_DB_MIGRATION_EXECUTOR_URL` (secret): migration runner webhook/endpoint
+- `STAGING_DB_MIGRATION_TOKEN` (secret): bearer token or signed trigger credential
+- `STAGING_DATABASE_URL` (secret): database connection string consumed only by migration runtime
+- `STAGING_DB_MIGRATION_TIMEOUT_SECONDS` (variable): max runtime budget for migration step
+- `STAGING_DB_MIGRATION_STRATEGY` (variable): rollout strategy label (for example `expand-contract`)
+
 Recommended URLs:
 
 - `STAGING_BACKEND_HEALTHCHECK_URL`: `https://<staging-backend-host>/api/health`
@@ -38,6 +46,20 @@ Recommended URLs:
 4. Frontend deploy hook receives immutable frontend image reference and staging API base URL.
 5. Frontend health probe validates reachability.
 6. Workflow publishes a `Staging Deployment` check-run on the source commit.
+
+## Reserved DB Migration Insertion Point and Future Order
+
+Current workflow includes a no-op reserved job named `Reserved Staging DB Migration Stage (No-Op)`.
+
+Future database rollout order:
+
+1. Preflight metadata and artifact selection.
+2. DB migration stage runs before application deployment.
+3. Backend deployment and backend health verification.
+4. Frontend deployment and frontend health verification.
+5. Publish `Staging Deployment` check-run.
+
+This insertion point keeps app rollout deterministic by ensuring schema changes are applied before app versions that depend on them.
 
 ## Verification Output Expectations
 
@@ -58,5 +80,14 @@ If staging health checks fail after deployment:
 2. Re-trigger provider deploy hooks using those prior tags.
 3. Re-run health probes for backend then frontend.
 4. Keep failed deployment metadata for audit history; do not retag mutable channels as rollback mechanism.
+
+## Migration Rollback Policy (Future Phase)
+
+If migration execution is enabled in a later phase:
+
+1. Migration failure aborts deployment before backend/frontend deploy steps.
+2. If app deploy fails after a successful migration, first redeploy last known-good app artifact compatible with the migrated schema.
+3. Destructive down migrations are manual-only and require an approved, tested rollback script for the exact migration version.
+4. Preserve migration and deployment logs for incident review and forward-fix planning.
 
 This keeps rollback deterministic by restoring known-good immutable artifacts.
