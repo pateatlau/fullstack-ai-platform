@@ -1,8 +1,11 @@
 import { ChatPage } from './pages/ChatPage'
-import './App.css'
 
 function App() {
-  return <ChatPage />
+  return (
+    <div className="min-h-dvh bg-shell-100 text-shell-950">
+      <ChatPage />
+    </div>
+  )
 }
 
 // Export the App component as the default export

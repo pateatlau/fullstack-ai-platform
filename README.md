@@ -8,6 +8,8 @@ A full-stack streaming chatbot project with:
 
 Current status:
 
+- Frontend chatbot page redesigned with Tailwind CSS v4 into a responsive ChatGPT-like shell
+- Sidebar foundation added for future multi-chat sessions, with mobile drawer and tablet collapse behavior
 - Stream interruption handling with inline Retry UI
 - Typed backend error envelopes and SSE error frames
 - Request-size and schema validation on both backends
@@ -29,6 +31,8 @@ Current status:
 - Streaming SSE endpoint: `POST /api/chat/stream`
 - Health endpoint: `GET /api/health`
 - Provider abstraction: switch between OpenAI/Gemini without frontend changes
+- Responsive chat shell with persistent desktop sidebar, collapsible tablet sidebar, and mobile drawer
+- Tailwind CSS v4-driven chat UI with accessible landmarks, focus states, and sticky composer
 - Stop/cancel while streaming
 - Retry after interrupted streams
 - Standardized error handling for validation, timeout, and provider failures
@@ -38,7 +42,7 @@ Current status:
 ```mermaid
 flowchart LR
   subgraph Client["React Client (Vite + TS)"]
-    UI["Chat UI\nMessageList / Composer"]
+    UI["Chat UI\nSidebar / MessageList / Composer"]
     Hook["useChatStream hook\nfetch + SSE parser + AbortController"]
   end
 
@@ -113,6 +117,12 @@ npm run dev
 ```
 
 Frontend default URL: `http://localhost:5173`
+
+Frontend highlights:
+
+- Tailwind CSS v4 app shell and chat page styling
+- Responsive sidebar behavior across mobile, tablet, and desktop
+- Streaming thread UI with retry, stop, and connection error feedback
 
 Python backend default URL: `http://localhost:8000`
 
