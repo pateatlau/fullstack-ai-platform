@@ -1,34 +1,40 @@
 # Frontend Application
 
-Streaming chat UI for the Basic Chatbot project.
+Streaming chat UI for the Fullstack AI Platform project.
 
-Current frontend scope includes the Phase 7-10 improvements:
+Current frontend scope includes the completed chatbot redesign and validation work:
 
+- Tailwind CSS v4-based ChatGPT-like app shell
+- Responsive sidebar foundation for future multi-chat sessions
+- Polished conversation thread and sticky composer
 - inline Retry after interrupted streams
 - top-of-page banner for total connection failures
 - Stop/cancel support during streaming
-- reducer and composer integration tests
+- reducer, composer, and accessibility smoke coverage
 - deployment env wiring for a hosted backend
 
 ## Features
 
-- Message list with role-based bubbles
-- Composer with Send/Stop behavior
+- Tailwind CSS v4 styling with design-token-driven utility classes
+- Left sidebar with current session state, saved-session placeholders, and responsive drawer/collapse behavior
+- Message list with role-based bubbles and streaming states
+- Composer with Send/Stop behavior and sticky bottom layout
 - Streaming token updates over SSE
 - Local reducer/context chat state
 - Retry after interrupted assistant streams
 - Connection error banner for backend/network failures
-- Unit tests for SSE parsing, reducer behavior, and composer-driven streaming
+- Unit tests for SSE parsing, reducer behavior, composer-driven streaming, and shell accessibility hooks
 
 ## Key Files
 
-- `src/pages/ChatPage.tsx` - page wiring (state + streaming hook + UI)
+- `src/pages/ChatPage.tsx` - responsive chat shell, sidebar state, and page wiring
 - `src/context/ChatContext.tsx` - provider + context hook
 - `src/state/chatReducer.ts` - chat state/actions reducer
 - `src/hooks/useChatStream.ts` - fetch + stream reader + parser integration
 - `src/api/chatClient.ts` - `/api/chat` + `/api/chat/stream` client
 - `src/api/sseParser.ts` - buffered SSE frame parser
 - `src/components/` - `MessageList`, `MessageBubble`, `Composer`, `StreamingIndicator`
+- `src/index.css` - Tailwind CSS v4 import, theme tokens, and global base layer
 
 ## Setup
 
@@ -50,6 +56,13 @@ npm run dev
 ```
 
 App runs at `http://localhost:5173` by default.
+
+## UI Overview
+
+- Desktop: persistent left sidebar, conversation panel, sticky composer
+- Tablet: collapsible sidebar controlled from the header
+- Mobile: off-canvas sidebar drawer with overlay
+- Thread UI: distinct user/assistant bubble styling, streaming placeholder, retry and stop states
 
 ## Scripts
 
@@ -79,6 +92,12 @@ npm run lint
 4. `SseParser` emits `start`/`delta`/`end`/`error` frames.
 5. Reducer updates assistant message incrementally per `delta`.
 6. If the connection drops mid-stream, partial content is preserved and the UI offers Retry.
+
+## Accessibility Notes
+
+- Semantic landmarks for sidebar navigation, conversation main region, message thread, and composer
+- Focus-visible treatments across shell controls and action buttons
+- Accessible labels for message input, session navigation, and streaming state
 
 ## Error and Retry Behavior
 
@@ -110,6 +129,7 @@ Current frontend tests cover:
 - SSE frame parsing across arbitrary chunk boundaries
 - reducer transitions for streaming, interruption, retry, and error cases
 - page-level composer behavior with streamed tokens and Stop
+- shell accessibility smoke coverage for core landmarks and controls
 
 ## Deployment Notes
 

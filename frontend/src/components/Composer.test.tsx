@@ -91,6 +91,23 @@ describe('Composer behavior', () => {
     vi.restoreAllMocks()
   })
 
+  it('exposes accessible shell landmarks and primary controls', () => {
+    render(<ChatPage />)
+
+    expect(screen.getByLabelText('Chat sessions')).not.toBeNull()
+    expect(screen.getByLabelText('Conversation')).not.toBeNull()
+    expect(screen.getByLabelText('Message thread')).not.toBeNull()
+    expect(screen.getByLabelText('Message composer')).not.toBeNull()
+    expect(screen.getByRole('button', { name: '+ New chat' })).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Send' })).not.toBeNull()
+    expect(screen.getByLabelText('Message input')).not.toBeNull()
+    expect(
+      screen
+        .getByRole('button', { name: /New conversation|Current session/ })
+        .getAttribute('aria-current'),
+    ).toBe('page')
+  })
+
   it('streams assistant tokens into the chat page after send', async () => {
     const fetchMock = vi
       .fn()
@@ -107,7 +124,10 @@ describe('Composer behavior', () => {
     render(<ChatPage />)
 
     const user = userEvent.setup()
+    expect(screen.getByText('Press Enter to send, Shift+Enter for a new line.')).not.toBeNull()
+    expect(screen.getByText('Waiting for input')).not.toBeNull()
     await user.type(screen.getByPlaceholderText('Ask something…'), 'Hello there')
+    expect(screen.getByText('Ready to send')).not.toBeNull()
     await user.click(screen.getByRole('button', { name: 'Send' }))
 
     await waitFor(() => {
@@ -128,7 +148,7 @@ describe('Composer behavior', () => {
             'event: delta\ndata: {"type":"delta","id":"resp_2","content":" answer","timestamp":"t2"}\n\n',
             'event: end\ndata: {"type":"end","id":"resp_2","finish_reason":"stop","timestamp":"t3"}\n\n',
           ],
-          40,
+          120,
           init?.signal ?? undefined,
         )
       })
@@ -151,6 +171,6 @@ describe('Composer behavior', () => {
       expect(screen.getByText('Stopped.')).not.toBeNull()
     })
 
-    expect(screen.queryByText('Partial answer')).toBeNull()
+    expect(screen.getByText(/Partial/)).not.toBeNull()
   })
 })

@@ -34,3 +34,12 @@ export interface ChatSession {
   id: string // anticipates future persistence; unused server-side in MVP
   messages: Message[]
 }
+
+export interface ChatSessionSummary {
+  id: string
+  title: string
+  preview: string
+  updatedLabel: string
+  messageCount: number
+  isSelectable: boolean
+}
