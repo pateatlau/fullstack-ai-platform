@@ -15,13 +15,14 @@ Current status:
 - Request-size and schema validation on both backends
 - Backend and frontend automated test coverage for the main chat flow
 - OpenAI and Gemini provider support behind the same frontend contract
-- Python backend remains the behavior reference while the Node backend reaches parity
-- Deployment runbook and prerequisite checklist documented for Render + Vercel
+- Python backend is the active MVP backend in production (Railway)
+- Node backend is paused until post-MVP work resumes
+- Deployment runbook and prerequisite checklist documented for Railway + Vercel
 
 ## Repository Structure
 
-- `backend-python/` - FastAPI reference backend
-- `backend-nodejs/` - Express + TypeScript parity backend
+- `backend-python/` - FastAPI active MVP backend
+- `backend-nodejs/` - Express + TypeScript post-MVP backend (currently paused)
 - `frontend/` - React client with streaming UI
 - `docs/` - planning notes (ignored by git in this repo setup)
 
@@ -98,7 +99,7 @@ uv sync
 make run
 ```
 
-### 2) Node Backend
+### 2) Node Backend (Optional, Post-MVP)
 
 ```bash
 cd backend-nodejs
@@ -127,6 +128,8 @@ Frontend highlights:
 Python backend default URL: `http://localhost:8000`
 
 Node backend recommended local URL: `http://localhost:8001`
+
+Production backend URL (MVP): `https://fullstack-ai-platform-production.up.railway.app`
 
 Before running locally, make sure the selected backend provider has a real API key in the backend `.env` file you are using.
 

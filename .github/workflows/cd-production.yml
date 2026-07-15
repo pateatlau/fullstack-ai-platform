@@ -10,12 +10,12 @@ on:
       production_api_base_url:
         description: Optional fallback API base URL if the production environment variable is not available
         required: false
-        default: https://fullstack-ai-platform-nodejs-production.up.railway.app
+        default: https://fullstack-ai-platform-production.up.railway.app
         type: string
       production_backend_healthcheck_url:
         description: Optional fallback backend healthcheck URL if the production environment variable is not available
         required: false
-        default: https://fullstack-ai-platform-nodejs-production.up.railway.app/api/health
+        default: https://fullstack-ai-platform-production.up.railway.app/api/health
         type: string
       production_frontend_healthcheck_url:
         description: Optional fallback frontend healthcheck URL if the production environment variable is not available
@@ -92,7 +92,7 @@ jobs:
           owner="${owner_raw,,}"
           image_tag="sha-${SOURCE_SHA}"
           started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          backend_image="${{ env.REGISTRY }}/${owner}/fullstack-ai-platform-backend-nodejs:${image_tag}"
+          backend_image="${{ env.REGISTRY }}/${owner}/fullstack-ai-platform-backend-python:${image_tag}"
           frontend_image="${{ env.REGISTRY }}/${owner}/fullstack-ai-platform-frontend:${image_tag}"
 
           echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"

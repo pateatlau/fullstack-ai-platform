@@ -76,7 +76,7 @@ jobs:
           owner="${owner_raw,,}"
           image_tag="sha-${SOURCE_SHA}"
           started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          backend_image="${{ env.REGISTRY }}/${owner}/fullstack-ai-platform-backend-nodejs:${image_tag}"
+          backend_image="${{ env.REGISTRY }}/${owner}/fullstack-ai-platform-backend-python:${image_tag}"
           frontend_image="${{ env.REGISTRY }}/${owner}/fullstack-ai-platform-frontend:${image_tag}"
 
           echo "owner=${owner}" >> "$GITHUB_OUTPUT"

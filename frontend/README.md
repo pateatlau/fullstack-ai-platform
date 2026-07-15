@@ -135,6 +135,12 @@ Current frontend tests cover:
 
 For hosted deployment, set `VITE_API_BASE_URL` to the public backend URL.
 
+Current MVP production backend:
+
+- `VITE_API_BASE_URL=https://fullstack-ai-platform-production.up.railway.app`
+
 The frontend is intended for Vercel static deployment, but successful production use also depends on the backend allowing the exact frontend origin via `CORS_ALLOWED_ORIGINS`.
+
+Use exact origins (no trailing slash) in `CORS_ALLOWED_ORIGINS`.
 
 The full deployment prerequisite checklist and manual runbook live in [../docs/plans/chatbot-v1.md](../docs/plans/chatbot-v1.md).
