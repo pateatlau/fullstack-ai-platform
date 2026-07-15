@@ -6,7 +6,7 @@ This document defines the staging deployment contract used by `.github/workflows
 
 - Trigger: successful completion of `Build and Publish Images` on `main`
 - Deploy source: immutable image tags from CI artifacts
-  - `ghcr.io/<owner>/fullstack-ai-platform-backend-nodejs:sha-<commit_sha>`
+  - `ghcr.io/<owner>/fullstack-ai-platform-backend-python:sha-<commit_sha>`
   - `ghcr.io/<owner>/fullstack-ai-platform-frontend:sha-<commit_sha>`
 - Deploy jobs do not rebuild images.
 

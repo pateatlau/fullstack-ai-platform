@@ -7,7 +7,7 @@ This document defines the production promotion contract used by `.github/workflo
 - Trigger: manual `workflow_dispatch`
 - Required input: `source_sha` (full 40-char commit SHA)
 - Deploy source: immutable image tags from CI artifacts
-  - `ghcr.io/<owner>/fullstack-ai-platform-backend-nodejs:sha-<source_sha>`
+  - `ghcr.io/<owner>/fullstack-ai-platform-backend-python:sha-<source_sha>`
   - `ghcr.io/<owner>/fullstack-ai-platform-frontend:sha-<source_sha>`
 - Promotion guard: selected `source_sha` must have a successful `Staging Deployment` check-run.
 

@@ -190,19 +190,28 @@ Current backend tests cover:
 
 ## Deployment Notes
 
-This backend is intended to deploy to Render as a Python web service.
+This backend is the active MVP production backend and is deployed to Railway.
 
 Recommended commands:
 
 ```bash
 uv sync
-uv run python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
+uv run python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
 ```
+
+Railway notes:
+
+- Prefer Dockerfile deploy mode for this service.
+- In Railway service settings, set root directory to `backend-python`.
+- If using Nixpacks instead, use:
+  - Build command: `uv sync --no-dev`
+  - Start command: `uv run python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Set `CORS_ALLOWED_ORIGINS` to the exact frontend origin(s), comma-separated, with no trailing slash.
 
 Before deployment, the operator must prepare:
 
 - a reachable Git remote
-- a Render account
+- a Railway account
 - production provider secrets
 - production `CORS_ALLOWED_ORIGINS`
 

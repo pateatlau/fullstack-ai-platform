@@ -2,6 +2,8 @@
 
 Express + TypeScript backend that mirrors the Python reference API.
 
+Status: post-MVP track. Production currently defaults to the Python backend.
+
 ## Stack
 
 - Node.js 20+
@@ -158,7 +160,7 @@ event: end
 data: {"type":"end","id":"resp_123","finish_reason":"stop","timestamp":"2026-07-10T12:00:00.500Z"}
 ```
 
-## Backend Switching Workflow
+## Backend Switching Workflow (Optional, Local Comparison)
 
 Use this when comparing Node behavior against the Python reference.
 
