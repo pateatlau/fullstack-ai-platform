@@ -42,7 +42,7 @@ def _extract_stream_delta(event: Any) -> tuple[str, str | None] | None:
             stop_reason = getattr(getattr(event, "delta", None), "stop_reason", None)
             return "", stop_reason
         if getattr(event, "type", None) == "message_stop":
-            return "", "stop"
+            return None
         return None
 
     delta = getattr(event, "delta", None)

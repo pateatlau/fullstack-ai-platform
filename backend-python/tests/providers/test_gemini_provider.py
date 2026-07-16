@@ -251,3 +251,22 @@ def test_get_settings_fails_fast_when_anthropic_key_is_missing(
             get_settings()
     finally:
         get_settings.cache_clear()
+
+
+def test_get_settings_fails_fast_for_unsupported_provider_value(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LLM_PROVIDER", "invalid-provider")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    get_settings.cache_clear()
+
+    try:
+        with pytest.raises(ValueError, match="Unsupported LLM_PROVIDER"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()

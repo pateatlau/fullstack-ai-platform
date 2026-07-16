@@ -114,7 +114,41 @@ class ChatService:
     def _resolve_provider(
         self, request: ChatRequestSchema
     ) -> tuple[LLMProvider, str, ProviderName]:
-        provider_name: ProviderName = request.provider or self._settings.llm_provider  # type: ignore[assignment]
+        provider_name_raw = request.provider or self._settings.llm_provider
+        allowed_providers: tuple[ProviderName, ...] = (
+            "openai",
+            "gemini",
+            "groq",
+            "anthropic",
+        )
+        if provider_name_raw not in allowed_providers:
+            raise ChatServiceError(
+                code="validation_error",
+                message=(
+                    f"Unsupported provider '{provider_name_raw}'. "
+                    "Supported providers: openai, gemini, groq, anthropic."
+                ),
+                status_code=422,
+            )
+
+        provider_name = cast(ProviderName, provider_name_raw)
+        required_key_by_provider: dict[ProviderName, tuple[str, str | None]] = {
+            "openai": ("OPENAI_API_KEY", self._settings.openai_api_key),
+            "gemini": ("GEMINI_API_KEY", self._settings.gemini_api_key),
+            "groq": ("GROQ_API_KEY", self._settings.groq_api_key),
+            "anthropic": ("ANTHROPIC_API_KEY", self._settings.anthropic_api_key),
+        }
+        key_env_name, key_value = required_key_by_provider[provider_name]
+        if not key_value:
+            raise ChatServiceError(
+                code="validation_error",
+                message=(
+                    f"Provider '{provider_name}' is selected but {key_env_name} "
+                    "is not set."
+                ),
+                status_code=422,
+            )
+
         provider = ProviderFactory.get_provider(provider_name, self._settings)
         model = request.model or self._default_model(provider_name)
         return provider, model, provider_name

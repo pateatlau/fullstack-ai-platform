@@ -31,7 +31,6 @@ Current status:
 - Non-streaming endpoint: `POST /api/chat`
 - Streaming SSE endpoint: `POST /api/chat/stream`
 - Health endpoint: `GET /api/health`
-- Provider abstraction: switch between OpenAI/Gemini without frontend changes
 - Provider abstraction: switch between OpenAI/Gemini/Groq/Anthropic without frontend changes
 - Responsive chat shell with persistent desktop sidebar, collapsible tablet sidebar, and mobile drawer
 - Tailwind CSS v4-driven chat UI with accessible landmarks, focus states, and sticky composer

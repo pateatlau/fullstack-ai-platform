@@ -8,16 +8,19 @@ from app.core.config import Settings
 Role = Literal["system", "user", "assistant"]
 ProviderName = Literal["openai", "gemini", "groq", "anthropic"]
 
-ALLOWED_PROVIDER_MODELS: dict[ProviderName, set[str]] = {
-    "openai": {"gpt-4o-mini"},
-    "gemini": {"gemini-3.1-flash-lite"},
-    "groq": {"openai/gpt-oss-20b"},
-    "anthropic": {"claude-haiku-4-5-20251001"},
-}
-
 
 def _max_message_length() -> int:
     return Settings().max_message_length
+
+
+def _allowed_provider_models() -> dict[ProviderName, set[str]]:
+    settings = Settings()
+    return {
+        "openai": {settings.openai_model},
+        "gemini": {settings.gemini_model},
+        "groq": {settings.groq_model},
+        "anthropic": {settings.anthropic_model},
+    }
 
 
 class ChatMessageSchema(BaseModel):
@@ -59,7 +62,7 @@ class ChatRequestSchema(BaseModel):
         if self.provider is None or self.model is None:
             return self
 
-        allowed_models = ALLOWED_PROVIDER_MODELS.get(self.provider)
+        allowed_models = _allowed_provider_models().get(self.provider)
         if allowed_models is None:
             return self
 

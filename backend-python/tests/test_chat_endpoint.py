@@ -14,9 +14,13 @@ from starlette.types import Message, Scope
 
 from app.core.config import Settings
 from app.main import MAX_REQUEST_BODY_BYTES, app, enforce_request_size
-from app.schemas.chat import ChatMessageSchema
+from app.schemas.chat import ChatMessageSchema, ChatRequestSchema
 from app.providers.factory import ProviderFactory
-from app.services.chat_service import normalize_chat_error
+from app.services.chat_service import (
+    ChatService,
+    ChatServiceError,
+    normalize_chat_error,
+)
 from tests.fakes import FakeProvider
 
 
@@ -117,6 +121,37 @@ async def test_chat_endpoint_accepts_supported_provider_model_pairs(
     assert response.status_code == 200
     assert body["provider"] == provider
     assert body["model"] == model
+
+
+@pytest.mark.anyio
+async def test_chat_endpoint_accepts_provider_model_configured_via_env(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    fake_provider = FakeProvider("Fake completion response")
+
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(fake_provider),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/chat",
+            json={
+                "messages": [{"role": "user", "content": "Hello"}],
+                "provider": "groq",
+                "model": "llama-3.3-70b-versatile",
+            },
+        )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["provider"] == "groq"
+    assert body["model"] == "llama-3.3-70b-versatile"
 
 
 @pytest.mark.anyio
@@ -264,6 +299,55 @@ def test_normalize_chat_error_handles_provider_specific_sdk_errors(
     normalized = normalize_chat_error(exception)
 
     assert normalized.code == expected_code
+
+
+@pytest.mark.anyio
+async def test_chat_service_rejects_selected_provider_with_missing_api_key() -> None:
+    service = ChatService(
+        settings=Settings(
+            llm_provider="openai",
+            openai_api_key="test-openai-key",
+            gemini_api_key="test-gemini-key",
+            groq_api_key="test-groq-key",
+            anthropic_api_key=None,
+        )
+    )
+
+    request = ChatRequestSchema(
+        messages=[ChatMessageSchema(role="user", content="Hello")],
+        provider="anthropic",
+    )
+
+    with pytest.raises(ChatServiceError) as exc_info:
+        await service.complete_chat(request)
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.code == "validation_error"
+    assert "ANTHROPIC_API_KEY" in exc_info.value.message
+
+
+@pytest.mark.anyio
+async def test_chat_service_rejects_invalid_default_provider_setting() -> None:
+    service = ChatService(
+        settings=Settings(
+            llm_provider="invalid-provider",
+            openai_api_key="test-openai-key",
+            gemini_api_key="test-gemini-key",
+            groq_api_key="test-groq-key",
+            anthropic_api_key="test-anthropic-key",
+        )
+    )
+
+    request = ChatRequestSchema(
+        messages=[ChatMessageSchema(role="user", content="Hello")]
+    )
+
+    with pytest.raises(ChatServiceError) as exc_info:
+        await service.complete_chat(request)
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.code == "validation_error"
+    assert "Unsupported provider" in exc_info.value.message
 
 
 @pytest.mark.anyio

@@ -306,10 +306,7 @@ def test_stream_chat_ignores_non_text_metadata_events() -> None:
 
     chunks = asyncio.run(gather_chunks())
 
-    assert chunks == [
-        {"content": "", "finish_reason": "stop"},
-        {"content": "payload", "finish_reason": None},
-    ]
+    assert chunks == [{"content": "payload", "finish_reason": None}]
 
 
 def test_stream_chat_propagates_sdk_timeout_error() -> None:

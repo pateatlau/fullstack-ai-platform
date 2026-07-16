@@ -44,6 +44,14 @@ class Settings(BaseSettings):
 
     def validate_provider_key(self) -> None:
         """Fail fast if the selected provider's API key is missing."""
+        supported_providers = {"openai", "gemini", "groq", "anthropic"}
+        if self.llm_provider not in supported_providers:
+            supported = ", ".join(sorted(supported_providers))
+            raise ValueError(
+                f"Unsupported LLM_PROVIDER '{self.llm_provider}'. "
+                f"Supported providers: {supported}."
+            )
+
         if self.llm_provider == "openai" and not self.openai_api_key:
             raise ValueError(
                 "LLM_PROVIDER is 'openai' but OPENAI_API_KEY is not set. "
