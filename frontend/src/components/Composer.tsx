@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react'
+import { useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react'
 import {
   getProviderOption,
   providerModelOptions,
@@ -15,13 +15,15 @@ export function Composer({ onSend, onStop, isStreaming }: ComposerProps) {
   const [value, setValue] = useState('')
   const [selectedProvider, setSelectedProvider] = useState<ProviderName>('openai')
   const [selectedModel, setSelectedModel] = useState(getProviderOption('openai').model)
+  const selectedProviderRef = useRef<ProviderName>('openai')
+  const selectedModelRef = useRef(getProviderOption('openai').model)
   const hasMessage = value.trim().length > 0
   const modelOptions = providerModelOptions.filter((option) => option.provider === selectedProvider)
 
   const submit = () => {
     const trimmed = value.trim()
     if (!trimmed || isStreaming) return
-    onSend(trimmed, selectedProvider, selectedModel)
+    onSend(trimmed, selectedProviderRef.current, selectedModelRef.current)
     setValue('')
   }
 
@@ -40,11 +42,14 @@ export function Composer({ onSend, onStop, isStreaming }: ComposerProps) {
   const handleProviderChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const nextProvider = event.target.value as ProviderName
     const nextOption = getProviderOption(nextProvider)
+    selectedProviderRef.current = nextProvider
+    selectedModelRef.current = nextOption.model
     setSelectedProvider(nextProvider)
     setSelectedModel(nextOption.model)
   }
 
   const handleModelChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    selectedModelRef.current = event.target.value
     setSelectedModel(event.target.value)
   }
 

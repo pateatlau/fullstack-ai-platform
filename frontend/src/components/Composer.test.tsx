@@ -183,6 +183,64 @@ describe('Composer behavior', () => {
     expect(body.model).toBe('claude-haiku-4-5-20251001')
   })
 
+  it('uses newly selected provider/model on a second send after switching providers', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createStreamResponse([
+          'event: start\ndata: {"type":"start","id":"resp_5","timestamp":"t0"}\n\n',
+          'event: delta\ndata: {"type":"delta","id":"resp_5","content":"Groq first","timestamp":"t1"}\n\n',
+          'event: end\ndata: {"type":"end","id":"resp_5","finish_reason":"stop","timestamp":"t2"}\n\n',
+        ]),
+      )
+      .mockResolvedValueOnce(
+        createStreamResponse([
+          'event: start\ndata: {"type":"start","id":"resp_6","timestamp":"t3"}\n\n',
+          'event: delta\ndata: {"type":"delta","id":"resp_6","content":"Anthropic second","timestamp":"t4"}\n\n',
+          'event: end\ndata: {"type":"end","id":"resp_6","finish_reason":"stop","timestamp":"t5"}\n\n',
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ChatPage />)
+
+    const user = userEvent.setup()
+
+    await user.selectOptions(screen.getByLabelText('Provider'), 'groq')
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'First request')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(screen.getByText('Groq first')).not.toBeNull()
+    })
+
+    await user.selectOptions(screen.getByLabelText('Provider'), 'anthropic')
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'Second request')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(screen.getByText('Anthropic second')).not.toBeNull()
+    })
+
+    const firstRequestInit = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const firstBody = JSON.parse(String(firstRequestInit.body)) as {
+      provider?: string
+      model?: string
+    }
+    expect(firstBody.provider).toBe('groq')
+    expect(firstBody.model).toBe('openai/gpt-oss-20b')
+
+    const secondRequestInit = fetchMock.mock.calls[1]?.[1] as RequestInit
+    const secondBody = JSON.parse(String(secondRequestInit.body)) as {
+      provider?: string
+      model?: string
+    }
+    expect(secondBody.provider).toBe('anthropic')
+    expect(secondBody.model).toBe('claude-haiku-4-5-20251001')
+  })
+
   it('streams assistant tokens into the chat page after send', async () => {
     const fetchMock = vi
       .fn()
