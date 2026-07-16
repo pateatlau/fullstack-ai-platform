@@ -14,7 +14,7 @@ export interface Message {
 export interface ChatRequest {
   messages: Pick<Message, 'role' | 'content'>[]
   model?: string
-  provider?: 'openai' | 'gemini'
+  provider?: 'openai' | 'gemini' | 'groq' | 'anthropic'
   temperature?: number
 }
 

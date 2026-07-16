@@ -4,7 +4,7 @@ A full-stack streaming chatbot project with:
 
 - Frontend: React + TypeScript + Vite
 - Backends: FastAPI (Python) and Express + TypeScript (Node.js)
-- LLM providers: OpenAI and Gemini (switchable via environment variables)
+- LLM providers: OpenAI, Gemini, Groq, and Anthropic (switchable via environment variables)
 
 Current status:
 
@@ -14,7 +14,7 @@ Current status:
 - Typed backend error envelopes and SSE error frames
 - Request-size and schema validation on both backends
 - Backend and frontend automated test coverage for the main chat flow
-- OpenAI and Gemini provider support behind the same frontend contract
+- OpenAI, Gemini, Groq, and Anthropic provider support behind the same frontend contract
 - Python backend is the active MVP backend in production (Railway)
 - Node backend is paused until post-MVP work resumes
 - Deployment runbook and prerequisite checklist documented for Railway + Vercel
@@ -31,7 +31,7 @@ Current status:
 - Non-streaming endpoint: `POST /api/chat`
 - Streaming SSE endpoint: `POST /api/chat/stream`
 - Health endpoint: `GET /api/health`
-- Provider abstraction: switch between OpenAI/Gemini without frontend changes
+- Provider abstraction: switch between OpenAI/Gemini/Groq/Anthropic without frontend changes
 - Responsive chat shell with persistent desktop sidebar, collapsible tablet sidebar, and mobile drawer
 - Tailwind CSS v4-driven chat UI with accessible landmarks, focus states, and sticky composer
 - Stop/cancel while streaming
@@ -59,11 +59,15 @@ flowchart LR
     Base[["LLMProvider interface"]]
     OpenAIAdapter["OpenAIProvider"]
     GeminiAdapter["GeminiProvider"]
+    GroqAdapter["GroqProvider"]
+    AnthropicAdapter["AnthropicProvider"]
   end
 
   subgraph External["External APIs"]
     OpenAI[("OpenAI API")]
     Gemini[("Gemini API")]
+    Groq[("Groq API")]
+    Anthropic[("Anthropic API")]
   end
 
   subgraph Future["Future (post-V1)"]
@@ -77,6 +81,8 @@ flowchart LR
   Factory --> Base
   Base --> OpenAIAdapter --> OpenAI
   Base --> GeminiAdapter --> Gemini
+  Base --> GroqAdapter --> Groq
+  Base --> AnthropicAdapter --> Anthropic
   Service -. future .-> DB
 ```
 
@@ -94,7 +100,7 @@ flowchart LR
 ```bash
 cd backend-python
 cp .env.example .env
-# Fill in API keys in .env
+# Fill in API keys in .env for the selected provider
 uv sync
 make run
 ```
@@ -408,6 +414,7 @@ Content-Type: application/json
 ```
 
 Returns `text/event-stream` with frames: `start`, `delta`, `end`, and `error`.
+Before running locally, make sure the selected backend provider has a real API key in the backend `.env` file you are using.
 
 ## Development Commands
 

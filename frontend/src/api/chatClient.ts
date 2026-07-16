@@ -8,7 +8,7 @@ export interface ChatResponse {
   role: 'assistant'
   content: string
   model: string
-  provider: 'openai' | 'gemini'
+  provider: 'openai' | 'gemini' | 'groq' | 'anthropic'
   created_at: string
 }
 

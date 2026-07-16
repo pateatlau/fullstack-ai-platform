@@ -1,16 +1,26 @@
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.config import Settings
 
 Role = Literal["system", "user", "assistant"]
-ProviderName = Literal["openai", "gemini"]
+ProviderName = Literal["openai", "gemini", "groq", "anthropic"]
 
 
 def _max_message_length() -> int:
     return Settings().max_message_length
+
+
+def _allowed_provider_models() -> dict[ProviderName, set[str]]:
+    settings = Settings()
+    return {
+        "openai": {settings.openai_model},
+        "gemini": {settings.gemini_model},
+        "groq": {settings.groq_model},
+        "anthropic": {settings.anthropic_model},
+    }
 
 
 class ChatMessageSchema(BaseModel):
@@ -46,6 +56,24 @@ class ChatRequestSchema(BaseModel):
         if not trimmed:
             raise ValueError("model must not be blank")
         return trimmed
+
+    @model_validator(mode="after")
+    def validate_provider_model_compatibility(self) -> "ChatRequestSchema":
+        if self.provider is None or self.model is None:
+            return self
+
+        allowed_models = _allowed_provider_models().get(self.provider)
+        if allowed_models is None:
+            return self
+
+        if self.model not in allowed_models:
+            allowed = ", ".join(sorted(allowed_models))
+            raise ValueError(
+                f"model '{self.model}' is not valid for provider '{self.provider}'. "
+                f"Allowed: {allowed}"
+            )
+
+        return self
 
 
 class ChatResponseSchema(BaseModel):

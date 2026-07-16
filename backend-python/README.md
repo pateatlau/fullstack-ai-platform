@@ -8,7 +8,7 @@ Current backend scope includes Phase 7-10 work:
 - typed streaming SSE error frames
 - provider timeout normalization
 - request-size and schema validation
-- Gemini provider integration behind the shared provider interface
+- Gemini, Groq, and Anthropic provider integration behind the shared provider interface
 - automated endpoint and provider tests
 
 ## Tech Stack
@@ -18,6 +18,8 @@ Current backend scope includes Phase 7-10 work:
 - pydantic-settings
 - OpenAI SDK
 - Google GenAI SDK
+- Groq SDK
+- Anthropic SDK
 
 ## Layout
 
@@ -44,6 +46,8 @@ Then fill in the real key for the selected provider before starting the server.
 
 - If `LLM_PROVIDER=openai`, set `OPENAI_API_KEY`
 - If `LLM_PROVIDER=gemini`, set `GEMINI_API_KEY`
+- If `LLM_PROVIDER=groq`, set `GROQ_API_KEY`
+- If `LLM_PROVIDER=anthropic`, set `ANTHROPIC_API_KEY`
 
 The app now fails fast during settings load if the selected provider key is missing.
 
@@ -90,6 +94,10 @@ OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-4o-mini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite
+GROQ_API_KEY=...
+GROQ_MODEL=openai/gpt-oss-20b
+ANTHROPIC_API_KEY=...
+ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 CORS_ALLOWED_ORIGINS=http://localhost:5173
 APP_ENV=development
 MAX_MESSAGE_LENGTH=4000
@@ -99,7 +107,10 @@ REQUEST_TIMEOUT_SECONDS=30
 Additional behavior tied to these settings:
 
 - `LLM_PROVIDER` controls the default adapter resolved by `ProviderFactory`
+- `OPENAI_MODEL` defaults to `gpt-4o-mini`
 - `GEMINI_MODEL` defaults to `gemini-3.1-flash-lite`
+- `GROQ_MODEL` defaults to `openai/gpt-oss-20b`
+- `ANTHROPIC_MODEL` defaults to `claude-haiku-4-5-20251001`
 - `REQUEST_TIMEOUT_SECONDS` caps provider completion and stream iteration time
 - `CORS_ALLOWED_ORIGINS` must include the deployed frontend origin in non-local environments
 
@@ -107,7 +118,7 @@ Additional behavior tied to these settings:
 
 - Default provider comes from `LLM_PROVIDER`.
 - You can also pass `provider` and `model` in each chat request.
-- OpenAI and Gemini use the same `/api/chat` and `/api/chat/stream` contracts.
+- OpenAI, Gemini, Groq, and Anthropic use the same `/api/chat` and `/api/chat/stream` contracts.
 - Health responses report the active default provider.
 
 ## Endpoints
@@ -186,7 +197,18 @@ Current backend tests cover:
 - `POST /api/chat` success path
 - `POST /api/chat` validation and provider-error paths
 - `POST /api/chat/stream` happy path, provider error, and client disconnect behavior
-- Gemini provider completion/streaming behavior and env-driven provider selection
+- Gemini, Groq, and Anthropic provider completion/streaming behavior and env-driven provider selection
+
+## Manual Smoke Checklist
+
+Use this checklist after changing provider wiring or env configuration:
+
+1. Set `LLM_PROVIDER` to one supported provider and configure only its matching API key.
+2. Start the backend and confirm `GET /api/health` reports the selected provider.
+3. Submit `POST /api/chat` with the provider omitted and confirm the backend uses that provider's default model.
+4. Submit `POST /api/chat/stream` with the provider omitted and confirm the stream starts, emits deltas, and ends with the same default model.
+5. Repeat steps 2-4 for OpenAI, Gemini, Groq, and Anthropic.
+6. Confirm that a mismatched provider/model pair returns a validation error before any provider request is made.
 
 ## Deployment Notes
 

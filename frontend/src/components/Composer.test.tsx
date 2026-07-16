@@ -101,11 +101,86 @@ describe('Composer behavior', () => {
     expect(screen.getByRole('button', { name: '+ New chat' })).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Send' })).not.toBeNull()
     expect(screen.getByLabelText('Message input')).not.toBeNull()
+    expect(screen.getByLabelText('Provider')).not.toBeNull()
+    expect(screen.getByLabelText('Model')).not.toBeNull()
+    expect(screen.getByDisplayValue('OpenAI')).not.toBeNull()
+    expect(screen.getByDisplayValue('gpt-4o-mini')).not.toBeNull()
     expect(
       screen
         .getByRole('button', { name: /New conversation|Current session/ })
         .getAttribute('aria-current'),
     ).toBe('page')
+  })
+
+  it('sends the selected provider and model with the chat request', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        createStreamResponse([
+          'event: start\ndata: {"type":"start","id":"resp_3","timestamp":"t0"}\n\n',
+          'event: delta\ndata: {"type":"delta","id":"resp_3","content":"Hello","timestamp":"t1"}\n\n',
+          'event: end\ndata: {"type":"end","id":"resp_3","finish_reason":"stop","timestamp":"t2"}\n\n',
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ChatPage />)
+
+    const user = userEvent.setup()
+    await user.selectOptions(screen.getByLabelText('Provider'), 'groq')
+    expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('openai/gpt-oss-20b')
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'Use Groq')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const body = JSON.parse(String(requestInit.body)) as {
+      provider?: string
+      model?: string
+      messages: Array<{ role: string; content: string }>
+    }
+
+    expect(body.provider).toBe('groq')
+    expect(body.model).toBe('openai/gpt-oss-20b')
+    expect(body.messages.at(-1)?.content).toBe('Use Groq')
+  })
+
+  it('streams assistant tokens after selecting Anthropic', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        createStreamResponse([
+          'event: start\ndata: {"type":"start","id":"resp_4","timestamp":"t0"}\n\n',
+          'event: delta\ndata: {"type":"delta","id":"resp_4","content":"Anthropic","timestamp":"t1"}\n\n',
+          'event: delta\ndata: {"type":"delta","id":"resp_4","content":" works","timestamp":"t2"}\n\n',
+          'event: end\ndata: {"type":"end","id":"resp_4","finish_reason":"stop","timestamp":"t3"}\n\n',
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ChatPage />)
+
+    const user = userEvent.setup()
+    await user.selectOptions(screen.getByLabelText('Provider'), 'anthropic')
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'Hello Anthropic')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(screen.getByText('Anthropic works')).not.toBeNull()
+    })
+
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const body = JSON.parse(String(requestInit.body)) as {
+      provider?: string
+      model?: string
+    }
+
+    expect(body.provider).toBe('anthropic')
+    expect(body.model).toBe('claude-haiku-4-5-20251001')
   })
 
   it('streams assistant tokens into the chat page after send', async () => {

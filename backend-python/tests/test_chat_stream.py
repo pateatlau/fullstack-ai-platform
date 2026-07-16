@@ -69,6 +69,22 @@ class RecordingProvider(FakeProvider):
             self.closed = True
 
 
+class CapturingStreamProvider(FakeProvider):
+    def __init__(self) -> None:
+        super().__init__("default stream response")
+        self.last_model: str | None = None
+
+    async def stream_chat(
+        self,
+        messages: list[ChatMessageSchema],
+        model: str,
+        temperature: float = 0.7,
+    ) -> AsyncIterator[ProviderChunk]:
+        del messages, temperature
+        self.last_model = model
+        yield ProviderChunk(content="default stream response", finish_reason="stop")
+
+
 class DisconnectAfterFirstChunkRequest:
     def __init__(self) -> None:
         self.calls = 0
@@ -86,6 +102,49 @@ def _mock_provider_factory(provider: FakeProvider):
         return provider
 
     return staticmethod(get_provider)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("provider", "expected_model"),
+    [
+        ("openai", "gpt-4o-mini"),
+        ("gemini", "gemini-3.1-flash-lite"),
+        ("groq", "openai/gpt-oss-20b"),
+        ("anthropic", "claude-haiku-4-5-20251001"),
+    ],
+)
+async def test_chat_stream_uses_provider_default_model_for_supported_providers(
+    monkeypatch: MonkeyPatch,
+    provider: str,
+    expected_model: str,
+) -> None:
+    stream_provider = CapturingStreamProvider()
+
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(stream_provider),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/chat/stream",
+            json={
+                "messages": [{"role": "user", "content": "Hello"}],
+                "provider": provider,
+            },
+        )
+
+    frames = _parse_sse_frames(response.text)
+
+    assert response.status_code == 200
+    assert [event for event, _ in frames] == ["start", "delta", "end"]
+    assert frames[1][1]["content"] == "default stream response"
+    assert frames[-1][1]["finish_reason"] == "stop"
+    assert stream_provider.last_model == expected_model
 
 
 @pytest.mark.anyio

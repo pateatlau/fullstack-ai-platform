@@ -1,6 +1,8 @@
 from app.core.config import Settings, get_settings
+from app.providers.anthropic_provider import AnthropicProvider
 from app.providers.base import LLMProvider
 from app.providers.gemini_provider import GeminiProvider
+from app.providers.groq_provider import GroqProvider
 from app.providers.openai_provider import OpenAIProvider
 
 
@@ -25,5 +27,9 @@ class ProviderFactory:
             return OpenAIProvider(api_key=settings.openai_api_key)
         if provider_name == "gemini":
             return GeminiProvider(api_key=settings.gemini_api_key)
+        if provider_name == "groq":
+            return GroqProvider(api_key=settings.groq_api_key)
+        if provider_name == "anthropic":
+            return AnthropicProvider(api_key=settings.anthropic_api_key)
 
         raise UnsupportedProviderError(f"Unsupported provider: {provider_name!r}")

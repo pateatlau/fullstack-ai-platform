@@ -7,18 +7,19 @@ Current frontend scope includes the completed chatbot redesign and validation wo
 - Tailwind CSS v4-based ChatGPT-like app shell
 - Responsive sidebar foundation for future multi-chat sessions
 - Polished conversation thread and sticky composer
-- inline Retry after interrupted streams
-- top-of-page banner for total connection failures
+- Inline Retry after interrupted streams
+- Top-of-page banner for total connection failures
 - Stop/cancel support during streaming
-- reducer, composer, and accessibility smoke coverage
-- deployment env wiring for a hosted backend
+- Reducer, composer, and accessibility smoke coverage
+- Provider/model selection in the composer for OpenAI, Gemini, Groq, and Anthropic
+- Deployment env wiring for a hosted backend
 
 ## Features
 
 - Tailwind CSS v4 styling with design-token-driven utility classes
 - Left sidebar with current session state, saved-session placeholders, and responsive drawer/collapse behavior
 - Message list with role-based bubbles and streaming states
-- Composer with Send/Stop behavior and sticky bottom layout
+- Composer with Send/Stop behavior, sticky bottom layout, and provider/model selection
 - Streaming token updates over SSE
 - Local reducer/context chat state
 - Retry after interrupted assistant streams
@@ -29,9 +30,6 @@ Current frontend scope includes the completed chatbot redesign and validation wo
 
 - `src/pages/ChatPage.tsx` - responsive chat shell, sidebar state, and page wiring
 - `src/context/ChatContext.tsx` - provider + context hook
-- `src/state/chatReducer.ts` - chat state/actions reducer
-- `src/hooks/useChatStream.ts` - fetch + stream reader + parser integration
-- `src/api/chatClient.ts` - `/api/chat` + `/api/chat/stream` client
 - `src/api/sseParser.ts` - buffered SSE frame parser
 - `src/components/` - `MessageList`, `MessageBubble`, `Composer`, `StreamingIndicator`
 - `src/index.css` - Tailwind CSS v4 import, theme tokens, and global base layer
@@ -101,9 +99,9 @@ npm run lint
 
 ## Error and Retry Behavior
 
-- total connection/setup failures show a banner at the top of the page
-- mid-stream interruptions mark the assistant message as interrupted
-- provider-originated stream failures render inline on the affected assistant message
+- Total connection/setup failures show a banner at the top of the page
+- Mid-stream interruptions mark the assistant message as interrupted
+- Provider-originated stream failures render inline on the affected assistant message
 - Retry replays the original request from scratch; there is no partial resume
 
 ## Backend Requirement
@@ -119,17 +117,19 @@ If the backend is not running or CORS is misconfigured, streaming requests will 
 The frontend expects the backend to support:
 
 - SSE `start`, `delta`, `end`, and `error` frames
-- standard non-streaming error envelopes
+- Standard non-streaming error envelopes
 - CORS for the active frontend origin
+- Provider selection values for OpenAI, Gemini, Groq, and Anthropic
 
 ## Tests
 
 Current frontend tests cover:
 
 - SSE frame parsing across arbitrary chunk boundaries
-- reducer transitions for streaming, interruption, retry, and error cases
-- page-level composer behavior with streamed tokens and Stop
-- shell accessibility smoke coverage for core landmarks and controls
+- Reducer transitions for streaming, interruption, retry, and error cases
+- Page-level composer behavior with streamed tokens and Stop
+- Composer provider/model selection wiring and payload coverage
+- Shell accessibility smoke coverage for core landmarks and controls
 
 ## Deployment Notes
 

@@ -1,19 +1,27 @@
-import { useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react'
+import {
+  getProviderOption,
+  providerModelOptions,
+  type ProviderName,
+} from '../constants/providerModels'
 
 interface ComposerProps {
-  onSend: (content: string) => void
+  onSend: (content: string, provider: ProviderName, model: string) => void
   onStop: () => void
   isStreaming: boolean
 }
 
 export function Composer({ onSend, onStop, isStreaming }: ComposerProps) {
   const [value, setValue] = useState('')
+  const [selectedProvider, setSelectedProvider] = useState<ProviderName>('openai')
+  const [selectedModel, setSelectedModel] = useState(getProviderOption('openai').model)
   const hasMessage = value.trim().length > 0
+  const modelOptions = providerModelOptions.filter((option) => option.provider === selectedProvider)
 
   const submit = () => {
     const trimmed = value.trim()
     if (!trimmed || isStreaming) return
-    onSend(trimmed)
+    onSend(trimmed, selectedProvider, selectedModel)
     setValue('')
   }
 
@@ -29,9 +37,20 @@ export function Composer({ onSend, onStop, isStreaming }: ComposerProps) {
     }
   }
 
+  const handleProviderChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    const nextProvider = event.target.value as ProviderName
+    const nextOption = getProviderOption(nextProvider)
+    setSelectedProvider(nextProvider)
+    setSelectedModel(nextOption.model)
+  }
+
+  const handleModelChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    setSelectedModel(event.target.value)
+  }
+
   return (
     <form
-      className="sticky bottom-0 z-10 mt-3 bg-gradient-to-t from-shell-100 via-shell-100/95 to-transparent px-1 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-4 sm:px-0"
+      className="sticky bottom-0 z-10 mt-3 bg-linear-to-t from-shell-100 via-shell-100/95 to-transparent px-1 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-4 sm:px-0"
       onSubmit={handleSubmit}
       aria-label="Message composer"
     >
@@ -56,6 +75,46 @@ export function Composer({ onSend, onStop, isStreaming }: ComposerProps) {
                 ? 'Ready to send'
                 : 'Waiting for input'}
           </span>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">
+              Provider
+            </span>
+            <select
+              className="h-11 rounded-xl border border-zinc-200 bg-zinc-50 px-3 text-sm text-shell-950 outline-none transition focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
+              value={selectedProvider}
+              onChange={handleProviderChange}
+              disabled={isStreaming}
+              aria-label="Provider"
+            >
+              {providerModelOptions.map((option) => (
+                <option key={option.provider} value={option.provider}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">
+              Model
+            </span>
+            <select
+              className="h-11 rounded-xl border border-zinc-200 bg-zinc-50 px-3 text-sm text-shell-950 outline-none transition focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
+              value={selectedModel}
+              onChange={handleModelChange}
+              disabled={isStreaming}
+              aria-label="Model"
+            >
+              {modelOptions.map((option) => (
+                <option key={option.model} value={option.model}>
+                  {option.model}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">

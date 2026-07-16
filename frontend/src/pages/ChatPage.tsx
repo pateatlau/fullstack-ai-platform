@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChatApiError } from '../api/chatClient'
+import { type ProviderName } from '../constants/providerModels'
 import { ChatProvider, useChatContext } from '../context/ChatContext'
 import { useChatStream } from '../hooks/useChatStream'
 import { MessageList } from '../components/MessageList'
@@ -156,7 +157,7 @@ function ChatPageContent() {
     void start(request)
   }
 
-  const handleSend = (content: string) => {
+  const handleSend = (content: string, provider: ProviderName, model: string) => {
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -170,7 +171,7 @@ function ChatPageContent() {
       role,
       content: text,
     }))
-    startRequest({ messages: history })
+    startRequest({ messages: history, provider, model })
   }
 
   const handleRetry = (messageId: string) => {
@@ -254,7 +255,7 @@ function ChatPageContent() {
   }, [isMobileSidebarOpen])
 
   return (
-    <div className="relative mx-auto flex h-dvh w-full max-w-[1500px] overflow-hidden bg-gradient-to-b from-shell-50 via-shell-100 to-[#ebeff6]">
+    <div className="relative mx-auto flex h-dvh w-full max-w-375 overflow-hidden bg-linear-to-b from-shell-50 via-shell-100 to-[#ebeff6]">
       {isMobileSidebarOpen ? (
         <button
           type="button"

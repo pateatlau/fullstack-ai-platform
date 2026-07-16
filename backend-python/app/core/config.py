@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.1-flash-lite"
 
+    groq_api_key: str | None = None
+    groq_model: str = "openai/gpt-oss-20b"
+
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-haiku-4-5-20251001"
+
     cors_allowed_origins: str = "http://localhost:5173"
 
     app_env: str = "development"
@@ -38,6 +44,14 @@ class Settings(BaseSettings):
 
     def validate_provider_key(self) -> None:
         """Fail fast if the selected provider's API key is missing."""
+        supported_providers = {"openai", "gemini", "groq", "anthropic"}
+        if self.llm_provider not in supported_providers:
+            supported = ", ".join(sorted(supported_providers))
+            raise ValueError(
+                f"Unsupported LLM_PROVIDER '{self.llm_provider}'. "
+                f"Supported providers: {supported}."
+            )
+
         if self.llm_provider == "openai" and not self.openai_api_key:
             raise ValueError(
                 "LLM_PROVIDER is 'openai' but OPENAI_API_KEY is not set. "
@@ -46,6 +60,16 @@ class Settings(BaseSettings):
         if self.llm_provider == "gemini" and not self.gemini_api_key:
             raise ValueError(
                 "LLM_PROVIDER is 'gemini' but GEMINI_API_KEY is not set. "
+                "Set it in backend-python/.env (see .env.example)."
+            )
+        if self.llm_provider == "groq" and not self.groq_api_key:
+            raise ValueError(
+                "LLM_PROVIDER is 'groq' but GROQ_API_KEY is not set. "
+                "Set it in backend-python/.env (see .env.example)."
+            )
+        if self.llm_provider == "anthropic" and not self.anthropic_api_key:
+            raise ValueError(
+                "LLM_PROVIDER is 'anthropic' but ANTHROPIC_API_KEY is not set. "
                 "Set it in backend-python/.env (see .env.example)."
             )
 

@@ -18,3 +18,45 @@ async def test_health_returns_expected_shape() -> None:
         "provider": get_settings().llm_provider,
         "version": APP_VERSION,
     }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("provider", "api_key_name"),
+    [
+        ("openai", "OPENAI_API_KEY"),
+        ("gemini", "GEMINI_API_KEY"),
+        ("groq", "GROQ_API_KEY"),
+        ("anthropic", "ANTHROPIC_API_KEY"),
+    ],
+)
+async def test_health_reports_selected_provider_for_each_supported_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    api_key_name: str,
+) -> None:
+    for env_name in (
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "GROQ_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
+    monkeypatch.setenv("LLM_PROVIDER", provider)
+    monkeypatch.setenv(api_key_name, f"test-{provider}-key")
+    get_settings.cache_clear()
+
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            response = await client.get("/api/health")
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["provider"] == provider
+    assert body["version"] == APP_VERSION
