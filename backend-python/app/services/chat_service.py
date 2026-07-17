@@ -332,7 +332,17 @@ class ChatService:
 
     @staticmethod
     def _last_user_content(request: ChatRequestSchema) -> str:
-        return request.messages[-1].content
+        last_message = request.messages[-1]
+        if last_message.role != "user":
+            raise ChatServiceError(
+                code="validation_error",
+                message=(
+                    "The last message must be from role 'user' when submitting "
+                    "a chat turn."
+                ),
+                status_code=422,
+            )
+        return last_message.content
 
     @staticmethod
     def _derive_title(request: ChatRequestSchema) -> str | None:
@@ -372,13 +382,15 @@ class ChatService:
         ):
             await self._quota_service.check(caller.guest_id)
 
-    async def _maybe_record_quota(self, caller: CallerContext) -> None:
+    async def _maybe_record_quota(
+        self, caller: CallerContext, *, tokens: int = 0
+    ) -> None:
         if (
             caller.kind == "guest"
             and caller.guest_id is not None
             and self._quota_service is not None
         ):
-            await self._quota_service.record(caller.guest_id)
+            await self._quota_service.record(caller.guest_id, tokens=tokens)
 
     async def _record_usage(
         self,
@@ -390,9 +402,7 @@ class ChatService:
         model: str,
         completion: ProviderCompletion,
         prompt_text: str,
-    ) -> None:
-        if self._usage_store is None:
-            return
+    ) -> int:
         record = build_usage_record(
             provider=provider_name,
             model=model,
@@ -400,6 +410,9 @@ class ChatService:
             prompt_text=prompt_text,
             completion_text=completion.content,
         )
+        if self._usage_store is None:
+            return record.total_tokens or 0
+
         await self._usage_store.record(
             session_id=session_id,
             user_id=caller.user_id,
@@ -413,6 +426,7 @@ class ChatService:
             total_tokens=record.total_tokens,
             kind="chat",
         )
+        return record.total_tokens or 0
 
     # ---- summarization (plan Sections 5.5, 5.6) -----------------------------
 
@@ -626,7 +640,7 @@ class ChatService:
             status="complete",
             finish_reason=completion.finish_reason,
         )
-        await self._record_usage(
+        usage_tokens = await self._record_usage(
             caller=caller,
             session_id=chat_session.id,
             message_id=assistant.id,
@@ -635,7 +649,7 @@ class ChatService:
             completion=completion,
             prompt_text=prompt_text,
         )
-        await self._maybe_record_quota(caller)
+        await self._maybe_record_quota(caller, tokens=usage_tokens)
         await self._chat_store.mark_last_message_at(chat_session.id)
         await self._maybe_summarize(
             caller=caller,
@@ -914,7 +928,7 @@ class ChatService:
                 total_tokens=record.total_tokens,
                 kind="chat",
             )
-            await self._maybe_record_quota(caller)
+            await self._maybe_record_quota(caller, tokens=record.total_tokens or 0)
         await self._chat_store.mark_last_message_at(prep.session_id)
         if status == "complete":
             await self._maybe_summarize(

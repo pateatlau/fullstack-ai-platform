@@ -1,8 +1,10 @@
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_VERSION = "0.1.0"
+_INSECURE_DEV_JWT_SECRET = "dev-insecure-jwt-secret-change-me"
 
 
 class Settings(BaseSettings):
@@ -37,7 +39,7 @@ class Settings(BaseSettings):
 
     # App-issued JWT (plan Section 3.2). The secret must be overridden outside
     # local development; production values come from environment/secret stores.
-    jwt_secret: str = "dev-insecure-jwt-secret-change-me"
+    jwt_secret: str = _INSECURE_DEV_JWT_SECRET
     jwt_algorithm: str = "HS256"
     jwt_access_token_expires_minutes: int = 60
 
@@ -57,6 +59,16 @@ class Settings(BaseSettings):
     app_env: str = "development"
     max_message_length: int = 4000
     request_timeout_seconds: int = 30
+
+    @model_validator(mode="after")
+    def validate_jwt_secret(self) -> "Settings":
+        env = self.app_env.strip().lower()
+        if env != "development" and self.jwt_secret == _INSECURE_DEV_JWT_SECRET:
+            raise ValueError(
+                "JWT_SECRET must be explicitly set when APP_ENV is not "
+                "'development'."
+            )
+        return self
 
     @property
     def cors_allowed_origins_list(self) -> list[str]:

@@ -25,6 +25,9 @@ _NOW = sa.text("now()")
 
 
 def upgrade() -> None:
+    # Required for gen_random_uuid() defaults used by UUID PKs.
+    op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+
     op.create_table(
         "users",
         sa.Column("id", _UUID, server_default=_UUID_DEFAULT, nullable=False),

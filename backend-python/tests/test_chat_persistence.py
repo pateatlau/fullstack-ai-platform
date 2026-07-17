@@ -5,21 +5,30 @@ exercise the real endpoints against the compose Postgres and skip when the DB is
 unavailable (the ``db_session`` fixture from conftest provides the skip guard).
 """
 
+import datetime
 import uuid
+from collections.abc import AsyncIterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pytest import MonkeyPatch
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import Request
 
 from app.core.caller import CallerContext
 from app.core.config import Settings, get_settings
 from app.main import app
+from app.providers.base import ProviderCompletion
 from app.providers.factory import ProviderFactory
-from app.schemas.chat import ChatMessageSchema, ChatRequestSchema
+from app.schemas.chat import ChatMessageSchema, ChatRequestSchema, ProviderName
 from app.services.chat_service import (
     ChatService,
     ChatServiceError,
+    ChatStore,
     SessionNotFoundError,
+    UsageStore,
 )
+from app.services.quota_service import GuestQuotaStore
 from app.services.quota_service import QuotaExceededError, QuotaService
 from tests.fakes import (
     FakeChatStore,
@@ -36,38 +45,85 @@ class RecordingProvider(FakeProvider):
         super().__init__(response)
         self.complete_calls = 0
 
-    async def complete_chat(self, messages, model, temperature=0.7):
+    async def complete_chat(
+        self,
+        messages: list[ChatMessageSchema],
+        model: str,
+        temperature: float = 0.7,
+    ) -> ProviderCompletion:
         self.complete_calls += 1
         return await super().complete_chat(messages, model, temperature)
 
 
 class BoomProvider(FakeProvider):
-    async def complete_chat(self, messages, model, temperature=0.7):
+    async def complete_chat(
+        self,
+        messages: list[ChatMessageSchema],
+        model: str,
+        temperature: float = 0.7,
+    ) -> ProviderCompletion:
         raise RuntimeError("provider exploded")
 
 
-def _patch_provider(monkeypatch, provider) -> None:
-    def get_provider(name=None, settings=None):
+def _connected_request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "path": "/api/chat/stream",
+            "headers": [],
+        }
+    )
+
+
+def _patch_provider(monkeypatch: MonkeyPatch, provider: FakeProvider) -> None:
+    def get_provider(
+        name: ProviderName | None = None,
+        settings: Settings | None = None,
+    ) -> FakeProvider:
+        _ = name, settings
         return provider
 
     monkeypatch.setattr(ProviderFactory, "get_provider", staticmethod(get_provider))
 
 
-def _service(provider_settings: Settings, **overrides) -> ChatService:
-    chat_store = overrides.get("chat_store", FakeChatStore())
-    usage_store = overrides.get("usage_store", FakeUsageStore())
-    quota_store = overrides.get("quota_store", FakeGuestQuotaStore())
+def _service(
+    provider_settings: Settings,
+    *,
+    chat_store: ChatStore | None = None,
+    usage_store: UsageStore | None = None,
+    quota_store: GuestQuotaStore | None = None,
+) -> ChatService:
+    resolved_chat_store = chat_store or FakeChatStore()
+    resolved_usage_store = usage_store or FakeUsageStore()
+    resolved_quota_store = quota_store or FakeGuestQuotaStore()
     return ChatService(
         provider_settings,
-        chat_store=chat_store,
-        usage_store=usage_store,
-        quota_service=QuotaService(store=quota_store, settings=provider_settings),
+        chat_store=resolved_chat_store,
+        usage_store=resolved_usage_store,
+        quota_service=QuotaService(
+            store=resolved_quota_store, settings=provider_settings
+        ),
     )
 
 
-def _request(content: str, **kwargs) -> ChatRequestSchema:
+def _request(
+    content: str,
+    *,
+    model: str | None = None,
+    provider: ProviderName | None = None,
+    temperature: float = 0.7,
+    session_id: uuid.UUID | None = None,
+    client_message_id: str | None = None,
+) -> ChatRequestSchema:
     return ChatRequestSchema(
-        messages=[ChatMessageSchema(role="user", content=content)], **kwargs
+        messages=[ChatMessageSchema(role="user", content=content)],
+        model=model,
+        provider=provider,
+        temperature=temperature,
+        session_id=session_id,
+        client_message_id=client_message_id,
     )
 
 
@@ -77,7 +133,9 @@ def _request(content: str, **kwargs) -> ChatRequestSchema:
 
 
 @pytest.mark.anyio
-async def test_complete_persists_new_session_messages_and_usage(monkeypatch) -> None:
+async def test_complete_persists_new_session_messages_and_usage(
+    monkeypatch: MonkeyPatch,
+) -> None:
     _patch_provider(monkeypatch, FakeProvider("Persisted reply"))
     settings = Settings(chat_persistence_enabled=True, llm_provider="openai")
     chat_store = FakeChatStore()
@@ -97,7 +155,9 @@ async def test_complete_persists_new_session_messages_and_usage(monkeypatch) -> 
 
 
 @pytest.mark.anyio
-async def test_guest_over_quota_blocks_provider_call(monkeypatch) -> None:
+async def test_guest_over_quota_blocks_provider_call(
+    monkeypatch: MonkeyPatch,
+) -> None:
     provider = RecordingProvider()
     _patch_provider(monkeypatch, provider)
     settings = Settings(chat_persistence_enabled=True, guest_daily_message_quota=1)
@@ -120,7 +180,9 @@ async def test_guest_over_quota_blocks_provider_call(monkeypatch) -> None:
 
 
 @pytest.mark.anyio
-async def test_append_to_unowned_session_raises_404(monkeypatch) -> None:
+async def test_append_to_unowned_session_raises_404(
+    monkeypatch: MonkeyPatch,
+) -> None:
     _patch_provider(monkeypatch, FakeProvider())
     settings = Settings(chat_persistence_enabled=True)
     chat_store = FakeChatStore()
@@ -133,7 +195,9 @@ async def test_append_to_unowned_session_raises_404(monkeypatch) -> None:
 
 
 @pytest.mark.anyio
-async def test_client_message_id_makes_append_idempotent(monkeypatch) -> None:
+async def test_client_message_id_makes_append_idempotent(
+    monkeypatch: MonkeyPatch,
+) -> None:
     provider = RecordingProvider("first reply")
     _patch_provider(monkeypatch, provider)
     settings = Settings(chat_persistence_enabled=True)
@@ -153,7 +217,9 @@ async def test_client_message_id_makes_append_idempotent(monkeypatch) -> None:
 
 
 @pytest.mark.anyio
-async def test_provider_failure_persists_error_assistant(monkeypatch) -> None:
+async def test_provider_failure_persists_error_assistant(
+    monkeypatch: MonkeyPatch,
+) -> None:
     _patch_provider(monkeypatch, BoomProvider())
     settings = Settings(chat_persistence_enabled=True)
     chat_store = FakeChatStore()
@@ -173,7 +239,9 @@ async def test_provider_failure_persists_error_assistant(monkeypatch) -> None:
 
 
 @pytest.mark.anyio
-async def test_stateless_when_persistence_inactive(monkeypatch) -> None:
+async def test_stateless_when_persistence_inactive(
+    monkeypatch: MonkeyPatch,
+) -> None:
     # No caller supplied -> stateless path, nothing persisted.
     _patch_provider(monkeypatch, FakeProvider("stateless"))
     settings = Settings(chat_persistence_enabled=True)
@@ -187,19 +255,52 @@ async def test_stateless_when_persistence_inactive(monkeypatch) -> None:
     assert chat_store.sessions == {}
 
 
+@pytest.mark.anyio
+async def test_persistence_rejects_request_not_ending_in_user_message(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _patch_provider(monkeypatch, FakeProvider("should not be used"))
+    settings = Settings(chat_persistence_enabled=True)
+    service = _service(
+        settings, chat_store=FakeChatStore(), usage_store=FakeUsageStore()
+    )
+    caller = CallerContext.for_user(uuid.uuid4())
+    request = ChatRequestSchema(
+        messages=[
+            ChatMessageSchema(role="user", content="hi"),
+            ChatMessageSchema(role="assistant", content="previous response"),
+        ]
+    )
+
+    with pytest.raises(ChatServiceError) as exc_info:
+        await service.complete_chat(request, caller)
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.code == "validation_error"
+    assert "last message" in exc_info.value.message.lower()
+
+
 # --------------------------------------------------------------------------- #
 # Endpoint integration (real Postgres; skips when unavailable)                 #
 # --------------------------------------------------------------------------- #
 
 
 @pytest.fixture
-async def app_persistence(db_session, monkeypatch):
+async def app_persistence(
+    db_session: AsyncSession,
+    monkeypatch: MonkeyPatch,
+) -> AsyncIterator[FakeProvider]:
     """Enable persistence, mock the provider, and reset the app engine after."""
+    _ = db_session
     monkeypatch.setenv("CHAT_PERSISTENCE_ENABLED", "true")
     get_settings.cache_clear()
     provider = FakeProvider("Integration reply")
 
-    def get_provider(name=None, settings=None):
+    def get_provider(
+        name: ProviderName | None = None,
+        settings: Settings | None = None,
+    ) -> FakeProvider:
+        _ = name, settings
         return provider
 
     monkeypatch.setattr(ProviderFactory, "get_provider", staticmethod(get_provider))
@@ -215,7 +316,10 @@ async def app_persistence(db_session, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_chat_endpoint_persists_and_resumes(app_persistence) -> None:
+async def test_chat_endpoint_persists_and_resumes(
+    app_persistence: FakeProvider,
+) -> None:
+    _ = app_persistence
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -242,7 +346,11 @@ async def test_chat_endpoint_persists_and_resumes(app_persistence) -> None:
 
 
 @pytest.mark.anyio
-async def test_chat_endpoint_enforces_guest_quota(app_persistence, monkeypatch) -> None:
+async def test_chat_endpoint_enforces_guest_quota(
+    app_persistence: FakeProvider,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _ = app_persistence
     monkeypatch.setenv("GUEST_DAILY_MESSAGE_QUOTA", "1")
     get_settings.cache_clear()
 
@@ -266,7 +374,10 @@ async def test_chat_endpoint_enforces_guest_quota(app_persistence, monkeypatch) 
 
 
 @pytest.mark.anyio
-async def test_resume_unknown_session_returns_404(app_persistence) -> None:
+async def test_resume_unknown_session_returns_404(
+    app_persistence: FakeProvider,
+) -> None:
+    _ = app_persistence
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -277,7 +388,8 @@ async def test_resume_unknown_session_returns_404(app_persistence) -> None:
 
 
 @pytest.mark.anyio
-async def test_readiness_reports_ok(app_persistence) -> None:
+async def test_readiness_reports_ok(app_persistence: FakeProvider) -> None:
+    _ = app_persistence
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -300,7 +412,10 @@ def _session_id_from_sse(body: str) -> str:
 
 
 @pytest.mark.anyio
-async def test_stream_endpoint_persists_and_resumes(app_persistence) -> None:
+async def test_stream_endpoint_persists_and_resumes(
+    app_persistence: FakeProvider,
+) -> None:
+    _ = app_persistence
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -329,3 +444,40 @@ async def test_stream_endpoint_persists_and_resumes(app_persistence) -> None:
     assert [m["role"] for m in transcript["messages"]] == ["user", "assistant"]
     assert transcript["messages"][0]["content"] == "Stream hi"
     assert transcript["messages"][1]["content"] == "Integration reply"
+
+
+@pytest.mark.anyio
+async def test_stream_records_guest_quota_tokens(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _patch_provider(monkeypatch, FakeProvider("streamed quota reply"))
+    settings = Settings(chat_persistence_enabled=True, llm_provider="openai")
+    chat_store = FakeChatStore()
+    usage_store = FakeUsageStore()
+    quota_store = FakeGuestQuotaStore()
+    service = _service(
+        settings,
+        chat_store=chat_store,
+        usage_store=usage_store,
+        quota_store=quota_store,
+    )
+    caller = CallerContext.anonymous(guest_id=uuid.uuid4())
+    request = _request("stream quota")
+
+    prep = await service.prepare_stream(request, caller)
+    assert prep is not None
+
+    async for _ in service.stream_chat(
+        request,
+        _connected_request(),
+        caller=caller,
+        prep=prep,
+    ):
+        pass
+
+    assert caller.guest_id is not None
+    assert len(usage_store.events) == 1
+    window = datetime.datetime.now(datetime.timezone.utc).date()
+    key = (caller.guest_id, window)
+    assert quota_store.counters[key] == 1
+    assert quota_store.token_totals[key] == usage_store.events[0].total_tokens

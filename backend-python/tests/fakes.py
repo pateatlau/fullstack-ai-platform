@@ -181,6 +181,7 @@ class FakeGuestQuotaStore:
 
     def __init__(self) -> None:
         self.counters: dict[tuple[uuid.UUID, object], int] = {}
+        self.token_totals: dict[tuple[uuid.UUID, object], int] = {}
 
     async def get_message_count(self, guest_id: uuid.UUID, window_start: object) -> int:
         return self.counters.get((guest_id, window_start), 0)
@@ -194,6 +195,7 @@ class FakeGuestQuotaStore:
     ) -> None:
         key = (guest_id, window_start)
         self.counters[key] = self.counters.get(key, 0) + 1
+        self.token_totals[key] = self.token_totals.get(key, 0) + tokens
 
 
 class FakeChatStore:

@@ -5,7 +5,8 @@ of ``docs/plans/database-persistence-plan.md``. Alembic migrations are generated
 from this metadata; there is no second schema representation.
 
 Conventions (plan Section 2.1):
-- Primary keys are native PostgreSQL ``uuid`` with ``DEFAULT gen_random_uuid()``.
+- Primary keys are native PostgreSQL ``uuid`` with ``DEFAULT gen_random_uuid()``
+    (requires the ``pgcrypto`` extension).
 - Timestamps are ``timestamptz`` (UTC). Every table has ``created_at``; mutable
   tables also have ``updated_at``.
 - Enum-like columns are ``text`` with ``CHECK`` constraints (no native enums).
@@ -32,7 +33,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
-# Server-side default that generates a UUID inside PostgreSQL (built-in on PG13+).
+# Server-side default that generates a UUID inside PostgreSQL (requires pgcrypto).
 _UUID_DEFAULT = text("gen_random_uuid()")
 # Server-side default for UTC timestamps.
 _NOW = func.now()

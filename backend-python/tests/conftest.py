@@ -4,6 +4,7 @@ os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 os.environ.setdefault("GEMINI_API_KEY", "test-gemini-key")
 os.environ.setdefault("GROQ_API_KEY", "test-groq-key")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 # Existing chat tests exercise the stateless contract; persistence is opt-in and
 # enabled explicitly by the Phase 5 persistence tests.
 os.environ.setdefault("CHAT_PERSISTENCE_ENABLED", "false")
