@@ -165,13 +165,24 @@ jobs:
       - name: Apply Alembic migrations
         working-directory: backend-python
         env:
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL || secrets.STAGING_DATABASE_URL_FALLBACK }}
+          HAS_STAGING_DATABASE_URL_SECRET: ${{ secrets.STAGING_DATABASE_URL != '' }}
+          HAS_STAGING_DATABASE_URL_FALLBACK_SECRET: ${{ secrets.STAGING_DATABASE_URL_FALLBACK != '' }}
+          TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
+          TRIGGER_ACTOR: ${{ github.event.workflow_run.actor.login }}
           DB_MIGRATION_STRATEGY: ${{ vars.STAGING_DB_MIGRATION_STRATEGY }}
           DB_MIGRATION_TIMEOUT_SECONDS: ${{ vars.STAGING_DB_MIGRATION_TIMEOUT_SECONDS }}
         shell: bash
         run: |
           test -n "$DATABASE_URL" || {
             echo "Missing secret: STAGING_DATABASE_URL" >&2
+            echo "Optional fallback secret: STAGING_DATABASE_URL_FALLBACK" >&2
+            echo "Debug (non-sensitive):" >&2
+            echo "- has STAGING_DATABASE_URL: ${HAS_STAGING_DATABASE_URL_SECRET}" >&2
+            echo "- has STAGING_DATABASE_URL_FALLBACK: ${HAS_STAGING_DATABASE_URL_FALLBACK_SECRET}" >&2
+            echo "- trigger event: ${TRIGGER_EVENT}" >&2
+            echo "- trigger actor: ${TRIGGER_ACTOR}" >&2
+            echo "If the actor is Dependabot or the source is untrusted, GitHub may withhold Actions secrets for security." >&2
             exit 1
           }
           timeout_seconds="${DB_MIGRATION_TIMEOUT_SECONDS:-300}"
