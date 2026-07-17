@@ -110,7 +110,7 @@ def test_complete_chat_maps_messages_and_returns_text() -> None:
         )
     )
 
-    assert result == "Groq full response"
+    assert result.content == "Groq full response"
     assert fake_completions.last_kwargs is not None
     assert fake_completions.last_kwargs["model"] == "openai/gpt-oss-20b"
     assert fake_completions.last_kwargs["temperature"] == 0.4
@@ -136,7 +136,7 @@ def test_complete_chat_coerces_structured_message_content() -> None:
         )
     )
 
-    assert result == "Groq structured"
+    assert result.content == "Groq structured"
 
 
 def test_complete_chat_returns_empty_string_when_choices_missing() -> None:
@@ -153,7 +153,7 @@ def test_complete_chat_returns_empty_string_when_choices_missing() -> None:
         )
     )
 
-    assert result == ""
+    assert result.content == ""
 
 
 def test_complete_chat_propagates_sdk_timeout_error() -> None:

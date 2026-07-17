@@ -158,7 +158,7 @@ def test_complete_chat_maps_system_to_top_level_system_field() -> None:
         )
     )
 
-    assert result == "Anthropic reply"
+    assert result.content == "Anthropic reply"
     assert fake_messages_api.last_kwargs is not None
     assert fake_messages_api.last_kwargs["model"] == "claude-haiku-4-5-20251001"
     assert fake_messages_api.last_kwargs["temperature"] == 0.5
@@ -212,7 +212,7 @@ def test_complete_chat_extracts_only_text_blocks() -> None:
         )
     )
 
-    assert result == "Anthropic text"
+    assert result.content == "Anthropic text"
     assert fake_messages_api.last_kwargs is not None
     assert "system" not in fake_messages_api.last_kwargs
 

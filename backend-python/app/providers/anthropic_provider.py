@@ -3,10 +3,28 @@ from typing import Any, AsyncIterator, cast
 from anthropic import AsyncAnthropic
 from anthropic.types import Message, MessageParam
 
-from app.providers.base import ProviderChunk
+from app.providers.base import ProviderChunk, ProviderCompletion, ProviderUsage
 from app.schemas.chat import ChatMessageSchema
 
 ANTHROPIC_MAX_TOKENS = 1024
+
+
+def _usage_from_message(response: Message) -> ProviderUsage | None:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    input_tokens = getattr(usage, "input_tokens", None)
+    output_tokens = getattr(usage, "output_tokens", None)
+    total = (
+        input_tokens + output_tokens
+        if input_tokens is not None and output_tokens is not None
+        else None
+    )
+    return ProviderUsage(
+        prompt_tokens=input_tokens,
+        completion_tokens=output_tokens,
+        total_tokens=total,
+    )
 
 
 def _split_messages_for_anthropic(
@@ -91,7 +109,7 @@ class AnthropicProvider:
         messages: list[ChatMessageSchema],
         model: str,
         temperature: float = 0.7,
-    ) -> str:
+    ) -> ProviderCompletion:
         system, anthropic_messages = _split_messages_for_anthropic(messages)
         request_payload: dict[str, Any] = {
             "model": model,
@@ -103,4 +121,8 @@ class AnthropicProvider:
             request_payload["system"] = system
 
         response = cast(Message, await self._client.messages.create(**request_payload))
-        return _extract_text_from_message(response)
+        return ProviderCompletion(
+            content=_extract_text_from_message(response),
+            finish_reason=getattr(response, "stop_reason", None),
+            usage=_usage_from_message(response),
+        )

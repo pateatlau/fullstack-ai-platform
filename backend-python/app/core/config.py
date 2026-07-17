@@ -30,6 +30,30 @@ class Settings(BaseSettings):
 
     cors_allowed_origins: str = "http://localhost:5173"
 
+    database_url: str = "postgresql+asyncpg://chatbot:chatbot@localhost:5432/chatbot"
+
+    # Google OAuth 2.0 (ID-token verification). Required to serve /api/auth/google.
+    google_client_id: str | None = None
+
+    # App-issued JWT (plan Section 3.2). The secret must be overridden outside
+    # local development; production values come from environment/secret stores.
+    jwt_secret: str = "dev-insecure-jwt-secret-change-me"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expires_minutes: int = 60
+
+    # Guest quota (plan Section 12): config-driven daily message ceiling for
+    # anonymous callers. Authenticated users are not governed by this limit.
+    guest_daily_message_quota: int = 20
+
+    # Feature flag (plan Section 13, Phase 5 mitigation): when disabled, chat
+    # endpoints behave statelessly (no DB reads/writes), preserving the original
+    # request/response contracts exactly.
+    chat_persistence_enabled: bool = True
+
+    # Summarization trigger (plan Sections 5.5, 14.3): create a new session
+    # summary once this many messages accumulate past the last summary boundary.
+    summary_trigger_message_count: int = 20
+
     app_env: str = "development"
     max_message_length: int = 4000
     request_timeout_seconds: int = 30

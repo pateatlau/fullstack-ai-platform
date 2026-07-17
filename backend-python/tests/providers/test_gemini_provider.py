@@ -64,7 +64,7 @@ def test_complete_chat_returns_text() -> None:
         )
     )
 
-    assert result == "Gemini full response"
+    assert result.content == "Gemini full response"
 
 
 def test_stream_chat_yields_incremental_chunks() -> None:

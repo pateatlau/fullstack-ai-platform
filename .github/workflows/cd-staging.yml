@@ -17,6 +17,7 @@ permissions: {}
 
 env:
   REGISTRY: ghcr.io
+  PYTHON_VERSION: 3.12.7
 
 jobs:
   preflight:
@@ -99,7 +100,7 @@ jobs:
     name: Deploy Staging Backend
     runs-on: ubuntu-latest
     environment: staging
-    needs: [preflight, reserve-db-migration]
+    needs: [preflight, db-migration]
     if: needs.preflight.outputs.should_deploy == 'true'
     steps:
       - name: Validate staging backend contract
@@ -132,20 +133,56 @@ jobs:
             echo "- Recorded at (UTC): ${STARTED_AT}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  reserve-db-migration:
-    name: Reserved Staging DB Migration Stage (No-Op)
+  db-migration:
+    name: Staging DB Migration
     runs-on: ubuntu-latest
     environment: staging
     needs: preflight
     if: needs.preflight.outputs.should_deploy == 'true'
+    permissions:
+      contents: read
     steps:
-      - name: Reserve migration insertion point
+      - name: Checkout source revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend-python/uv.lock
+
+      - name: Sync dependencies
+        working-directory: backend-python
+        run: uv sync --frozen
+
+      - name: Apply Alembic migrations
+        working-directory: backend-python
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          DB_MIGRATION_STRATEGY: ${{ vars.STAGING_DB_MIGRATION_STRATEGY }}
+          DB_MIGRATION_TIMEOUT_SECONDS: ${{ vars.STAGING_DB_MIGRATION_TIMEOUT_SECONDS }}
         shell: bash
         run: |
+          test -n "$DATABASE_URL" || {
+            echo "Missing secret: STAGING_DATABASE_URL" >&2
+            exit 1
+          }
+          timeout_seconds="${DB_MIGRATION_TIMEOUT_SECONDS:-300}"
+          strategy="${DB_MIGRATION_STRATEGY:-expand-contract}"
+          echo "Applying migrations before app deploy (strategy: ${strategy}, timeout: ${timeout_seconds}s)"
+          timeout "${timeout_seconds}" uv run alembic upgrade head
           {
             echo "### DB Migration Stage"
-            echo "- Mode: no-op"
-            echo "- Status: reserved for future database rollout"
+            echo "- Mode: alembic upgrade head"
+            echo "- Strategy: ${strategy}"
+            echo "- Timeout (s): ${timeout_seconds}"
             echo "- Source SHA: ${{ github.event.workflow_run.head_sha }}"
             echo "- Insertion point: after preflight and before backend deploy"
           } >> "$GITHUB_STEP_SUMMARY"

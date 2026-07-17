@@ -110,6 +110,22 @@ jobs:
     defaults:
       run:
         working-directory: backend-python
+    env:
+      DATABASE_URL: postgresql+asyncpg://chatbot:chatbot@localhost:5432/chatbot
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: chatbot
+          POSTGRES_PASSWORD: chatbot
+          POSTGRES_DB: chatbot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U chatbot -d chatbot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -127,6 +143,9 @@ jobs:
 
       - name: Sync dependencies
         run: uv sync --frozen --all-extras --dev
+
+      - name: Apply database migrations
+        run: uv run alembic upgrade head
 
       - name: Lint
         run: make lint
