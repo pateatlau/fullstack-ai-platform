@@ -105,6 +105,20 @@ uv sync
 make run
 ```
 
+Important environment note:
+
+- Python dependencies (including Groq) are installed in the uv-managed project environment.
+- If you run plain `python` from a different interpreter (for example a global/Conda environment), imports like `groq` can fail even though the project is configured correctly.
+- Prefer `uv run ...` and `make ...` commands in this repo so tooling always uses the project environment.
+
+Quick check:
+
+```bash
+cd backend-python
+python -c "import groq"            # may fail outside uv env
+uv run python -c "import groq"     # expected to succeed
+```
+
 ### 2) Node Backend (Optional, Post-MVP)
 
 ```bash

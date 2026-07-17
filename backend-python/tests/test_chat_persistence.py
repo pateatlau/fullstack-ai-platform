@@ -14,6 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from pytest import MonkeyPatch
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
+from starlette.types import Message, Scope
 
 from app.core.caller import CallerContext
 from app.core.config import Settings, get_settings
@@ -66,15 +67,24 @@ class BoomProvider(FakeProvider):
 
 
 def _connected_request() -> Request:
-    return Request(
-        {
-            "type": "http",
-            "http_version": "1.1",
-            "method": "POST",
-            "path": "/api/chat/stream",
-            "headers": [],
-        }
-    )
+    scope: Scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/chat/stream",
+        "raw_path": b"/api/chat/stream",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+
+    async def receive() -> Message:
+        # Keep the connection logically open for stream tests.
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    return Request(scope, receive)
 
 
 def _patch_provider(monkeypatch: MonkeyPatch, provider: FakeProvider) -> None:
