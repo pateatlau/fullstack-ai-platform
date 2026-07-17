@@ -143,4 +143,10 @@ The frontend is intended for Vercel static deployment, but successful production
 
 Use exact origins (no trailing slash) in `CORS_ALLOWED_ORIGINS`.
 
+Google login requires `VITE_GOOGLE_CLIENT_ID` (public, not a secret) set at build time,
+the same way as `VITE_API_BASE_URL`. The frontend's own origin must be registered as an
+authorized JavaScript origin on the Google Cloud OAuth Web client — see
+[backend-python/README.md](../backend-python/README.md) Deployment Notes for the
+local/staging/production origin list.
+
 The full deployment prerequisite checklist and manual runbook live in [../docs/plans/chatbot-v1.md](../docs/plans/chatbot-v1.md).

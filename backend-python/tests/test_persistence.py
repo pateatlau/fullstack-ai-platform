@@ -112,3 +112,28 @@ async def test_usage_store_records_event_for_message(db_session) -> None:
     assert event.id is not None
     assert event.message_id == message.id
     assert event.total_tokens == 18
+
+
+@pytest.mark.anyio
+async def test_guest_link_to_user_is_last_writer_wins(db_session) -> None:
+    """Locks the SQL-layer behavior behind the already-linked/different-user
+    edge case (plan Section 4.2): ``link_to_user`` is a plain UPDATE, so
+    presenting the same guest token to a second, different user overwrites
+    ``linked_user_id`` rather than erroring or preserving the first link.
+    """
+    guest_store = SqlGuestStore(db_session)
+    guest = await guest_store.create(token_hash=hash_token(f"relink-{uuid.uuid4()}"))
+    first_user_id = await _make_user(db_session)
+    second_user_id = await _make_user(db_session)
+
+    await guest_store.link_to_user(guest.id, first_user_id)
+    await db_session.flush()
+    after_first = await guest_store.get_by_token_hash(guest.token_hash)
+    assert after_first is not None
+    assert after_first.linked_user_id == first_user_id
+
+    await guest_store.link_to_user(guest.id, second_user_id)
+    await db_session.flush()
+    after_second = await guest_store.get_by_token_hash(guest.token_hash)
+    assert after_second is not None
+    assert after_second.linked_user_id == second_user_id

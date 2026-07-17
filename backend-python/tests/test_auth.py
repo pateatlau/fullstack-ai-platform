@@ -135,8 +135,12 @@ async def test_google_login_rejects_invalid_token() -> None:
 async def test_google_login_fails_closed_when_client_id_not_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # No GOOGLE_CLIENT_ID configured and no verifier override -> fail closed (503).
-    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    # Explicitly set an empty value (not delenv) so this is deterministic even
+    # when a local `.env` file has a real GOOGLE_CLIENT_ID: pydantic-settings
+    # prioritizes `os.environ` over `env_file`, but only when the var is
+    # actually present in `os.environ` — `delenv` makes it "absent" and falls
+    # through to the `.env` file's value instead of the empty default.
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "")
     get_settings.cache_clear()
     try:
         async with AsyncClient(

@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChatApiError } from '../api/chatClient'
 import { type ProviderName } from '../constants/providerModels'
+import { AuthControls } from '../components/AuthControls'
+import { AuthProvider, useAuthContext } from '../context/AuthContext'
 import { ChatProvider, useChatContext } from '../context/ChatContext'
 import { useChatStream } from '../hooks/useChatStream'
 import { MessageList } from '../components/MessageList'
 import { Composer } from '../components/Composer'
 import type { ChatChunk, ChatRequest, ChatSessionSummary, Message } from '../types/chat'
+
+const INVALID_ACCESS_TOKEN_CODE = 'invalid_access_token'
 
 function isChunkError(
   error: Extract<ChatChunk, { type: 'error' }> | Error,
@@ -22,6 +26,7 @@ function toConnectionErrorMessage(error: Error): string {
 
 function ChatPageContent() {
   const { state, dispatch } = useChatContext()
+  const { sessionExpired, dismissSessionExpired, handleInvalidAccessToken } = useAuthContext()
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
   const [isTabletSidebarCollapsed, setIsTabletSidebarCollapsed] = useState(false)
   const [selectedSessionId, setSelectedSessionId] = useState('current-session')
@@ -98,6 +103,10 @@ function ChatPageContent() {
           return
         }
 
+        if (error.code === INVALID_ACCESS_TOKEN_CODE) {
+          handleInvalidAccessToken()
+        }
+
         const localMessageId = streamMessageMapRef.current.get(error.id) ?? id
         if (localMessageId) {
           dispatch({
@@ -112,6 +121,10 @@ function ChatPageContent() {
         streamMessageMapRef.current.delete(error.id)
       } else {
         if (error instanceof ChatApiError) {
+          if (error.code === INVALID_ACCESS_TOKEN_CODE) {
+            handleInvalidAccessToken()
+          }
+
           if (id) {
             dispatch({
               type: 'STREAM_ERROR',
@@ -422,8 +435,25 @@ function ChatPageContent() {
                 AI Chat Assistant
               </h1>
             </div>
+            <AuthControls />
           </div>
         </header>
+
+        {sessionExpired ? (
+          <div
+            className="mx-3 mt-3 flex items-center justify-between gap-3 rounded-chat border border-brand-500/25 bg-brand-500/10 px-4 py-3 text-sm text-shell-900 sm:mx-4"
+            role="status"
+          >
+            <span>Your session expired. Sign in again to continue as you were.</span>
+            <button
+              type="button"
+              className="rounded-lg border border-shell-800/20 px-3 py-1.5 text-xs font-semibold text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              onClick={dismissSessionExpired}
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
 
         {state.error ? (
           <div
@@ -448,8 +478,10 @@ function ChatPageContent() {
 
 export function ChatPage() {
   return (
-    <ChatProvider>
-      <ChatPageContent />
-    </ChatProvider>
+    <AuthProvider>
+      <ChatProvider>
+        <ChatPageContent />
+      </ChatProvider>
+    </AuthProvider>
   )
 }

@@ -244,6 +244,30 @@ Railway notes:
   - Build command: `uv sync --no-dev`
   - Start command: `uv run python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 - Set `CORS_ALLOWED_ORIGINS` to the exact frontend origin(s), comma-separated, with no trailing slash.
+- CORS exposes the `X-Guest-Token` response header (`expose_headers=["X-Guest-Token"]`) so
+  the frontend can read the minted guest token cross-origin. `allow_credentials` stays
+  `False` (Bearer token transport, not cookies).
+
+### Google OAuth Web Client Configuration
+
+Google login requires one Google Cloud OAuth 2.0 **Web client**. Only the client ID is
+used (`GOOGLE_CLIENT_ID` here, `VITE_GOOGLE_CLIENT_ID` on the frontend) — never the client
+secret.
+
+Authorized JavaScript origins must exactly match each frontend origin (scheme + host, no
+path, no trailing slash), one-to-one with `CORS_ALLOWED_ORIGINS`:
+
+- Local: `http://localhost:5173`
+- Staging: the exact staging Vercel frontend origin (see [CD_STAGING.md](../CD_STAGING.md)) — pending real hostname
+- Production: the exact production Vercel frontend origin (see [CD_PRODUCTION.md](../CD_PRODUCTION.md)) — pending real hostname
+
+Authorized redirect URIs are not required for the Google Identity Services ID-token flow
+used by this app.
+
+Full per-environment env var contract (Railway `GOOGLE_CLIENT_ID`/`APP_ENV`/`JWT_SECRET`,
+Vercel `VITE_GOOGLE_CLIENT_ID`, and the matching Google Cloud origin) lives in the
+"Authentication (Google OAuth) Environment Contract" section of
+[CD_STAGING.md](../CD_STAGING.md) and [CD_PRODUCTION.md](../CD_PRODUCTION.md).
 
 Before deployment, the operator must prepare:
 
@@ -251,5 +275,6 @@ Before deployment, the operator must prepare:
 - a Railway account
 - production provider secrets
 - production `CORS_ALLOWED_ORIGINS`
+- production `GOOGLE_CLIENT_ID` and a matching authorized JavaScript origin on the Google OAuth Web client
 
 The full manual deployment prerequisite checklist and runbook live in [../docs/plans/chatbot-v1.md](../docs/plans/chatbot-v1.md).

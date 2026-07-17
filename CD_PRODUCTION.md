@@ -36,6 +36,38 @@ Reserved database migration contract (Stage D3, future-enabled):
 - `PRODUCTION_DB_MIGRATION_TIMEOUT_SECONDS` (environment variable): max runtime budget for migration step
 - `PRODUCTION_DB_MIGRATION_STRATEGY` (environment variable): rollout strategy label (for example `expand-contract`)
 
+## Authentication (Google OAuth) Environment Contract
+
+Google login (see [docs/plans/google-auth-implementation-plan.md](docs/plans/google-auth-implementation-plan.md))
+requires the following, per environment. None of this is provisioned by
+`cd-production.yml` itself — it is manual platform configuration on Railway,
+Vercel, and Google Cloud Console. **Status: pending manual validation** —
+the real production Vercel frontend origin is not yet known (see
+`PRODUCTION_FRONTEND_HEALTHCHECK_URL` placeholder above).
+
+Railway (backend, production service):
+
+- `GOOGLE_CLIENT_ID` — the production Google OAuth Web client ID (public, not a secret).
+  Use a **distinct** OAuth Web client from staging so origins/audiences don't overlap.
+- `CORS_ALLOWED_ORIGINS` — must equal the exact production Vercel frontend origin
+  (scheme + host, no trailing slash), one-to-one with the Google JavaScript origin below.
+- `APP_ENV=production` — gates the non-default `JWT_SECRET` validation (see
+  [backend-python/app/core/config.py](backend-python/app/core/config.py)).
+- `JWT_SECRET` — a real secret distinct from staging and from the local dev default;
+  boot fails otherwise.
+
+Vercel (frontend, production environment):
+
+- `VITE_GOOGLE_CLIENT_ID` — the production Google OAuth Web client ID, set as a
+  Vercel build-time Environment Variable (same mechanism as `VITE_API_BASE_URL`).
+
+Google Cloud Console (OAuth 2.0 Web client used for production):
+
+- Authorized JavaScript origin = the exact production Vercel frontend origin (no path,
+  no trailing slash), matching `CORS_ALLOWED_ORIGINS` above exactly.
+- No authorized redirect URI is required for the GIS ID-token flow this app uses.
+- Only the client ID is used server-side; never configure or ship a client secret.
+
 Recommended URLs:
 
 - `PRODUCTION_BACKEND_HEALTHCHECK_URL`: `https://<prod-backend-host>/api/health`

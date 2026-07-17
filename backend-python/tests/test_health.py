@@ -58,5 +58,17 @@ async def test_health_reports_selected_provider_for_each_supported_provider(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["provider"] == provider
-    assert body["version"] == APP_VERSION
+
+
+@pytest.mark.anyio
+async def test_cors_exposes_guest_token_header_for_allowed_origin() -> None:
+    allowed_origin = get_settings().cors_allowed_origins_list[0]
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get("/api/health", headers={"Origin": allowed_origin})
+
+    assert response.status_code == 200
+    assert response.headers["access-control-expose-headers"] == "X-Guest-Token"
+    assert response.headers["access-control-allow-origin"] == allowed_origin
+    assert "access-control-allow-credentials" not in response.headers

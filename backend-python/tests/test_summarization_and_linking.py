@@ -253,3 +253,48 @@ async def test_auth_endpoint_links_guest_from_header() -> None:
     assert resp.status_code == 200
     assert len(guest_store.linked) == 1
     assert guest_store.linked[0][0] == guest.id
+
+
+@pytest.mark.anyio
+async def test_login_relinks_already_linked_guest_to_different_user() -> None:
+    """Locks the intended edge-case behavior (plan Section 4.2, [Verify] resolved):
+
+    presenting the same guest token at a second login by a *different* user
+    re-links the guest to that user (last-writer-wins) rather than erroring or
+    leaving the original link untouched. Linking is fail-soft and idempotent
+    but always reflects the most recently presenting user.
+    """
+    guest_store = FakeGuestStore()
+    guest = await guest_store.create(token_hash=hash_token("shared-token"))
+
+    verifier_1 = FakeGoogleVerifier(
+        claims=GoogleClaims(sub="sub-first", email=None, name=None, picture=None)
+    )
+    service_1 = AuthService(
+        verifier=verifier_1,
+        store=FakeUserStore(),
+        settings=Settings(),
+        guest_store=guest_store,
+    )
+    result_1 = await service_1.login_with_google("fake", guest_token="shared-token")
+
+    verifier_2 = FakeGoogleVerifier(
+        claims=GoogleClaims(sub="sub-second", email=None, name=None, picture=None)
+    )
+    service_2 = AuthService(
+        verifier=verifier_2,
+        store=FakeUserStore(),
+        settings=Settings(),
+        guest_store=guest_store,
+    )
+    result_2 = await service_2.login_with_google("fake", guest_token="shared-token")
+
+    assert result_1.user.id != result_2.user.id
+    assert result_1.linked_guest_id == guest.id
+    assert result_2.linked_guest_id == guest.id
+    # Both logins linked the same guest; the most recent call is last, and a
+    # real UPDATE (SqlGuestStore.link_to_user) makes it authoritative.
+    assert guest_store.linked == [
+        (guest.id, result_1.user.id),
+        (guest.id, result_2.user.id),
+    ]

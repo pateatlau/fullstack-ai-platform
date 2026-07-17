@@ -41,6 +41,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
+    expose_headers=["X-Guest-Token"],
 )
 
 app.include_router(health.router)
