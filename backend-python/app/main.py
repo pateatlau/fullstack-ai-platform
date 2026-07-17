@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -8,7 +9,9 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import Message
 
 from app.core.config import get_settings
-from app.routers import chat, health
+from app.core.security import AuthError
+from app.db.engine import get_engine
+from app.routers import auth, chat, health
 from app.schemas.chat import ErrorDetail, ErrorResponseSchema
 from app.services.chat_service import ChatServiceError
 
@@ -21,7 +24,16 @@ REQUEST_BODY_LIMIT_MESSAGE = (
 
 settings = get_settings()
 
-app = FastAPI(title="Chatbot Backend", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Startup: the async engine/session factory are created lazily on first use.
+    yield
+    # Shutdown: dispose the engine so pooled DB connections are released cleanly.
+    await get_engine().dispose()
+
+
+app = FastAPI(title="Chatbot Backend", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,6 +44,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(auth.router)
 app.include_router(chat.router)
 
 
@@ -101,6 +114,11 @@ async def enforce_request_size(
 
 @app.exception_handler(ChatServiceError)
 async def handle_chat_service_error(_: Request, exc: ChatServiceError) -> JSONResponse:
+    return _error_response(exc.status_code, exc.code, exc.message)
+
+
+@app.exception_handler(AuthError)
+async def handle_auth_error(_: Request, exc: AuthError) -> JSONResponse:
     return _error_response(exc.status_code, exc.code, exc.message)
 
 

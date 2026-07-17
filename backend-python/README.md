@@ -42,6 +42,19 @@ cp .env.example .env
 uv sync
 ```
 
+Environment resolution note:
+
+- Dependencies declared in `pyproject.toml` (including `groq`) are resolved in the uv-managed project environment.
+- Running plain `python` may use a different interpreter (for example system or Conda), where `groq` is not installed.
+- Use `uv run ...` (or the provided `make` targets) to ensure commands run against this project's environment.
+
+Quick verification:
+
+```bash
+python -c "import groq"         # may fail if this is not the uv interpreter
+uv run python -c "import groq"  # expected to succeed after uv sync
+```
+
 Then fill in the real key for the selected provider before starting the server.
 
 - If `LLM_PROVIDER=openai`, set `OPENAI_API_KEY`
@@ -62,6 +75,8 @@ make test
 ```
 
 These Make targets intentionally run tooling through `python -m ...` so commands always resolve from the project virtual environment and not from any global Python/Conda PATH entries.
+
+If a command works with `uv run ...` but fails with plain `python`, you are almost certainly on the wrong interpreter.
 
 ## Windows Note
 

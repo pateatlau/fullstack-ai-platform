@@ -7,8 +7,19 @@ from groq.types.chat import (
     ChatCompletionMessageParam,
 )
 
-from app.providers.base import ProviderChunk
+from app.providers.base import ProviderChunk, ProviderCompletion, ProviderUsage
 from app.schemas.chat import ChatMessageSchema
+
+
+def _usage_from_response(response: Any) -> ProviderUsage | None:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    return ProviderUsage(
+        prompt_tokens=getattr(usage, "prompt_tokens", None),
+        completion_tokens=getattr(usage, "completion_tokens", None),
+        total_tokens=getattr(usage, "total_tokens", None),
+    )
 
 
 def _to_groq_messages(
@@ -78,7 +89,7 @@ class GroqProvider:
         messages: list[ChatMessageSchema],
         model: str,
         temperature: float = 0.7,
-    ) -> str:
+    ) -> ProviderCompletion:
         response: ChatCompletion = await self._client.chat.completions.create(
             model=model,
             messages=_to_groq_messages(messages),
@@ -86,7 +97,13 @@ class GroqProvider:
             stream=False,
         )
 
+        usage = _usage_from_response(response)
         if not response.choices:
-            return ""
+            return ProviderCompletion(content="", usage=usage)
 
-        return _coerce_message_content(response.choices[0].message.content)
+        choice = response.choices[0]
+        return ProviderCompletion(
+            content=_coerce_message_content(choice.message.content),
+            finish_reason=getattr(choice, "finish_reason", None),
+            usage=usage,
+        )

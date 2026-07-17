@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -7,6 +8,7 @@ from app.core.config import Settings
 
 Role = Literal["system", "user", "assistant"]
 ProviderName = Literal["openai", "gemini", "groq", "anthropic"]
+MessageStatus = Literal["complete", "stopped", "error", "interrupted"]
 
 
 def _max_message_length() -> int:
@@ -46,6 +48,12 @@ class ChatRequestSchema(BaseModel):
     model: str | None = Field(default=None, min_length=1, max_length=120)
     provider: ProviderName | None = None
     temperature: float = Field(default=0.7, ge=0, le=2)
+    # Additive persistence fields (backward-compatible; older clients omit them).
+    # When set, the request appends to an existing owned session; otherwise a new
+    # session is started. A supplied ``client_message_id`` makes the append
+    # idempotent (plan Sections 2.11, 5.3).
+    session_id: uuid.UUID | None = None
+    client_message_id: str | None = Field(default=None, max_length=200)
 
     @field_validator("model")
     @classmethod
@@ -82,6 +90,8 @@ class ChatResponseSchema(BaseModel):
     content: str
     model: str
     provider: ProviderName
+    # Populated when persistence is active so the client can continue the session.
+    session_id: uuid.UUID | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -97,6 +107,8 @@ class ErrorResponseSchema(BaseModel):
 class StartFrame(BaseModel):
     type: Literal["start"] = "start"
     id: str
+    # Populated when persistence is active so streaming clients learn the session.
+    session_id: uuid.UUID | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -120,3 +132,26 @@ class ErrorFrame(BaseModel):
     code: str
     message: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ChatMessageOut(BaseModel):
+    """A persisted chat message returned when resuming a session."""
+
+    id: uuid.UUID
+    seq: int
+    role: Role
+    content: str
+    provider: str | None = None
+    model: str | None = None
+    status: MessageStatus = "complete"
+    finish_reason: str | None = None
+    created_at: datetime
+
+
+class ChatSessionOut(BaseModel):
+    """A persisted chat session with its ordered messages (plan Section 5.4)."""
+
+    id: uuid.UUID
+    title: str | None = None
+    last_message_at: datetime | None = None
+    messages: list[ChatMessageOut]

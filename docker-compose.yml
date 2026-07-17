@@ -86,6 +86,10 @@ services:
       APP_ENV: development
       MAX_MESSAGE_LENGTH: 4000
       REQUEST_TIMEOUT_SECONDS: 30
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://chatbot:chatbot@postgres:5432/chatbot}
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -98,3 +102,30 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+
+  postgres:
+    profiles:
+      - python
+    image: postgres:16-alpine
+    container_name: chatbot-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chatbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chatbot}
+      POSTGRES_DB: ${POSTGRES_DB:-chatbot}
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-chatbot} -d ${POSTGRES_DB:-chatbot}',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres-data:

@@ -15,6 +15,7 @@ from starlette.types import Message, Scope
 from app.core.config import Settings
 from app.main import MAX_REQUEST_BODY_BYTES, app, enforce_request_size
 from app.schemas.chat import ChatMessageSchema, ChatRequestSchema
+from app.providers.base import ProviderCompletion
 from app.providers.factory import ProviderFactory
 from app.services.chat_service import (
     ChatService,
@@ -30,7 +31,7 @@ class ErroringProvider(FakeProvider):
         messages: list[ChatMessageSchema],
         model: str,
         temperature: float = 0.7,
-    ) -> str:
+    ) -> ProviderCompletion:
         del messages, model, temperature
         raise RuntimeError("provider exploded")
 

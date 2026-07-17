@@ -1,8 +1,10 @@
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_VERSION = "0.1.0"
+_INSECURE_DEV_JWT_SECRET = "dev-insecure-jwt-secret-change-me"
 
 
 class Settings(BaseSettings):
@@ -30,9 +32,43 @@ class Settings(BaseSettings):
 
     cors_allowed_origins: str = "http://localhost:5173"
 
+    database_url: str = "postgresql+asyncpg://chatbot:chatbot@localhost:5432/chatbot"
+
+    # Google OAuth 2.0 (ID-token verification). Required to serve /api/auth/google.
+    google_client_id: str | None = None
+
+    # App-issued JWT (plan Section 3.2). The secret must be overridden outside
+    # local development; production values come from environment/secret stores.
+    jwt_secret: str = _INSECURE_DEV_JWT_SECRET
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expires_minutes: int = 60
+
+    # Guest quota (plan Section 12): config-driven daily message ceiling for
+    # anonymous callers. Authenticated users are not governed by this limit.
+    guest_daily_message_quota: int = 20
+
+    # Feature flag (plan Section 13, Phase 5 mitigation): when disabled, chat
+    # endpoints behave statelessly (no DB reads/writes), preserving the original
+    # request/response contracts exactly.
+    chat_persistence_enabled: bool = True
+
+    # Summarization trigger (plan Sections 5.5, 14.3): create a new session
+    # summary once this many messages accumulate past the last summary boundary.
+    summary_trigger_message_count: int = 20
+
     app_env: str = "development"
     max_message_length: int = 4000
     request_timeout_seconds: int = 30
+
+    @model_validator(mode="after")
+    def validate_jwt_secret(self) -> "Settings":
+        env = self.app_env.strip().lower()
+        if env != "development" and self.jwt_secret == _INSECURE_DEV_JWT_SECRET:
+            raise ValueError(
+                "JWT_SECRET must be explicitly set when APP_ENV is not "
+                "'development'."
+            )
+        return self
 
     @property
     def cors_allowed_origins_list(self) -> list[str]:

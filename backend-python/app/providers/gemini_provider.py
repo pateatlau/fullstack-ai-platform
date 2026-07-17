@@ -5,8 +5,19 @@ from typing import Any, AsyncIterator, Callable, cast
 
 from google import genai
 
-from app.providers.base import ProviderChunk
+from app.providers.base import ProviderChunk, ProviderCompletion, ProviderUsage
 from app.schemas.chat import ChatMessageSchema
+
+
+def _usage_from_response(response: Any) -> ProviderUsage | None:
+    meta = getattr(response, "usage_metadata", None)
+    if meta is None:
+        return None
+    return ProviderUsage(
+        prompt_tokens=getattr(meta, "prompt_token_count", None),
+        completion_tokens=getattr(meta, "candidates_token_count", None),
+        total_tokens=getattr(meta, "total_token_count", None),
+    )
 
 
 def _message_to_line(message: ChatMessageSchema) -> str:
@@ -121,7 +132,7 @@ class GeminiProvider:
         messages: list[ChatMessageSchema],
         model: str,
         temperature: float = 0.7,
-    ) -> str:
+    ) -> ProviderCompletion:
         prompt = _messages_to_prompt(messages)
         response = await asyncio.to_thread(
             self._generate_content,
@@ -129,4 +140,7 @@ class GeminiProvider:
             prompt=prompt,
             temperature=temperature,
         )
-        return _extract_text(response)
+        return ProviderCompletion(
+            content=_extract_text(response),
+            usage=_usage_from_response(response),
+        )
