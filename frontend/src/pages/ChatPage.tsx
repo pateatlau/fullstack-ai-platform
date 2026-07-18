@@ -7,10 +7,12 @@ import {
 } from '../api/chatClient'
 import { type ProviderName } from '../constants/providerModels'
 import { AuthControls } from '../components/AuthControls'
+import { MenuIcon, PanelCollapseIcon, PanelExpandIcon } from '../components/icons/ShellIcons'
 import { AuthProvider, useAuthContext } from '../context/AuthContext'
 import { ChatProvider, useChatContext } from '../context/ChatContext'
 import { useChatStream } from '../hooks/useChatStream'
 import { MessageList } from '../components/MessageList'
+import { PageBanner } from '../components/PageBanner'
 import { Composer } from '../components/Composer'
 import type {
   ChatChunk,
@@ -22,6 +24,23 @@ import type {
 
 const INVALID_ACCESS_TOKEN_CODE = 'invalid_access_token'
 const QUOTA_EXCEEDED_CODE = 'quota_exceeded'
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'chat-sidebar-collapsed'
+
+function readSidebarCollapsedPreference(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function persistSidebarCollapsedPreference(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? 'true' : 'false')
+  } catch {
+    // Ignore storage failures (private mode, quota, etc.).
+  }
+}
 
 function isChunkError(
   error: Extract<ChatChunk, { type: 'error' }> | Error,
@@ -51,7 +70,7 @@ function ChatPageContent() {
   const { status, sessionExpired, dismissSessionExpired, handleInvalidAccessToken } =
     useAuthContext()
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
-  const [isTabletSidebarCollapsed, setIsTabletSidebarCollapsed] = useState(false)
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readSidebarCollapsedPreference)
   const [isSessionsLoading, setIsSessionsLoading] = useState(false)
   const [isTranscriptLoading, setIsTranscriptLoading] = useState(false)
   const [isCreatingSession, setIsCreatingSession] = useState(false)
@@ -443,16 +462,30 @@ function ChatPageContent() {
     })()
   }
 
+  const handleCloseMobileSidebar = useCallback(() => {
+    setIsMobileSidebarOpen(false)
+  }, [])
+
+  const handleCloseSidebar = useCallback(() => {
+    setIsSidebarCollapsed(true)
+    persistSidebarCollapsedPreference(true)
+  }, [])
+
+  const handleExpandSidebar = () => {
+    setIsSidebarCollapsed(false)
+    persistSidebarCollapsedPreference(false)
+  }
+
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setIsMobileSidebarOpen(false)
+        handleCloseMobileSidebar()
       }
     }
 
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
-  }, [])
+  }, [handleCloseMobileSidebar])
 
   useEffect(() => {
     if (!isMobileSidebarOpen) return
@@ -478,7 +511,7 @@ function ChatPageContent() {
           type="button"
           className="fixed inset-0 z-30 bg-zinc-500/20 md:hidden"
           aria-label="Close sidebar overlay"
-          onClick={() => setIsMobileSidebarOpen(false)}
+          onClick={handleCloseMobileSidebar}
         />
       ) : null}
 
@@ -487,7 +520,7 @@ function ChatPageContent() {
         className={[
           'fixed inset-y-0 left-0 z-40 w-[18rem] border-r border-zinc-300 bg-zinc-200 text-zinc-950 shadow-chat-shell transition-transform duration-300 md:sticky md:top-0 md:z-auto md:h-dvh md:flex-none md:translate-x-0 md:overflow-hidden',
           isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full',
-          isTabletSidebarCollapsed ? 'md:hidden lg:block lg:w-[18rem]' : 'md:w-[18rem]',
+          isSidebarCollapsed ? 'md:hidden' : 'md:w-[18rem]',
         ].join(' ')}
       >
         <div className="flex h-full flex-col gap-4 p-3 sm:p-4">
@@ -495,8 +528,15 @@ function ChatPageContent() {
             <h2 className="text-sm font-semibold tracking-wide text-zinc-900">Sessions</h2>
             <button
               type="button"
-              className="rounded-full border border-zinc-400/60 px-3 py-1.5 text-xs font-semibold text-zinc-900 transition hover:bg-zinc-300/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-              onClick={() => setIsMobileSidebarOpen(false)}
+              className="rounded-full border border-zinc-400/60 px-3 py-1.5 text-xs font-semibold text-zinc-900 transition hover:bg-zinc-300/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 md:hidden"
+              onClick={handleCloseMobileSidebar}
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              className="hidden rounded-full border border-zinc-400/60 px-3 py-1.5 text-xs font-semibold text-zinc-900 transition hover:bg-zinc-300/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 md:inline-flex"
+              onClick={handleCloseSidebar}
             >
               Close
             </button>
@@ -510,11 +550,11 @@ function ChatPageContent() {
             >
               + New chat
             </button>
-          ) : (
+          ) : state.messages.length === 0 ? (
             <p className="rounded-chat border border-dashed border-zinc-300 bg-zinc-100/80 p-3 text-xs text-zinc-700">
               Guests get a single chat. Sign in above to start additional chats.
             </p>
-          )}
+          ) : null}
 
           <div className="flex-1 space-y-4 overflow-y-auto">
             <section aria-labelledby="current-session-heading" className="space-y-2">
@@ -618,77 +658,70 @@ function ChatPageContent() {
             </section>
           </div>
 
-          <div className="rounded-chat border border-brand-500/20 bg-brand-500/10 p-3">
-            <p className="text-xs text-zinc-800">
-              {isTranscriptLoading
-                ? 'Loading conversation\u2026'
-                : 'Sidebar reflects your saved chats.'}
-            </p>
-          </div>
+          {isTranscriptLoading ? (
+            <div className="rounded-chat border border-brand-500/20 bg-brand-500/10 p-3">
+              <p className="text-xs text-zinc-800">Loading conversation…</p>
+            </div>
+          ) : null}
         </div>
       </nav>
 
       <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <header className="sticky top-0 z-20 border-b border-shell-800/15 bg-shell-50/90 px-3 py-2 backdrop-blur sm:px-4">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
+          <div
+            className={[
+              'flex gap-2',
+              isAuthenticated
+                ? 'items-center justify-between'
+                : 'flex-col sm:flex-row sm:items-center sm:justify-between',
+            ].join(' ')}
+          >
+            <div className="flex min-w-0 items-center gap-2">
               <button
                 type="button"
-                className="rounded-lg border border-shell-800/20 px-3 py-2 text-sm font-medium text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 md:hidden"
+                className="inline-flex items-center justify-center rounded-lg border border-shell-800/20 p-2 text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 md:hidden"
                 aria-label="Open sidebar"
                 onClick={() => setIsMobileSidebarOpen(true)}
               >
-                Menu
+                <MenuIcon />
               </button>
-              <button
-                type="button"
-                className="hidden rounded-lg border border-shell-800/20 px-3 py-2 text-sm font-medium text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 md:inline-flex lg:hidden"
-                aria-label={isTabletSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                onClick={() => setIsTabletSidebarCollapsed((value) => !value)}
-              >
-                {isTabletSidebarCollapsed ? 'Expand' : 'Collapse'}
-              </button>
-              <h1 className="text-sm font-semibold tracking-wide text-shell-900 sm:text-base">
+              {isSidebarCollapsed ? (
+                <button
+                  type="button"
+                  className="hidden items-center justify-center gap-2 rounded-lg border border-shell-800/20 px-2 py-2 text-sm font-medium text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 md:inline-flex lg:px-3"
+                  aria-label="Expand sidebar"
+                  onClick={handleExpandSidebar}
+                >
+                  <PanelExpandIcon className="h-5 w-5 lg:hidden" />
+                  <span className="hidden lg:inline">Sessions</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="hidden items-center justify-center gap-2 rounded-lg border border-shell-800/20 px-2 py-2 text-sm font-medium text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 md:inline-flex lg:px-3 lg:hidden"
+                  aria-label="Collapse sidebar"
+                  onClick={handleCloseSidebar}
+                >
+                  <PanelCollapseIcon className="h-5 w-5" />
+                  <span className="sr-only">Collapse</span>
+                </button>
+              )}
+              <h1 className="min-w-0 truncate text-sm font-semibold tracking-wide text-shell-900 sm:text-base">
                 AI Chat Assistant
               </h1>
             </div>
-            <AuthControls />
+            <div className={isAuthenticated ? 'shrink-0' : 'flex items-center gap-2 sm:shrink-0'}>
+              <AuthControls />
+            </div>
           </div>
         </header>
 
-        {sessionExpired ? (
-          <div
-            className="mx-3 mt-3 flex items-center justify-between gap-3 rounded-chat border border-brand-500/25 bg-brand-500/10 px-4 py-3 text-sm text-shell-900 sm:mx-4"
-            role="status"
-          >
-            <span>Your session expired. Sign in again to continue as you were.</span>
-            <button
-              type="button"
-              className="rounded-lg border border-shell-800/20 px-3 py-1.5 text-xs font-semibold text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-              onClick={dismissSessionExpired}
-            >
-              Dismiss
-            </button>
-          </div>
-        ) : null}
-
-        {state.error ? (
-          <div
-            className="mx-3 mt-3 rounded-chat border border-danger-600/25 bg-danger-100 px-4 py-3 text-sm text-danger-600 sm:mx-4"
-            role="alert"
-          >
-            {state.error}
-          </div>
-        ) : null}
-
-        {state.quotaBlocked ? (
-          <div
-            className="mx-3 mt-3 rounded-chat border border-danger-600/25 bg-danger-100 px-4 py-3 text-sm text-danger-600 sm:mx-4"
-            role="alert"
-          >
-            You&rsquo;ve reached today&rsquo;s guest message limit. Sign in above to keep chatting.
-          </div>
-        ) : null}
+        <PageBanner
+          sessionExpired={sessionExpired}
+          onDismissSessionExpired={dismissSessionExpired}
+          quotaBlocked={state.quotaBlocked}
+          error={state.error}
+        />
 
         <main
           aria-label="Conversation"
@@ -699,7 +732,11 @@ function ChatPageContent() {
               Loading conversation…
             </div>
           ) : null}
-          <MessageList messages={state.messages} onRetryMessage={handleRetry} />
+          <MessageList
+            messages={state.messages}
+            onRetryMessage={handleRetry}
+            isStreaming={isStreaming}
+          />
           <Composer
             onSend={handleSend}
             onStop={handleStop}

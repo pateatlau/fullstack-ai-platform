@@ -24,15 +24,18 @@ export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
         ? 'border-amber-500/40 bg-amber-50'
         : ''
 
+  const showStatusBadge = message.status !== 'complete'
+  const statusLabel = message.status === 'streaming' ? 'Streaming' : message.status
+
   return (
     <article className={`${alignment} ${baseBubble} ${roleBubble} ${statusTone}`}>
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
           {roleLabel}
         </span>
-        <span className="text-[11px] text-zinc-400">
-          {message.status === 'streaming' ? 'Streaming' : message.status}
-        </span>
+        {showStatusBadge ? (
+          <span className="text-[11px] capitalize text-zinc-400">{statusLabel}</span>
+        ) : null}
       </div>
 
       {isWaitingForFirstToken ? (

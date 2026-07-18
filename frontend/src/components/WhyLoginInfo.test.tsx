@@ -21,6 +21,7 @@ describe('WhyLoginInfo', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Why login?' }))
 
-    expect(screen.getByRole('note').textContent).toContain('Signing in with Google')
+    expect(screen.getByRole('note').textContent).toContain('provider and model selection')
+    expect(screen.getByRole('note').textContent).toContain('multiple sessions')
   })
 })
