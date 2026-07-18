@@ -368,7 +368,7 @@ function ChatPageContent() {
           : 'New conversation'
 
     return {
-      id: isAuthenticated ? (activeSessionListItem?.id ?? 'unsaved-session') : 'current-session',
+      id: isAuthenticated ? (state.activeSessionId ?? 'unsaved-session') : 'current-session',
       title,
       preview:
         state.messages.length > 0
