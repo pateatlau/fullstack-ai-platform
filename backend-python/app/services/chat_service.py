@@ -23,6 +23,7 @@ from app.schemas.chat import (
     ChatMessageSchema,
     ChatRequestSchema,
     ChatResponseSchema,
+    ChatSessionListItem,
     ChatSessionOut,
     DeltaFrame,
     EndFrame,
@@ -53,6 +54,18 @@ class ChatStore(Protocol):
         user_id: uuid.UUID | None = None,
         guest_id: uuid.UUID | None = None,
     ) -> ChatSession | None: ...
+
+    async def get_default_guest_session(
+        self, guest_id: uuid.UUID
+    ) -> ChatSession | None: ...
+
+    async def list_sessions_for_owner(
+        self,
+        *,
+        user_id: uuid.UUID | None = None,
+        guest_id: uuid.UUID | None = None,
+        limit: int = 50,
+    ) -> list[ChatSession]: ...
 
     async def allocate_seq(self, session_id: uuid.UUID) -> int: ...
 
@@ -127,6 +140,8 @@ class QuotaChecker(Protocol):
 
     async def record(self, guest_id: uuid.UUID, *, tokens: int = 0) -> None: ...
 
+    async def remaining(self, guest_id: uuid.UUID) -> int: ...
+
 
 @dataclass(frozen=True)
 class _StreamPrep:
@@ -187,6 +202,24 @@ class SessionNotFoundError(ChatServiceError):
             code="session_not_found",
             message="Chat session not found.",
             status_code=404,
+        )
+
+
+class ProviderNotAllowedError(ChatServiceError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="provider_not_allowed",
+            message="Guests may only use the default provider and model.",
+            status_code=403,
+        )
+
+
+class NewChatForbiddenError(ChatServiceError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="new_chat_forbidden",
+            message="Guests may not create additional chat sessions.",
+            status_code=403,
         )
 
 
@@ -355,10 +388,39 @@ class ChatService:
         if self._session is not None:
             await self._session.commit()
 
+    def _enforce_guest_provider_gating(
+        self,
+        caller: CallerContext,
+        provider_name: ProviderName,
+        model: str,
+    ) -> None:
+        """Reject non-default provider/model for guests (plan Sections 3.2, D3).
+
+        Guests may omit ``provider``/``model`` (the resolved values then equal
+        the system default and pass); an explicit value other than the system
+        default is rejected before any provider call.
+        """
+        if caller.kind != "guest":
+            return
+        default_provider = cast(ProviderName, self._settings.llm_provider)
+        default_model = self._default_model(default_provider)
+        if provider_name != default_provider or model != default_model:
+            raise ProviderNotAllowedError()
+
     async def _resolve_session(
         self, request: ChatRequestSchema, caller: CallerContext
     ) -> ChatSession:
+        """Resolve the session a turn appends to (plan Section 2.3).
+
+        Guests are restricted to a single default session, enforced here at the
+        application level (no new DB constraint): addressing a non-default
+        ``session_id`` is treated as ownership failure (404), and omitting
+        ``session_id`` reuses the guest's existing default session rather than
+        creating a new one.
+        """
         assert self._chat_store is not None
+        is_guest = caller.kind == "guest" and caller.guest_id is not None
+
         if request.session_id is not None:
             existing = await self._chat_store.get_owned_session(
                 request.session_id,
@@ -367,7 +429,21 @@ class ChatService:
             )
             if existing is None:
                 raise SessionNotFoundError()
+            if is_guest:
+                assert caller.guest_id is not None
+                default = await self._chat_store.get_default_guest_session(
+                    caller.guest_id
+                )
+                if default is not None and default.id != existing.id:
+                    raise SessionNotFoundError()
             return existing
+
+        if is_guest:
+            assert caller.guest_id is not None
+            default = await self._chat_store.get_default_guest_session(caller.guest_id)
+            if default is not None:
+                return default
+
         return await self._chat_store.create_session(
             user_id=caller.user_id,
             guest_id=caller.guest_id,
@@ -391,6 +467,20 @@ class ChatService:
             and self._quota_service is not None
         ):
             await self._quota_service.record(caller.guest_id, tokens=tokens)
+
+    async def guest_quota_remaining(self, caller: CallerContext | None) -> int | None:
+        """Remaining guest daily-message quota, for the ``X-Guest-Quota-Remaining``
+        response header (plan Section 3.1). ``None`` for authenticated callers or
+        when quota tracking is inactive.
+        """
+        if (
+            caller is None
+            or caller.kind != "guest"
+            or caller.guest_id is None
+            or self._quota_service is None
+        ):
+            return None
+        return await self._quota_service.remaining(caller.guest_id)
 
     async def _record_usage(
         self,
@@ -509,6 +599,12 @@ class ChatService:
         if len(pending) < threshold:
             return
 
+        logger.info(
+            "Summarization triggered for session %s (pending=%d, threshold=%d)",
+            session_id,
+            len(pending),
+            threshold,
+        )
         summary_input = self._build_summary_input(latest, pending)
         try:
             completion = await asyncio.wait_for(
@@ -529,6 +625,12 @@ class ChatService:
             content=completion.content,
             provider=provider_name,
             model=model,
+        )
+        logger.info(
+            "Summarization succeeded for session %s (version=%d, covers_through_seq=%d)",
+            session_id,
+            version,
+            pending[-1].seq,
         )
         if self._usage_store is not None:
             record = build_usage_record(
@@ -573,6 +675,7 @@ class ChatService:
             )
 
         assert caller is not None and self._chat_store is not None
+        self._enforce_guest_provider_gating(caller, provider_name, model)
         prompt_text = self._last_user_content(request)
 
         try:
@@ -706,6 +809,60 @@ class ChatService:
             ],
         )
 
+    # ---- session list/create (plan Section 2.2) -----------------------------
+
+    async def list_sessions(
+        self, caller: CallerContext | None
+    ) -> list[ChatSessionListItem]:
+        """Owner-scoped, lean session list for the sidebar.
+
+        Returns ``[]`` when persistence is inactive (flag off, or no resolved
+        caller/stores) rather than an error (plan Section 2.7).
+        """
+        if not self._persistence_active(caller):
+            return []
+        assert caller is not None and self._chat_store is not None
+        try:
+            sessions = await self._chat_store.list_sessions_for_owner(
+                user_id=caller.user_id, guest_id=caller.guest_id
+            )
+        except (OperationalError, InterfaceError, DBAPIError) as exc:
+            raise DbUnavailableError() from exc
+
+        return [
+            ChatSessionListItem(
+                id=session.id,
+                title=session.title,
+                last_message_at=session.last_message_at,
+                created_at=session.created_at,
+            )
+            for session in sessions
+        ]
+
+    async def create_session(self, caller: CallerContext | None) -> ChatSessionOut:
+        """Explicit, authenticated-only session create (plan Section 2.2).
+
+        A guest caller — or persistence being inactive, which implies no
+        resolved caller — cannot create additional sessions.
+        """
+        if self._chat_store is None or caller is None:
+            raise SessionNotFoundError()
+        if caller.kind != "user":
+            raise NewChatForbiddenError()
+
+        try:
+            chat_session = await self._chat_store.create_session(user_id=caller.user_id)
+        except (OperationalError, InterfaceError, DBAPIError) as exc:
+            raise DbUnavailableError() from exc
+        await self._commit()
+
+        return ChatSessionOut(
+            id=chat_session.id,
+            title=chat_session.title,
+            last_message_at=chat_session.last_message_at,
+            messages=[],
+        )
+
     # ---- streaming ----------------------------------------------------------
 
     async def prepare_stream(
@@ -720,7 +877,10 @@ class ChatService:
         if not self._persistence_active(caller):
             return None
         assert caller is not None and self._chat_store is not None
-        self._resolve_provider(request)  # validate provider/model (may raise 422)
+        _, model, provider_name = self._resolve_provider(
+            request
+        )  # validate provider/model (may raise 422)
+        self._enforce_guest_provider_gating(caller, provider_name, model)
         prompt_text = self._last_user_content(request)
 
         try:

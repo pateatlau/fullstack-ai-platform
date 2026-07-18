@@ -21,7 +21,12 @@ from app.db.chat import SqlChatStore
 from app.db.engine import get_sessionmaker
 from app.db.identity import SqlGuestQuotaStore
 from app.db.usage import SqlUsageStore
-from app.schemas.chat import ChatRequestSchema, ChatResponseSchema, ChatSessionOut
+from app.schemas.chat import (
+    ChatRequestSchema,
+    ChatResponseSchema,
+    ChatSessionListItem,
+    ChatSessionOut,
+)
 from app.services.chat_service import ChatService, SessionNotFoundError
 from app.services.quota_service import QuotaService
 
@@ -77,6 +82,16 @@ def _set_guest_token(response: Response, caller: CallerContext | None) -> None:
         response.headers["X-Guest-Token"] = caller.issued_guest_token
 
 
+async def _set_guest_headers(
+    response: Response, caller: CallerContext | None, service: ChatService
+) -> None:
+    """Set continuity + quota-visibility headers for guest callers (plan §3.1)."""
+    _set_guest_token(response, caller)
+    remaining = await service.guest_quota_remaining(caller)
+    if remaining is not None:
+        response.headers["X-Guest-Quota-Remaining"] = str(remaining)
+
+
 @router.post("/api/chat", response_model=ChatResponseSchema)
 async def create_chat(
     request: ChatRequestSchema,
@@ -85,7 +100,7 @@ async def create_chat(
     service: ChatService = Depends(get_chat_service),
 ) -> ChatResponseSchema:
     result = await service.complete_chat(request, caller)
-    _set_guest_token(response, caller)
+    await _set_guest_headers(response, caller, service)
     return result
 
 
@@ -103,8 +118,36 @@ async def create_chat_stream(
         service.stream_chat(request, http_request, caller, prep),
         media_type="text/event-stream",
     )
-    _set_guest_token(response, caller)
+    await _set_guest_headers(response, caller, service)
     return response
+
+
+@router.get("/api/chat/sessions", response_model=list[ChatSessionListItem])
+async def list_chat_sessions(
+    response: Response,
+    caller: CallerContext | None = Depends(get_optional_caller),
+    service: ChatService = Depends(get_chat_service),
+) -> list[ChatSessionListItem]:
+    # No caller (persistence disabled) means no session concept at all: an
+    # empty list, not an error (plan Section 2.7).
+    if caller is None:
+        return []
+    result = await service.list_sessions(caller)
+    _set_guest_token(response, caller)
+    return result
+
+
+@router.post("/api/chat/sessions", response_model=ChatSessionOut, status_code=201)
+async def create_chat_session(
+    response: Response,
+    caller: CallerContext | None = Depends(get_optional_caller),
+    service: ChatService = Depends(get_chat_service),
+) -> ChatSessionOut:
+    if caller is None:
+        raise SessionNotFoundError()
+    result = await service.create_session(caller)
+    _set_guest_token(response, caller)
+    return result
 
 
 @router.get("/api/chat/sessions/{session_id}", response_model=ChatSessionOut)

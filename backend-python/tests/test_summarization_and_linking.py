@@ -140,6 +140,77 @@ async def test_build_context_messages_is_deterministic() -> None:
 
 
 @pytest.mark.anyio
+async def test_summarization_boundaries_are_independent_per_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 3: multi-session summarization independence (plan Sections 4.2, 9.1).
+
+    Two sessions crossing the threshold each get their own summary; advancing
+    one session's boundary with a further turn must not affect the other's
+    ``covers_through_seq``/``version`` — no shared state between sessions.
+    """
+    _patch_provider(monkeypatch, FakeProvider("Session summary."))
+    settings = Settings(
+        chat_persistence_enabled=True,
+        llm_provider="openai",
+        summary_trigger_message_count=2,
+    )
+    chat_store = FakeChatStore()
+    service = ChatService(
+        settings,
+        chat_store=chat_store,
+        usage_store=FakeUsageStore(),
+        quota_service=QuotaService(store=FakeGuestQuotaStore(), settings=settings),
+    )
+    caller = CallerContext.for_user(uuid.uuid4())
+
+    # Session A's first turn (1 user + 1 assistant = 2 pending) crosses the
+    # threshold; omitting session_id starts a distinct session B likewise.
+    result_a = await service.complete_chat(
+        ChatRequestSchema(
+            messages=[ChatMessageSchema(role="user", content="hi from A")]
+        ),
+        caller,
+    )
+    result_b = await service.complete_chat(
+        ChatRequestSchema(
+            messages=[ChatMessageSchema(role="user", content="hi from B")]
+        ),
+        caller,
+    )
+    session_a_id = result_a.session_id
+    session_b_id = result_b.session_id
+    assert session_a_id is not None and session_b_id is not None
+    assert session_a_id != session_b_id
+
+    summary_a_v1 = await chat_store.get_latest_summary(session_a_id)
+    summary_b_v1 = await chat_store.get_latest_summary(session_b_id)
+    assert summary_a_v1 is not None
+    assert summary_b_v1 is not None
+    assert summary_a_v1.version == 1 and summary_a_v1.covers_through_seq == 2
+    assert summary_b_v1.version == 1 and summary_b_v1.covers_through_seq == 2
+
+    # A further turn in session A alone crosses the threshold again.
+    await service.complete_chat(
+        ChatRequestSchema(
+            messages=[ChatMessageSchema(role="user", content="follow up in A")],
+            session_id=session_a_id,
+        ),
+        caller,
+    )
+
+    summary_a_v2 = await chat_store.get_latest_summary(session_a_id)
+    summary_b_after = await chat_store.get_latest_summary(session_b_id)
+    assert summary_a_v2 is not None
+    assert summary_a_v2.version == 2 and summary_a_v2.covers_through_seq == 4
+
+    # Session B's boundary is untouched by session A's second summarization.
+    assert summary_b_after is not None
+    assert summary_b_after.version == summary_b_v1.version
+    assert summary_b_after.covers_through_seq == summary_b_v1.covers_through_seq
+
+
+@pytest.mark.anyio
 async def test_summary_persisted_against_real_db(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

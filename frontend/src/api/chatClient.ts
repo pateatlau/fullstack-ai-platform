@@ -1,5 +1,5 @@
 import { getStoredAccessToken, getStoredGuestToken, storeGuestToken } from '../auth/tokenStorage'
-import type { ChatRequest } from '../types/chat'
+import type { ChatRequest, ChatSessionDetail, ChatSessionListItem } from '../types/chat'
 
 const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000'
@@ -39,6 +39,8 @@ export interface ChatResponse {
   model: string
   provider: 'openai' | 'gemini' | 'groq' | 'anthropic'
   created_at: string
+  // Populated when backend persistence is active (plan Section 2.4).
+  session_id?: string | null
 }
 
 interface ErrorResponse {
@@ -112,4 +114,54 @@ export async function streamChat(request: ChatRequest, signal: AbortSignal): Pro
   captureGuestToken(response)
 
   return response
+}
+
+/** Lists the caller's chat sessions (plan Section 2.2). Owner-scoped and
+ * ordered server-side; empty for a guest with no default chat yet, or when
+ * backend persistence is disabled. */
+export async function listChatSessions(): Promise<ChatSessionListItem[]> {
+  const response = await fetch(`${API_BASE_URL}/api/chat/sessions`, {
+    method: 'GET',
+    headers: buildRequestHeaders(),
+  })
+
+  captureGuestToken(response)
+
+  if (!response.ok) {
+    throw await toChatApiError(response, `Failed to list chat sessions: ${response.status}`)
+  }
+
+  return (await response.json()) as ChatSessionListItem[]
+}
+
+/** Creates a new empty chat session (authenticated-only; guests get 403 `new_chat_forbidden`). */
+export async function createChatSession(): Promise<ChatSessionDetail> {
+  const response = await fetch(`${API_BASE_URL}/api/chat/sessions`, {
+    method: 'POST',
+    headers: buildRequestHeaders(),
+  })
+
+  captureGuestToken(response)
+
+  if (!response.ok) {
+    throw await toChatApiError(response, `Failed to create chat session: ${response.status}`)
+  }
+
+  return (await response.json()) as ChatSessionDetail
+}
+
+/** Fetches a session's full transcript to resume it (ownership-checked; 404 if foreign/unknown). */
+export async function getChatSession(sessionId: string): Promise<ChatSessionDetail> {
+  const response = await fetch(`${API_BASE_URL}/api/chat/sessions/${sessionId}`, {
+    method: 'GET',
+    headers: buildRequestHeaders(),
+  })
+
+  captureGuestToken(response)
+
+  if (!response.ok) {
+    throw await toChatApiError(response, `Failed to load chat session: ${response.status}`)
+  }
+
+  return (await response.json()) as ChatSessionDetail
 }

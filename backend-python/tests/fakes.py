@@ -205,6 +205,9 @@ class FakeChatStore:
         self.sessions: dict[uuid.UUID, ChatSession] = {}
         self.messages: list[ChatMessage] = []
         self.summaries: list[SessionSummary] = []
+        # Test-only injection point mirroring the SQL store's read-time
+        # projection (plan Section 2.6): user_id -> set of linked guest_ids.
+        self.linked_guest_ids_by_user: dict[uuid.UUID, set[uuid.UUID]] = {}
 
     async def create_session(
         self,
@@ -219,6 +222,7 @@ class FakeChatStore:
             guest_id=guest_id,
             title=title,
             next_seq=1,
+            created_at=datetime.datetime.now(datetime.timezone.utc),
         )
         self.sessions[chat_session.id] = chat_session
         return chat_session
@@ -238,6 +242,40 @@ class FakeChatStore:
         if guest_id is not None and chat_session.guest_id == guest_id:
             return chat_session
         return None
+
+    async def get_default_guest_session(
+        self, guest_id: uuid.UUID
+    ) -> ChatSession | None:
+        guest_sessions = [s for s in self.sessions.values() if s.guest_id == guest_id]
+        if not guest_sessions:
+            return None
+        return min(guest_sessions, key=lambda s: s.created_at or datetime.datetime.min)
+
+    async def list_sessions_for_owner(
+        self,
+        *,
+        user_id: uuid.UUID | None = None,
+        guest_id: uuid.UUID | None = None,
+        limit: int = 50,
+    ) -> list[ChatSession]:
+        if user_id is not None:
+            linked_ids = self.linked_guest_ids_by_user.get(user_id, set())
+            sessions = [
+                s
+                for s in self.sessions.values()
+                if s.user_id == user_id
+                or (s.guest_id is not None and s.guest_id in linked_ids)
+            ]
+            epoch = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
+            sessions.sort(
+                key=lambda s: (s.last_message_at or epoch, s.created_at or epoch),
+                reverse=True,
+            )
+            return sessions[:limit]
+        if guest_id is not None:
+            default = await self.get_default_guest_session(guest_id)
+            return [default] if default is not None else []
+        return []
 
     async def allocate_seq(self, session_id: uuid.UUID) -> int:
         chat_session = self.sessions[session_id]

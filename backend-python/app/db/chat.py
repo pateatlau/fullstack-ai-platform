@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import ChatMessage, ChatSession, SessionSummary
+from app.db.models import ChatMessage, ChatSession, GuestIdentity, SessionSummary
+
+#: Cap for the session list endpoint (plan Section 2.2, D1: simple cap, no
+#: cursor pagination for MVP).
+DEFAULT_SESSION_LIST_LIMIT = 50
 
 
 class SqlChatStore:
@@ -49,6 +53,64 @@ class SqlChatStore:
         else:
             return None
         return await self._session.scalar(stmt)
+
+    async def get_default_guest_session(
+        self, guest_id: uuid.UUID
+    ) -> ChatSession | None:
+        """Fetch the guest's single default session, if one exists.
+
+        Guests are restricted to exactly one session (plan Section 2.3,
+        application-level enforcement). When multiple rows exist (e.g. legacy
+        data predating this constraint), the earliest-created session is the
+        canonical default.
+        """
+        return await self._session.scalar(
+            select(ChatSession)
+            .where(ChatSession.guest_id == guest_id)
+            .order_by(ChatSession.created_at.asc())
+            .limit(1)
+        )
+
+    async def list_sessions_for_owner(
+        self,
+        *,
+        user_id: uuid.UUID | None = None,
+        guest_id: uuid.UUID | None = None,
+        limit: int = DEFAULT_SESSION_LIST_LIMIT,
+    ) -> list[ChatSession]:
+        """List the caller's sessions, most-recently-active first (plan Section 2.2).
+
+        Authenticated callers (``user_id``) also see sessions owned by any
+        guest identity linked to their account — a read-time projection (plan
+        Section 2.6) with no ownership migration. Guest callers see only their
+        single default session (plan Section 2.3).
+        """
+        if user_id is not None:
+            linked_guest_ids = select(GuestIdentity.id).where(
+                GuestIdentity.linked_user_id == user_id
+            )
+            stmt = (
+                select(ChatSession)
+                .where(
+                    or_(
+                        ChatSession.user_id == user_id,
+                        ChatSession.guest_id.in_(linked_guest_ids),
+                    )
+                )
+                .order_by(
+                    ChatSession.last_message_at.desc().nulls_last(),
+                    ChatSession.created_at.desc(),
+                )
+                .limit(limit)
+            )
+            result = await self._session.scalars(stmt)
+            return list(result)
+
+        if guest_id is not None:
+            default = await self.get_default_guest_session(guest_id)
+            return [default] if default is not None else []
+
+        return []
 
     async def allocate_seq(self, session_id: uuid.UUID) -> int:
         """Assign the next gap-free per-session sequence number (plan Section 2.11).

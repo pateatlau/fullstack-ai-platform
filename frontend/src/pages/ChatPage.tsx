@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChatApiError } from '../api/chatClient'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ChatApiError,
+  createChatSession,
+  getChatSession,
+  listChatSessions,
+} from '../api/chatClient'
 import { type ProviderName } from '../constants/providerModels'
 import { AuthControls } from '../components/AuthControls'
 import { AuthProvider, useAuthContext } from '../context/AuthContext'
@@ -7,9 +12,16 @@ import { ChatProvider, useChatContext } from '../context/ChatContext'
 import { useChatStream } from '../hooks/useChatStream'
 import { MessageList } from '../components/MessageList'
 import { Composer } from '../components/Composer'
-import type { ChatChunk, ChatRequest, ChatSessionSummary, Message } from '../types/chat'
+import type {
+  ChatChunk,
+  ChatRequest,
+  ChatSessionSummary,
+  Message,
+  PersistedChatMessage,
+} from '../types/chat'
 
 const INVALID_ACCESS_TOKEN_CODE = 'invalid_access_token'
+const QUOTA_EXCEEDED_CODE = 'quota_exceeded'
 
 function isChunkError(
   error: Extract<ChatChunk, { type: 'error' }> | Error,
@@ -24,12 +36,24 @@ function toConnectionErrorMessage(error: Error): string {
   return error.message
 }
 
+function toLocalMessage(message: PersistedChatMessage): Message {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    status: message.status,
+    createdAt: message.created_at,
+  }
+}
+
 function ChatPageContent() {
   const { state, dispatch } = useChatContext()
-  const { sessionExpired, dismissSessionExpired, handleInvalidAccessToken } = useAuthContext()
+  const { status, sessionExpired, dismissSessionExpired, handleInvalidAccessToken } =
+    useAuthContext()
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
   const [isTabletSidebarCollapsed, setIsTabletSidebarCollapsed] = useState(false)
-  const [selectedSessionId, setSelectedSessionId] = useState('current-session')
+  const [isSessionsLoading, setIsSessionsLoading] = useState(false)
+  const [isTranscriptLoading, setIsTranscriptLoading] = useState(false)
   const currentMessageIdRef = useRef<string | null>(null)
   const currentStreamIdRef = useRef<string | null>(null)
   const pendingRequestRef = useRef<ChatRequest | null>(null)
@@ -37,6 +61,74 @@ function ChatPageContent() {
   const messageRequestMapRef = useRef(new Map<string, ChatRequest>())
   const streamMessageMapRef = useRef(new Map<string, string>())
   const stoppedStreamIdsRef = useRef(new Set<string>())
+  const isAuthenticated = status === 'authenticated'
+  const activeSessionIdRef = useRef(state.activeSessionId)
+  useEffect(() => {
+    activeSessionIdRef.current = state.activeSessionId
+  }, [state.activeSessionId])
+
+  /** Best-effort sidebar refresh (plan Section 2.2); failures don't interrupt chat. */
+  const refreshSessions = useCallback(async () => {
+    try {
+      const sessions = await listChatSessions()
+      dispatch({ type: 'SET_SESSIONS', sessions })
+      return sessions
+    } catch {
+      return null
+    }
+  }, [dispatch])
+
+  /** Fetches a session's transcript and loads it into the reducer (plan Sections 5.3, 6.4). */
+  const loadSession = useCallback(
+    async (sessionId: string) => {
+      setIsTranscriptLoading(true)
+      try {
+        const detail = await getChatSession(sessionId)
+        dispatch({
+          type: 'LOAD_SESSION',
+          sessionId: detail.id,
+          messages: detail.messages.map(toLocalMessage),
+        })
+      } catch (error) {
+        if (error instanceof ChatApiError && error.status === 404) {
+          // Foreign/unknown session: clear the active session and refresh the
+          // list rather than leaving a stale transcript on screen (plan Section 6.6).
+          dispatch({ type: 'SET_ACTIVE_SESSION', sessionId: null })
+          dispatch({ type: 'SET_ERROR', message: 'That chat session was not found.' })
+          void refreshSessions()
+        } else {
+          dispatch({
+            type: 'SET_ERROR',
+            message: 'Could not load that conversation. Try again.',
+          })
+        }
+      } finally {
+        setIsTranscriptLoading(false)
+      }
+    },
+    [dispatch, refreshSessions],
+  )
+
+  // Authenticated-only: load the session list on mount/login, and auto-resume
+  // the most recently active session (surfaces a just-linked guest chat too).
+  useEffect(() => {
+    if (!isAuthenticated) return
+    let cancelled = false
+
+    void (async () => {
+      setIsSessionsLoading(true)
+      const sessions = await refreshSessions()
+      if (cancelled) return
+      setIsSessionsLoading(false)
+      if (sessions && sessions.length > 0 && !activeSessionIdRef.current) {
+        void loadSession(sessions[0].id)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isAuthenticated, refreshSessions, loadSession])
 
   const { start, stop, isStreaming } = useChatStream({
     onStart: (chunk) => {
@@ -49,6 +141,12 @@ function ChatPageContent() {
 
       if (pendingRequestRef.current) {
         messageRequestMapRef.current.set(localMessageId, pendingRequestRef.current)
+      }
+
+      // Tag the conversation with its backend session id (plan Section 2.4) so
+      // follow-up turns append to the same session instead of starting a new one.
+      if (isAuthenticated && chunk.session_id && chunk.session_id !== state.activeSessionId) {
+        dispatch({ type: 'SET_ACTIVE_SESSION', sessionId: chunk.session_id })
       }
 
       if (retryTargetMessageIdRef.current) {
@@ -87,6 +185,11 @@ function ChatPageContent() {
       currentStreamIdRef.current = null
       pendingRequestRef.current = null
       retryTargetMessageIdRef.current = null
+
+      // Best-effort: keeps sidebar ordering/title current after a turn lands.
+      if (isAuthenticated) {
+        void refreshSessions()
+      }
     },
     onError: (error) => {
       const id = currentMessageIdRef.current
@@ -127,6 +230,10 @@ function ChatPageContent() {
             // The session-expired banner already communicates this; avoid also
             // surfacing a stale/confusing chat error for the same event.
             handleInvalidAccessToken()
+          } else if (error.code === QUOTA_EXCEEDED_CODE) {
+            // Blocks the composer + shows a login prompt instead of a generic
+            // error banner or a dangling streaming message (plan Sections 3.1, 6.4).
+            dispatch({ type: 'SET_QUOTA_BLOCKED' })
           } else if (id) {
             dispatch({
               type: 'STREAM_ERROR',
@@ -172,7 +279,7 @@ function ChatPageContent() {
     void start(request)
   }
 
-  const handleSend = (content: string, provider: ProviderName, model: string) => {
+  const handleSend = (content: string, provider?: ProviderName, model?: string) => {
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -186,7 +293,16 @@ function ChatPageContent() {
       role,
       content: text,
     }))
-    startRequest({ messages: history, provider, model })
+    // Guests omit provider/model (server applies the system default, plan
+    // Section 3.2) and session_id (the backend reuses their single default
+    // chat automatically). Authenticated turns continue the active session.
+    startRequest({
+      messages: history,
+      provider,
+      model,
+      session_id: isAuthenticated ? (state.activeSessionId ?? undefined) : undefined,
+      client_message_id: userMessage.id,
+    })
   }
 
   const handleRetry = (messageId: string) => {
@@ -221,10 +337,22 @@ function ChatPageContent() {
     }
   }
 
+  const activeSessionListItem = useMemo(
+    () => state.sessions.find((session) => session.id === state.activeSessionId) ?? null,
+    [state.sessions, state.activeSessionId],
+  )
+
   const currentSession = useMemo<ChatSessionSummary>(() => {
+    const title =
+      isAuthenticated && activeSessionListItem
+        ? (activeSessionListItem.title ?? 'New conversation')
+        : state.messages.length > 0
+          ? 'Current session'
+          : 'New conversation'
+
     return {
-      id: 'current-session',
-      title: state.messages.length > 0 ? 'Current session' : 'New conversation',
+      id: isAuthenticated ? (activeSessionListItem?.id ?? 'unsaved-session') : 'current-session',
+      title,
       preview:
         state.messages.length > 0
           ? 'Live conversation in progress. Select to continue this chat.'
@@ -233,20 +361,51 @@ function ChatPageContent() {
       messageCount: state.messages.length,
       isSelectable: true,
     }
-  }, [state.messages])
+  }, [isAuthenticated, activeSessionListItem, state.messages])
 
   const sidebarSessions = useMemo<ChatSessionSummary[]>(() => [currentSession], [currentSession])
-  const savedSessions: ChatSessionSummary[] = []
-  const isSavedSessionsLoading = false
+
+  const savedSessions = useMemo<ChatSessionSummary[]>(() => {
+    if (!isAuthenticated) return []
+    return state.sessions
+      .filter((session) => session.id !== state.activeSessionId)
+      .map((session) => ({
+        id: session.id,
+        title: session.title ?? 'New conversation',
+        preview: session.last_message_at ? 'Continue this conversation.' : 'No messages yet.',
+        updatedLabel: session.last_message_at
+          ? new Date(session.last_message_at).toLocaleString()
+          : 'Not started',
+        messageCount: 0,
+        isSelectable: true,
+      }))
+  }, [isAuthenticated, state.sessions, state.activeSessionId])
+
+  const isSavedSessionsLoading = isAuthenticated && isSessionsLoading
 
   const handleSelectSession = (sessionId: string) => {
-    setSelectedSessionId(sessionId)
     setIsMobileSidebarOpen(false)
+    if (isAuthenticated && sessionId !== state.activeSessionId) {
+      void loadSession(sessionId)
+    }
   }
 
   const handleNewChat = () => {
-    setSelectedSessionId(currentSession.id)
     setIsMobileSidebarOpen(false)
+    if (!isAuthenticated) {
+      // Guests are limited to a single default chat; the control is hidden
+      // for them (plan Section 3.3) — this is a defensive no-op.
+      return
+    }
+    void (async () => {
+      try {
+        const created = await createChatSession()
+        dispatch({ type: 'LOAD_SESSION', sessionId: created.id, messages: [] })
+        await refreshSessions()
+      } catch {
+        dispatch({ type: 'SET_ERROR', message: 'Could not start a new chat. Try again.' })
+      }
+    })()
   }
 
   useEffect(() => {
@@ -268,6 +427,14 @@ function ChatPageContent() {
       document.body.style.overflow = originalOverflow
     }
   }, [isMobileSidebarOpen])
+
+  useEffect(() => {
+    // Signing in raises the caller's limits (plan Section 3.3); unblock the
+    // composer once the guest quota banner is no longer applicable.
+    if (status === 'authenticated' && state.quotaBlocked) {
+      dispatch({ type: 'CLEAR_QUOTA_BLOCKED' })
+    }
+  }, [status, state.quotaBlocked, dispatch])
 
   return (
     <div className="relative mx-auto flex h-dvh w-full max-w-375 overflow-hidden bg-linear-to-b from-shell-50 via-shell-100 to-[#ebeff6]">
@@ -300,13 +467,19 @@ function ChatPageContent() {
             </button>
           </div>
 
-          <button
-            type="button"
-            className="rounded-chat bg-brand-600 px-4 py-3 text-left text-sm font-semibold text-white shadow-chat-card transition hover:bg-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-200 focus-visible:ring-brand-500"
-            onClick={handleNewChat}
-          >
-            + New chat
-          </button>
+          {isAuthenticated ? (
+            <button
+              type="button"
+              className="rounded-chat bg-brand-600 px-4 py-3 text-left text-sm font-semibold text-white shadow-chat-card transition hover:bg-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-200 focus-visible:ring-brand-500"
+              onClick={handleNewChat}
+            >
+              + New chat
+            </button>
+          ) : (
+            <p className="rounded-chat border border-dashed border-zinc-300 bg-zinc-100/80 p-3 text-xs text-zinc-700">
+              Guests get a single chat. Sign in above to start additional chats.
+            </p>
+          )}
 
           <div className="flex-1 space-y-4 overflow-y-auto">
             <section aria-labelledby="current-session-heading" className="space-y-2">
@@ -322,7 +495,7 @@ function ChatPageContent() {
 
               <ul className="space-y-2" aria-label="Current chat history">
                 {sidebarSessions.map((session) => {
-                  const isActive = session.id === selectedSessionId
+                  const isActive = session.id === currentSession.id
 
                   return (
                     <li key={session.id}>
@@ -366,7 +539,9 @@ function ChatPageContent() {
                 >
                   Saved
                 </h3>
-                <span className="text-[11px] text-zinc-600">Future multi-chat</span>
+                <span className="text-[11px] text-zinc-600">
+                  {isAuthenticated ? `${savedSessions.length} previous` : 'Sign in to save chats'}
+                </span>
               </div>
 
               {isSavedSessionsLoading ? (
@@ -399,8 +574,9 @@ function ChatPageContent() {
                 <div className="rounded-chat border border-dashed border-zinc-300 bg-zinc-100/80 p-3">
                   <p className="text-sm font-medium text-zinc-900">No saved conversations yet</p>
                   <p className="mt-1 text-xs text-zinc-600">
-                    This section is ready for persisted multi-chat sessions once backend support is
-                    added.
+                    {isAuthenticated
+                      ? 'Start a new chat to build up your conversation history.'
+                      : 'Sign in to keep multiple conversations and pick up where you left off.'}
                   </p>
                 </div>
               )}
@@ -408,7 +584,11 @@ function ChatPageContent() {
           </div>
 
           <div className="rounded-chat border border-brand-500/20 bg-brand-500/10 p-3">
-            <p className="text-xs text-zinc-800">Sidebar is ready for multi-chat session wiring.</p>
+            <p className="text-xs text-zinc-800">
+              {isTranscriptLoading
+                ? 'Loading conversation\u2026'
+                : 'Sidebar reflects your saved chats.'}
+            </p>
           </div>
         </div>
       </nav>
@@ -466,12 +646,32 @@ function ChatPageContent() {
           </div>
         ) : null}
 
+        {state.quotaBlocked ? (
+          <div
+            className="mx-3 mt-3 rounded-chat border border-danger-600/25 bg-danger-100 px-4 py-3 text-sm text-danger-600 sm:mx-4"
+            role="alert"
+          >
+            You&rsquo;ve reached today&rsquo;s guest message limit. Sign in above to keep chatting.
+          </div>
+        ) : null}
+
         <main
           aria-label="Conversation"
           className="flex min-h-0 flex-1 flex-col px-2 pb-2 pt-2 sm:px-4 sm:pb-4"
         >
+          {isTranscriptLoading ? (
+            <div className="px-2 py-3 text-sm text-shell-700" role="status" aria-live="polite">
+              Loading conversation…
+            </div>
+          ) : null}
           <MessageList messages={state.messages} onRetryMessage={handleRetry} />
-          <Composer onSend={handleSend} onStop={handleStop} isStreaming={isStreaming} />
+          <Composer
+            onSend={handleSend}
+            onStop={handleStop}
+            isStreaming={isStreaming}
+            canSwitchProvider={status === 'authenticated'}
+            disabled={state.quotaBlocked || isTranscriptLoading}
+          />
         </main>
       </section>
     </div>
