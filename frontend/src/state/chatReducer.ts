@@ -1,13 +1,24 @@
-import type { Message } from '../types/chat'
+import type { ChatSessionListItem, Message } from '../types/chat'
 
 export interface ChatState {
   messages: Message[]
   error: string | null
+  /** Set on `429 quota_exceeded` (plan Section 3.1/6.4): blocks the composer
+   * and surfaces a login prompt until the caller authenticates. */
+  quotaBlocked: boolean
+  /** The backend session id the current transcript belongs to (plan Section
+   * 2.2); `null` for an unsaved/guest-local conversation. */
+  activeSessionId: string | null
+  /** Owner-scoped session list for the sidebar (plan Section 2.2), lean metadata only. */
+  sessions: ChatSessionListItem[]
 }
 
 export const initialChatState: ChatState = {
   messages: [],
   error: null,
+  quotaBlocked: false,
+  activeSessionId: null,
+  sessions: [],
 }
 
 export type ChatAction =
@@ -21,6 +32,11 @@ export type ChatAction =
   | { type: 'STOP_MESSAGE'; id: string }
   | { type: 'INTERRUPT_MESSAGE'; id: string; message: string }
   | { type: 'STREAM_ERROR'; id: string; message: string; code?: string }
+  | { type: 'SET_QUOTA_BLOCKED' }
+  | { type: 'CLEAR_QUOTA_BLOCKED' }
+  | { type: 'SET_SESSIONS'; sessions: ChatSessionListItem[] }
+  | { type: 'SET_ACTIVE_SESSION'; sessionId: string | null }
+  | { type: 'LOAD_SESSION'; sessionId: string | null; messages: Message[] }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
@@ -33,6 +49,38 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'CLEAR_ERROR':
       return {
         ...state,
+        error: null,
+      }
+
+    case 'SET_QUOTA_BLOCKED':
+      return {
+        ...state,
+        quotaBlocked: true,
+      }
+
+    case 'CLEAR_QUOTA_BLOCKED':
+      return {
+        ...state,
+        quotaBlocked: false,
+      }
+
+    case 'SET_SESSIONS':
+      return {
+        ...state,
+        sessions: action.sessions,
+      }
+
+    case 'SET_ACTIVE_SESSION':
+      return {
+        ...state,
+        activeSessionId: action.sessionId,
+      }
+
+    case 'LOAD_SESSION':
+      return {
+        ...state,
+        activeSessionId: action.sessionId,
+        messages: action.messages,
         error: null,
       }
 

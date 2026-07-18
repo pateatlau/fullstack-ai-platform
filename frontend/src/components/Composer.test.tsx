@@ -4,6 +4,46 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPage } from '../pages/ChatPage'
+import { storeSession } from '../auth/tokenStorage'
+import type { AuthenticatedUser } from '../types/auth'
+
+const authenticatedUser: AuthenticatedUser = {
+  id: 'user-1',
+  email: 'person@example.com',
+  display_name: 'Person',
+  picture_url: null,
+}
+
+function makeJwt(expSecondsFromNow: number): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+  const exp = Math.floor(Date.now() / 1000) + expSecondsFromNow
+  const payload = btoa(JSON.stringify({ exp }))
+  return `${header}.${payload}.signature`
+}
+
+/** Provider/model switching is authenticated-only (plan Section 3.2); seed a
+ * valid session so switcher-focused tests exercise that tier by default. */
+function signInAsAuthenticatedUser(): void {
+  storeSession(makeJwt(3600), authenticatedUser)
+}
+
+/** Authenticated `ChatPage` fetches `GET /api/chat/sessions` on mount (Phase 2
+ * sidebar wiring). Answers that transparently with an empty list so it never
+ * consumes or counts against a test's chat/stream-focused `fetchMock`. */
+function withSessionsListStub(
+  chatFetchMock: (input: RequestInfo | URL, init?: RequestInit) => unknown,
+): ReturnType<typeof vi.fn> {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input.toString()
+    if (url.endsWith('/api/chat/sessions') && (init?.method ?? 'GET') === 'GET') {
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return chatFetchMock(input, init)
+  })
+}
 
 function createStreamResponse(chunks: string[], chunkDelayMs = 0): Response {
   const encoder = new TextEncoder()
@@ -80,6 +120,8 @@ function createAbortableStreamResponse(
 
 describe('Composer behavior', () => {
   beforeEach(() => {
+    window.localStorage.clear()
+    signInAsAuthenticatedUser()
     Object.defineProperty(globalThis.HTMLElement.prototype, 'scrollIntoView', {
       configurable: true,
       value: vi.fn(),
@@ -89,6 +131,7 @@ describe('Composer behavior', () => {
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
+    window.localStorage.clear()
   })
 
   it('exposes accessible shell landmarks and primary controls', () => {
@@ -122,7 +165,7 @@ describe('Composer behavior', () => {
           'event: end\ndata: {"type":"end","id":"resp_3","finish_reason":"stop","timestamp":"t2"}\n\n',
         ]),
       )
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withSessionsListStub(fetchMock))
 
     render(<ChatPage />)
 
@@ -159,7 +202,7 @@ describe('Composer behavior', () => {
           'event: end\ndata: {"type":"end","id":"resp_4","finish_reason":"stop","timestamp":"t3"}\n\n',
         ]),
       )
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withSessionsListStub(fetchMock))
 
     render(<ChatPage />)
 
@@ -200,7 +243,7 @@ describe('Composer behavior', () => {
           'event: end\ndata: {"type":"end","id":"resp_6","finish_reason":"stop","timestamp":"t5"}\n\n',
         ]),
       )
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withSessionsListStub(fetchMock))
 
     render(<ChatPage />)
 
@@ -252,7 +295,7 @@ describe('Composer behavior', () => {
           'event: end\ndata: {"type":"end","id":"resp_1","finish_reason":"stop","timestamp":"t3"}\n\n',
         ]),
       )
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withSessionsListStub(fetchMock))
 
     render(<ChatPage />)
 
@@ -285,7 +328,7 @@ describe('Composer behavior', () => {
           init?.signal ?? undefined,
         )
       })
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withSessionsListStub(fetchMock))
 
     render(<ChatPage />)
 
@@ -305,5 +348,97 @@ describe('Composer behavior', () => {
     })
 
     expect(screen.getByText(/Partial/)).not.toBeNull()
+  })
+})
+
+describe('Composer guest gating and quota UX', () => {
+  beforeEach(() => {
+    window.localStorage.clear() // stay on the default guest tier
+    Object.defineProperty(globalThis.HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  })
+
+  it('hides the provider/model switcher for guests', () => {
+    render(<ChatPage />)
+
+    expect(screen.queryByLabelText('Provider')).toBeNull()
+    expect(screen.queryByLabelText('Model')).toBeNull()
+  })
+
+  it('hides the + New chat control for guests and shows a login affordance instead', () => {
+    render(<ChatPage />)
+
+    expect(screen.queryByRole('button', { name: '+ New chat' })).toBeNull()
+    expect(screen.getByText(/sign in above to start additional chats/i)).not.toBeNull()
+  })
+
+  it('omits provider/model from the request when sent as a guest', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        createStreamResponse([
+          'event: start\ndata: {"type":"start","id":"resp_7","timestamp":"t0"}\n\n',
+          'event: delta\ndata: {"type":"delta","id":"resp_7","content":"Default reply","timestamp":"t1"}\n\n',
+          'event: end\ndata: {"type":"end","id":"resp_7","finish_reason":"stop","timestamp":"t2"}\n\n',
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ChatPage />)
+
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'Hi as a guest')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const body = JSON.parse(String(requestInit.body)) as {
+      provider?: string
+      model?: string
+      client_message_id?: string
+    }
+
+    expect(body.provider).toBeUndefined()
+    expect(body.model).toBeUndefined()
+    expect(body.client_message_id).toBeTruthy()
+  })
+
+  it('blocks the composer and shows a login prompt on 429 quota_exceeded', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: { code: 'quota_exceeded', message: 'limit reached' } }),
+        {
+          status: 429,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ChatPage />)
+
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'One too many')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/reached today.s guest message limit/i)).not.toBeNull()
+    })
+
+    expect((screen.getByPlaceholderText('Ask something…') as HTMLTextAreaElement).disabled).toBe(
+      true,
+    )
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
   })
 })

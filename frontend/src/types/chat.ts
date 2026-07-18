@@ -16,10 +16,15 @@ export interface ChatRequest {
   model?: string
   provider?: 'openai' | 'gemini' | 'groq' | 'anthropic'
   temperature?: number
+  // Additive persistence fields (plan Sections 2.4, 6.5). Omitted by older
+  // flows; when set, continues an existing owned session and/or makes the
+  // append idempotent on retry.
+  session_id?: string
+  client_message_id?: string
 }
 
 export type ChatChunk =
-  | { type: 'start'; id: string; timestamp: string }
+  | { type: 'start'; id: string; session_id?: string | null; timestamp: string }
   | { type: 'delta'; id: string; content: string; timestamp: string }
   | { type: 'end'; id: string; finish_reason: string; timestamp: string }
   | {
@@ -42,4 +47,33 @@ export interface ChatSessionSummary {
   updatedLabel: string
   messageCount: number
   isSelectable: boolean
+}
+
+/** Lean session metadata from `GET /api/chat/sessions` (plan Section 2.2) — no messages. */
+export interface ChatSessionListItem {
+  id: string
+  title: string | null
+  last_message_at: string | null
+  created_at: string
+}
+
+/** A persisted message as returned by session resume/create (backend `ChatMessageOut`). */
+export interface PersistedChatMessage {
+  id: string
+  seq: number
+  role: Role
+  content: string
+  provider: string | null
+  model: string | null
+  status: 'complete' | 'stopped' | 'error' | 'interrupted'
+  finish_reason: string | null
+  created_at: string
+}
+
+/** A persisted session with its ordered transcript (backend `ChatSessionOut`). */
+export interface ChatSessionDetail {
+  id: string
+  title: string | null
+  last_message_at: string | null
+  messages: PersistedChatMessage[]
 }

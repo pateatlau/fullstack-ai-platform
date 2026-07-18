@@ -12,11 +12,14 @@ existing error envelope as a first-class ``quota_exceeded`` (429) response
 from __future__ import annotations
 
 import datetime
+import logging
 import uuid
 from typing import Protocol
 
 from app.core.config import Settings
 from app.services.chat_service import ChatServiceError
+
+logger = logging.getLogger(__name__)
 
 
 class QuotaExceededError(ChatServiceError):
@@ -57,8 +60,19 @@ class QuotaService:
         """Raise ``QuotaExceededError`` if the guest has hit the daily limit."""
         count = await self._store.get_message_count(guest_id, _utc_window())
         if count >= self._settings.guest_daily_message_quota:
+            logger.info(
+                "Guest quota denied for guest_id=%s (count=%d, quota=%d)",
+                guest_id,
+                count,
+                self._settings.guest_daily_message_quota,
+            )
             raise QuotaExceededError()
 
     async def record(self, guest_id: uuid.UUID, *, tokens: int = 0) -> None:
         """Durably increment the guest's counter for the current window."""
         await self._store.increment(guest_id, _utc_window(), tokens=tokens)
+
+    async def remaining(self, guest_id: uuid.UUID) -> int:
+        """Messages left in the current UTC window (never negative)."""
+        count = await self._store.get_message_count(guest_id, _utc_window())
+        return max(0, self._settings.guest_daily_message_quota - count)

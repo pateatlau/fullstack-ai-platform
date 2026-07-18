@@ -33,6 +33,16 @@ describe('chatReducer', () => {
     expect(cleared.error).toBeNull()
   })
 
+  it('SET_QUOTA_BLOCKED and CLEAR_QUOTA_BLOCKED toggle the guest quota flag', () => {
+    expect(initialChatState.quotaBlocked).toBe(false)
+
+    const blocked = chatReducer(initialChatState, { type: 'SET_QUOTA_BLOCKED' })
+    expect(blocked.quotaBlocked).toBe(true)
+
+    const cleared = chatReducer(blocked, { type: 'CLEAR_QUOTA_BLOCKED' })
+    expect(cleared.quotaBlocked).toBe(false)
+  })
+
   it('START_MESSAGE appends an empty streaming assistant message', () => {
     const state = chatReducer(initialChatState, {
       type: 'START_MESSAGE',
@@ -91,6 +101,9 @@ describe('chatReducer', () => {
   it('RETRY_MESSAGE clears error metadata and returns the assistant message to streaming', () => {
     const interruptedState = {
       error: 'Could not reach the backend.',
+      quotaBlocked: false,
+      activeSessionId: null,
+      sessions: [],
       messages: [
         {
           id: 'resp_1',

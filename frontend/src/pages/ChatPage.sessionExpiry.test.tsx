@@ -39,6 +39,24 @@ function makeJwt(expSecondsFromNow: number): string {
   return `${header}.${payload}.signature`
 }
 
+/** Authenticated `ChatPage` fetches `GET /api/chat/sessions` on mount (Phase 2
+ * sidebar wiring). Answers that transparently with an empty list so it never
+ * consumes/counts against this test's chat/stream-focused `fetchMock` queue. */
+function withSessionsListStub(
+  chatFetchMock: (input: RequestInfo | URL, init?: RequestInit) => unknown,
+): ReturnType<typeof vi.fn> {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input.toString()
+    if (url.endsWith('/api/chat/sessions') && (init?.method ?? 'GET') === 'GET') {
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return chatFetchMock(input, init)
+  })
+}
+
 describe('ChatPage session-expiry UX', () => {
   beforeEach(() => {
     Object.defineProperty(globalThis.HTMLElement.prototype, 'scrollIntoView', {
@@ -71,7 +89,7 @@ describe('ChatPage session-expiry UX', () => {
           'event: end\ndata: {"type":"end","id":"resp_2","finish_reason":"stop","timestamp":"t2"}\n\n',
         ]),
       )
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withSessionsListStub(fetchMock))
 
     render(<ChatPage />)
 

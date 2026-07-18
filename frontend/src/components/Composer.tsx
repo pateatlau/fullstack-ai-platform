@@ -6,24 +6,40 @@ import {
 } from '../constants/providerModels'
 
 interface ComposerProps {
-  onSend: (content: string, provider: ProviderName, model: string) => void
+  onSend: (content: string, provider?: ProviderName, model?: string) => void
   onStop: () => void
   isStreaming: boolean
+  /** Guests use the fixed system default and never see the switcher (plan Section 3.2). */
+  canSwitchProvider: boolean
+  /** True when sending is blocked (e.g. guest daily quota reached, plan Section 3.1). */
+  disabled?: boolean
 }
 
-export function Composer({ onSend, onStop, isStreaming }: ComposerProps) {
+export function Composer({
+  onSend,
+  onStop,
+  isStreaming,
+  canSwitchProvider,
+  disabled = false,
+}: ComposerProps) {
   const [value, setValue] = useState('')
   const [selectedProvider, setSelectedProvider] = useState<ProviderName>('openai')
   const [selectedModel, setSelectedModel] = useState(getProviderOption('openai').model)
   const selectedProviderRef = useRef<ProviderName>('openai')
   const selectedModelRef = useRef(getProviderOption('openai').model)
   const hasMessage = value.trim().length > 0
+  const isBlocked = isStreaming || disabled
   const modelOptions = providerModelOptions.filter((option) => option.provider === selectedProvider)
 
   const submit = () => {
     const trimmed = value.trim()
-    if (!trimmed || isStreaming) return
-    onSend(trimmed, selectedProviderRef.current, selectedModelRef.current)
+    if (!trimmed || isBlocked) return
+    if (canSwitchProvider) {
+      onSend(trimmed, selectedProviderRef.current, selectedModelRef.current)
+    } else {
+      // Guests omit provider/model; the server applies the system default.
+      onSend(trimmed)
+    }
     setValue('')
   }
 
@@ -70,57 +86,65 @@ export function Composer({ onSend, onStop, isStreaming }: ComposerProps) {
           <span
             className={[
               'rounded-chip px-2.5 py-1 text-[11px] font-medium',
-              isStreaming ? 'bg-amber-100 text-amber-800' : 'bg-zinc-100 text-zinc-600',
+              isStreaming
+                ? 'bg-amber-100 text-amber-800'
+                : disabled
+                  ? 'bg-danger-100 text-danger-600'
+                  : 'bg-zinc-100 text-zinc-600',
             ].join(' ')}
             aria-live="polite"
           >
             {isStreaming
               ? 'Streaming response'
-              : hasMessage
-                ? 'Ready to send'
-                : 'Waiting for input'}
+              : disabled
+                ? 'Sending blocked'
+                : hasMessage
+                  ? 'Ready to send'
+                  : 'Waiting for input'}
           </span>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">
-              Provider
-            </span>
-            <select
-              className="h-11 rounded-xl border border-zinc-200 bg-zinc-50 px-3 text-sm text-shell-950 outline-none transition focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
-              value={selectedProvider}
-              onChange={handleProviderChange}
-              disabled={isStreaming}
-              aria-label="Provider"
-            >
-              {providerModelOptions.map((option) => (
-                <option key={option.provider} value={option.provider}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+        {canSwitchProvider ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">
+                Provider
+              </span>
+              <select
+                className="h-11 rounded-xl border border-zinc-200 bg-zinc-50 px-3 text-sm text-shell-950 outline-none transition focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
+                value={selectedProvider}
+                onChange={handleProviderChange}
+                disabled={isBlocked}
+                aria-label="Provider"
+              >
+                {providerModelOptions.map((option) => (
+                  <option key={option.provider} value={option.provider}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">
-              Model
-            </span>
-            <select
-              className="h-11 rounded-xl border border-zinc-200 bg-zinc-50 px-3 text-sm text-shell-950 outline-none transition focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
-              value={selectedModel}
-              onChange={handleModelChange}
-              disabled={isStreaming}
-              aria-label="Model"
-            >
-              {modelOptions.map((option) => (
-                <option key={option.model} value={option.model}>
-                  {option.model}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">
+                Model
+              </span>
+              <select
+                className="h-11 rounded-xl border border-zinc-200 bg-zinc-50 px-3 text-sm text-shell-950 outline-none transition focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
+                value={selectedModel}
+                onChange={handleModelChange}
+                disabled={isBlocked}
+                aria-label="Model"
+              >
+                {modelOptions.map((option) => (
+                  <option key={option.model} value={option.model}>
+                    {option.model}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        ) : null}
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <label className="flex min-w-0 flex-1">
@@ -131,7 +155,7 @@ export function Composer({ onSend, onStop, isStreaming }: ComposerProps) {
               onChange={(event) => setValue(event.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Ask something…"
-              disabled={isStreaming}
+              disabled={isBlocked}
               rows={3}
               aria-label="Message input"
             />
@@ -160,7 +184,7 @@ export function Composer({ onSend, onStop, isStreaming }: ComposerProps) {
               <button
                 type="submit"
                 className="inline-flex min-h-11 items-center justify-center rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-brand-500/40"
-                disabled={!hasMessage}
+                disabled={!hasMessage || disabled}
               >
                 Send
               </button>

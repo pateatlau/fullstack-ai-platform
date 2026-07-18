@@ -155,3 +155,12 @@ class ChatSessionOut(BaseModel):
     title: str | None = None
     last_message_at: datetime | None = None
     messages: list[ChatMessageOut]
+
+
+class ChatSessionListItem(BaseModel):
+    """Lean session metadata for the sidebar list (plan Section 2.2) — no messages."""
+
+    id: uuid.UUID
+    title: str | None = None
+    last_message_at: datetime | None = None
+    created_at: datetime
