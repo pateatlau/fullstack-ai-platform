@@ -237,8 +237,14 @@ class FakeChatStore:
         chat_session = self.sessions.get(session_id)
         if chat_session is None:
             return None
-        if user_id is not None and chat_session.user_id == user_id:
-            return chat_session
+        if user_id is not None:
+            linked_ids = self.linked_guest_ids_by_user.get(user_id, set())
+            if chat_session.user_id == user_id or (
+                chat_session.guest_id is not None
+                and chat_session.guest_id in linked_ids
+            ):
+                return chat_session
+            return None
         if guest_id is not None and chat_session.guest_id == guest_id:
             return chat_session
         return None
@@ -249,7 +255,10 @@ class FakeChatStore:
         guest_sessions = [s for s in self.sessions.values() if s.guest_id == guest_id]
         if not guest_sessions:
             return None
-        return min(guest_sessions, key=lambda s: s.created_at or datetime.datetime.min)
+        return min(
+            guest_sessions,
+            key=lambda s: (s.created_at or datetime.datetime.min, s.id),
+        )
 
     async def list_sessions_for_owner(
         self,
@@ -307,6 +316,7 @@ class FakeChatStore:
             status=status,
             finish_reason=finish_reason,
             client_message_id=client_message_id,
+            created_at=datetime.datetime.now(datetime.timezone.utc),
         )
         self.messages.append(message)
         return message

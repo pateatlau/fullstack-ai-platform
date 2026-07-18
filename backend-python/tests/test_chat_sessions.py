@@ -378,6 +378,40 @@ async def test_list_sessions_includes_linked_guest_session_for_authenticated_cal
     assert linked_session.guest_id == guest_id
 
 
+@pytest.mark.anyio
+async def test_authenticated_caller_can_resume_and_append_to_linked_guest_session(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A linked guest session that appears in the list (previous test) must
+    also be resumable and continuable — ``get_owned_session`` needs the same
+    linked-guest projection as ``list_sessions_for_owner``, or the list would
+    show a session the caller can't actually open (plan Sections 2.6, 5.2).
+    """
+    _patch_provider(monkeypatch, FakeProvider("continuing the linked chat"))
+    settings = Settings(chat_persistence_enabled=True)
+    chat_store = FakeChatStore()
+    user_id = uuid.uuid4()
+    guest_id = uuid.uuid4()
+    linked_session = await chat_store.create_session(guest_id=guest_id)
+    await chat_store.add_message(
+        session_id=linked_session.id, seq=1, role="user", content="from before login"
+    )
+    chat_store.linked_guest_ids_by_user[user_id] = {guest_id}
+    service = _service(settings, chat_store=chat_store)
+    caller = CallerContext.for_user(user_id)
+
+    transcript = await service.get_session_transcript(linked_session.id, caller)
+    assert transcript.id == linked_session.id
+    assert [m.content for m in transcript.messages] == ["from before login"]
+
+    result = await service.complete_chat(
+        _request("continuing", session_id=linked_session.id), caller
+    )
+    assert result.session_id == linked_session.id
+    # The row is still guest-owned; appending doesn't migrate ownership.
+    assert linked_session.user_id is None
+
+
 # --------------------------------------------------------------------------- #
 # Session create (unit, fakes)                                                #
 # --------------------------------------------------------------------------- #

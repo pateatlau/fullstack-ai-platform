@@ -119,6 +119,32 @@ describe('ChatPage session sidebar wiring', () => {
     expect(screen.getByRole('button', { name: /New conversation/ })).not.toBeNull()
   })
 
+  it('clicking the current entry with no active session does not fetch a sentinel session id', async () => {
+    // Authenticated with no sessions yet: activeSessionId stays null and the
+    // "Current" entry falls back to the local 'unsaved-session' sentinel id.
+    const fetchMock = createRoutedFetchMock((url, method) => {
+      if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+        return jsonResponse([])
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ChatPage />)
+
+    const currentEntry = await screen.findByRole('button', { name: /New conversation/ })
+    await userEvent.setup().click(currentEntry)
+
+    // No GET to /api/chat/sessions/unsaved-session (or any other id) and no
+    // "not found" error surfaced.
+    const sessionDetailCalls = fetchMock.mock.calls.filter(([input]) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      return /\/api\/chat\/sessions\/[^/]+$/.test(url)
+    })
+    expect(sessionDetailCalls).toHaveLength(0)
+    expect(screen.queryByText(/not found/i)).toBeNull()
+  })
+
   it('switching to a saved session fetches and loads its transcript', async () => {
     const fetchMock = createRoutedFetchMock((url, method) => {
       if (url.endsWith('/api/chat/sessions') && method === 'GET') {
@@ -233,7 +259,24 @@ describe('ChatPage session sidebar wiring', () => {
         ])
       }
       if (url.endsWith('/api/chat/sessions/s1') && method === 'GET') {
-        return jsonResponse({ id: 's1', title: 'First chat', last_message_at: null, messages: [] })
+        return jsonResponse({
+          id: 's1',
+          title: 'First chat',
+          last_message_at: null,
+          messages: [
+            {
+              id: 'm1',
+              seq: 1,
+              role: 'user',
+              content: 'Hello from the first chat',
+              provider: null,
+              model: null,
+              status: 'complete',
+              finish_reason: null,
+              created_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+        })
       }
       if (url.endsWith('/api/chat/sessions/gone') && method === 'GET') {
         return jsonResponse(
@@ -247,11 +290,19 @@ describe('ChatPage session sidebar wiring', () => {
 
     render(<ChatPage />)
 
+    await waitFor(() => {
+      expect(screen.getByText('Hello from the first chat')).not.toBeNull()
+    })
+
     const goneButton = await screen.findByRole('button', { name: /Deleted elsewhere/ })
     await userEvent.setup().click(goneButton)
 
     await waitFor(() => {
       expect(screen.getByText(/that chat session was not found/i)).not.toBeNull()
     })
+
+    // The previous session's transcript must not linger once its session is
+    // gone (plan Section 6.6) — LOAD_SESSION clears activeSessionId+messages together.
+    expect(screen.queryByText('Hello from the first chat')).toBeNull()
   })
 })

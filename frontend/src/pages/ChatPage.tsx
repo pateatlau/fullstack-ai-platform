@@ -54,6 +54,7 @@ function ChatPageContent() {
   const [isTabletSidebarCollapsed, setIsTabletSidebarCollapsed] = useState(false)
   const [isSessionsLoading, setIsSessionsLoading] = useState(false)
   const [isTranscriptLoading, setIsTranscriptLoading] = useState(false)
+  const [isCreatingSession, setIsCreatingSession] = useState(false)
   const currentMessageIdRef = useRef<string | null>(null)
   const currentStreamIdRef = useRef<string | null>(null)
   const pendingRequestRef = useRef<ChatRequest | null>(null)
@@ -61,6 +62,10 @@ function ChatPageContent() {
   const messageRequestMapRef = useRef(new Map<string, ChatRequest>())
   const streamMessageMapRef = useRef(new Map<string, string>())
   const stoppedStreamIdsRef = useRef(new Set<string>())
+  // Monotonic counter guarding loadSession against out-of-order responses: a
+  // superseded fetch (an older selection resolving after a newer one) must
+  // never overwrite the transcript of the session the user is now viewing.
+  const sessionLoadSeqRef = useRef(0)
   const isAuthenticated = status === 'authenticated'
   const activeSessionIdRef = useRef(state.activeSessionId)
   useEffect(() => {
@@ -81,19 +86,29 @@ function ChatPageContent() {
   /** Fetches a session's transcript and loads it into the reducer (plan Sections 5.3, 6.4). */
   const loadSession = useCallback(
     async (sessionId: string) => {
+      const requestSeq = ++sessionLoadSeqRef.current
       setIsTranscriptLoading(true)
       try {
         const detail = await getChatSession(sessionId)
+        if (sessionLoadSeqRef.current !== requestSeq) {
+          // A newer selection started while this fetch was in flight; discard
+          // this now-superseded response so it can't overwrite the transcript.
+          return
+        }
         dispatch({
           type: 'LOAD_SESSION',
           sessionId: detail.id,
           messages: detail.messages.map(toLocalMessage),
         })
       } catch (error) {
+        if (sessionLoadSeqRef.current !== requestSeq) {
+          return
+        }
         if (error instanceof ChatApiError && error.status === 404) {
-          // Foreign/unknown session: clear the active session and refresh the
-          // list rather than leaving a stale transcript on screen (plan Section 6.6).
-          dispatch({ type: 'SET_ACTIVE_SESSION', sessionId: null })
+          // Foreign/unknown session: clear the active session AND the stale
+          // transcript together (plan Section 6.6) — LOAD_SESSION resets both
+          // in one dispatch so the previous session's messages never linger.
+          dispatch({ type: 'LOAD_SESSION', sessionId: null, messages: [] })
           dispatch({ type: 'SET_ERROR', message: 'That chat session was not found.' })
           void refreshSessions()
         } else {
@@ -103,7 +118,9 @@ function ChatPageContent() {
           })
         }
       } finally {
-        setIsTranscriptLoading(false)
+        if (sessionLoadSeqRef.current === requestSeq) {
+          setIsTranscriptLoading(false)
+        }
       }
     },
     [dispatch, refreshSessions],
@@ -382,28 +399,46 @@ function ChatPageContent() {
   }, [isAuthenticated, state.sessions, state.activeSessionId])
 
   const isSavedSessionsLoading = isAuthenticated && isSessionsLoading
+  // Disables session-switching controls while any session transition or an
+  // active stream is in flight, so overlapping clicks can't race each other
+  // or leave a stream writing into a conversation the user has since left.
+  const areSessionControlsDisabled = isTranscriptLoading || isCreatingSession || isStreaming
 
   const handleSelectSession = (sessionId: string) => {
     setIsMobileSidebarOpen(false)
-    if (isAuthenticated && sessionId !== state.activeSessionId) {
-      void loadSession(sessionId)
+    // Guard against the 'unsaved-session' sentinel (no backend session yet),
+    // re-selecting the already-active session, and overlapping transitions —
+    // none of these should fetch.
+    if (!isAuthenticated || sessionId === currentSession.id || areSessionControlsDisabled) {
+      return
     }
+    if (isStreaming) {
+      handleStop()
+    }
+    void loadSession(sessionId)
   }
 
   const handleNewChat = () => {
     setIsMobileSidebarOpen(false)
-    if (!isAuthenticated) {
+    if (!isAuthenticated || areSessionControlsDisabled) {
       // Guests are limited to a single default chat; the control is hidden
-      // for them (plan Section 3.3) — this is a defensive no-op.
+      // for them (plan Section 3.3) — this is a defensive no-op. Also blocks
+      // re-entry while a session transition or stream is already in flight.
       return
     }
+    if (isStreaming) {
+      handleStop()
+    }
     void (async () => {
+      setIsCreatingSession(true)
       try {
         const created = await createChatSession()
         dispatch({ type: 'LOAD_SESSION', sessionId: created.id, messages: [] })
         await refreshSessions()
       } catch {
         dispatch({ type: 'SET_ERROR', message: 'Could not start a new chat. Try again.' })
+      } finally {
+        setIsCreatingSession(false)
       }
     })()
   }

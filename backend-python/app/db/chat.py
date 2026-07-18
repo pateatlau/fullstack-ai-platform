@@ -44,10 +44,24 @@ class SqlChatStore:
         user_id: uuid.UUID | None = None,
         guest_id: uuid.UUID | None = None,
     ) -> ChatSession | None:
-        """Fetch a session filtered by its owner (ownership mismatch → None)."""
+        """Fetch a session filtered by its owner (ownership mismatch → None).
+
+        Authenticated callers (``user_id``) also match a session owned by any
+        guest identity linked to their account — the same read-time projection
+        used by ``list_sessions_for_owner`` (plan Section 2.6) — so a linked
+        guest session that appears in the list can also be resumed/appended to.
+        """
         stmt = select(ChatSession).where(ChatSession.id == session_id)
         if user_id is not None:
-            stmt = stmt.where(ChatSession.user_id == user_id)
+            linked_guest_ids = select(GuestIdentity.id).where(
+                GuestIdentity.linked_user_id == user_id
+            )
+            stmt = stmt.where(
+                or_(
+                    ChatSession.user_id == user_id,
+                    ChatSession.guest_id.in_(linked_guest_ids),
+                )
+            )
         elif guest_id is not None:
             stmt = stmt.where(ChatSession.guest_id == guest_id)
         else:
@@ -62,12 +76,13 @@ class SqlChatStore:
         Guests are restricted to exactly one session (plan Section 2.3,
         application-level enforcement). When multiple rows exist (e.g. legacy
         data predating this constraint), the earliest-created session is the
-        canonical default.
+        canonical default; ``id`` is a tiebreaker for deterministic selection
+        when ``created_at`` values collide.
         """
         return await self._session.scalar(
             select(ChatSession)
             .where(ChatSession.guest_id == guest_id)
-            .order_by(ChatSession.created_at.asc())
+            .order_by(ChatSession.created_at.asc(), ChatSession.id.asc())
             .limit(1)
         )
 

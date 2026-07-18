@@ -36,7 +36,7 @@ export type ChatAction =
   | { type: 'CLEAR_QUOTA_BLOCKED' }
   | { type: 'SET_SESSIONS'; sessions: ChatSessionListItem[] }
   | { type: 'SET_ACTIVE_SESSION'; sessionId: string | null }
-  | { type: 'LOAD_SESSION'; sessionId: string; messages: Message[] }
+  | { type: 'LOAD_SESSION'; sessionId: string | null; messages: Message[] }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
