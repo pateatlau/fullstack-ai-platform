@@ -8,7 +8,7 @@ export function WhyLoginInfo() {
   const [isOpen, setIsOpen] = useState(false)
 
   return (
-    <div className="relative">
+    <div className="relative sm:inline-block">
       <button
         type="button"
         className="rounded-lg border border-shell-800/20 px-2 py-2 text-xs font-medium text-shell-700 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
@@ -22,10 +22,11 @@ export function WhyLoginInfo() {
         <div
           id="why-login-popover"
           role="note"
-          className="absolute right-0 top-full z-30 mt-2 w-64 rounded-chat border border-shell-800/15 bg-white p-3 text-xs text-shell-800 shadow-chat-card"
+          className="mt-2 w-full rounded-chat border border-shell-800/15 bg-white p-3 text-xs text-shell-800 shadow-chat-card sm:absolute sm:right-0 sm:top-full sm:mt-2 sm:w-64"
         >
-          Signing in with Google lets us save your chat history to your account in a future update.
-          You can keep chatting as a guest at any time.
+          Signing in with Google unlocks provider and model selection (OpenAI, Gemini, Groq,
+          Anthropic, and more), saves your chat history to your account, and lets you manage
+          multiple sessions. You can keep chatting as a guest at any time.
         </div>
       ) : null}
     </div>

@@ -155,6 +155,36 @@ describe('Composer behavior', () => {
     ).toBe('page')
   })
 
+  it('collapses provider and model controls behind a mobile summary toggle', async () => {
+    render(<ChatPage />)
+
+    const toggle = screen.getByRole('button', { name: /Provider & model/i })
+    const settings = screen.getByLabelText('Provider').closest('#provider-model-settings')
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(settings?.className).toContain('hidden')
+
+    const user = userEvent.setup()
+    await user.click(toggle)
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(settings?.className).not.toContain('hidden')
+  })
+
+  it('collapses provider settings again after changing provider on mobile', async () => {
+    render(<ChatPage />)
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /Provider & model/i }))
+
+    const toggle = screen.getByRole('button', { name: /Provider & model/i })
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+
+    await user.selectOptions(screen.getByLabelText('Provider'), 'groq')
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  })
+
   it('sends the selected provider and model with the chat request', async () => {
     const fetchMock = vi
       .fn()
@@ -300,10 +330,9 @@ describe('Composer behavior', () => {
     render(<ChatPage />)
 
     const user = userEvent.setup()
-    expect(screen.getByText('Press Enter to send, Shift+Enter for a new line.')).not.toBeNull()
-    expect(screen.getByText('Waiting for input')).not.toBeNull()
+    expect(screen.getAllByText('Waiting for input').length).toBeGreaterThan(0)
     await user.type(screen.getByPlaceholderText('Ask something…'), 'Hello there')
-    expect(screen.getByText('Ready to send')).not.toBeNull()
+    expect(screen.getAllByText('Ready to send').length).toBeGreaterThan(0)
     await user.click(screen.getByRole('button', { name: 'Send' }))
 
     await waitFor(() => {

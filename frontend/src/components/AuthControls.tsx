@@ -44,7 +44,7 @@ export function AuthControls() {
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <LoginButton onCredential={handleCredential} />
       <WhyLoginInfo />
       {loginError ? (
