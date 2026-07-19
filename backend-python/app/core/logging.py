@@ -133,6 +133,17 @@ def _record_extras(record: logging.LogRecord) -> dict[str, Any]:
     return extras
 
 
+def _format_record_exception(
+    formatter: logging.Formatter, record: logging.LogRecord
+) -> str | None:
+    """Return formatted traceback text from ``exc_info`` or precomputed ``exc_text``."""
+    if record.exc_info:
+        return formatter.formatException(record.exc_info)
+    if record.exc_text:
+        return record.exc_text
+    return None
+
+
 def _build_extra(fields: dict[str, Any]) -> dict[str, Any]:
     merged = {**get_log_context(), **fields}
     return {
@@ -165,6 +176,9 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
         }
         payload.update(_record_extras(record))
+        exc_text = _format_record_exception(self, record)
+        if exc_text:
+            payload["exception"] = sanitize_message(exc_text)
         return json.dumps(payload, default=str)
 
 
@@ -194,7 +208,11 @@ class DevelopmentFormatter(logging.Formatter):
         parts = [timestamp, level, record.name, message]
         if extra_suffix:
             parts.append(extra_suffix)
-        return " ".join(parts)
+        line = " ".join(parts)
+        exc_text = _format_record_exception(self, record)
+        if exc_text:
+            line = f"{line}\n{sanitize_message(exc_text)}"
+        return line
 
 
 class StructuredLogger:

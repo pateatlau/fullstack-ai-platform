@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import sys
 
 import pytest
 
@@ -88,6 +89,61 @@ def test_development_formatter_emits_readable_single_line() -> None:
     assert "status_code=200" in line
     assert "latency_ms=15" in line
     assert line.count("\n") == 0
+
+
+def test_json_formatter_includes_exception_from_exc_info() -> None:
+    formatter = JsonFormatter()
+    try:
+        raise ValueError("boom")
+    except ValueError:
+        exc_info = sys.exc_info()
+
+    record = _make_record(message="Request failed")
+    record.exc_info = exc_info
+
+    payload = json.loads(formatter.format(record))
+
+    assert payload["message"] == "Request failed"
+    assert "exception" in payload
+    assert "ValueError" in payload["exception"]
+    assert "boom" in payload["exception"]
+
+
+def test_development_formatter_includes_exception_from_exc_info() -> None:
+    formatter = DevelopmentFormatter(use_color=False)
+    try:
+        raise RuntimeError("dev details")
+    except RuntimeError:
+        exc_info = sys.exc_info()
+
+    record = _make_record(message="Unhandled error")
+    record.exc_info = exc_info
+
+    output = formatter.format(record)
+
+    assert output.startswith("20")
+    assert "Unhandled error" in output
+    assert "RuntimeError" in output
+    assert "dev details" in output
+    assert output.count("\n") >= 1
+
+
+def test_structured_logger_exception_emits_trace_in_json_logs() -> None:
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    settings = Settings(app_env="production", log_level="ERROR")
+    setup_logging(settings, handler=handler)
+
+    try:
+        raise ValueError("logged failure")
+    except ValueError:
+        get_logger("test.exception").exception("Operation failed")
+
+    payload = json.loads(stream.getvalue().strip())
+    assert payload["message"] == "Operation failed"
+    assert "exception" in payload
+    assert "ValueError" in payload["exception"]
+    assert "logged failure" in payload["exception"]
 
 
 def test_log_level_filtering() -> None:
