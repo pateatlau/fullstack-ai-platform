@@ -21,6 +21,7 @@ import uuid
 from sqlalchemy import (
     CheckConstraint,
     Date,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -28,7 +29,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -289,4 +290,67 @@ class GuestQuotaCounter(Base):
         nullable=False,
         server_default=_NOW,
         onupdate=_NOW,
+    )
+
+
+class Document(Base):
+    """Auth-owned uploaded document (Post-MVP V1 Phase 5)."""
+
+    __tablename__ = "documents"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    filename: Mapped[str] = mapped_column(nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(nullable=True)
+    status: Mapped[str] = mapped_column(
+        nullable=False, server_default=text("'pending'")
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=_NOW,
+        onupdate=_NOW,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'ready', 'failed')",
+            name="status_valid",
+        ),
+        Index("ix_documents_user_created", "user_id", "created_at"),
+    )
+
+
+class DocumentChunk(Base):
+    """Text chunk for a document; embeddings added in Phase 7."""
+
+    __tablename__ = "document_chunks"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(nullable=False)
+    metadata_json: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    # Phase 5: nullable REAL[] placeholder until Phase 7 migrates to vector(N).
+    embedding: Mapped[list[float] | None] = mapped_column(ARRAY(Float), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id", "chunk_index", name="uq_document_chunks_document_index"
+        ),
+        Index("ix_document_chunks_document_id", "document_id"),
     )

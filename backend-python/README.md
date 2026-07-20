@@ -114,6 +114,36 @@ from app.routers.chat import get_tool_chat_service
 
 Unit tests register the stub **`echo`** tool in fixtures only (`tests/test_tool_platform.py`). Tool arguments and search queries are never logged.
 
+### Document Ingestion (Phase 5)
+
+Parse, chunk, and persist uploaded documents for authenticated users only (no HTTP upload route until Phase 11).
+
+| Component | Location | Responsibility |
+| --------- | -------- | -------------- |
+| Parsers | `app/ai/documents/parsers/` | PDF (PyMuPDF), DOCX (python-docx), Markdown/plain text |
+| Router | `select_parser(mime_type, filename)` | Simple if/else routing — not a plugin system |
+| Chunker | `app/ai/documents/chunkers/recursive.py` | Character-based chunks with overlap from settings |
+| Pipeline | `app/ai/documents/pipeline.py` | In-memory parse → chunk orchestration |
+| Service | `app/services/document_service.py` | Auth-only ownership, status lifecycle, DB persistence |
+
+Supported file types: **PDF**, **DOCX**, **`.md`**, **`.txt`**.
+
+Settings (service-layer validation in Phase 5; HTTP enforcement in Phase 11):
+
+| Setting | Env var | Default |
+| ------- | ------- | ------- |
+| Chunk size | `CHUNK_SIZE` | `1000` |
+| Chunk overlap | `CHUNK_OVERLAP` | `200` |
+| Upload max bytes | `DOCUMENT_UPLOAD_MAX_BYTES` | `10485760` (10 MB) |
+
+Phase 5 scope: parse + chunk + persist text chunks only. The `embedding` column exists as nullable `REAL[]` (NULL in Phase 5); pgvector migration and indexing arrive in Phase 7. No embeddings, vector search, or RAG routes yet.
+
+Wire via DI:
+
+```python
+from app.ai.deps import get_document_service, get_ingestion_pipeline
+```
+
 ### Module boundaries
 
 | Layer | Location | Responsibility |

@@ -11,9 +11,11 @@ request-scoped dependencies follow the same pattern as ``app/db/deps.py``.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from fastapi import Depends
 
+from app.ai.documents.pipeline import IngestionPipeline
 from app.ai.prompts.manager import PromptManager, create_prompt_manager
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.implementations.web_search import (
@@ -22,6 +24,11 @@ from app.ai.tools.implementations.web_search import (
 )
 from app.ai.tools.registry import ToolRegistry
 from app.core.config import Settings, get_settings
+from app.db.session import get_db_session
+from app.services.document_service import DocumentService
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def get_ai_settings(
@@ -57,5 +64,20 @@ def get_tool_executor(
     return ToolExecutor(registry=registry, settings=settings)
 
 
-# Phase 5+: get_document_ingestion_service() -> DocumentIngestionService
+def get_ingestion_pipeline(
+    settings: Settings = Depends(get_ai_settings),
+) -> IngestionPipeline:
+    """Return a request-scoped ingestion pipeline (parse + chunk only)."""
+    return IngestionPipeline(settings)
+
+
+def get_document_service(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_ai_settings),
+    pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
+) -> DocumentService:
+    """Return a request-scoped ``DocumentService`` for auth-only ingestion."""
+    return DocumentService(session=session, settings=settings, pipeline=pipeline)
+
+
 # Phase 8+: get_rag_service() -> RAGService (app-scoped singleton)
