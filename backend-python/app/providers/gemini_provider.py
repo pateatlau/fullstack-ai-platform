@@ -5,7 +5,13 @@ from typing import Any, AsyncIterator, Callable, cast
 
 from google import genai
 
-from app.providers.base import ProviderChunk, ProviderCompletion, ProviderUsage
+from app.providers.base import (
+    ChatMessageInput,
+    ProviderChunk,
+    ProviderCompletion,
+    ProviderToolCompletion,
+    ProviderUsage,
+)
 from app.schemas.chat import ChatMessageSchema
 
 
@@ -144,3 +150,13 @@ class GeminiProvider:
             content=_extract_text(response),
             usage=_usage_from_response(response),
         )
+
+    async def complete_chat_with_tools(
+        self,
+        messages: list[ChatMessageInput],
+        model: str,
+        tools: list[dict[str, object]],
+        temperature: float = 0.7,
+    ) -> ProviderToolCompletion:
+        del messages, model, tools, temperature
+        raise NotImplementedError("Tool calling is not supported for Gemini in V1")

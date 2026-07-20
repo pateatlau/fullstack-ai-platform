@@ -3,7 +3,13 @@ from typing import Any, AsyncIterator, cast
 from anthropic import AsyncAnthropic
 from anthropic.types import Message, MessageParam
 
-from app.providers.base import ProviderChunk, ProviderCompletion, ProviderUsage
+from app.providers.base import (
+    ChatMessageInput,
+    ProviderChunk,
+    ProviderCompletion,
+    ProviderToolCompletion,
+    ProviderUsage,
+)
 from app.schemas.chat import ChatMessageSchema
 
 ANTHROPIC_MAX_TOKENS = 1024
@@ -126,3 +132,13 @@ class AnthropicProvider:
             finish_reason=getattr(response, "stop_reason", None),
             usage=_usage_from_message(response),
         )
+
+    async def complete_chat_with_tools(
+        self,
+        messages: list[ChatMessageInput],
+        model: str,
+        tools: list[dict[str, object]],
+        temperature: float = 0.7,
+    ) -> ProviderToolCompletion:
+        del messages, model, tools, temperature
+        raise NotImplementedError("Tool calling is not supported for Anthropic in V1")

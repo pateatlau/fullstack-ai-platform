@@ -7,7 +7,13 @@ from groq.types.chat import (
     ChatCompletionMessageParam,
 )
 
-from app.providers.base import ProviderChunk, ProviderCompletion, ProviderUsage
+from app.providers.base import (
+    ChatMessageInput,
+    ProviderChunk,
+    ProviderCompletion,
+    ProviderToolCompletion,
+    ProviderUsage,
+)
 from app.schemas.chat import ChatMessageSchema
 
 
@@ -107,3 +113,13 @@ class GroqProvider:
             finish_reason=getattr(choice, "finish_reason", None),
             usage=usage,
         )
+
+    async def complete_chat_with_tools(
+        self,
+        messages: list[ChatMessageInput],
+        model: str,
+        tools: list[dict[str, object]],
+        temperature: float = 0.7,
+    ) -> ProviderToolCompletion:
+        del messages, model, tools, temperature
+        raise NotImplementedError("Tool calling is not supported for Groq in V1")

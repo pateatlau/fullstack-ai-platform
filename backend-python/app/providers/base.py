@@ -1,7 +1,10 @@
 from dataclasses import dataclass
-from typing import AsyncIterator, NotRequired, Protocol, TypedDict
+from typing import Any, AsyncIterator, NotRequired, Protocol, TypedDict
 
 from app.schemas.chat import ChatMessageSchema
+
+# Tool-loop messages may include OpenAI tool / tool_result shapes as dicts.
+ChatMessageInput = ChatMessageSchema | dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -23,6 +26,25 @@ class ProviderCompletion:
     """Result of a non-streaming completion, including optional usage."""
 
     content: str
+    finish_reason: str | None = None
+    usage: ProviderUsage | None = None
+
+
+@dataclass(frozen=True)
+class ProviderToolCall:
+    """Normalized tool call from an LLM response."""
+
+    id: str
+    name: str
+    arguments: dict[str, object]
+
+
+@dataclass(frozen=True)
+class ProviderToolCompletion:
+    """Result of a non-streaming completion that may include tool calls."""
+
+    content: str | None
+    tool_calls: list[ProviderToolCall]
     finish_reason: str | None = None
     usage: ProviderUsage | None = None
 
@@ -54,3 +76,11 @@ class LLMProvider(Protocol):
         model: str,
         temperature: float = 0.7,
     ) -> ProviderCompletion: ...
+
+    async def complete_chat_with_tools(
+        self,
+        messages: list[ChatMessageInput],
+        model: str,
+        tools: list[dict[str, object]],
+        temperature: float = 0.7,
+    ) -> ProviderToolCompletion: ...

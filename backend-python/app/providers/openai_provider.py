@@ -1,3 +1,4 @@
+import json
 from typing import Any, AsyncIterator, cast
 
 from openai import AsyncOpenAI, AsyncStream
@@ -5,9 +6,17 @@ from openai.types.chat import (
     ChatCompletion,
     ChatCompletionChunk,
     ChatCompletionMessageParam,
+    ChatCompletionToolParam,
 )
 
-from app.providers.base import ProviderChunk, ProviderCompletion, ProviderUsage
+from app.providers.base import (
+    ChatMessageInput,
+    ProviderChunk,
+    ProviderCompletion,
+    ProviderToolCall,
+    ProviderToolCompletion,
+    ProviderUsage,
+)
 from app.schemas.chat import ChatMessageSchema
 
 
@@ -25,12 +34,31 @@ def _usage_from_response(response: Any) -> ProviderUsage | None:
 def _to_openai_messages(
     messages: list[ChatMessageSchema],
 ) -> list[ChatCompletionMessageParam]:
-    # The OpenAI SDK expects a union of typed message params; our internal
-    # schema uses a simpler role/content shape.
-    return cast(
-        list[ChatCompletionMessageParam],
-        [{"role": m.role, "content": m.content} for m in messages],
-    )
+    return _to_openai_tool_messages(cast(list[ChatMessageInput], messages))
+
+
+def _to_openai_tool_messages(
+    messages: list[ChatMessageInput],
+) -> list[ChatCompletionMessageParam]:
+    converted: list[dict[str, Any]] = []
+    for message in messages:
+        if isinstance(message, ChatMessageSchema):
+            converted.append({"role": message.role, "content": message.content})
+        else:
+            converted.append(dict(message))
+    return cast(list[ChatCompletionMessageParam], converted)
+
+
+def _parse_tool_arguments(raw: str | None) -> dict[str, object]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(parsed, dict):
+        return cast(dict[str, object], parsed)
+    return {}
 
 
 def _coerce_message_content(content: Any) -> str:
@@ -95,6 +123,49 @@ class OpenAIProvider:
         choice = response.choices[0]
         return ProviderCompletion(
             content=_coerce_message_content(choice.message.content),
+            finish_reason=getattr(choice, "finish_reason", None),
+            usage=usage,
+        )
+
+    async def complete_chat_with_tools(
+        self,
+        messages: list[ChatMessageInput],
+        model: str,
+        tools: list[dict[str, object]],
+        temperature: float = 0.7,
+    ) -> ProviderToolCompletion:
+        response: ChatCompletion = await self._client.chat.completions.create(
+            model=model,
+            messages=_to_openai_tool_messages(messages),
+            tools=cast(list[ChatCompletionToolParam], tools),
+            temperature=temperature,
+            stream=False,
+        )
+        usage = _usage_from_response(response)
+        if not response.choices:
+            return ProviderToolCompletion(
+                content="",
+                tool_calls=[],
+                usage=usage,
+            )
+
+        choice = response.choices[0]
+        message = choice.message
+        tool_calls: list[ProviderToolCall] = []
+        for call in message.tool_calls or []:
+            if call.type != "function":
+                continue
+            tool_calls.append(
+                ProviderToolCall(
+                    id=call.id,
+                    name=call.function.name,
+                    arguments=_parse_tool_arguments(call.function.arguments),
+                )
+            )
+
+        return ProviderToolCompletion(
+            content=_coerce_message_content(message.content) or None,
+            tool_calls=tool_calls,
             finish_reason=getattr(choice, "finish_reason", None),
             usage=usage,
         )

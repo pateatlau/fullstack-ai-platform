@@ -216,6 +216,14 @@ class Settings(BaseSettings):
         if not self.tools_enabled:
             return
 
+        supported_search_providers = {"tavily"}
+        if self.web_search_provider not in supported_search_providers:
+            supported = ", ".join(sorted(supported_search_providers))
+            raise ValueError(
+                f"Unsupported WEB_SEARCH_PROVIDER '{self.web_search_provider}'. "
+                f"Supported providers: {supported}."
+            )
+
         if not self.web_search_api_key:
             raise ValueError(
                 "TOOLS_ENABLED is true but WEB_SEARCH_API_KEY is not set. "
