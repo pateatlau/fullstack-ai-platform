@@ -19,7 +19,6 @@ class PromptRepository:
         self._cache: dict[tuple[str, str, str], Template] = {}
         self._environment = Environment(
             autoescape=False,
-            keep_trailing_newline=True,
             undefined=StrictUndefined,
         )
 

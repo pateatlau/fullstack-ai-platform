@@ -132,4 +132,4 @@ def test_fixture_multiline_body(fixture_manager: PromptManager) -> None:
         "1",
         {"value": "alpha\nbeta"},
     )
-    assert rendered == "Line one\nLine two: alpha\nbeta\n"
+    assert rendered == "Line one\nLine two: alpha\nbeta"
