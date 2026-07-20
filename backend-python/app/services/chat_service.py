@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.caller import CallerContext
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
+from app.ai.deps import get_prompt_manager
+from app.ai.prompts.manager import PromptManager
 from app.db.models import ChatMessage, ChatSession, SessionSummary, UsageEvent
 from app.providers.base import LLMProvider, ProviderChunk, ProviderCompletion
 from app.providers.factory import ProviderFactory
@@ -285,12 +287,14 @@ class ChatService:
         usage_store: UsageStore | None = None,
         quota_service: QuotaChecker | None = None,
         session: AsyncSession | None = None,
+        prompt_manager: PromptManager | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._chat_store = chat_store
         self._usage_store = usage_store
         self._quota_service = quota_service
         self._session = session
+        self._prompt_manager = prompt_manager or get_prompt_manager()
 
     def _resolve_provider(
         self, request: ChatRequestSchema
@@ -542,8 +546,8 @@ class ChatService:
 
     # ---- summarization (plan Sections 5.5, 5.6) -----------------------------
 
-    @staticmethod
     def _build_summary_input(
+        self,
         latest_summary: SessionSummary | None,
         pending: list[ChatMessage],
     ) -> list[ChatMessageSchema]:
@@ -553,22 +557,22 @@ class ChatService:
         for message in pending:
             lines.append(f"{message.role}: {message.content}")
         transcript = "\n".join(lines)
+        system_content = self._prompt_manager.render(
+            "chat", "summarize_system", "1", {}
+        )
+        user_content = self._prompt_manager.render(
+            "chat", "summarize_user", "1", {"transcript": transcript}
+        )
         # model_construct bypasses the max-length validator: summarization input
         # is internal and intentionally may exceed a single user message limit.
         return [
             ChatMessageSchema.model_construct(
                 role="system",
-                content=(
-                    "You produce concise summaries of conversations, "
-                    "preserving key facts and decisions."
-                ),
+                content=system_content,
             ),
             ChatMessageSchema.model_construct(
                 role="user",
-                content=(
-                    "Summarize the conversation so far in a few sentences:\n\n"
-                    f"{transcript}"
-                ),
+                content=user_content,
             ),
         ]
 
@@ -589,10 +593,16 @@ class ChatService:
 
         assembled: list[ChatMessageSchema] = []
         if latest is not None:
+            summary_content = self._prompt_manager.render(
+                "chat",
+                "context_summary_prefix",
+                "1",
+                {"summary_content": latest.content},
+            )
             assembled.append(
                 ChatMessageSchema.model_construct(
                     role="system",
-                    content=f"Summary of earlier conversation: {latest.content}",
+                    content=summary_content,
                 )
             )
         for message in pending:

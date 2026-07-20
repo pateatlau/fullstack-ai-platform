@@ -18,6 +18,7 @@ import secrets
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.ai.prompts.manager import create_prompt_manager
 from app.core.config import Settings
 from app.db.models import (
     ChatMessage,
@@ -66,11 +67,14 @@ async def _seed(session: AsyncSession) -> None:
     session.add(chat)
     await session.flush()
 
+    prompt_manager = create_prompt_manager()
+    default_system_content = prompt_manager.render("chat", "default_system", "1", {})
+
     system_msg = ChatMessage(
         session_id=chat.id,
         seq=1,
         role="system",
-        content="You are a helpful assistant.",
+        content=default_system_content,
     )
     user_msg = ChatMessage(
         session_id=chat.id,
