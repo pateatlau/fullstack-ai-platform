@@ -81,15 +81,15 @@ content = get_prompt_manager().render(
 
 All template variables are **required** — missing keys raise `PromptRenderError` (Jinja2 `StrictUndefined`). Regression snapshots and edge-case fixtures are in `tests/test_prompt_manager.py` and `tests/data/prompts/`.
 
-### Tool Platform (Phase 3)
+### Tool Platform (Phase 3–4)
 
-Generic tool lifecycle (no production tools registered at startup in Phase 3):
+Generic tool lifecycle:
 
 ```text
 Registry → Validation → Authorization → Execution → Normalization
 ```
 
-LLM integration and web search arrive in Phase 4.
+**Phase 4** adds **web search** as the first production tool and wires a **non-streaming tool loop** into chat when `TOOLS_ENABLED=true`.
 
 | Stage | Component | Responsibility |
 | ----- | --------- | -------------- |
@@ -97,14 +97,22 @@ LLM integration and web search arrive in Phase 4.
 | Validation | `ToolValidator` | Validate call args against tool JSON Schema |
 | Authorization | `ToolAuthorizer` | V1: authenticated users only; guests receive `forbidden` |
 | Execution | `ToolExecutor` | Orchestrate lifecycle with timeout, logging, error normalization |
+| Chat orchestration | `ToolChatService` | Composes `ChatService`; capped tool loop for `POST /api/chat` |
 
 Wire via DI:
 
 ```python
-from app.ai.deps import get_tool_registry, get_tool_executor
+from app.ai.deps import get_tool_registry, get_tool_executor, get_web_search_client
+from app.routers.chat import get_tool_chat_service
 ```
 
-Unit tests register the stub **`echo`** tool in fixtures only (`tests/test_tool_platform.py`). Structured log counters: `tool_calls_total` (every invocation) and `tool_errors_total` (failures). Tool arguments are never logged.
+- **`web_search`** — Tavily-backed handler (`app/ai/tools/implementations/web_search.py`); registered at startup when `TOOLS_ENABLED=true`.
+- **OpenAI-first tool calling** — `complete_chat_with_tools` on the OpenAI adapter; other LLM providers raise `NotImplementedError` until extended incrementally.
+- **Streaming policy (V1)** — `POST /api/chat/stream` always uses standard streaming chat; tool calling is silently skipped even when `TOOLS_ENABLED=true`.
+- **Retry policy** — shared utility in `app/core/retry.py` (HTTP 429/503, timeouts; max 3 attempts with exponential backoff).
+- **Metrics** — `tool_calls_total`, `tool_errors_total` (Phase 3); `search_latency_ms` on each web search (no query text in logs).
+
+Unit tests register the stub **`echo`** tool in fixtures only (`tests/test_tool_platform.py`). Tool arguments and search queries are never logged.
 
 ### Module boundaries
 
@@ -143,13 +151,14 @@ LLM provider selection remains `LLM_PROVIDER` in `app/core/config.py`.
 ### Feature flags
 
 - `RAG_ENABLED=false` (default) — no RAG routes or pipeline; MVP chat unchanged.
-- `TOOLS_ENABLED=false` (default) — standard `ChatService` path; no tool execution.
+- `TOOLS_ENABLED=false` (default) — standard `ChatService` path; no tool execution or production tool registration.
+- `TOOLS_ENABLED=true` — non-streaming `POST /api/chat` uses `ToolChatService` (OpenAI tool calling first); requires `WEB_SEARCH_API_KEY`. Streaming chat is unchanged.
 - When a flag is `true`, startup fails fast if required secrets are missing (`OPENAI_API_KEY` for RAG with `EMBEDDING_PROVIDER=openai`; `WEB_SEARCH_API_KEY` for tools).
 - With both flags off, no new secrets are required and behavior matches the MVP baseline.
 
 ### External service retry policy
 
-Documented for later phases — implement in `app/core/retry.py` and reuse from adapters:
+Documented for later phases — implemented in `app/core/retry.py` and reused from web search (Phase 4+):
 
 | Setting | Value |
 | ------- | ----- |

@@ -7,6 +7,8 @@ from fastapi.responses import Response
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import Message
 
+from app.ai.deps import get_tool_registry
+from app.ai.tools.registration import register_production_tools
 from app.core.config import get_settings
 from app.core.errors import error_response, register_exception_handlers
 from app.core.logging import bind_context, get_logger, setup_logging
@@ -26,6 +28,8 @@ logger = get_logger(__name__)
 async def lifespan(_: FastAPI):
     setup_logging(settings)
     settings.log_development_warnings(logger)
+    if settings.tools_enabled:
+        register_production_tools(get_tool_registry(), settings)
     yield
     await get_engine().dispose()
 

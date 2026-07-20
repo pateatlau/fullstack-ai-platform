@@ -35,7 +35,12 @@ def test_ai_settings_load_with_defaults(monkeypatch: pytest.MonkeyPatch) -> None
     assert settings.web_search_max_results == 5
 
 
-def test_feature_flags_default_off() -> None:
+def test_feature_flags_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        Settings,
+        "model_config",
+        SettingsConfigDict(env_file=None, extra="ignore"),
+    )
     settings = Settings(
         llm_provider="openai",
         openai_api_key="sk-placeholder",

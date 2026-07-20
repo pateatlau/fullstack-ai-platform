@@ -11,7 +11,13 @@ from app.db.models import (
     UsageEvent,
     User,
 )
-from app.providers.base import ProviderChunk, ProviderCompletion, ProviderUsage
+from app.providers.base import (
+    ChatMessageInput,
+    ProviderChunk,
+    ProviderCompletion,
+    ProviderToolCompletion,
+    ProviderUsage,
+)
 from app.schemas.chat import ChatMessageSchema
 from app.services.auth_service import GoogleClaims
 
@@ -30,9 +36,13 @@ class FakeProvider:
         usage: ProviderUsage | None = ProviderUsage(
             prompt_tokens=11, completion_tokens=7, total_tokens=18
         ),
+        tool_completions: list[ProviderToolCompletion] | None = None,
     ) -> None:
         self.response = response
         self.usage = usage
+        self._tool_completions = tool_completions or []
+        self._tool_call_index = 0
+        self.tool_completion_calls = 0
 
     async def stream_chat(
         self,
@@ -60,6 +70,27 @@ class FakeProvider:
     ) -> ProviderCompletion:
         return ProviderCompletion(
             content=self.response,
+            finish_reason="stop",
+            usage=self.usage,
+        )
+
+    async def complete_chat_with_tools(
+        self,
+        messages: list[ChatMessageInput],
+        model: str,
+        tools: list[dict[str, object]],
+        temperature: float = 0.7,
+    ) -> ProviderToolCompletion:
+        del messages, model, tools, temperature
+        self.tool_completion_calls += 1
+        if self._tool_completions:
+            index = min(self._tool_call_index, len(self._tool_completions) - 1)
+            completion = self._tool_completions[index]
+            self._tool_call_index += 1
+            return completion
+        return ProviderToolCompletion(
+            content=self.response,
+            tool_calls=[],
             finish_reason="stop",
             usage=self.usage,
         )

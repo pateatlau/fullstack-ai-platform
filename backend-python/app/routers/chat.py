@@ -15,8 +15,14 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.deps import get_prompt_manager
+from app.ai.deps import (
+    get_prompt_manager,
+    get_tool_executor,
+    get_tool_registry,
+)
 from app.ai.prompts.manager import PromptManager
+from app.ai.tools.executor import ToolExecutor
+from app.ai.tools.registry import ToolRegistry
 from app.core.caller import CallerContext, get_current_caller
 from app.core.config import Settings, get_settings
 from app.core.logging import bind_context, get_logger
@@ -32,6 +38,7 @@ from app.schemas.chat import (
 )
 from app.services.chat_service import ChatService, SessionNotFoundError
 from app.services.quota_service import QuotaService
+from app.services.tool_chat_service import ToolChatService
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -83,6 +90,22 @@ def get_chat_service(
     )
 
 
+def get_tool_chat_service(
+    settings: Settings = Depends(get_settings),
+    chat_service: ChatService = Depends(get_chat_service),
+    registry: ToolRegistry = Depends(get_tool_registry),
+    executor: ToolExecutor = Depends(get_tool_executor),
+    prompt_manager: PromptManager = Depends(get_prompt_manager),
+) -> ToolChatService:
+    return ToolChatService(
+        chat_service=chat_service,
+        tool_executor=executor,
+        tool_registry=registry,
+        prompt_manager=prompt_manager,
+        settings=settings,
+    )
+
+
 def _set_guest_token(response: Response, caller: CallerContext | None) -> None:
     if caller is not None and caller.issued_guest_token:
         response.headers["X-Guest-Token"] = caller.issued_guest_token
@@ -103,12 +126,15 @@ async def create_chat(
     request: ChatRequestSchema,
     response: Response,
     caller: CallerContext | None = Depends(get_optional_caller),
+    settings: Settings = Depends(get_settings),
     service: ChatService = Depends(get_chat_service),
+    tool_service: ToolChatService = Depends(get_tool_chat_service),
 ) -> ChatResponseSchema:
     if caller is not None and caller.user_id is not None:
         bind_context(user_id=str(caller.user_id))
     logger.info("Chat request accepted", route="/api/chat", method="POST")
-    result = await service.complete_chat(request, caller)
+    active_service = tool_service if settings.tools_enabled else service
+    result = await active_service.complete_chat(request, caller)
     await _set_guest_headers(response, caller, service)
     return result
 
