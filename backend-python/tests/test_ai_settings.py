@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import pytest
+from pydantic_settings import SettingsConfigDict
 
 from app.ai import deps as ai_deps
 from app.core.config import Settings
 
 
-def test_ai_settings_load_with_defaults() -> None:
+def test_ai_settings_load_with_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        Settings,
+        "model_config",
+        SettingsConfigDict(env_file=None, extra="ignore"),
+    )
     settings = Settings(
         llm_provider="openai",
         openai_api_key="sk-placeholder",

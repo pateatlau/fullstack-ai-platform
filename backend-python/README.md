@@ -45,7 +45,7 @@ Dev tooling: Ruff (lint and format), Pyright (static type checking, standard mod
 
 ## AI Module (`app/ai/`)
 
-Phase 1 scaffold only — implementations arrive in later phases. Dependency direction:
+Phase 1 scaffold; **Phase 2** adds prompt infrastructure (`PromptManager`, versioned Jinja2 templates). Dependency direction:
 
 ```text
 Routers → Services → AI Framework (`app/ai/`) → Providers → External APIs
@@ -64,6 +64,22 @@ Routers → Services → AI Framework (`app/ai/`) → Providers → External API
 | `app/ai/evaluation/` | Prompt, retrieval, and end-to-end evaluation helpers |
 | `app/ai/interfaces/` | Protocols added incrementally per phase |
 | `app/ai/deps.py` | FastAPI dependency wiring for AI components |
+
+### Prompt Infrastructure (Phase 2)
+
+Production prompts live under `app/ai/prompts/{category}/` using the filename convention `{name}.v{version}.j2` (for example `chat/summarize_system.v1.j2`).
+
+Render via the app-scoped DI singleton:
+
+```python
+from app.ai.deps import get_prompt_manager
+
+content = get_prompt_manager().render(
+    "chat", "summarize_system", "1", {}
+)
+```
+
+All template variables are **required** — missing keys raise `PromptRenderError` (Jinja2 `StrictUndefined`). Regression snapshots and edge-case fixtures are in `tests/test_prompt_manager.py` and `tests/data/prompts/`.
 
 ### Module boundaries
 

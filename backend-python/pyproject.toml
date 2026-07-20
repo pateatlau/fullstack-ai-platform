@@ -10,6 +10,7 @@ dependencies = [
     "google-auth>=2.35.0",
     "google-genai>=2.11.0",
     "groq>=0.38.0",
+    "jinja2>=3.1.6",
     "anthropic>=0.72.0",
     "openai>=2.45.0",
     "pydantic-settings>=2.14.2",

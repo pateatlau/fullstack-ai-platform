@@ -15,6 +15,8 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.deps import get_prompt_manager
+from app.ai.prompts.manager import PromptManager
 from app.core.caller import CallerContext, get_current_caller
 from app.core.config import Settings, get_settings
 from app.core.logging import bind_context, get_logger
@@ -65,9 +67,10 @@ async def get_optional_caller(
 def get_chat_service(
     settings: Settings = Depends(get_settings),
     session: AsyncSession | None = Depends(get_optional_session),
+    prompt_manager: PromptManager = Depends(get_prompt_manager),
 ) -> ChatService:
     if session is None:
-        return ChatService(settings)
+        return ChatService(settings, prompt_manager=prompt_manager)
     return ChatService(
         settings,
         chat_store=SqlChatStore(session),
@@ -76,6 +79,7 @@ def get_chat_service(
             store=SqlGuestQuotaStore(session), settings=settings
         ),
         session=session,
+        prompt_manager=prompt_manager,
     )
 
 
