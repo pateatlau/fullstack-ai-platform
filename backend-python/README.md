@@ -39,8 +39,100 @@ Dev tooling: Ruff (lint and format), Pyright (static type checking, standard mod
 - `app/routers/chat.py` — chat endpoints and session APIs
 - `app/services/chat_service.py` — orchestration, SSE framing, persistence
 - `app/providers/` — provider adapters and factory
+- `app/ai/` — reusable AI framework (embeddings, vectorstores, prompts, tools, documents, rag, evaluation)
 - `app/schemas/` — request/response/frame schemas
-- `tests/` — unit and integration tests (167 tests, ~89% coverage on `app/`)
+- `tests/` — unit and integration tests (180 tests, ~90% coverage on `app/`)
+
+## AI Module (`app/ai/`)
+
+Phase 1 scaffold only — implementations arrive in later phases. Dependency direction:
+
+```text
+Routers → Services → AI Framework (`app/ai/`) → Providers → External APIs
+```
+
+### Folder responsibilities
+
+| Path | Responsibility |
+| ---- | -------------- |
+| `app/ai/prompts/` | Versioned Jinja2 prompt templates by category (`chat/`, `rag/`, `tools/`, etc.) |
+| `app/ai/tools/` | Tool registry, validation, authorization, execution, normalization |
+| `app/ai/documents/` | Upload parsing and chunking (`parsers/`, `chunkers/`) |
+| `app/ai/embeddings/` | Embedding provider adapters |
+| `app/ai/vectorstores/` | Vector store adapters (V1: pgvector only) |
+| `app/ai/rag/` | Generic RAG framework (retriever, context builder, orchestration) |
+| `app/ai/evaluation/` | Prompt, retrieval, and end-to-end evaluation helpers |
+| `app/ai/interfaces/` | Protocols added incrementally per phase |
+| `app/ai/deps.py` | FastAPI dependency wiring for AI components |
+
+### Module boundaries
+
+| Layer | Location | Responsibility |
+| ----- | -------- | -------------- |
+| LLM adapters | `app/providers/` | Existing `LLMProvider` protocol and OpenAI/Gemini/Groq/Anthropic adapters |
+| Embeddings | `app/ai/embeddings/` | Embedding provider protocol + concrete adapters |
+| Vector store | `app/ai/vectorstores/` | Vector store protocol + `PgVectorStore` (V1) |
+| AI framework | `app/ai/` | Domain-agnostic orchestration consumed by `app/services/` |
+
+V1 uses **pgvector only** for vector storage — no vector-store factory for alternate backends.
+
+### Configuration matrix (env vars)
+
+| Setting | Env var | Default |
+| ------- | ------- | ------- |
+| Embedding provider | `EMBEDDING_PROVIDER` | `openai` |
+| Embedding model | `EMBEDDING_MODEL` | `text-embedding-3-small` |
+| Embedding dimensions | `EMBEDDING_DIMENSIONS` | `1536` |
+| Chunk size | `CHUNK_SIZE` | `1000` |
+| Chunk overlap | `CHUNK_OVERLAP` | `200` |
+| RAG top-K | `RAG_TOP_K` | `5` |
+| RAG default template | `RAG_DEFAULT_PROMPT_TEMPLATE` | `rag/answer/v1` |
+| RAG context budget | `RAG_CONTEXT_MAX_CHARS` | `8000` |
+| RAG feature flag | `RAG_ENABLED` | `false` |
+| Tools feature flag | `TOOLS_ENABLED` | `false` |
+| Default temperature | `DEFAULT_TEMPERATURE` | `0.7` |
+| Default max tokens | `DEFAULT_MAX_TOKENS` | provider default (`None`) |
+| Document upload max | `DOCUMENT_UPLOAD_MAX_BYTES` | `10485760` (10 MB) |
+| Web search provider | `WEB_SEARCH_PROVIDER` | `tavily` |
+| Web search API key | `WEB_SEARCH_API_KEY` | unset |
+| Web search max results | `WEB_SEARCH_MAX_RESULTS` | `5` |
+
+LLM provider selection remains `LLM_PROVIDER` in `app/core/config.py`.
+
+### Feature flags
+
+- `RAG_ENABLED=false` (default) — no RAG routes or pipeline; MVP chat unchanged.
+- `TOOLS_ENABLED=false` (default) — standard `ChatService` path; no tool execution.
+- When a flag is `true`, startup fails fast if required secrets are missing (`OPENAI_API_KEY` for RAG with `EMBEDDING_PROVIDER=openai`; `WEB_SEARCH_API_KEY` for tools).
+- With both flags off, no new secrets are required and behavior matches the MVP baseline.
+
+### External service retry policy
+
+Documented for later phases — implement in `app/core/retry.py` and reuse from adapters:
+
+| Setting | Value |
+| ------- | ----- |
+| Retry on | HTTP 429, HTTP 503, network timeout, temporary connection failures |
+| Max attempts | 3 |
+| Backoff | Exponential (e.g. 1s → 2s → 4s with jitter) |
+| Do not retry | HTTP 4xx (except 429), validation errors, auth failures |
+
+### Observability metrics (V1)
+
+Structured log counters (implementation in later phases):
+
+| Metric | Purpose |
+| ------ | ------- |
+| `rag_requests_total` | RAG ask volume |
+| `rag_request_duration_ms` | End-to-end RAG latency |
+| `retrieval_latency_ms` | Retriever stage latency |
+| `embedding_latency_ms` | Embedding batch latency |
+| `vector_search_latency_ms` | pgvector query latency |
+| `tool_calls_total` | Tool invocations by name |
+| `tool_errors_total` | Tool failures by name |
+| `search_latency_ms` | Web search provider latency |
+| `documents_ingested_total` | Successful ingestions |
+| `documents_failed_total` | Failed ingestions |
 
 ## Setup
 
@@ -153,6 +245,11 @@ GOOGLE_CLIENT_ID=...
 JWT_SECRET=...
 GUEST_DAILY_MESSAGE_QUOTA=20
 CHAT_PERSISTENCE_ENABLED=true
+# AI / RAG (optional — defaults shown; see AI Module section)
+# RAG_ENABLED=false
+# TOOLS_ENABLED=false
+# EMBEDDING_PROVIDER=openai
+# WEB_SEARCH_API_KEY=...
 ```
 
 Additional behavior tied to these settings:
@@ -169,6 +266,8 @@ Additional behavior tied to these settings:
 - `CORS_ALLOWED_ORIGINS` must include the deployed frontend origin in non-local environments
 - When `APP_ENV` is not `development`, startup fails fast unless `JWT_SECRET`, `DATABASE_URL`, and `GOOGLE_CLIENT_ID` are explicitly set
 - In `development`, insecure defaults emit startup warnings instead of failing
+- `RAG_ENABLED` / `TOOLS_ENABLED` default to `false`; enabling either requires the corresponding secrets at startup
+- `DOCUMENT_UPLOAD_MAX_BYTES` (default 10 MB) is configured now; HTTP enforcement on `/api/documents/upload` arrives in Phase 11
 
 ## Provider Selection
 
@@ -253,7 +352,7 @@ CI and local quality gates:
 make lint && make format-check && make typecheck && make test-cov
 ```
 
-Current suite (2026-07-19): **167 passed**, **~89%** coverage on `app/`.
+Current suite (2026-07-20): **180 passed**, **~90%** coverage on `app/`.
 
 Coverage includes health, auth, chat (streaming and non-streaming), persistence, logging, correlation IDs, errors, rate limiting, and provider adapters (OpenAI, Gemini, Groq, Anthropic).
 

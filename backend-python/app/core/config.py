@@ -70,6 +70,26 @@ class Settings(BaseSettings):
     rate_limit_anonymous_per_minute: int = Field(default=30, ge=1)
     rate_limit_authenticated_per_minute: int = Field(default=120, ge=1)
 
+    # AI / RAG configuration matrix (Phase 1). Feature flags default off so
+    # MVP chat/auth/persistence behave identically until later phases enable
+    # RAG and tool endpoints.
+    embedding_provider: str = "openai"
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int = Field(default=1536, ge=1)
+    chunk_size: int = Field(default=1000, ge=1)
+    chunk_overlap: int = Field(default=200, ge=0)
+    rag_top_k: int = Field(default=5, ge=1)
+    rag_default_prompt_template: str = "rag/answer/v1"
+    rag_context_max_chars: int = Field(default=8000, ge=1)
+    rag_enabled: bool = False
+    tools_enabled: bool = False
+    default_temperature: float = 0.7
+    default_max_tokens: int | None = None
+    document_upload_max_bytes: int = Field(default=10_485_760, ge=1)
+    web_search_provider: str = "tavily"
+    web_search_api_key: str | None = None
+    web_search_max_results: int = Field(default=5, ge=1)
+
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, value: object) -> str:
@@ -81,6 +101,13 @@ class Settings(BaseSettings):
                 f"LOG_LEVEL must be one of DEBUG, INFO, WARNING, ERROR; got '{value}'."
             )
         return normalized
+
+    @field_validator("default_max_tokens", mode="before")
+    @classmethod
+    def normalize_default_max_tokens(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @property
     def is_development(self) -> bool:
@@ -158,6 +185,43 @@ class Settings(BaseSettings):
         if errors:
             raise ValueError(" ".join(errors))
 
+    def validate_rag_requirements(self) -> None:
+        """Fail fast when RAG is enabled but embedding configuration is invalid."""
+        if not self.rag_enabled:
+            return
+
+        supported_embedding_providers = {"openai"}
+        if self.embedding_provider not in supported_embedding_providers:
+            supported = ", ".join(sorted(supported_embedding_providers))
+            raise ValueError(
+                f"Unsupported EMBEDDING_PROVIDER '{self.embedding_provider}'. "
+                f"Supported providers: {supported}."
+            )
+
+        if self.embedding_provider == "openai" and not self.openai_api_key:
+            raise ValueError(
+                "RAG_ENABLED is true but OPENAI_API_KEY is not set "
+                "(required when EMBEDDING_PROVIDER=openai). "
+                "Set it in backend-python/.env (see .env.example)."
+            )
+
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError(
+                "CHUNK_OVERLAP must be less than CHUNK_SIZE when RAG_ENABLED is true. "
+                f"Got CHUNK_OVERLAP={self.chunk_overlap}, CHUNK_SIZE={self.chunk_size}."
+            )
+
+    def validate_tools_requirements(self) -> None:
+        """Fail fast when tools are enabled but web search is not configured."""
+        if not self.tools_enabled:
+            return
+
+        if not self.web_search_api_key:
+            raise ValueError(
+                "TOOLS_ENABLED is true but WEB_SEARCH_API_KEY is not set. "
+                "Set it in backend-python/.env (see .env.example)."
+            )
+
     def log_development_warnings(self, logger: object) -> None:
         """Emit human-readable warnings for permissive development defaults."""
         if not self.is_development:
@@ -187,6 +251,8 @@ class Settings(BaseSettings):
 
     def validate_startup(self) -> None:
         self.validate_provider_key()
+        self.validate_rag_requirements()
+        self.validate_tools_requirements()
         self.validate_production_requirements()
 
 
