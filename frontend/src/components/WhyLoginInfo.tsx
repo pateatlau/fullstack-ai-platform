@@ -26,7 +26,9 @@ export function WhyLoginInfo() {
         >
           Signing in with Google unlocks provider and model selection (OpenAI, Gemini, Groq,
           Anthropic, and more), saves your chat history to your account, and lets you manage
-          multiple sessions. You can keep chatting as a guest at any time.
+          multiple sessions. You also get access to Documents — upload PDF, DOCX, Markdown, or text
+          files and ask questions grounded in your content via RAG. You can keep chatting as a guest
+          at any time.
         </div>
       ) : null}
     </div>

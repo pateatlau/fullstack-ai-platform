@@ -41,7 +41,7 @@ Dev tooling: Ruff (lint and format), Pyright (static type checking, standard mod
 - `app/providers/` — provider adapters and factory
 - `app/ai/` — reusable AI framework (embeddings, vectorstores, prompts, tools, documents, rag, evaluation)
 - `app/schemas/` — request/response/frame schemas
-- `tests/` — unit and integration tests (180 tests, ~90% coverage on `app/`)
+- `tests/` — unit and integration tests (342 tests, 88.25% coverage on `app/`, 2026-07-21)
 
 ## AI Module (`app/ai/`)
 
@@ -307,6 +307,8 @@ uv run python -m app.ai.evaluation.cli --level e2e --use-judge
 
 - Sample dataset: `tests/data/evaluation/sample.yaml` (3–5 cases covering all levels).
 - JSON baseline report (for Phase 13 comparison): `.eval/eval-report.json` by default (`--output` to override).
+
+**Phase 13 / V1 validation:** Re-run `make eval` before release and compare against the committed baseline in `.eval/eval-report.json`. Phase 13 verified 5/5 cases pass (prompt=2, retrieval=2, e2e=1) with mean retrieval latency 57.5 ms and e2e latency 49 ms on the sample dataset.
 - **Offline mode:** fake embeddings + mocked LLM — no live API key required for prompt-level runs; retrieval/e2e need local Postgres with pgvector.
 - Optional `--use-judge` enables LLM-as-judge faithfulness/hallucination via `app/ai/prompts/evaluation/judge.v1.j2`.
 
@@ -367,7 +369,7 @@ Documented for later phases — implemented in `app/core/retry.py` and reused fr
 
 ### Observability metrics (V1)
 
-Structured log counters (implementation in later phases):
+Structured log counters (implemented in V1):
 
 | Metric | Purpose |
 | ------ | ------- |
@@ -600,7 +602,7 @@ CI and local quality gates:
 make lint && make format-check && make typecheck && make test-cov
 ```
 
-Current suite (2026-07-20): **180 passed**, **~90%** coverage on `app/`.
+Current suite (2026-07-21): **342 passed**, **88.25%** coverage on `app/` (12.35s).
 
 Coverage includes health, auth, chat (streaming and non-streaming), persistence, logging, correlation IDs, errors, rate limiting, and provider adapters (OpenAI, Gemini, Groq, Anthropic).
 

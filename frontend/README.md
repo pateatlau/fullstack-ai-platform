@@ -118,7 +118,7 @@ Document and RAG endpoints (auth-only, Phase 11 backend):
 - `DELETE /api/documents/{id}`
 - `POST /api/rag/ask`
 
-See [backend-python/README.md](../backend-python/README.md) → **Knowledge and RAG API (Phase 11)** for request/response shapes and env requirements (`RAG_ENABLED=true` for ask).
+See [backend-python/README.md](../backend-python/README.md) → **Knowledge and RAG API (Phase 11)** for request/response shapes and env requirements (`RAG_ENABLED=true` for ask). Post-MVP V1 release summary: [docs/releases/post-mvp-v1-release-summary.md](../docs/releases/post-mvp-v1-release-summary.md).
 
 ## Documents and RAG UI (Phase 12)
 

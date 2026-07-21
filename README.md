@@ -24,6 +24,33 @@ The MVP engineering track is **complete**. The Python backend is the production 
 
 Validation record: `docs/plans/mvp-completion-implementation-plan.md` (Phase 9).
 
+## Post-MVP V1 Status (Complete — 2026-07-21)
+
+Post-MVP V1 engineering is **complete**. The Python backend is the production reference for the reusable AI platform.
+
+| Capability | Status |
+| ---------- | ------ |
+| Centralized prompt management (Jinja2, versioned templates) | Done |
+| Generic tool platform + web search (non-streaming chat path) | Done |
+| Knowledge platform (upload → parse → chunk → embed → pgvector) | Done |
+| Generic RAG Framework (domain-agnostic) | Done |
+| Evaluation CLI (prompt, retrieval, end-to-end) | Done |
+| Document/RAG HTTP API (auth-only) | Done |
+| Frontend `/documents` route (upload, list, delete, RAG ask) | Done |
+
+**Feature flags** (default off — MVP unchanged when disabled):
+
+- `RAG_ENABLED=false` — no RAG endpoints; chat/auth/persistence unchanged
+- `TOOLS_ENABLED=false` — no tool execution in chat
+
+**Auth policy:** Document upload and RAG ask require authentication. Guests receive **401** on document/RAG API routes and see a login prompt on `/documents`.
+
+**UI:** Chat remains at `/`. Authenticated users access documents and generic RAG at [`/documents`](frontend/src/pages/DocumentsPage.tsx). See [backend-python/README.md](backend-python/README.md) for API, eval CLI, and configuration matrix.
+
+**Release summary:** [docs/releases/post-mvp-v1-release-summary.md](docs/releases/post-mvp-v1-release-summary.md)
+
+Validation record: [docs/plans/post-mvp-v1-implementation-plan.md](docs/plans/post-mvp-v1-implementation-plan.md) (Phase 13 Completion Record).
+
 ## Current Capabilities
 
 - Responsive ChatGPT-like UI with sidebar, streaming, stop, and retry
@@ -518,10 +545,10 @@ Common error codes: `validation_error`, `invalid_google_token`, `quota_exceeded`
 
 ## Tests
 
-| App | Command | Baseline (2026-07-19) |
-| --- | ------- | --------------------- |
-| Python | `cd backend-python && make test-cov` | 167 passed, 89% coverage |
-| Frontend | `cd frontend && npm test -- --run` | 90 passed |
+| App | Command | Baseline (2026-07-21, Post-MVP V1) |
+| --- | ------- | ---------------------------------- |
+| Python | `cd backend-python && make test-cov` | 342 passed, 88.25% coverage on `app/` |
+| Frontend | `cd frontend && npm test -- --run` | 106 passed |
 | Node.js | `cd backend-nodejs && npm test` | 26 passed (baseline, unhardened) |
 
 Recommended pre-push validation:

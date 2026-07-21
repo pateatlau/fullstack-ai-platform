@@ -23,5 +23,7 @@ describe('WhyLoginInfo', () => {
 
     expect(screen.getByRole('note').textContent).toContain('provider and model selection')
     expect(screen.getByRole('note').textContent).toContain('multiple sessions')
+    expect(screen.getByRole('note').textContent).toContain('Documents')
+    expect(screen.getByRole('note').textContent).toContain('RAG')
   })
 })
