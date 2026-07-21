@@ -59,6 +59,7 @@ def _to_gemini_contents(
 ) -> tuple[str | None, list[Any]]:
     system_parts: list[str] = []
     contents: list[Any] = []
+    tool_call_names_by_id: dict[str, str] = {}
 
     for message in messages:
         if isinstance(message, ChatMessageSchema):
@@ -87,11 +88,14 @@ def _to_gemini_contents(
                 args = _parse_tool_arguments(
                     raw_args if isinstance(raw_args, (str, dict)) else None
                 )
+                call_id = str(call.get("id") or f"call_{uuid.uuid4().hex[:12]}")
+                call_name = str(function.get("name", ""))
+                tool_call_names_by_id[call_id] = call_name
                 parts.append(
                     types.Part(
                         function_call=types.FunctionCall(
-                            id=call.get("id") or f"call_{uuid.uuid4().hex[:12]}",
-                            name=str(function.get("name", "")),
+                            id=call_id,
+                            name=call_name,
                             args=args,
                         )
                     )
@@ -100,14 +104,16 @@ def _to_gemini_contents(
             continue
 
         if role == "tool":
+            tool_call_id = str(message.get("tool_call_id", ""))
+            function_name = tool_call_names_by_id.get(tool_call_id, "")
             contents.append(
                 types.Content(
                     role="user",
                     parts=[
                         types.Part(
                             function_response=types.FunctionResponse(
-                                id=str(message.get("tool_call_id", "")),
-                                name="tool_result",
+                                id=tool_call_id,
+                                name=function_name,
                                 response={"output": message.get("content", "")},
                             )
                         )
@@ -155,7 +161,7 @@ def _extract_tool_completion(response: Any) -> ProviderToolCompletion:
     candidates = getattr(response, "candidates", None) or []
     if not candidates:
         return ProviderToolCompletion(
-            content="",
+            content=None,
             tool_calls=[],
             usage=_usage_from_response(response),
         )

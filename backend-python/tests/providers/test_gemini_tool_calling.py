@@ -7,7 +7,11 @@ from typing import Any
 import pytest
 
 from app.providers.base import ProviderToolCall
-from app.providers.gemini_provider import GeminiProvider
+from app.providers.gemini_provider import (
+    GeminiProvider,
+    _extract_tool_completion,
+    _to_gemini_contents,
+)
 from app.schemas.chat import ChatMessageSchema
 
 pytestmark = pytest.mark.anyio
@@ -125,3 +129,47 @@ async def test_gemini_complete_chat_with_tools_handles_malformed_arguments(
     assert completion.tool_calls == [
         ProviderToolCall(id="call_bad", name="web_search", arguments={})
     ]
+
+
+def test_to_gemini_contents_preserves_function_name_on_tool_result() -> None:
+    _system, contents = _to_gemini_contents(
+        [
+            ChatMessageSchema(role="user", content="Search for news"),
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "web_search",
+                            "arguments": '{"query": "news"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": '{"success": true}',
+            },
+        ]
+    )
+
+    function_response = contents[-1].parts[0].function_response
+    assert function_response.id == "call-1"
+    assert function_response.name == "web_search"
+    assert function_response.response == {"output": '{"success": true}'}
+
+
+def test_extract_tool_completion_returns_none_content_without_candidates() -> None:
+    class _EmptyCandidatesResponse:
+        candidates: list[Any] = []
+        usage_metadata = None
+
+    completion = _extract_tool_completion(_EmptyCandidatesResponse())
+
+    assert completion.content is None
+    assert completion.tool_calls == []
+    assert completion.usage is None
