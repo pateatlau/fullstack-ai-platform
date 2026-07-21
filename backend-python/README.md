@@ -7,6 +7,7 @@ MVP hardening is complete (2026-07-19): structured logging, correlation IDs, cen
 ## Capabilities
 
 - Multi-provider chat (OpenAI, Gemini, Groq, Anthropic) — streaming and non-streaming
+- Unified chat orchestration via `UnifiedChatService` — web search and document grounding toggles on `POST /api/chat` and `POST /api/chat/stream` (V1.1)
 - Google OAuth login with app-issued JWT; guest identity and daily quota
 - Chat persistence (sessions, messages, usage) when `CHAT_PERSISTENCE_ENABLED=true`
 - Typed error envelopes and SSE error frames with `request_id`
@@ -37,11 +38,13 @@ Dev tooling: Ruff (lint and format), Pyright (static type checking, standard mod
 - `app/routers/health.py` — `GET /api/health`, `GET /api/health/ready`
 - `app/routers/auth.py` — `POST /api/auth/google`
 - `app/routers/chat.py` — chat endpoints and session APIs
-- `app/services/chat_service.py` — orchestration, SSE framing, persistence
+- `app/services/chat_service.py` — core chat completion, SSE framing, persistence
+- `app/services/unified_chat_service.py` — V1.1 orchestration for toggled chat (streaming + non-streaming)
+- `app/services/tool_chat_service.py` — tool loop (invoked by orchestrator)
 - `app/providers/` — provider adapters and factory
 - `app/ai/` — reusable AI framework (embeddings, vectorstores, prompts, tools, documents, rag, evaluation)
 - `app/schemas/` — request/response/frame schemas
-- `tests/` — unit and integration tests (342 tests, 88.25% coverage on `app/`, 2026-07-21)
+- `tests/` — unit and integration tests (**403** tests, **86.14%** coverage on `app/`, 2026-07-22)
 
 ## AI Module (`app/ai/`)
 
@@ -162,7 +165,7 @@ Return Response (+ optional retrieved_chunks, tools_used)
 | RAG retrieval stack | Generic retrieval/context only — no chat logic in `app/ai/rag/` |
 | `RAGService` | Standalone `/api/rag/ask` unchanged |
 
-**Request fields** on `POST /api/chat` (optional, default `false`):
+**Request fields** on `POST /api/chat` and `POST /api/chat/stream` (optional, default `false`):
 
 | Field | Behavior when `true` (and flag on, authenticated) |
 | ----- | --------------------------------------------------- |
@@ -312,7 +315,7 @@ Question → Retriever → ContextBuilder → PromptBuilder → LLM → RAGRespo
 | Empty corpus | Short-circuits without an LLM call; returns a generic framework message |
 | Response | Answer text + retrieved chunk metadata (scores, IDs) for debugging — not a citations UI |
 | Metrics | `rag_requests_total`, `rag_request_duration_ms`, retrieval/included counts, top score, latency breakdown |
-| Streaming | **Not supported in V1** — `complete_chat` only |
+| Streaming | Standalone `/api/rag/ask` streaming **deferred**; chat document grounding streams via `UnifiedChatService` (V1.1) |
 
 **Extension philosophy** — domain-specific assistants compose the framework; they do not modify `app/ai/rag/`:
 
@@ -436,12 +439,14 @@ LLM provider selection remains `LLM_PROVIDER` in `app/core/config.py`.
 
 ### Feature flags
 
-- `RAG_ENABLED=false` (default) — no RAG routes or pipeline; MVP chat unchanged.
-- `TOOLS_ENABLED=false` (default) — standard `ChatService` path; no tool execution or production tool registration.
-- `TOOLS_ENABLED=true` — non-streaming `POST /api/chat` uses `ToolChatService` with multi-provider tool calling; requires `WEB_SEARCH_API_KEY`. Streaming chat is unchanged.
+- `RAG_ENABLED=false` (default) — document toggle and `/api/rag/ask` disabled; plain chat unchanged.
+- `TOOLS_ENABLED=false` (default) — web search toggle disabled; no tool registration at startup.
+- `TOOLS_ENABLED=true` — registers `web_search`; enables `use_web_search` on non-streaming and streaming chat when authenticated. Requires `WEB_SEARCH_API_KEY`.
+- `RAG_ENABLED=true` — enables `use_documents` on chat and `/api/rag/ask`. Requires embedding provider secrets (e.g. `OPENAI_API_KEY` when `EMBEDDING_PROVIDER=openai`).
 - `CHAT_STREAMING_ENABLED=true` (default) — `POST /api/chat/stream` serves SSE; set `false` to return **503** `feature_disabled` on the stream route and use non-streaming `POST /api/chat` instead. Exposed on `GET /api/health` as `chat_streaming_enabled` for the frontend.
-- When a flag is `true`, startup fails fast if required secrets are missing (`OPENAI_API_KEY` for RAG with `EMBEDDING_PROVIDER=openai`; `WEB_SEARCH_API_KEY` for tools).
-- With both flags off, no new secrets are required and behavior matches the MVP baseline.
+- **Request toggles** (`use_web_search`, `use_documents`) are JSON body fields, not env vars. They are no-ops when the corresponding flag is off or the caller is a guest.
+- When a flag is `true`, startup fails fast if required secrets are missing.
+- With both `RAG_ENABLED` and `TOOLS_ENABLED` off and toggles off, behavior matches the MVP/V1 baseline.
 
 ### External service retry policy
 
@@ -454,15 +459,17 @@ Documented for later phases — implemented in `app/core/retry.py` and reused fr
 | Backoff | Exponential (e.g. 1s → 2s → 4s with jitter) |
 | Do not retry | HTTP 4xx (except 429), validation errors, auth failures |
 
-### Observability metrics (V1)
+### Observability metrics (V1 + V1.1)
 
-Structured log counters (implemented in V1):
+Structured log counters and fields:
 
 | Metric | Purpose |
 | ------ | ------- |
 | `rag_requests_total` | RAG ask volume |
 | `rag_request_duration_ms` | End-to-end RAG latency |
-| `retrieval_latency_ms` | Retriever stage latency |
+| `retrieval_latency_ms` | Retriever stage latency (standalone RAG + unified streaming) |
+| `time_to_first_delta_ms` | Unified streaming UX latency (V1.1) |
+| `stream_tool_rounds` | Tool iterations per unified streaming request (V1.1) |
 | `embedding_latency_ms` | Embedding batch latency |
 | `vector_search_latency_ms` | pgvector query latency |
 | `tool_calls_total` | Tool invocations by name |
@@ -678,6 +685,13 @@ Streaming RAG policy: retrieval and context merge complete **before** the first 
 - **Logging:** JSON in production (`APP_ENV=production`), readable text in development. Fields include `request_id`, route, method, status, latency, provider, and model. Sensitive values are redacted.
 - **Correlation IDs:** Every response includes `X-Request-ID`. Pass the header on inbound requests to continue a trace.
 - **Rate limiting:** Anonymous callers (IP or guest token bucket) and authenticated callers (JWT bucket) have separate per-minute limits. `/api/health` and `/api/health/ready` are exempt.
+- **V1.1 unified streaming path** — structured log fields on `UnifiedChatService.stream_execute`:
+  - `retrieval_latency_ms` — document pre-retrieval duration
+  - `time_to_first_delta_ms` — time from stream start to first answer `delta`
+  - `stream_tool_rounds` — tool loop iterations before final stream
+  - `chunk_count` on retrieval completion log line
+- **Tool platform** — `tool_calls_total`, `tool_errors_total`, `search_latency_ms` (Phase 3–4)
+- **RAG** — `rag_requests_total`, `rag_request_duration_ms`, retrieval counts (standalone `/api/rag/ask`)
 
 ## Error Behavior
 
@@ -742,9 +756,9 @@ CI and local quality gates:
 make lint && make format-check && make typecheck && make test-cov
 ```
 
-Current suite (2026-07-21): **342 passed**, **88.25%** coverage on `app/` (12.35s).
+Current suite (2026-07-22): **403 passed**, **86.14%** coverage on `app/` (20.10s).
 
-Coverage includes health, auth, chat (streaming and non-streaming), persistence, logging, correlation IDs, errors, rate limiting, and provider adapters (OpenAI, Gemini, Groq, Anthropic).
+Coverage includes health, auth, chat (streaming and non-streaming), unified chat toggles, tools, RAG, persistence, logging, correlation IDs, errors, rate limiting, and provider adapters (OpenAI, Gemini, Groq, Anthropic).
 
 ## Manual Smoke Checklist
 

@@ -46,11 +46,32 @@ Post-MVP V1 engineering is **complete**. The Python backend is the production re
 
 **Auth policy:** Document upload and RAG ask require authentication. Guests receive **401** on document/RAG API routes and see a login prompt on `/documents`.
 
-**UI:** Chat remains at `/`. Authenticated users access documents and generic RAG at [`/documents`](frontend/src/pages/DocumentsPage.tsx). See [backend-python/README.md](backend-python/README.md) for API, eval CLI, and configuration matrix.
+**UI:** Chat remains at `/`. Document management (upload/list/delete) lives at [`/documents`](frontend/src/pages/DocumentsPage.tsx); standalone RAG ask on that route is de-emphasized in V1.1 — primary ask surface is main chat with toggles. See [backend-python/README.md](backend-python/README.md) for API, eval CLI, and configuration matrix.
 
 **Release summary:** [docs/releases/post-mvp-v1-release-summary.md](docs/releases/post-mvp-v1-release-summary.md)
 
 Validation record: [docs/plans/post-mvp-v1-implementation-plan.md](docs/plans/post-mvp-v1-implementation-plan.md) (Phase 13 Completion Record).
+
+## Post-MVP V1.1 Status (Complete — 2026-07-22)
+
+Post-MVP V1.1 engineering is **complete**. Unified chat on `/` integrates web search and document grounding across all four providers in streaming and non-streaming modes.
+
+| Capability | Status |
+| ---------- | ------ |
+| Multi-provider tool calling (OpenAI, Gemini, Groq, Anthropic) — non-streaming + streaming | Done |
+| Per-request RAG provider/model on chat and `/api/rag/ask` | Done |
+| Unified chat toggles (`use_web_search`, `use_documents`) on main chat | Done |
+| SSE extensions (`retrieval_complete`, `tool_start`, `tool_end`) | Done |
+| Provider capability model on `GET /api/health` | Done |
+| V1 regression when toggles off | Verified |
+
+**Sub-tracks:** 1.1a provider parity → 1.1b unified chat (non-streaming) → 1.1c streaming tools + RAG.
+
+**Release summary:** [docs/releases/post-mvp-v1.1-release-summary.md](docs/releases/post-mvp-v1.1-release-summary.md)
+
+**Details:** [backend-python/README.md](backend-python/README.md) (canonical pipeline, SSE protocol, toggles, flags)
+
+Validation record: [docs/plans/post-mvp-v1.1-implementation-plan.md](docs/plans/post-mvp-v1.1-implementation-plan.md) (Phase 6 Completion Record).
 
 ## Current Capabilities
 
@@ -79,6 +100,7 @@ Validation record: [docs/plans/post-mvp-v1-implementation-plan.md](docs/plans/po
 - Tailwind CSS v4-driven chat UI with accessible landmarks, focus states, and sticky composer
 - Stop/cancel while streaming
 - Retry after interrupted streams
+- Web search and document grounding toggles on `/` for authenticated users (when `TOOLS_ENABLED` / `RAG_ENABLED` are on)
 - Standardized error handling for validation, timeout, and provider failures
 
 ## System Design Diagram
@@ -94,7 +116,7 @@ flowchart LR
     Py["Python FastAPI backend"]
     Node["Node Express backend"]
     Router["chat routes\nGET /api/health\nPOST /api/chat\nPOST /api/chat/stream"]
-    Service["ChatService\n(validates, orchestrates)"]
+    Service["ChatService / UnifiedChatService\n(plain vs toggled orchestration)"]
     Factory["ProviderFactory\n(reads LLM_PROVIDER env)"]
   end
 
@@ -191,7 +213,7 @@ Frontend highlights:
 
 - Tailwind CSS v4 app shell and chat page styling
 - Responsive sidebar behavior across mobile, tablet, and desktop
-- Streaming thread UI with retry, stop, and connection error feedback
+- Streaming thread UI with retry, stop, connection error feedback, and unified-chat status indicators (web search / document retrieval)
 
 Python backend default URL: `http://localhost:8000`
 
@@ -400,7 +422,7 @@ Required checks:
 1. `make lint` — Ruff
 2. `make format-check` — Ruff format
 3. `make typecheck` — Pyright (`typeCheckingMode = standard`)
-4. `make test-cov` — pytest with `--cov-fail-under=80` (baseline ~89%; `app/db/seed.py` omitted as a CLI entrypoint)
+4. `make test-cov` — pytest with `--cov-fail-under=80` (baseline ~86% on `app/`; `app/db/seed.py` omitted as a CLI entrypoint)
 
 CI uploads `backend-python/coverage.xml` as a workflow artifact on Python PRs.
 
@@ -459,15 +481,25 @@ For the Node backend, the equivalent env file is `backend-nodejs/.env`.
 GET /api/health
 ```
 
-Example response:
+Example response (V1.1 fields shown):
 
 ```json
 {
   "status": "ok",
   "provider": "gemini",
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "chat_streaming_enabled": true,
+  "tools_enabled": false,
+  "rag_enabled": false,
+  "capabilities": {
+    "by_provider": {
+      "openai": { "supports_streaming": true, "supports_tool_calling": true }
+    }
+  }
 }
 ```
+
+See [backend-python/README.md](backend-python/README.md) for the full `capabilities.by_provider` shape.
 
 ### Non-streaming chat
 
@@ -480,9 +512,13 @@ Body:
 
 ```json
 {
-  "messages": [{ "role": "user", "content": "What is FastAPI?" }]
+  "messages": [{ "role": "user", "content": "What is FastAPI?" }],
+  "use_web_search": false,
+  "use_documents": false
 }
 ```
+
+Optional V1.1 toggles (`use_web_search`, `use_documents`) require authentication and respective feature flags. Default `false` preserves V1 plain chat.
 
 ### Streaming chat (SSE)
 
@@ -552,10 +588,10 @@ Common error codes: `validation_error`, `invalid_google_token`, `quota_exceeded`
 
 ## Tests
 
-| App | Command | Baseline (2026-07-21, Post-MVP V1) |
-| --- | ------- | ---------------------------------- |
-| Python | `cd backend-python && make test-cov` | 342 passed, 88.25% coverage on `app/` |
-| Frontend | `cd frontend && npm test -- --run` | 106 passed |
+| App | Command | Baseline (2026-07-22, Post-MVP V1.1) |
+| --- | ------- | -------------------------------------- |
+| Python | `cd backend-python && make test-cov` | 403 passed, 86.14% coverage on `app/` |
+| Frontend | `cd frontend && npm test -- --run` | 122 passed |
 | Node.js | `cd backend-nodejs && npm test` | 26 passed (baseline, unhardened) |
 
 Recommended pre-push validation:
