@@ -136,11 +136,11 @@ Settings (service-layer validation in Phase 5; HTTP enforcement in Phase 11):
 | Chunk overlap | `CHUNK_OVERLAP` | `200` |
 | Upload max bytes | `DOCUMENT_UPLOAD_MAX_BYTES` | `10485760` (10 MB) |
 
-Phase 5 scope: parse + chunk + persist text chunks only. The `embedding` column exists as nullable `REAL[]` (NULL in Phase 5); pgvector migration and indexing arrive in Phase 7. No vector search or RAG routes yet.
+Phase 5 scope: parse + chunk + persist text chunks only. `DocumentService` keeps this text-only path (DB `embedding` column NULL). Full vector ingest uses `KnowledgeService` (Phase 7).
 
 ### Embeddings (Phase 6)
 
-In-memory embedding generation only — vectors are attached to pipeline `DocumentChunk` instances after chunking and are **not** persisted to Postgres until Phase 7 (`KnowledgeService` + pgvector).
+In-memory embedding generation — vectors attach to pipeline `DocumentChunk` instances after chunking. `DocumentService` does not embed; use `KnowledgeService` for parse → chunk → embed → persist (Phase 7).
 
 | Setting | Env var | Default |
 | ------- | ------- | ------- |
@@ -154,6 +154,28 @@ In-memory embedding generation only — vectors are attached to pipeline `Docume
 - V2 embedding cache (Redis) is deferred; see comment in `app/ai/embeddings/factory.py`.
 - When `RAG_ENABLED=true` and `EMBEDDING_PROVIDER=openai`, startup requires `OPENAI_API_KEY` (existing validation in `Settings.validate_rag_requirements()`).
 
+### Vector store (Phase 7)
+
+Local dev Postgres must use the pgvector image (`pgvector/pgvector:pg16` in root `docker-compose.yml`, `python` profile). Host Postgres is supported if the `vector` extension is installed.
+
+Alembic migration `0003_pgvector_embeddings`:
+
+- `CREATE EXTENSION IF NOT EXISTS vector`
+- `document_chunks.embedding` → `vector(1536)` (matches `EMBEDDING_DIMENSIONS`)
+- HNSW index `ix_document_chunks_embedding_hnsw` with cosine distance (`vector_cosine_ops`)
+
+If migration fails on an old volume from `postgres:16-alpine`, reset with `docker compose --profile python down -v` then bring Postgres back up before `make db-migrate`.
+
+| Component | Scope (Phase 7) |
+| --------- | ---------------- |
+| `PgVectorStore` | `upsert`, `similarity_search` (cosine, `user_id`-scoped), `delete_by_document` |
+| `KnowledgeService` | `ingest_document`, `delete_document` only — **no search** (retrieval is Phase 8 `Retriever`) |
+| `IngestionPipeline.persist` | Writes embeddings after in-memory embed |
+
+Structured logs: `vector_search_latency_ms` (result count only), `documents_ingested_total`, `documents_failed_total`. Never log chunk text or embedding values.
+
+V2 may add async ingest queue (return `document_id` + status immediately); V1 ingest is synchronous end-to-end.
+
 Wire via DI:
 
 ```python
@@ -162,6 +184,8 @@ from app.ai.deps import (
     get_embedding_provider,
     get_ingestion_pipeline,
     get_ingestion_pipeline_with_embeddings,
+    get_knowledge_service,
+    get_vector_store,
 )
 ```
 

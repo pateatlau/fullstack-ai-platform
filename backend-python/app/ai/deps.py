@@ -25,9 +25,11 @@ from app.ai.tools.implementations.web_search import (
     create_tavily_client,
 )
 from app.ai.tools.registry import ToolRegistry
+from app.ai.vectorstores.pgvector import PgVectorStore
 from app.core.config import Settings, get_settings
 from app.db.session import get_db_session
 from app.services.document_service import DocumentService
+from app.services.knowledge_service import KnowledgeService
 
 
 def get_ai_settings(
@@ -91,6 +93,29 @@ def get_document_service(
 ) -> DocumentService:
     """Return a request-scoped ``DocumentService`` for auth-only ingestion."""
     return DocumentService(session=session, settings=settings, pipeline=pipeline)
+
+
+def get_vector_store(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_ai_settings),
+) -> PgVectorStore:
+    """Return a request-scoped pgvector store backed by the DB session."""
+    return PgVectorStore(session=session, settings=settings)
+
+
+def get_knowledge_service(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_ai_settings),
+    pipeline: IngestionPipeline = Depends(get_ingestion_pipeline_with_embeddings),
+    vector_store: PgVectorStore = Depends(get_vector_store),
+) -> KnowledgeService:
+    """Return a request-scoped service for full vector ingest lifecycle."""
+    return KnowledgeService(
+        session=session,
+        settings=settings,
+        pipeline=pipeline,
+        vector_store=vector_store,
+    )
 
 
 # Phase 8+: get_rag_service() -> RAGService (app-scoped singleton)

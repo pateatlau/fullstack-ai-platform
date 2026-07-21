@@ -18,10 +18,10 @@ from __future__ import annotations
 import datetime
 import uuid
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     CheckConstraint,
     Date,
-    Float,
     ForeignKey,
     Index,
     Integer,
@@ -29,10 +29,13 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.config import Settings
 from app.db.base import Base
+
+_EMBEDDING_DIMENSIONS = Settings().embedding_dimensions
 
 # Server-side default that generates a UUID inside PostgreSQL (requires pgcrypto).
 _UUID_DEFAULT = text("gen_random_uuid()")
@@ -342,8 +345,11 @@ class DocumentChunk(Base):
     metadata_json: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'")
     )
-    # Phase 5: nullable REAL[] placeholder until Phase 7 migrates to vector(N).
-    embedding: Mapped[list[float] | None] = mapped_column(ARRAY(Float), nullable=True)
+    # Phase 7: pgvector column (nullable until KnowledgeService ingest persists).
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(_EMBEDDING_DIMENSIONS),
+        nullable=True,
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
     )

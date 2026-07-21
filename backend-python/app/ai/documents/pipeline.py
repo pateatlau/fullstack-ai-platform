@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import time
+import uuid
 from dataclasses import replace
 
 from app.ai.documents.chunkers.recursive import RecursiveChunker
 from app.ai.documents.parsers.router import select_parser
 from app.ai.documents.schemas import DocumentChunk, ParsedDocument
 from app.ai.interfaces.embedding_provider import EmbeddingProvider
+from app.ai.interfaces.vector_store import VectorStore
 from app.core.config import Settings
 from app.core.logging import get_logger
 
@@ -16,7 +18,7 @@ _logger = get_logger(__name__)
 
 
 class IngestionPipeline:
-    """Orchestrates parse → chunk → embed (in memory; DB persistence is Phase 7)."""
+    """Orchestrates parse → chunk → embed → optional vector persist."""
 
     def __init__(
         self,
@@ -77,3 +79,38 @@ class IngestionPipeline:
         parsed = await self.parse(file_bytes, filename, mime_type)
         chunks = self.chunk(parsed)
         return await self.embed(chunks)
+
+    async def persist(
+        self,
+        *,
+        document_id: uuid.UUID,
+        user_id: uuid.UUID,
+        chunks: list[DocumentChunk],
+        vector_store: VectorStore,
+    ) -> None:
+        if any(chunk.embedding is None for chunk in chunks):
+            raise ValueError("All chunks must have embeddings before persist.")
+        await vector_store.upsert(
+            document_id=document_id,
+            user_id=user_id,
+            chunks=chunks,
+        )
+
+    async def parse_chunk_embed_persist(
+        self,
+        *,
+        file_bytes: bytes,
+        filename: str,
+        mime_type: str | None,
+        document_id: uuid.UUID,
+        user_id: uuid.UUID,
+        vector_store: VectorStore,
+    ) -> list[DocumentChunk]:
+        chunks = await self.parse_chunk_embed(file_bytes, filename, mime_type)
+        await self.persist(
+            document_id=document_id,
+            user_id=user_id,
+            chunks=chunks,
+            vector_store=vector_store,
+        )
+        return chunks

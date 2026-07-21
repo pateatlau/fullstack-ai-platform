@@ -120,7 +120,7 @@ services:
   postgres:
     profiles:
       - python
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: chatbot-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-chatbot}

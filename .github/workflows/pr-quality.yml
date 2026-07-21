@@ -120,7 +120,7 @@ jobs:
       DATABASE_URL: postgresql+asyncpg://chatbot:chatbot@localhost:5432/chatbot
     services:
       postgres:
-        image: postgres:16-alpine
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: chatbot
           POSTGRES_PASSWORD: chatbot

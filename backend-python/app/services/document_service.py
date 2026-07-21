@@ -23,6 +23,35 @@ class DocumentServiceError(Exception):
         self.message = message
 
 
+def validate_document_upload(
+    settings: Settings,
+    *,
+    file_bytes: bytes,
+    filename: str,
+    mime_type: str | None,
+) -> None:
+    """Shared MIME/size validation for document ingest paths."""
+    if len(file_bytes) > settings.document_upload_max_bytes:
+        raise DocumentServiceError(
+            code="document_too_large",
+            message=(
+                f"Document exceeds the {settings.document_upload_max_bytes} "
+                "byte upload limit."
+            ),
+        )
+    if is_supported_document_type(mime_type, filename):
+        return
+    try:
+        from app.ai.documents.parsers.router import select_parser
+
+        select_parser(mime_type, filename)
+    except UnsupportedDocumentTypeError as exc:
+        raise DocumentServiceError(
+            code="unsupported_document_type",
+            message=str(exc),
+        ) from exc
+
+
 class DocumentService:
     def __init__(
         self,
@@ -43,8 +72,12 @@ class DocumentService:
         filename: str,
         mime_type: str | None,
     ) -> uuid.UUID:
-        self._validate_file_size(len(file_bytes))
-        self._validate_document_type(filename, mime_type)
+        validate_document_upload(
+            self._settings,
+            file_bytes=file_bytes,
+            filename=filename,
+            mime_type=mime_type,
+        )
 
         document = await self._store.create_document(
             user_id=user_id,
@@ -77,26 +110,3 @@ class DocumentService:
         document_id: uuid.UUID,
     ) -> Document | None:
         return await self._store.get_owned_document(document_id, user_id=user_id)
-
-    def _validate_file_size(self, size_bytes: int) -> None:
-        if size_bytes > self._settings.document_upload_max_bytes:
-            raise DocumentServiceError(
-                code="document_too_large",
-                message=(
-                    f"Document exceeds the {self._settings.document_upload_max_bytes} "
-                    "byte upload limit."
-                ),
-            )
-
-    def _validate_document_type(self, filename: str, mime_type: str | None) -> None:
-        if is_supported_document_type(mime_type, filename):
-            return
-        try:
-            from app.ai.documents.parsers.router import select_parser
-
-            select_parser(mime_type, filename)
-        except UnsupportedDocumentTypeError as exc:
-            raise DocumentServiceError(
-                code="unsupported_document_type",
-                message=str(exc),
-            ) from exc

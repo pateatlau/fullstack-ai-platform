@@ -80,3 +80,7 @@ class SqlDocumentStore:
             .order_by(DocumentChunk.chunk_index)
         )
         return list(result.all())
+
+    async def delete_document(self, document_id: uuid.UUID) -> None:
+        await self._session.execute(delete(Document).where(Document.id == document_id))
+        await self._session.flush()
