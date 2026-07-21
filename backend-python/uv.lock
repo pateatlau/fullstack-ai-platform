@@ -1231,6 +1231,7 @@ dependencies = [
     { name = "pyjwt" },
     { name = "pymupdf" },
     { name = "python-docx" },
+    { name = "pyyaml" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1261,6 +1262,7 @@ requires-dist = [
     { name = "pyjwt", specifier = ">=2.9.0" },
     { name = "pymupdf", specifier = ">=1.25.5" },
     { name = "python-docx", specifier = ">=1.1.2" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.51.0" },
 ]

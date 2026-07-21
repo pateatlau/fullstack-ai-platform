@@ -1,6 +1,6 @@
 UV := uv
 
-.PHONY: run lint typecheck format format-check test test-cov db-migrate db-revision db-reset db-seed
+.PHONY: run lint typecheck format format-check test test-cov eval db-migrate db-revision db-reset db-seed
 
 run:
 	$(UV) run python -m uvicorn app.main:app --reload --port 8000
@@ -26,6 +26,9 @@ test-cov:
 		--cov-report=term-missing \
 		--cov-report=xml:coverage.xml \
 		--cov-fail-under=80
+
+eval:
+	$(UV) run python -m app.ai.evaluation.cli --level all
 
 db-migrate:
 	$(UV) run alembic upgrade head

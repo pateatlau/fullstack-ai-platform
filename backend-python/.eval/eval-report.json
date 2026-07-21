@@ -1,0 +1,113 @@
+{
+  "dataset_path": "tests/data/evaluation/sample.yaml",
+  "results": [
+    {
+      "case_id": "rag_answer_renders",
+      "correctness": null,
+      "error": null,
+      "faithfulness": null,
+      "hallucination": null,
+      "latency_ms": 0,
+      "latency_warning": null,
+      "level": "prompt",
+      "passed": true,
+      "precision": null,
+      "recall": null,
+      "retrieved_count": null,
+      "skip_reason": null,
+      "skipped": false
+    },
+    {
+      "case_id": "chat_summarize_system_snapshot",
+      "correctness": null,
+      "error": null,
+      "faithfulness": null,
+      "hallucination": null,
+      "latency_ms": 0,
+      "latency_warning": null,
+      "level": "prompt",
+      "passed": true,
+      "precision": null,
+      "recall": null,
+      "retrieved_count": null,
+      "skip_reason": null,
+      "skipped": false
+    },
+    {
+      "case_id": "retrieval_finds_fixture",
+      "correctness": null,
+      "error": null,
+      "faithfulness": null,
+      "hallucination": null,
+      "latency_ms": 41,
+      "latency_warning": null,
+      "level": "retrieval",
+      "passed": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "retrieved_count": 1,
+      "skip_reason": null,
+      "skipped": false
+    },
+    {
+      "case_id": "empty_corpus_retrieval",
+      "correctness": null,
+      "error": null,
+      "faithfulness": null,
+      "hallucination": null,
+      "latency_ms": 1,
+      "latency_warning": null,
+      "level": "retrieval",
+      "passed": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "retrieved_count": 0,
+      "skip_reason": null,
+      "skipped": false
+    },
+    {
+      "case_id": "e2e_fixture_answer",
+      "correctness": true,
+      "error": null,
+      "faithfulness": 1.0,
+      "hallucination": false,
+      "latency_ms": 6,
+      "latency_warning": null,
+      "level": "e2e",
+      "passed": true,
+      "precision": null,
+      "recall": null,
+      "retrieved_count": null,
+      "skip_reason": null,
+      "skipped": false
+    }
+  ],
+  "schema_version": 1,
+  "settings_snapshot": {
+    "chunk_overlap": 200,
+    "chunk_size": 1000,
+    "default_temperature": 0.7,
+    "embedding_dimensions": 1536,
+    "embedding_model": "text-embedding-3-small",
+    "embedding_provider": "openai",
+    "llm_provider": "openai",
+    "rag_context_max_chars": 8000,
+    "rag_top_k": 5
+  },
+  "skipped_levels": [],
+  "summary": {
+    "failed": 0,
+    "mean_latency_ms": {
+      "e2e": 6.0,
+      "prompt": 0.0,
+      "retrieval": 21.0
+    },
+    "passed": 5,
+    "retrieval": {
+      "mean_precision": 1.0,
+      "mean_recall": 1.0
+    },
+    "skipped": 0
+  },
+  "timestamp": "2026-07-21T09:08:53.919001+00:00"
+}
