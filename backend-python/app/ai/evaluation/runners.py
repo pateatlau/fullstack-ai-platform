@@ -9,6 +9,7 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import patch
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +44,7 @@ from app.providers.base import (
     ProviderToolCompletion,
     ProviderUsage,
 )
+from app.providers.factory import ProviderFactory
 from app.schemas.chat import ChatMessageSchema
 from app.services.knowledge_service import KnowledgeService
 
@@ -317,8 +319,9 @@ class EndToEndEvalRunner:
                 default_response=case.expected_answer or "",
                 judge_mode=self.use_judge,
             )
-            rag = self._rag_service(llm)
-            response = await rag.ask(user_id=user_id, question=case.question or "")
+            rag = self._rag_service()
+            with patch.object(ProviderFactory, "get_provider", return_value=llm):
+                response = await rag.ask(user_id=user_id, question=case.question or "")
 
             correctness = answer_matches(
                 response.answer,
@@ -373,7 +376,7 @@ class EndToEndEvalRunner:
                 error=str(exc),
             )
 
-    def _rag_service(self, llm: LLMProvider) -> RAGService:
+    def _rag_service(self) -> RAGService:
         retriever = Retriever(
             embedding_provider=_FakeEmbeddingProvider(),
             vector_store=PgVectorStore(self.session, self.settings),
@@ -386,7 +389,6 @@ class EndToEndEvalRunner:
                 prompt_manager=self.prompt_manager,
                 settings=self.settings,
             ),
-            llm_provider=llm,
             settings=self.settings,
         )
 

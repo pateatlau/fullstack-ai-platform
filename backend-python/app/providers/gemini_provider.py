@@ -91,15 +91,16 @@ def _to_gemini_contents(
                 call_id = str(call.get("id") or f"call_{uuid.uuid4().hex[:12]}")
                 call_name = str(function.get("name", ""))
                 tool_call_names_by_id[call_id] = call_name
-                parts.append(
-                    types.Part(
-                        function_call=types.FunctionCall(
-                            id=call_id,
-                            name=call_name,
-                            args=args,
-                        )
-                    )
+                thought_signature = call.get("thought_signature")
+                function_call = types.FunctionCall(
+                    id=call_id,
+                    name=call_name,
+                    args=args,
                 )
+                part_kwargs: dict[str, Any] = {"function_call": function_call}
+                if isinstance(thought_signature, bytes):
+                    part_kwargs["thought_signature"] = thought_signature
+                parts.append(types.Part(**part_kwargs))
             contents.append(types.Content(role="model", parts=parts))
             continue
 
@@ -172,12 +173,18 @@ def _extract_tool_completion(response: Any) -> ProviderToolCompletion:
         if function_call is not None:
             raw_args = getattr(function_call, "args", None)
             arguments = raw_args if isinstance(raw_args, dict) else {}
+            thought_signature = getattr(part, "thought_signature", None)
             tool_calls.append(
                 ProviderToolCall(
                     id=getattr(function_call, "id", None)
                     or f"call_{uuid.uuid4().hex[:12]}",
                     name=getattr(function_call, "name", "") or "",
                     arguments=cast(dict[str, object], arguments),
+                    thought_signature=(
+                        thought_signature
+                        if isinstance(thought_signature, bytes)
+                        else None
+                    ),
                 )
             )
             continue

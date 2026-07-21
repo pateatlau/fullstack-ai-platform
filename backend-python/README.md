@@ -280,6 +280,8 @@ Auth-only REST endpoints for document management and generic RAG. Guests receive
 
 **RAG feature flag:** set `RAG_ENABLED=true` for `/api/rag/ask`; otherwise the endpoint returns **503** with code `feature_disabled`. Document upload/list/delete work independently of `RAG_ENABLED`.
 
+**RAG provider selection:** `LLM_PROVIDER` is the default when the request omits `provider`. Each `POST /api/rag/ask` body may optionally include `provider` (`openai` | `gemini` | `groq` | `anthropic`) and `model` (must match the configured model for that provider). Retrieval and embeddings still use the env-configured embedding provider (OpenAI by default) — selecting a different LLM provider does not change the embedding backend in V1.1.
+
 **CORS:** `DELETE` is allowed for browser-based document removal in Phase 12.
 
 Example requests (replace `$TOKEN` with a bearer JWT from `POST /api/auth/google`):
@@ -299,6 +301,12 @@ curl -X POST http://localhost:8000/api/rag/ask \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"question":"Summarize my uploaded documents."}'
+
+# Ask with per-request provider override (optional)
+curl -X POST http://localhost:8000/api/rag/ask \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"question":"Summarize my uploaded documents.","provider":"groq","model":"openai/gpt-oss-20b"}'
 ```
 
 ### Evaluation framework (Phase 10)

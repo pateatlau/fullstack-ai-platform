@@ -215,7 +215,7 @@ async def test_end_to_end_eval_runner_with_mocked_llm(
     rag_service = MagicMock()
     rag_service.ask = AsyncMock(return_value=rag_response)
 
-    def fake_rag_service(self: EndToEndEvalRunner, _llm: object) -> MagicMock:
+    def fake_rag_service(self: EndToEndEvalRunner) -> MagicMock:
         return rag_service
 
     monkeypatch.setattr(EndToEndEvalRunner, "_rag_service", fake_rag_service)
