@@ -42,6 +42,7 @@ Post-MVP V1 engineering is **complete**. The Python backend is the production re
 
 - `RAG_ENABLED=false` — no RAG endpoints; chat/auth/persistence unchanged
 - `TOOLS_ENABLED=false` — no tool execution in chat
+- `CHAT_STREAMING_ENABLED=true` (default) — SSE streaming via `POST /api/chat/stream`; set `false` to use non-streaming `POST /api/chat`
 
 **Auth policy:** Document upload and RAG ask require authentication. Guests receive **401** on document/RAG API routes and see a login prompt on `/documents`.
 

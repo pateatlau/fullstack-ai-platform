@@ -339,6 +339,7 @@ V1 uses **pgvector only** for vector storage — no vector-store factory for alt
 | RAG context budget | `RAG_CONTEXT_MAX_CHARS` | `8000` |
 | RAG feature flag | `RAG_ENABLED` | `false` |
 | Tools feature flag | `TOOLS_ENABLED` | `false` |
+| Chat streaming flag | `CHAT_STREAMING_ENABLED` | `true` |
 | Default temperature | `DEFAULT_TEMPERATURE` | `0.7` |
 | Default max tokens | `DEFAULT_MAX_TOKENS` | provider default (`None`) |
 | Document upload max | `DOCUMENT_UPLOAD_MAX_BYTES` | `10485760` (10 MB) |
@@ -353,6 +354,7 @@ LLM provider selection remains `LLM_PROVIDER` in `app/core/config.py`.
 - `RAG_ENABLED=false` (default) — no RAG routes or pipeline; MVP chat unchanged.
 - `TOOLS_ENABLED=false` (default) — standard `ChatService` path; no tool execution or production tool registration.
 - `TOOLS_ENABLED=true` — non-streaming `POST /api/chat` uses `ToolChatService` (OpenAI tool calling first); requires `WEB_SEARCH_API_KEY`. Streaming chat is unchanged.
+- `CHAT_STREAMING_ENABLED=true` (default) — `POST /api/chat/stream` serves SSE; set `false` to return **503** `feature_disabled` on the stream route and use non-streaming `POST /api/chat` instead. Exposed on `GET /api/health` as `chat_streaming_enabled` for the frontend.
 - When a flag is `true`, startup fails fast if required secrets are missing (`OPENAI_API_KEY` for RAG with `EMBEDDING_PROVIDER=openai`; `WEB_SEARCH_API_KEY` for tools).
 - With both flags off, no new secrets are required and behavior matches the MVP baseline.
 

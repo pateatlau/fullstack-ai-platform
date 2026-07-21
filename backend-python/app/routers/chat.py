@@ -25,6 +25,7 @@ from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
 from app.core.caller import CallerContext, get_current_caller
 from app.core.config import Settings, get_settings
+from app.core.errors import AppError
 from app.core.logging import bind_context, get_logger
 from app.db.chat import SqlChatStore
 from app.db.engine import get_sessionmaker
@@ -144,8 +145,16 @@ async def create_chat_stream(
     request: ChatRequestSchema,
     http_request: Request,
     caller: CallerContext | None = Depends(get_optional_caller),
+    settings: Settings = Depends(get_settings),
     service: ChatService = Depends(get_chat_service),
 ) -> StreamingResponse:
+    if not settings.chat_streaming_enabled:
+        raise AppError(
+            code="feature_disabled",
+            message="Chat streaming is not enabled on this server.",
+            status_code=503,
+        )
+
     if caller is not None and caller.user_id is not None:
         bind_context(user_id=str(caller.user_id))
     logger.info("Chat stream accepted", route="/api/chat/stream", method="POST")

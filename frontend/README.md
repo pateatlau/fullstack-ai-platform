@@ -82,12 +82,18 @@ npm run build
 
 ## Streaming Flow
 
+On mount, `ChatPage` reads `chat_streaming_enabled` from `GET /api/health` (backend env `CHAT_STREAMING_ENABLED`, default `true`).
+
+When streaming is enabled:
+
 1. User submits from `Composer`.
 2. `ChatPage` dispatches user message and calls `useChatStream.start(...)`.
 3. `useChatStream` opens `POST /api/chat/stream`.
 4. `SseParser` emits `start`/`delta`/`end`/`error` frames.
 5. Reducer updates assistant message incrementally per `delta`.
 6. If the connection drops mid-stream, partial content is preserved and the UI offers Retry.
+
+When streaming is disabled, the same UI uses `useChatCompletion` and non-streaming `POST /api/chat` instead (full response applied in one step).
 
 ## Accessibility Notes
 

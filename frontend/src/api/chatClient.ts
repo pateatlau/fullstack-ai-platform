@@ -107,11 +107,12 @@ export async function toChatApiError(
 }
 
 /** Calls the non-streaming `POST /api/chat` fallback endpoint. */
-export async function sendChat(request: ChatRequest): Promise<ChatResponse> {
+export async function sendChat(request: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
   const response = await fetch(`${API_BASE_URL}/api/chat`, {
     method: 'POST',
     headers: buildRequestHeaders(),
     body: JSON.stringify(request),
+    signal,
   })
 
   captureGuestToken(response)

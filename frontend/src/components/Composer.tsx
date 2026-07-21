@@ -16,6 +16,8 @@ interface ComposerProps {
   onSend: (content: string, provider?: ProviderName, model?: string) => void
   onStop: () => void
   isStreaming: boolean
+  /** When false, in-flight status uses "Waiting for response" instead of "Streaming response". */
+  showStreamingStatus?: boolean
   /** Guests use the fixed system default and never see the switcher (plan Section 3.2). */
   canSwitchProvider: boolean
   /** True when sending is blocked (e.g. guest daily quota reached, plan Section 3.1). */
@@ -31,6 +33,7 @@ export function Composer({
   onSend,
   onStop,
   isStreaming,
+  showStreamingStatus = true,
   canSwitchProvider,
   disabled = false,
 }: ComposerProps) {
@@ -61,10 +64,17 @@ export function Composer({
   const renderStatusChip = (className?: string) => (
     <span className={[statusChipClassName, className].filter(Boolean).join(' ')} aria-live="polite">
       {isStreaming ? (
-        <>
-          <span className="sm:hidden">Streaming</span>
-          <span className="hidden sm:inline">Streaming response</span>
-        </>
+        showStreamingStatus ? (
+          <>
+            <span className="sm:hidden">Streaming</span>
+            <span className="hidden sm:inline">Streaming response</span>
+          </>
+        ) : (
+          <>
+            <span className="sm:hidden">Waiting</span>
+            <span className="hidden sm:inline">Waiting for response</span>
+          </>
+        )
       ) : disabled ? (
         <>
           <span className="sm:hidden">Blocked</span>

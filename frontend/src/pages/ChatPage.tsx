@@ -14,6 +14,8 @@ import { MenuIcon, PanelCollapseIcon, PanelExpandIcon } from '../components/icon
 import { useAuthContext } from '../context/AuthContext'
 import { ChatProvider, useChatContext } from '../context/ChatContext'
 import { useChatStream } from '../hooks/useChatStream'
+import { useChatCompletion } from '../hooks/useChatCompletion'
+import { useChatStreamingEnabled } from '../hooks/useChatStreamingEnabled'
 import { MessageList } from '../components/MessageList'
 import { PageBanner } from '../components/PageBanner'
 import { Composer } from '../components/Composer'
@@ -89,6 +91,7 @@ function ChatPageContent() {
   // never overwrite the transcript of the session the user is now viewing.
   const sessionLoadSeqRef = useRef(0)
   const isAuthenticated = status === 'authenticated'
+  const chatStreamingEnabled = useChatStreamingEnabled()
   const activeSessionIdRef = useRef(state.activeSessionId)
   useEffect(() => {
     activeSessionIdRef.current = state.activeSessionId
@@ -168,6 +171,76 @@ function ChatPageContent() {
       cancelled = true
     }
   }, [isAuthenticated, refreshSessions, loadSession])
+
+  const handleCompletionError = useCallback(
+    (error: Error) => {
+      const id = currentMessageIdRef.current
+
+      if (error instanceof ChatApiError) {
+        if (error.code === INVALID_ACCESS_TOKEN_CODE) {
+          handleInvalidAccessToken()
+        } else if (error.code === QUOTA_EXCEEDED_CODE) {
+          dispatch({ type: 'SET_QUOTA_BLOCKED' })
+        } else if (id) {
+          dispatch({
+            type: 'STREAM_ERROR',
+            id,
+            message: error.message,
+            code: error.code,
+          })
+        } else {
+          dispatch({ type: 'SET_ERROR', message: error.message })
+        }
+      } else if (id) {
+        dispatch({
+          type: 'INTERRUPT_MESSAGE',
+          id,
+          message: 'The connection dropped before the response finished. Retry to send again.',
+        })
+      } else {
+        dispatch({ type: 'SET_ERROR', message: toConnectionErrorMessage(error) })
+      }
+
+      currentMessageIdRef.current = null
+      pendingRequestRef.current = null
+      retryTargetMessageIdRef.current = null
+    },
+    [dispatch, handleInvalidAccessToken],
+  )
+
+  const {
+    start: completionStart,
+    stop: completionStop,
+    isPending,
+  } = useChatCompletion({
+    onComplete: (response) => {
+      const localMessageId = currentMessageIdRef.current ?? response.id
+
+      if (pendingRequestRef.current) {
+        messageRequestMapRef.current.set(localMessageId, pendingRequestRef.current)
+      }
+
+      if (
+        isAuthenticated &&
+        response.session_id &&
+        response.session_id !== activeSessionIdRef.current
+      ) {
+        dispatch({ type: 'SET_ACTIVE_SESSION', sessionId: response.session_id })
+      }
+
+      dispatch({ type: 'APPEND_DELTA', id: localMessageId, content: response.content })
+      dispatch({ type: 'END_MESSAGE', id: localMessageId })
+
+      currentMessageIdRef.current = null
+      pendingRequestRef.current = null
+      retryTargetMessageIdRef.current = null
+
+      if (isAuthenticated) {
+        void refreshSessions()
+      }
+    },
+    onError: handleCompletionError,
+  })
 
   const { start, stop, isStreaming } = useChatStream({
     onStart: (chunk) => {
@@ -308,15 +381,31 @@ function ChatPageContent() {
   const startRequest = (request: ChatRequest, retryMessageId?: string) => {
     pendingRequestRef.current = request
     retryTargetMessageIdRef.current = retryMessageId ?? null
-    currentMessageIdRef.current = retryMessageId ?? null
     dispatch({ type: 'CLEAR_ERROR' })
 
     if (retryMessageId) {
+      currentMessageIdRef.current = retryMessageId
       dispatch({ type: 'RETRY_MESSAGE', id: retryMessageId })
+    } else if (!chatStreamingEnabled) {
+      const messageId = crypto.randomUUID()
+      currentMessageIdRef.current = messageId
+      dispatch({
+        type: 'START_MESSAGE',
+        id: messageId,
+        createdAt: new Date().toISOString(),
+      })
+    } else {
+      currentMessageIdRef.current = retryMessageId ?? null
     }
 
-    void start(request)
+    if (chatStreamingEnabled) {
+      void start(request)
+    } else {
+      void completionStart(request)
+    }
   }
+
+  const isGenerating = chatStreamingEnabled ? isStreaming : isPending
 
   const handleSend = (content: string, provider?: ProviderName, model?: string) => {
     const userMessage: Message = {
@@ -359,7 +448,11 @@ function ChatPageContent() {
   }
 
   const handleStop = () => {
-    stop()
+    if (chatStreamingEnabled) {
+      stop()
+    } else {
+      completionStop()
+    }
     const id = currentMessageIdRef.current
     const streamId = currentStreamIdRef.current
 
@@ -425,7 +518,7 @@ function ChatPageContent() {
   // Disables session-switching controls while any session transition or an
   // active stream is in flight, so overlapping clicks can't race each other
   // or leave a stream writing into a conversation the user has since left.
-  const areSessionControlsDisabled = isTranscriptLoading || isCreatingSession || isStreaming
+  const areSessionControlsDisabled = isTranscriptLoading || isCreatingSession || isGenerating
 
   const handleSelectSession = (sessionId: string) => {
     setIsMobileSidebarOpen(false)
@@ -435,7 +528,7 @@ function ChatPageContent() {
     if (!isAuthenticated || sessionId === currentSession.id || areSessionControlsDisabled) {
       return
     }
-    if (isStreaming) {
+    if (isGenerating) {
       handleStop()
     }
     void loadSession(sessionId)
@@ -449,7 +542,7 @@ function ChatPageContent() {
       // re-entry while a session transition or stream is already in flight.
       return
     }
-    if (isStreaming) {
+    if (isGenerating) {
       handleStop()
     }
     void (async () => {
@@ -740,12 +833,14 @@ function ChatPageContent() {
           <MessageList
             messages={state.messages}
             onRetryMessage={handleRetry}
-            isStreaming={isStreaming}
+            isStreaming={isGenerating}
+            showStreamingStatus={chatStreamingEnabled}
           />
           <Composer
             onSend={handleSend}
             onStop={handleStop}
-            isStreaming={isStreaming}
+            isStreaming={isGenerating}
+            showStreamingStatus={chatStreamingEnabled}
             canSwitchProvider={status === 'authenticated'}
             disabled={state.quotaBlocked || isTranscriptLoading}
           />

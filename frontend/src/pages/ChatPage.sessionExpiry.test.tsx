@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPage } from './ChatPage'
 import { storeSession } from '../auth/tokenStorage'
 import { renderWithProviders } from '../test/renderWithProviders'
+import { withChatPageFetchStubs } from '../test/chatFetchStubs'
 import type { AuthenticatedUser } from '../types/auth'
 
 function createStreamResponse(chunks: string[]): Response {
@@ -46,16 +47,7 @@ function makeJwt(expSecondsFromNow: number): string {
 function withSessionsListStub(
   chatFetchMock: (input: RequestInfo | URL, init?: RequestInit) => unknown,
 ): ReturnType<typeof vi.fn> {
-  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input.toString()
-    if (url.endsWith('/api/chat/sessions') && (init?.method ?? 'GET') === 'GET') {
-      return new Response(JSON.stringify([]), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-    return chatFetchMock(input, init)
-  })
+  return withChatPageFetchStubs(chatFetchMock)
 }
 
 describe('ChatPage session-expiry UX', () => {

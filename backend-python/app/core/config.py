@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     rag_context_max_chars: int = Field(default=8000, ge=1)
     rag_enabled: bool = False
     tools_enabled: bool = False
+    # When false, ``POST /api/chat/stream`` returns 503 ``feature_disabled`` and
+    # clients should use non-streaming ``POST /api/chat`` instead.
+    chat_streaming_enabled: bool = True
     default_temperature: float = 0.7
     default_max_tokens: int | None = None
     document_upload_max_bytes: int = Field(default=10_485_760, ge=1)

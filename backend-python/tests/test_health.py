@@ -17,6 +17,7 @@ async def test_health_returns_expected_shape() -> None:
         "status": "ok",
         "provider": get_settings().llm_provider,
         "version": APP_VERSION,
+        "chat_streaming_enabled": get_settings().chat_streaming_enabled,
     }
 
 

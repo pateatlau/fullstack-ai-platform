@@ -4,9 +4,15 @@ import { StreamingIndicator } from './StreamingIndicator'
 interface MessageBubbleProps {
   message: Message
   onRetry?: (messageId: string) => void
+  /** When false, in-flight assistant messages omit the "Streaming" status label. */
+  showStreamingStatus?: boolean
 }
 
-export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  onRetry,
+  showStreamingStatus = true,
+}: MessageBubbleProps) {
   const isWaitingForFirstToken = message.status === 'streaming' && message.content === ''
   const canRetry = message.canRetry && onRetry && message.role === 'assistant'
   const roleLabel = message.role === 'user' ? 'You' : 'Assistant'
@@ -24,7 +30,8 @@ export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
         ? 'border-amber-500/40 bg-amber-50'
         : ''
 
-  const showStatusBadge = message.status !== 'complete'
+  const showStatusBadge =
+    message.status !== 'complete' && !(message.status === 'streaming' && !showStreamingStatus)
   const statusLabel = message.status === 'streaming' ? 'Streaming' : message.status
 
   return (

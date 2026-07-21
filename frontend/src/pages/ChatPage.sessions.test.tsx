@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPage } from './ChatPage'
 import { storeSession } from '../auth/tokenStorage'
 import { renderWithProviders } from '../test/renderWithProviders'
+import { jsonHealthResponse } from '../test/chatFetchStubs'
 import type { AuthenticatedUser } from '../types/auth'
 
 const user: AuthenticatedUser = {
@@ -36,10 +37,14 @@ function jsonResponse(body: unknown, status = 200): Response {
  */
 function createRoutedFetchMock(
   handler: (url: string, method: string) => Response | Promise<Response>,
+  options?: { chatStreamingEnabled?: boolean },
 ): ReturnType<typeof vi.fn> {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
     const method = init?.method ?? 'GET'
+    if (url.endsWith('/api/health') && method === 'GET') {
+      return jsonHealthResponse(options?.chatStreamingEnabled ?? true)
+    }
     return handler(url, method)
   })
 }
@@ -305,5 +310,54 @@ describe('ChatPage session sidebar wiring', () => {
     // The previous session's transcript must not linger once its session is
     // gone (plan Section 6.6) — LOAD_SESSION clears activeSessionId+messages together.
     expect(screen.queryByText('Hello from the first chat')).toBeNull()
+  })
+
+  it('uses non-streaming POST /api/chat when chat_streaming_enabled is false', async () => {
+    const fetchMock = createRoutedFetchMock(
+      (url, method) => {
+        if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+          return jsonResponse([])
+        }
+        if (url.endsWith('/api/chat') && method === 'POST') {
+          return jsonResponse({
+            id: 'resp_nonstream',
+            role: 'assistant',
+            content: 'Full reply at once',
+            model: 'gpt-4o-mini',
+            provider: 'openai',
+            created_at: '2026-01-01T00:00:00Z',
+          })
+        }
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      },
+      { chatStreamingEnabled: false },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled()
+    })
+
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'Hello without streaming')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Full reply at once')).not.toBeNull()
+    })
+
+    const chatCall = fetchMock.mock.calls.find(([input, init]) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      return url.endsWith('/api/chat') && (init?.method ?? 'GET') === 'POST'
+    })
+    expect(chatCall).toBeTruthy()
+    expect(
+      fetchMock.mock.calls.some(([input]) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        return url.endsWith('/api/chat/stream')
+      }),
+    ).toBe(false)
   })
 })

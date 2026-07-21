@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPage } from '../pages/ChatPage'
 import { storeSession } from '../auth/tokenStorage'
 import { renderWithProviders } from '../test/renderWithProviders'
+import { withChatPageFetchStubs } from '../test/chatFetchStubs'
 import type { AuthenticatedUser } from '../types/auth'
 
 const authenticatedUser: AuthenticatedUser = {
@@ -34,16 +35,7 @@ function signInAsAuthenticatedUser(): void {
 function withSessionsListStub(
   chatFetchMock: (input: RequestInfo | URL, init?: RequestInit) => unknown,
 ): ReturnType<typeof vi.fn> {
-  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input.toString()
-    if (url.endsWith('/api/chat/sessions') && (init?.method ?? 'GET') === 'GET') {
-      return new Response(JSON.stringify([]), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-    return chatFetchMock(input, init)
-  })
+  return withChatPageFetchStubs(chatFetchMock)
 }
 
 function createStreamResponse(chunks: string[], chunkDelayMs = 0): Response {
@@ -420,7 +412,7 @@ describe('Composer guest gating and quota UX', () => {
           'event: end\ndata: {"type":"end","id":"resp_7","finish_reason":"stop","timestamp":"t2"}\n\n',
         ]),
       )
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withChatPageFetchStubs(fetchMock))
 
     renderWithProviders(<ChatPage />)
 
@@ -454,7 +446,7 @@ describe('Composer guest gating and quota UX', () => {
         },
       ),
     )
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withChatPageFetchStubs(fetchMock))
 
     renderWithProviders(<ChatPage />)
 

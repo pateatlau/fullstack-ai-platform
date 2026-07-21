@@ -10,11 +10,12 @@ router = APIRouter()
 
 
 @router.get("/api/health")
-async def health(settings: Settings = Depends(get_settings)) -> dict[str, str]:
+async def health(settings: Settings = Depends(get_settings)) -> dict[str, str | bool]:
     return {
         "status": "ok",
         "provider": settings.llm_provider,
         "version": APP_VERSION,
+        "chat_streaming_enabled": settings.chat_streaming_enabled,
     }
 
 

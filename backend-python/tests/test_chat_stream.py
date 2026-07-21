@@ -236,3 +236,23 @@ def test_chat_service_stops_streaming_when_client_disconnects(
     assert [event for event, _ in frames] == ["start", "delta"]
     assert provider.chunks_seen == 1
     assert provider.closed is True
+
+
+@pytest.mark.anyio
+async def test_chat_stream_disabled_returns_503(monkeypatch: MonkeyPatch) -> None:
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("CHAT_STREAMING_ENABLED", "false")
+    get_settings.cache_clear()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/chat/stream",
+            json={"messages": [{"role": "user", "content": "Hello"}]},
+        )
+
+    get_settings.cache_clear()
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "feature_disabled"

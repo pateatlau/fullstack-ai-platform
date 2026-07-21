@@ -47,6 +47,7 @@ def test_feature_flags_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert settings.rag_enabled is False
     assert settings.tools_enabled is False
+    assert settings.chat_streaming_enabled is True
 
 
 def test_rag_enabled_requires_embedding_provider_key() -> None:
