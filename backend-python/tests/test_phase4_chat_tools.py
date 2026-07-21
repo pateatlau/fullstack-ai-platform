@@ -123,6 +123,7 @@ async def test_tools_enabled_non_streaming_invokes_tool_loop_per_provider(
             "/api/chat",
             json={
                 "messages": [{"role": "user", "content": "Search for news"}],
+                "use_web_search": True,
                 "provider": provider_name,
             },
         )
@@ -185,6 +186,7 @@ async def test_tools_enabled_non_streaming_invokes_tool_loop(
             "/api/chat",
             json={
                 "messages": [{"role": "user", "content": "Search for news"}],
+                "use_web_search": True,
                 "provider": "openai",
                 "model": "gpt-4o-mini",
             },
@@ -249,6 +251,7 @@ async def test_tools_enabled_ndjson_reports_web_search_activity(
             headers={"Accept": "application/x-ndjson"},
             json={
                 "messages": [{"role": "user", "content": "Search for news"}],
+                "use_web_search": True,
                 "provider": "openai",
                 "model": "gpt-4o-mini",
             },

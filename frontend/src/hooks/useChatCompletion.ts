@@ -24,14 +24,16 @@ export function useChatCompletion(options: UseChatCompletionOptions = {}) {
   const abortControllerRef = useRef<AbortController | null>(null)
 
   const start = useCallback(
-    async (request: ChatRequest) => {
+    async (request: ChatRequest, runtimeOptions?: { useProgress?: boolean }) => {
       const controller = new AbortController()
       abortControllerRef.current = controller
       setActivityPhase('thinking')
       setIsPending(true)
 
+      const useProgress = runtimeOptions?.useProgress ?? options.useProgress ?? false
+
       try {
-        const response = options.useProgress
+        const response = useProgress
           ? await sendChatWithProgress(request, {
               signal: controller.signal,
               onActivity: setActivityPhase,

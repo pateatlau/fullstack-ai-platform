@@ -11,9 +11,15 @@ import {
   providerModelOptions,
   type ProviderName,
 } from '../constants/providerModels'
+import type { ProviderCapabilityFlags } from '../hooks/useChatStreamingEnabled'
 
 interface ComposerProps {
-  onSend: (content: string, provider?: ProviderName, model?: string) => void
+  onSend: (
+    content: string,
+    provider?: ProviderName,
+    model?: string,
+    options?: { useWebSearch?: boolean; useDocuments?: boolean },
+  ) => void
   onStop: () => void
   isStreaming: boolean
   /** When false, in-flight status uses "Waiting for response" instead of "Streaming response". */
@@ -22,6 +28,12 @@ interface ComposerProps {
   canSwitchProvider: boolean
   /** True when sending is blocked (e.g. guest daily quota reached, plan Section 3.1). */
   disabled?: boolean
+  isAuthenticated: boolean
+  toolsEnabled: boolean
+  ragEnabled: boolean
+  capabilitiesByProvider: Partial<Record<ProviderName, ProviderCapabilityFlags>>
+  /** When true, unified toggles route through non-streaming chat (Phase 3). */
+  streamingOnlyMode: boolean
 }
 
 const TEXTAREA_LINE_HEIGHT_PX = 24
@@ -36,11 +48,18 @@ export function Composer({
   showStreamingStatus = true,
   canSwitchProvider,
   disabled = false,
+  isAuthenticated,
+  toolsEnabled,
+  ragEnabled,
+  capabilitiesByProvider,
+  streamingOnlyMode,
 }: ComposerProps) {
   const [value, setValue] = useState('')
   const [selectedProvider, setSelectedProvider] = useState<ProviderName>('openai')
   const [selectedModel, setSelectedModel] = useState(getProviderOption('openai').model)
   const [isProviderSettingsExpanded, setIsProviderSettingsExpanded] = useState(false)
+  const [useWebSearch, setUseWebSearch] = useState(false)
+  const [useDocuments, setUseDocuments] = useState(false)
   const selectedProviderRef = useRef<ProviderName>('openai')
   const selectedModelRef = useRef(getProviderOption('openai').model)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -49,6 +68,26 @@ export function Composer({
   const isBlocked = isStreaming || disabled
   const modelOptions = providerModelOptions.filter((option) => option.provider === selectedProvider)
   const selectedProviderLabel = getProviderOption(selectedProvider).label
+  const providerSupportsTools =
+    capabilitiesByProvider[selectedProvider]?.supports_tool_calling ?? true
+
+  const webSearchDisabledReason = !isAuthenticated
+    ? 'Sign in to search the web from chat.'
+    : !toolsEnabled
+      ? 'Web search is not enabled on this server.'
+      : !providerSupportsTools
+        ? 'The selected provider does not support tool calling.'
+        : null
+
+  const documentsDisabledReason = !isAuthenticated
+    ? 'Sign in to ask questions about your uploaded documents.'
+    : !ragEnabled
+      ? 'Document grounding is not enabled on this server.'
+      : null
+
+  const webSearchDisabled = isBlocked || !isAuthenticated || !toolsEnabled || !providerSupportsTools
+
+  const documentsDisabled = isBlocked || !isAuthenticated || !ragEnabled
 
   const statusTone = isStreaming
     ? 'bg-amber-100 text-amber-800'
@@ -97,11 +136,15 @@ export function Composer({
   const submit = () => {
     const trimmed = value.trim()
     if (!trimmed || isBlocked) return
+    const toggleOptions = {
+      useWebSearch: useWebSearch && isAuthenticated && toolsEnabled && providerSupportsTools,
+      useDocuments: useDocuments && isAuthenticated && ragEnabled,
+    }
     if (canSwitchProvider) {
-      onSend(trimmed, selectedProviderRef.current, selectedModelRef.current)
+      onSend(trimmed, selectedProviderRef.current, selectedModelRef.current, toggleOptions)
     } else {
       // Guests omit provider/model; the server applies the system default.
-      onSend(trimmed)
+      onSend(trimmed, undefined, undefined, toggleOptions)
     }
     setValue('')
   }
@@ -251,6 +294,56 @@ export function Composer({
               </label>
             </div>
           </div>
+        ) : null}
+
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5">
+          <label
+            className="inline-flex items-center gap-2 text-sm text-shell-950"
+            title={webSearchDisabledReason ?? undefined}
+          >
+            <input
+              type="checkbox"
+              className="size-4 rounded border-zinc-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed"
+              checked={useWebSearch}
+              onChange={(event) => setUseWebSearch(event.target.checked)}
+              disabled={webSearchDisabled}
+              aria-label="Web search"
+            />
+            <span>Web search</span>
+          </label>
+
+          <label
+            className="inline-flex items-center gap-2 text-sm text-shell-950"
+            title={documentsDisabledReason ?? undefined}
+          >
+            <input
+              type="checkbox"
+              className="size-4 rounded border-zinc-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed"
+              checked={useDocuments}
+              onChange={(event) => setUseDocuments(event.target.checked)}
+              disabled={documentsDisabled}
+              aria-label="My documents"
+            />
+            <span>My documents</span>
+          </label>
+
+          <a
+            href="/documents"
+            className="ml-auto text-xs font-semibold text-brand-600 underline-offset-2 hover:underline"
+          >
+            Manage documents
+          </a>
+        </div>
+
+        {!isAuthenticated ? (
+          <p className="text-xs text-zinc-600">
+            Sign in to enable web search and document-grounded answers in chat.
+          </p>
+        ) : streamingOnlyMode && (useWebSearch || useDocuments) ? (
+          <p className="text-xs text-zinc-600">
+            Web search and document grounding use non-streaming chat until streaming support ships
+            in a later release.
+          </p>
         ) : null}
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">

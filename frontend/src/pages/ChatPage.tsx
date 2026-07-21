@@ -91,7 +91,8 @@ function ChatPageContent() {
   // never overwrite the transcript of the session the user is now viewing.
   const sessionLoadSeqRef = useRef(0)
   const isAuthenticated = status === 'authenticated'
-  const { chatStreamingEnabled, toolsEnabled } = useChatStreamingEnabled()
+  const { chatStreamingEnabled, toolsEnabled, ragEnabled, capabilitiesByProvider } =
+    useChatStreamingEnabled()
   const activeSessionIdRef = useRef(state.activeSessionId)
   useEffect(() => {
     activeSessionIdRef.current = state.activeSessionId
@@ -214,7 +215,7 @@ function ChatPageContent() {
     isPending,
     activityPhase,
   } = useChatCompletion({
-    useProgress: !chatStreamingEnabled && toolsEnabled && isAuthenticated,
+    useProgress: false,
     onComplete: (response) => {
       const localMessageId = currentMessageIdRef.current ?? response.id
 
@@ -231,7 +232,12 @@ function ChatPageContent() {
       }
 
       dispatch({ type: 'APPEND_DELTA', id: localMessageId, content: response.content })
-      dispatch({ type: 'END_MESSAGE', id: localMessageId })
+      dispatch({
+        type: 'END_MESSAGE',
+        id: localMessageId,
+        toolsUsed: response.tools_used ?? undefined,
+        retrievedChunkCount: response.retrieved_chunks?.length ?? undefined,
+      })
 
       currentMessageIdRef.current = null
       pendingRequestRef.current = null
@@ -385,10 +391,13 @@ function ChatPageContent() {
     retryTargetMessageIdRef.current = retryMessageId ?? null
     dispatch({ type: 'CLEAR_ERROR' })
 
+    const useUnifiedToggles = Boolean(request.use_web_search || request.use_documents)
+    const useStreamingTransport = chatStreamingEnabled && !useUnifiedToggles
+
     if (retryMessageId) {
       currentMessageIdRef.current = retryMessageId
       dispatch({ type: 'RETRY_MESSAGE', id: retryMessageId })
-    } else if (!chatStreamingEnabled) {
+    } else if (!useStreamingTransport) {
       const messageId = crypto.randomUUID()
       currentMessageIdRef.current = messageId
       dispatch({
@@ -400,18 +409,31 @@ function ChatPageContent() {
       currentMessageIdRef.current = retryMessageId ?? null
     }
 
-    if (chatStreamingEnabled) {
+    if (useStreamingTransport) {
       void start(request)
     } else {
-      void completionStart(request)
+      void completionStart(request, {
+        useProgress: Boolean(
+          (request.use_web_search && toolsEnabled) || (request.use_documents && ragEnabled),
+        ),
+      })
     }
   }
 
-  const isGenerating = chatStreamingEnabled ? isStreaming : isPending
+  const isGenerating = isStreaming || isPending
   const assistantWaitingVariant =
-    activityPhase === 'web_search' ? ('searching_web' as const) : ('typing' as const)
+    activityPhase === 'web_search'
+      ? ('searching_web' as const)
+      : activityPhase === 'document_retrieval'
+        ? ('searching_documents' as const)
+        : ('typing' as const)
 
-  const handleSend = (content: string, provider?: ProviderName, model?: string) => {
+  const handleSend = (
+    content: string,
+    provider?: ProviderName,
+    model?: string,
+    options?: { useWebSearch?: boolean; useDocuments?: boolean },
+  ) => {
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -434,6 +456,8 @@ function ChatPageContent() {
       model,
       session_id: isAuthenticated ? (state.activeSessionId ?? undefined) : undefined,
       client_message_id: userMessage.id,
+      use_web_search: options?.useWebSearch,
+      use_documents: options?.useDocuments,
     })
   }
 
@@ -848,6 +872,11 @@ function ChatPageContent() {
             showStreamingStatus={chatStreamingEnabled}
             canSwitchProvider={status === 'authenticated'}
             disabled={state.quotaBlocked || isTranscriptLoading}
+            isAuthenticated={isAuthenticated}
+            toolsEnabled={toolsEnabled}
+            ragEnabled={ragEnabled}
+            capabilitiesByProvider={capabilitiesByProvider}
+            streamingOnlyMode={chatStreamingEnabled}
           />
         </main>
       </section>

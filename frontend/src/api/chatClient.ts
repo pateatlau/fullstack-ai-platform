@@ -66,6 +66,13 @@ export interface ChatResponse {
   created_at: string
   // Populated when backend persistence is active (plan Section 2.4).
   session_id?: string | null
+  retrieved_chunks?: Array<{
+    chunk_id: string | null
+    document_id: string | null
+    chunk_index: number | null
+    score: number
+  }> | null
+  tools_used?: string[] | null
 }
 
 interface ErrorResponse {
@@ -125,7 +132,7 @@ export async function sendChat(request: ChatRequest, signal?: AbortSignal): Prom
   return (await response.json()) as ChatResponse
 }
 
-export type ChatActivityPhase = 'thinking' | 'web_search'
+export type ChatActivityPhase = 'thinking' | 'web_search' | 'document_retrieval'
 
 const CHAT_NDJSON_ACCEPT = 'application/x-ndjson'
 

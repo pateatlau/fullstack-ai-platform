@@ -107,8 +107,9 @@ from app.routers.chat import get_tool_chat_service
 ```
 
 - **`web_search`** — Tavily-backed handler (`app/ai/tools/implementations/web_search.py`); registered at startup when `TOOLS_ENABLED=true`.
-- **Multi-provider tool calling (V1.1a)** — `complete_chat_with_tools` on all four LLM adapters (OpenAI, Gemini, Groq, Anthropic). Non-streaming `POST /api/chat` runs the tool loop for any provider when `TOOLS_ENABLED=true`. Capability flags are exposed on `GET /api/health` under `capabilities.by_provider` (see `app/providers/capabilities.py`).
-- **Streaming policy (V1)** — `POST /api/chat/stream` always uses standard streaming chat; tool calling is silently skipped even when `TOOLS_ENABLED=true` (unchanged until V1.1c / Phase 4).
+- **Multi-provider tool calling (V1.1a)** — `complete_chat_with_tools` on all four LLM adapters (OpenAI, Gemini, Groq, Anthropic). Per-request web search via `use_web_search=true` on `POST /api/chat` when `TOOLS_ENABLED=true` (V1.1b). Capability flags are exposed on `GET /api/health` under `capabilities.by_provider` (see `app/providers/capabilities.py`).
+- **Unified chat (V1.1b)** — `UnifiedChatService` orchestrates document grounding (`use_documents`) and web search (`use_web_search`) toggles on non-streaming `POST /api/chat`. Plain chat is unchanged when both toggles are off.
+- **Streaming policy (V1)** — `POST /api/chat/stream` always uses standard streaming chat; tool calling and document grounding are skipped even when toggles/flags are on (unchanged until V1.1c / Phase 4).
 - **Retry policy** — shared utility in `app/core/retry.py` (HTTP 429/503, timeouts; max 3 attempts with exponential backoff).
 - **Metrics** — `tool_calls_total`, `tool_errors_total` (Phase 3); `search_latency_ms` on each web search (no query text in logs).
 
@@ -127,9 +128,66 @@ Query capabilities via **`GET /api/health`** — response includes `capabilities
 
 When tools are enabled but the resolved provider lacks tool support, `ToolChatService` returns **422** `validation_error` with message `Tool calling is not supported for provider '<name>'.` — no silent plain-chat fallback.
 
-Non-streaming tool path: `POST /api/chat` with `TOOLS_ENABLED=true`. Streaming still skips tools until Phase 4 (`CHAT_STREAMING_ENABLED` policy unchanged).
+Non-streaming unified path: `POST /api/chat` with optional `use_web_search` / `use_documents` (authenticated users only). Global flags gate capabilities; request toggles default off. Streaming still skips tools/RAG until Phase 4 (`CHAT_STREAMING_ENABLED` policy unchanged).
 
 Known limitations: tool calling is validated on the non-streaming path only; model-specific restrictions (e.g. Groq model availability) follow each provider's SDK constraints.
+
+### Unified chat orchestration (V1.1b)
+
+Canonical non-streaming pipeline (`UnifiedChatService.execute` in `app/services/unified_chat_service.py`):
+
+```text
+Validate Request (auth for toggles, flags, provider capability)
+        ↓
+Build Conversation Context
+        ↓
+[use_documents?] → Retriever.retrieve → ContextBuilder.build → merge via chat/document_context.v1.j2
+        ↓
+[use_web_search?] → register web_search (this request only) → ToolChatService tool loop
+        ↓
+ChatService.complete_chat (or tool loop terminal completion)
+        ↓
+Persist Conversation
+        ↓
+Return Response (+ optional retrieved_chunks, tools_used)
+```
+
+| Service | Responsibility |
+| ------- | -------------- |
+| `UnifiedChatService` | Request orchestration; composes chat, tools, and retrieval components |
+| `ChatService` | Provider resolution, plain completion, persistence hooks |
+| `ToolChatService` | Tool loop only (invoked when `use_web_search=true`) |
+| RAG retrieval stack | Generic retrieval/context only — no chat logic in `app/ai/rag/` |
+| `RAGService` | Standalone `/api/rag/ask` unchanged |
+
+**Request fields** on `POST /api/chat` (optional, default `false`):
+
+| Field | Behavior when `true` (and flag on, authenticated) |
+| ----- | --------------------------------------------------- |
+| `use_web_search` | Per-request Tavily `web_search` tool loop via `ToolChatService` |
+| `use_documents` | Pre-retrieval from caller's corpus; context merged before LLM call |
+
+**Routing:** `POST /api/chat` delegates to `UnifiedChatService` when either toggle is `true`; otherwise existing plain `ChatService` path (zero regression when toggles off).
+
+**Guests:** toggles return the same denial message as V1 tool policy (`_GUEST_TOOL_DENIED_MESSAGE` style) without invoking retrieval or tools.
+
+**Flags off:** when `RAG_ENABLED=false` or `TOOLS_ENABLED=false`, the corresponding toggle is ignored (no-op); plain chat proceeds.
+
+**Health:** `GET /api/health` exposes `rag_enabled`, `tools_enabled`, and `capabilities.by_provider` for frontend toggle gating.
+
+Example:
+
+```bash
+curl -sS -X POST http://localhost:8000/api/chat \
+  -H "Authorization: Bearer $JWT" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{"role":"user","content":"Summarize my uploaded notes"}],
+    "use_documents": true,
+    "provider": "openai",
+    "model": "gpt-4o-mini"
+  }'
+```
 
 ### Document Ingestion (Phase 5)
 

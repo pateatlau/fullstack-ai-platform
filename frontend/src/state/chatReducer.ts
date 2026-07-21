@@ -27,7 +27,7 @@ export type ChatAction =
   | { type: 'SET_ERROR'; message: string }
   | { type: 'START_MESSAGE'; id: string; createdAt: string }
   | { type: 'APPEND_DELTA'; id: string; content: string }
-  | { type: 'END_MESSAGE'; id: string }
+  | { type: 'END_MESSAGE'; id: string; toolsUsed?: string[]; retrievedChunkCount?: number }
   | { type: 'RETRY_MESSAGE'; id: string }
   | { type: 'STOP_MESSAGE'; id: string }
   | { type: 'INTERRUPT_MESSAGE'; id: string; message: string }
@@ -134,6 +134,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
                 errorMessage: undefined,
                 errorCode: undefined,
                 canRetry: false,
+                toolsUsed: action.toolsUsed,
+                retrievedChunkCount: action.retrievedChunkCount,
               }
             : message,
         ),

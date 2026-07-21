@@ -1,8 +1,12 @@
-export type StreamingIndicatorVariant = 'typing' | 'searching_web'
+export type StreamingIndicatorVariant = 'typing' | 'searching_web' | 'searching_documents'
 
 const LABELS: Record<StreamingIndicatorVariant, { text: string; ariaLabel: string }> = {
   typing: { text: 'typing…', ariaLabel: 'Assistant is typing' },
   searching_web: { text: 'searching web…', ariaLabel: 'Assistant is searching the web' },
+  searching_documents: {
+    text: 'searching docs…',
+    ariaLabel: 'Assistant is searching docs',
+  },
 }
 
 interface StreamingIndicatorProps {

@@ -18,6 +18,12 @@ describe('useChatStreamingEnabled', () => {
           version: '0.1.0',
           chat_streaming_enabled: false,
           tools_enabled: true,
+          rag_enabled: true,
+          capabilities: {
+            by_provider: {
+              openai: { supports_streaming: true, supports_tool_calling: true },
+            },
+          },
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),
@@ -29,6 +35,7 @@ describe('useChatStreamingEnabled', () => {
     await waitFor(() => {
       expect(result.current.chatStreamingEnabled).toBe(false)
       expect(result.current.toolsEnabled).toBe(true)
+      expect(result.current.ragEnabled).toBe(true)
     })
   })
 })

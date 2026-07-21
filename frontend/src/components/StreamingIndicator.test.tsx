@@ -16,4 +16,10 @@ describe('StreamingIndicator', () => {
     expect(screen.getByLabelText('Assistant is searching the web')).not.toBeNull()
     expect(screen.getByText('searching web…')).not.toBeNull()
   })
+
+  it('shows searching documents when that variant is selected', () => {
+    render(<StreamingIndicator variant="searching_documents" />)
+    expect(screen.getByLabelText('Assistant is searching docs')).not.toBeNull()
+    expect(screen.getByText('searching docs…')).not.toBeNull()
+  })
 })
