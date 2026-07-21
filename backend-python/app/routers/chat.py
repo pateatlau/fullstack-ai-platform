@@ -19,11 +19,15 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.deps import (
+    get_context_builder,
     get_prompt_manager,
+    get_retriever,
     get_tool_executor,
     get_tool_registry,
 )
 from app.ai.prompts.manager import PromptManager
+from app.ai.rag.context_builder import ContextBuilder
+from app.ai.rag.retriever import Retriever
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
 from app.core.caller import CallerContext, get_current_caller
@@ -46,6 +50,7 @@ from app.schemas.chat import (
 from app.services.chat_service import ChatService, SessionNotFoundError
 from app.services.quota_service import QuotaService
 from app.services.tool_chat_service import ToolChatService
+from app.services.unified_chat_service import UnifiedChatService
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -58,13 +63,35 @@ def _wants_chat_progress(request: Request) -> bool:
     return CHAT_NDJSON_MEDIA in accept
 
 
-async def _stream_tool_chat_ndjson(
+def _needs_unified_path(request: ChatRequestSchema) -> bool:
+    return request.use_web_search or request.use_documents
+
+
+def _effective_web_search(request: ChatRequestSchema, settings: Settings) -> bool:
+    return request.use_web_search and settings.tools_enabled
+
+
+def _effective_documents(request: ChatRequestSchema, settings: Settings) -> bool:
+    return request.use_documents and settings.rag_enabled
+
+
+def _unified_path_reports_progress(
+    request: ChatRequestSchema, settings: Settings, http_request: Request
+) -> bool:
+    if not _wants_chat_progress(http_request):
+        return False
+    return _effective_web_search(request, settings) or _effective_documents(
+        request, settings
+    )
+
+
+async def _stream_unified_chat_ndjson(
     *,
     request: ChatRequestSchema,
     caller: CallerContext | None,
-    tool_service: ToolChatService,
+    unified_service: UnifiedChatService,
 ) -> AsyncIterator[str]:
-    """Yield activity frames during tool chat, then a terminal complete frame."""
+    """Yield activity frames during unified tool chat, then a terminal complete frame."""
     queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
 
     async def on_activity(phase: str) -> None:
@@ -72,7 +99,7 @@ async def _stream_tool_chat_ndjson(
 
     async def run_chat() -> None:
         try:
-            result = await tool_service.complete_chat(
+            result = await unified_service.execute(
                 request, caller, on_activity=on_activity
             )
             await queue.put(("complete", result))
@@ -158,6 +185,24 @@ def get_tool_chat_service(
     )
 
 
+def get_unified_chat_service(
+    settings: Settings = Depends(get_settings),
+    chat_service: ChatService = Depends(get_chat_service),
+    tool_chat_service: ToolChatService = Depends(get_tool_chat_service),
+    retriever: Retriever = Depends(get_retriever),
+    context_builder: ContextBuilder = Depends(get_context_builder),
+    prompt_manager: PromptManager = Depends(get_prompt_manager),
+) -> UnifiedChatService:
+    return UnifiedChatService(
+        chat_service=chat_service,
+        tool_chat_service=tool_chat_service,
+        retriever=retriever,
+        context_builder=context_builder,
+        prompt_manager=prompt_manager,
+        settings=settings,
+    )
+
+
 def _set_guest_token(response: Response, caller: CallerContext | None) -> None:
     if caller is not None and caller.issued_guest_token:
         response.headers["X-Guest-Token"] = caller.issued_guest_token
@@ -181,26 +226,30 @@ async def create_chat(
     caller: CallerContext | None = Depends(get_optional_caller),
     settings: Settings = Depends(get_settings),
     service: ChatService = Depends(get_chat_service),
-    tool_service: ToolChatService = Depends(get_tool_chat_service),
+    unified_service: UnifiedChatService = Depends(get_unified_chat_service),
 ) -> ChatResponseSchema | StreamingResponse:
     if caller is not None and caller.user_id is not None:
         bind_context(user_id=str(caller.user_id))
     logger.info("Chat request accepted", route="/api/chat", method="POST")
 
-    if settings.tools_enabled and _wants_chat_progress(http_request):
-        stream_response = StreamingResponse(
-            _stream_tool_chat_ndjson(
-                request=request,
-                caller=caller,
-                tool_service=tool_service,
-            ),
-            media_type=CHAT_NDJSON_MEDIA,
-        )
-        await _set_guest_headers(stream_response, caller, service)
-        return stream_response
+    if _needs_unified_path(request):
+        if _unified_path_reports_progress(request, settings, http_request):
+            stream_response = StreamingResponse(
+                _stream_unified_chat_ndjson(
+                    request=request,
+                    caller=caller,
+                    unified_service=unified_service,
+                ),
+                media_type=CHAT_NDJSON_MEDIA,
+            )
+            await _set_guest_headers(stream_response, caller, service)
+            return stream_response
 
-    active_service = tool_service if settings.tools_enabled else service
-    result = await active_service.complete_chat(request, caller)
+        result = await unified_service.execute(request, caller)
+        await _set_guest_headers(response, caller, service)
+        return result
+
+    result = await service.complete_chat(request, caller)
     await _set_guest_headers(response, caller, service)
     return result
 

@@ -34,7 +34,7 @@ describe('DocumentsPage guest gate', () => {
     expect(screen.getByText(/Sign in to continue/i)).toBeTruthy()
     expect(screen.getByText(/Documents & Knowledge Base/i)).toBeTruthy()
     expect(screen.queryByLabelText(/Choose a document file/i)).toBeNull()
-    expect(screen.queryByText(/Ask your documents/i)).toBeNull()
+    expect(screen.queryByText(/Ask about your documents in chat/i)).toBeNull()
   })
 })
 
@@ -59,7 +59,8 @@ describe('DocumentsPage authenticated layout', () => {
 
     expect(await screen.findByRole('heading', { name: 'Upload document' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Your documents' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Ask your documents' })).toBeTruthy()
+    expect(screen.getByText(/Ask about your documents in chat/i)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Go to chat' })).toBeTruthy()
   })
 })
 

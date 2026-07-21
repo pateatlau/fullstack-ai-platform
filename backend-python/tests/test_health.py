@@ -20,6 +20,7 @@ async def test_health_returns_expected_shape() -> None:
         "version": APP_VERSION,
         "chat_streaming_enabled": get_settings().chat_streaming_enabled,
         "tools_enabled": get_settings().tools_enabled,
+        "rag_enabled": get_settings().rag_enabled,
         "capabilities": {
             "by_provider": capabilities_by_provider(),
         },

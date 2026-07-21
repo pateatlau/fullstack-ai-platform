@@ -7,6 +7,16 @@ export interface HealthResponse {
   version: string
   chat_streaming_enabled: boolean
   tools_enabled: boolean
+  rag_enabled: boolean
+  capabilities?: {
+    by_provider: Record<
+      string,
+      {
+        supports_streaming: boolean
+        supports_tool_calling: boolean
+      }
+    >
+  }
 }
 
 /** Fetches server health and feature flags exposed by ``GET /api/health``. */

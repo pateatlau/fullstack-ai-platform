@@ -48,6 +48,9 @@ class ChatRequestSchema(BaseModel):
     model: str | None = Field(default=None, min_length=1, max_length=120)
     provider: ProviderName | None = None
     temperature: float = Field(default=0.7, ge=0, le=2)
+    # V1.1 unified chat toggles (default off — plain chat when omitted).
+    use_web_search: bool = False
+    use_documents: bool = False
     # Additive persistence fields (backward-compatible; older clients omit them).
     # When set, the request appends to an existing owned session; otherwise a new
     # session is started. A supplied ``client_message_id`` makes the append
@@ -84,6 +87,15 @@ class ChatRequestSchema(BaseModel):
         return self
 
 
+class RetrievedChunkMetaSchema(BaseModel):
+    """Metadata for document chunks included in the LLM context (debugging only)."""
+
+    chunk_id: uuid.UUID | None = None
+    document_id: uuid.UUID | None = None
+    chunk_index: int | None = None
+    score: float
+
+
 class ChatResponseSchema(BaseModel):
     id: str
     role: Role = "assistant"
@@ -93,6 +105,9 @@ class ChatResponseSchema(BaseModel):
     # Populated when persistence is active so the client can continue the session.
     session_id: uuid.UUID | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Optional unified-chat metadata (V1.1b).
+    retrieved_chunks: list[RetrievedChunkMetaSchema] | None = None
+    tools_used: list[str] | None = None
 
 
 class ErrorDetail(BaseModel):
@@ -167,7 +182,7 @@ class ChatSessionListItem(BaseModel):
     created_at: datetime
 
 
-ChatActivityPhase = Literal["thinking", "web_search"]
+ChatActivityPhase = Literal["thinking", "web_search", "document_retrieval"]
 
 
 class ChatActivityFrame(BaseModel):

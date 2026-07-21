@@ -464,3 +464,77 @@ describe('Composer guest gating and quota UX', () => {
     expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
   })
 })
+
+describe('Composer unified chat toggles', () => {
+  beforeEach(() => {
+    signInAsAuthenticatedUser()
+  })
+
+  afterEach(() => {
+    cleanup()
+    window.localStorage.clear()
+    vi.restoreAllMocks()
+  })
+
+  it('renders toggles and disables them for guests', () => {
+    window.localStorage.clear()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', withChatPageFetchStubs(fetchMock))
+
+    renderWithProviders(<ChatPage />)
+
+    expect(screen.getByRole('checkbox', { name: 'Web search' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'My documents' })).toBeTruthy()
+    expect(
+      (screen.getByRole('checkbox', { name: 'Web search' }) as HTMLInputElement).disabled,
+    ).toBe(true)
+    expect(
+      (screen.getByRole('checkbox', { name: 'My documents' }) as HTMLInputElement).disabled,
+    ).toBe(true)
+  })
+
+  it('includes toggle fields in the chat request when enabled', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'resp_toggle',
+          role: 'assistant',
+          content: 'ok',
+          model: 'gpt-4o-mini',
+          provider: 'openai',
+          created_at: 't0',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    vi.stubGlobal(
+      'fetch',
+      withChatPageFetchStubs(fetchMock, {
+        chatStreamingEnabled: false,
+        toolsEnabled: true,
+        ragEnabled: true,
+      }),
+    )
+
+    renderWithProviders(<ChatPage />)
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('checkbox', { name: 'Web search' }))
+    await user.click(screen.getByRole('checkbox', { name: 'My documents' }))
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'Use my docs and search')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled()
+    })
+
+    const chatCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/api/chat'))
+    expect(chatCall).toBeTruthy()
+    const body = JSON.parse(String((chatCall?.[1] as RequestInit).body)) as {
+      use_web_search?: boolean
+      use_documents?: boolean
+    }
+    expect(body.use_web_search).toBe(true)
+    expect(body.use_documents).toBe(true)
+  })
+})

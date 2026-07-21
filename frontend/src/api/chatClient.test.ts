@@ -225,4 +225,33 @@ describe('chatClient request-id retry wiring', () => {
     const retryHeaders = fetchMock.mock.calls[1][1].headers as Record<string, string>
     expect(retryHeaders[REQUEST_ID_HEADER]).toBe('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
   })
+
+  it('sendChat includes unified chat toggle fields when provided', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        id: 'resp_toggle',
+        role: 'assistant',
+        content: 'grounded',
+        model: 'gpt-4o-mini',
+        provider: 'openai',
+        created_at: 't0',
+        tools_used: ['web_search'],
+        retrieved_chunks: [{ chunk_id: 'c1', document_id: 'd1', chunk_index: 0, score: 0.9 }],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await sendChat({
+      messages: [{ role: 'user', content: 'hello' }],
+      use_web_search: true,
+      use_documents: true,
+    })
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body)) as {
+      use_web_search?: boolean
+      use_documents?: boolean
+    }
+    expect(body.use_web_search).toBe(true)
+    expect(body.use_documents).toBe(true)
+  })
 })

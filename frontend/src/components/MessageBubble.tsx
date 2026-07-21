@@ -71,6 +71,18 @@ export function MessageBubble({
           Stopped.
         </p>
       )}
+      {message.role === 'assistant' &&
+      message.status === 'complete' &&
+      (message.toolsUsed?.length || message.retrievedChunkCount) ? (
+        <p className="mt-3 text-[11px] text-zinc-500">
+          {message.toolsUsed?.includes('web_search') ? 'Used web search. ' : ''}
+          {message.retrievedChunkCount
+            ? `Grounded in ${message.retrievedChunkCount} document chunk${
+                message.retrievedChunkCount === 1 ? '' : 's'
+              }.`
+            : ''}
+        </p>
+      ) : null}
       {canRetry ? (
         <button
           type="button"

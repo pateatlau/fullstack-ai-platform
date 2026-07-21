@@ -37,7 +37,7 @@ function jsonResponse(body: unknown, status = 200): Response {
  */
 function createRoutedFetchMock(
   handler: (url: string, method: string) => Response | Promise<Response>,
-  options?: { chatStreamingEnabled?: boolean; toolsEnabled?: boolean },
+  options?: { chatStreamingEnabled?: boolean; toolsEnabled?: boolean; ragEnabled?: boolean },
 ): ReturnType<typeof vi.fn> {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
@@ -46,6 +46,7 @@ function createRoutedFetchMock(
       return jsonHealthResponse(
         options?.chatStreamingEnabled ?? true,
         options?.toolsEnabled ?? false,
+        options?.ragEnabled ?? false,
       )
     }
     return handler(url, method)
@@ -401,6 +402,7 @@ describe('ChatPage session sidebar wiring', () => {
     })
 
     const user = userEvent.setup()
+    await user.click(screen.getByRole('checkbox', { name: 'Web search' }))
     await user.type(screen.getByPlaceholderText('Ask something…'), 'Latest news?')
     await user.click(screen.getByRole('button', { name: 'Send' }))
 
@@ -451,21 +453,76 @@ describe('ChatPage session sidebar wiring', () => {
     expect(screen.queryByLabelText('Assistant is searching the web')).toBeNull()
 
     resolveChat(
-      new Response(
-        `{"type":"complete","response":${JSON.stringify({
-          id: 'resp_nonstream',
-          role: 'assistant',
-          content: 'You are welcome',
-          model: 'gpt-4o-mini',
-          provider: 'openai',
-          created_at: '2026-01-01T00:00:00Z',
-        })}}\n`,
-        { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } },
-      ),
+      jsonResponse({
+        id: 'resp_nonstream',
+        role: 'assistant',
+        content: 'You are welcome',
+        model: 'gpt-4o-mini',
+        provider: 'openai',
+        created_at: '2026-01-01T00:00:00Z',
+      }),
     )
 
     await waitFor(() => {
       expect(screen.getByText('You are welcome')).not.toBeNull()
     })
+  })
+
+  it('shows searching documents while document-grounded chat is in progress', async () => {
+    const completePayload = {
+      id: 'resp_docs',
+      role: 'assistant',
+      content: 'From your documents: fixture content.',
+      model: 'gpt-4o-mini',
+      provider: 'openai',
+      created_at: '2026-01-01T00:00:00Z',
+      retrieved_chunks: [{ chunk_id: 'c1', document_id: 'd1', chunk_index: 0, score: 0.9 }],
+    }
+    const ndjsonBody =
+      '{"type":"activity","phase":"document_retrieval"}\n' +
+      '{"type":"activity","phase":"thinking"}\n' +
+      `{"type":"complete","response":${JSON.stringify(completePayload)}}\n`
+
+    const fetchMock = createRoutedFetchMock(
+      (url, method) => {
+        if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+          return jsonResponse([])
+        }
+        if (url.endsWith('/api/chat') && method === 'POST') {
+          return new Response(ndjsonBody, {
+            status: 200,
+            headers: { 'Content-Type': 'application/x-ndjson' },
+          })
+        }
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      },
+      { chatStreamingEnabled: false, toolsEnabled: false, ragEnabled: true },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled()
+    })
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('checkbox', { name: 'My documents' }))
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'What is in my docs?')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('From your documents: fixture content.')).not.toBeNull()
+    })
+
+    const chatCall = fetchMock.mock.calls.find(([input, init]) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      return url.endsWith('/api/chat') && (init?.method ?? 'GET') === 'POST'
+    })
+    expect(chatCall).toBeTruthy()
+    const chatInit = chatCall?.[1] as RequestInit
+    expect((chatInit.headers as Record<string, string>).Accept).toBe('application/x-ndjson')
+    const body = JSON.parse(String(chatInit.body)) as { use_documents?: boolean }
+    expect(body.use_documents).toBe(true)
   })
 })

@@ -9,6 +9,8 @@ export interface Message {
   errorMessage?: string
   errorCode?: string
   canRetry?: boolean
+  toolsUsed?: string[]
+  retrievedChunkCount?: number
 }
 
 export interface ChatRequest {
@@ -16,6 +18,8 @@ export interface ChatRequest {
   model?: string
   provider?: 'openai' | 'gemini' | 'groq' | 'anthropic'
   temperature?: number
+  use_web_search?: boolean
+  use_documents?: boolean
   // Additive persistence fields (plan Sections 2.4, 6.5). Omitted by older
   // flows; when set, continues an existing owned session and/or makes the
   // append idempotent on retry.

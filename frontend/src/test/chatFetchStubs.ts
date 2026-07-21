@@ -1,7 +1,11 @@
 import { vi } from 'vitest'
 
 /** Default health payload returned by ``GET /api/health`` in component tests. */
-export function jsonHealthResponse(chatStreamingEnabled = true, toolsEnabled = false): Response {
+export function jsonHealthResponse(
+  chatStreamingEnabled = true,
+  toolsEnabled = false,
+  ragEnabled = false,
+): Response {
   return new Response(
     JSON.stringify({
       status: 'ok',
@@ -9,6 +13,15 @@ export function jsonHealthResponse(chatStreamingEnabled = true, toolsEnabled = f
       version: '0.1.0',
       chat_streaming_enabled: chatStreamingEnabled,
       tools_enabled: toolsEnabled,
+      rag_enabled: ragEnabled,
+      capabilities: {
+        by_provider: {
+          openai: { supports_streaming: true, supports_tool_calling: true },
+          gemini: { supports_streaming: true, supports_tool_calling: true },
+          groq: { supports_streaming: true, supports_tool_calling: true },
+          anthropic: { supports_streaming: true, supports_tool_calling: true },
+        },
+      },
     }),
     { status: 200, headers: { 'Content-Type': 'application/json' } },
   )
@@ -20,7 +33,7 @@ export function jsonHealthResponse(chatStreamingEnabled = true, toolsEnabled = f
  */
 export function withChatPageFetchStubs(
   chatFetchMock: (input: RequestInfo | URL, init?: RequestInit) => unknown,
-  options?: { chatStreamingEnabled?: boolean; toolsEnabled?: boolean },
+  options?: { chatStreamingEnabled?: boolean; toolsEnabled?: boolean; ragEnabled?: boolean },
 ): ReturnType<typeof vi.fn> {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
@@ -30,6 +43,7 @@ export function withChatPageFetchStubs(
       return jsonHealthResponse(
         options?.chatStreamingEnabled ?? true,
         options?.toolsEnabled ?? false,
+        options?.ragEnabled ?? false,
       )
     }
 

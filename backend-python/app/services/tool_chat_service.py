@@ -6,6 +6,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import cast
 
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
@@ -25,6 +26,7 @@ from app.providers.base import (
     ProviderCompletion,
     ProviderToolCall,
     ProviderToolCompletion,
+    ProviderUsage,
 )
 from app.providers.capabilities import get_capabilities
 from app.schemas.chat import (
@@ -54,6 +56,14 @@ _GUEST_TOOL_DENIED_MESSAGE = (
 ChatActivityCallback = Callable[[str], Awaitable[None]]
 
 
+@dataclass(frozen=True)
+class _ToolLoopResult:
+    content: str
+    finish_reason: str | None
+    usage: ProviderUsage | None
+    tools_used: list[str]
+
+
 class ToolChatService:
     """Compose ``ChatService`` with a capped non-streaming tool loop."""
 
@@ -78,6 +88,8 @@ class ToolChatService:
         request: ChatRequestSchema,
         caller: CallerContext | None = None,
         on_activity: ChatActivityCallback | None = None,
+        *,
+        allowed_tool_names: frozenset[str] | None = None,
     ) -> ChatResponseSchema:
         provider, model, provider_name = self._chat_service._resolve_provider(request)
 
@@ -90,6 +102,7 @@ class ToolChatService:
                     provider_name=provider_name,
                     caller=caller,
                     on_activity=on_activity,
+                    allowed_tool_names=allowed_tool_names,
                 )
             except NotImplementedError as exc:
                 raise normalize_chat_error(exc) from exc
@@ -100,6 +113,7 @@ class ToolChatService:
                 content=completion.content,
                 model=model,
                 provider=provider_name,
+                tools_used=completion.tools_used or None,
             )
 
         assert caller is not None
@@ -152,6 +166,7 @@ class ToolChatService:
                 provider_name=provider_name,
                 caller=caller,
                 on_activity=on_activity,
+                allowed_tool_names=allowed_tool_names,
             )
         except NotImplementedError as exc:
             app_error = normalize_chat_error(exc)
@@ -201,7 +216,11 @@ class ToolChatService:
             message_id=assistant.id,
             provider_name=provider_name,
             model=model,
-            completion=completion,
+            completion=ProviderCompletion(
+                content=completion.content,
+                finish_reason=completion.finish_reason,
+                usage=completion.usage,
+            ),
             prompt_text=prompt_text,
         )
         await self._chat_service._maybe_record_quota(caller, tokens=usage_tokens)
@@ -220,6 +239,7 @@ class ToolChatService:
             model=model,
             provider=provider_name,
             session_id=chat_session.id,
+            tools_used=completion.tools_used or None,
         )
 
     async def _run_tool_loop(
@@ -231,15 +251,29 @@ class ToolChatService:
         provider_name: ProviderName,
         caller: CallerContext | None,
         on_activity: ChatActivityCallback | None = None,
-    ) -> ProviderCompletion:
+        allowed_tool_names: frozenset[str] | None = None,
+    ) -> _ToolLoopResult:
         tools = self._tool_registry.get_schemas_for_llm()
+        if allowed_tool_names is not None:
+            tools = [
+                schema
+                for schema in tools
+                if schema.get("function", {}).get("name") in allowed_tool_names
+            ]
+        tools_used: list[str] = []
         if not tools:
-            return await self._chat_service._complete_and_log(
+            completion = await self._chat_service._complete_and_log(
                 provider,
                 request,
                 model,
                 provider_name,
                 event="Chat completion (no tools registered)",
+            )
+            return _ToolLoopResult(
+                content=completion.content,
+                finish_reason=completion.finish_reason,
+                usage=completion.usage,
+                tools_used=tools_used,
             )
 
         if not get_capabilities(provider_name).supports_tool_calling:
@@ -279,10 +313,11 @@ class ToolChatService:
             last_completion = completion
             if not completion.tool_calls:
                 content = completion.content or ""
-                return ProviderCompletion(
+                return _ToolLoopResult(
                     content=content,
                     finish_reason=completion.finish_reason,
                     usage=completion.usage,
+                    tools_used=tools_used,
                 )
 
             assistant_message = _assistant_tool_call_message(completion)
@@ -290,6 +325,8 @@ class ToolChatService:
 
             guest_denied = False
             for tool_call in completion.tool_calls:
+                if tool_call.name not in tools_used:
+                    tools_used.append(tool_call.name)
                 tool_result_content, denied = await self._execute_tool_call(
                     tool_call=tool_call,
                     caller=caller,
@@ -306,10 +343,11 @@ class ToolChatService:
                 )
 
             if guest_denied and (caller is None or caller.kind == "guest"):
-                return ProviderCompletion(
+                return _ToolLoopResult(
                     content=_GUEST_TOOL_DENIED_MESSAGE,
                     finish_reason="stop",
                     usage=completion.usage,
+                    tools_used=tools_used,
                 )
 
         logger.warning(
@@ -323,10 +361,11 @@ class ToolChatService:
             if last_completion is not None and last_completion.content
             else _TOOL_ITERATION_LIMIT_MESSAGE
         )
-        return ProviderCompletion(
+        return _ToolLoopResult(
             content=fallback_content,
             finish_reason="tool_iteration_cap",
             usage=last_completion.usage if last_completion is not None else None,
+            tools_used=tools_used,
         )
 
     def _build_loop_messages(

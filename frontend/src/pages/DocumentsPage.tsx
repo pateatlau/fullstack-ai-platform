@@ -5,7 +5,6 @@ import { AppNav } from '../components/AppNav'
 import { DocumentList } from '../components/DocumentList'
 import { DocumentsLoginPrompt } from '../components/DocumentsLoginPrompt'
 import { DocumentUpload } from '../components/DocumentUpload'
-import { RagAskPanel } from '../components/RagAskPanel'
 import { useAuthContext } from '../context/AuthContext'
 import type { DocumentSummary } from '../types/documents'
 
@@ -59,7 +58,19 @@ function AuthenticatedDocumentsContent() {
         isLoading={isLoading}
         onChanged={() => void refreshDocuments()}
       />
-      <RagAskPanel />
+      <div className="rounded-chat border border-dashed border-zinc-300 bg-zinc-100/80 p-4">
+        <p className="text-sm font-medium text-zinc-900">Ask about your documents in chat</p>
+        <p className="mt-1 text-xs text-zinc-600">
+          Upload and manage files here, then enable <strong>My documents</strong> on the chat page
+          for grounded answers.
+        </p>
+        <a
+          href="/"
+          className="mt-3 inline-flex text-xs font-semibold text-brand-600 underline-offset-2 hover:underline"
+        >
+          Go to chat
+        </a>
+      </div>
     </div>
   )
 }
