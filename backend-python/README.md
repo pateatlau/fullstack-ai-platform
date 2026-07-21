@@ -217,9 +217,35 @@ Wire via DI:
 from app.ai.deps import (
     get_context_builder,
     get_prompt_builder,
+    get_rag_service,
     get_retriever,
 )
 ```
+
+### Generic RAG orchestration (Phase 9)
+
+`RAGService.ask` wires the Phase 8 components into a complete non-streaming pipeline:
+
+```text
+Question → Retriever → ContextBuilder → PromptBuilder → LLM → RAGResponse
+```
+
+| Behavior | Detail |
+| -------- | ------ |
+| Empty corpus | Short-circuits without an LLM call; returns a generic framework message |
+| Response | Answer text + retrieved chunk metadata (scores, IDs) for debugging — not a citations UI |
+| Metrics | `rag_requests_total`, `rag_request_duration_ms`, retrieval/included counts, top score, latency breakdown |
+| Streaming | **Not supported in V1** — `complete_chat` only |
+
+**Extension philosophy** — domain-specific assistants compose the framework; they do not modify `app/ai/rag/`:
+
+| Future consumer | Corpus | Prompt template | Application service |
+| --------------- | ------ | --------------- | ------------------- |
+| Customer Care RAG | Customer documents | `rag/customer_care.v1.j2` | `CustomerCareRAGService` in `app/services/` |
+| Enterprise Knowledge Assistant | Internal docs | Enterprise prompt template | App service with org scoping |
+| Legal / HR / Community Service | Domain corpus | Domain prompt template | Matching app service |
+
+Business knowledge lives in **documents** and **prompt templates**; framework code stays domain-agnostic. HTTP endpoints (`POST /api/rag/ask`) arrive in Phase 11.
 
 ### Module boundaries
 

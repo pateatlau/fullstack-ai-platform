@@ -22,6 +22,8 @@ from app.ai.prompts.manager import PromptManager, create_prompt_manager
 from app.ai.rag.context_builder import ContextBuilder
 from app.ai.rag.prompt_builder import PromptBuilder
 from app.ai.rag.retriever import Retriever
+from app.ai.rag.service import RAGService
+from app.providers.factory import ProviderFactory
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.implementations.web_search import (
     WebSearchClient,
@@ -149,4 +151,18 @@ def get_prompt_builder(
     return PromptBuilder(prompt_manager=prompt_manager, settings=settings)
 
 
-# Phase 9+: get_rag_service() -> RAGService (app-scoped singleton)
+def get_rag_service(
+    retriever: Retriever = Depends(get_retriever),
+    context_builder: ContextBuilder = Depends(get_context_builder),
+    prompt_builder: PromptBuilder = Depends(get_prompt_builder),
+    settings: Settings = Depends(get_ai_settings),
+) -> RAGService:
+    """Return a request-scoped ``RAGService`` wired to retrieval + LLM."""
+    llm_provider = ProviderFactory.get_provider(settings=settings)
+    return RAGService(
+        retriever=retriever,
+        context_builder=context_builder,
+        prompt_builder=prompt_builder,
+        llm_provider=llm_provider,
+        settings=settings,
+    )
