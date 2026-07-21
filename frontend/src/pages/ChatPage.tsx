@@ -88,6 +88,7 @@ function ChatPageContent() {
   const stoppedStreamIdsRef = useRef(new Set<string>())
   type ActiveChatTransport = 'streaming' | 'completion'
   const activeTransportRef = useRef<ActiveChatTransport | null>(null)
+  const [streamingToolActive, setStreamingToolActive] = useState(false)
   // Monotonic counter guarding loadSession against out-of-order responses: a
   // superseded fetch (an older selection resolving after a newer one) must
   // never overwrite the transcript of the session the user is now viewing.
@@ -263,6 +264,12 @@ function ChatPageContent() {
   })
 
   const { start, stop, isStreaming } = useChatStream({
+    onToolStart: () => {
+      setStreamingToolActive(true)
+    },
+    onToolEnd: () => {
+      setStreamingToolActive(false)
+    },
     onStart: (chunk) => {
       const localMessageId = retryTargetMessageIdRef.current ?? chunk.id
       stoppedStreamIdsRef.current.delete(chunk.id)
@@ -329,8 +336,10 @@ function ChatPageContent() {
       if (isAuthenticated) {
         void refreshSessions()
       }
+      setStreamingToolActive(false)
     },
     onError: (error) => {
+      setStreamingToolActive(false)
       if (activeTransportRef.current !== 'streaming') {
         return
       }
@@ -415,8 +424,7 @@ function ChatPageContent() {
     retryTargetMessageIdRef.current = retryMessageId ?? null
     dispatch({ type: 'CLEAR_ERROR' })
 
-    const useUnifiedToggles = Boolean(request.use_web_search || request.use_documents)
-    const useStreamingTransport = chatStreamingEnabled && !useUnifiedToggles
+    const useStreamingTransport = chatStreamingEnabled && !request.use_documents
 
     if (retryMessageId) {
       currentMessageIdRef.current = retryMessageId
@@ -448,7 +456,7 @@ function ChatPageContent() {
 
   const isGenerating = isStreaming || isPending
   const assistantWaitingVariant =
-    activityPhase === 'web_search'
+    streamingToolActive || activityPhase === 'web_search'
       ? ('searching_web' as const)
       : activityPhase === 'document_retrieval'
         ? ('searching_documents' as const)
@@ -524,6 +532,7 @@ function ChatPageContent() {
       dispatch({ type: 'STOP_MESSAGE', id })
       currentMessageIdRef.current = null
     }
+    setStreamingToolActive(false)
   }
 
   const activeSessionListItem = useMemo(

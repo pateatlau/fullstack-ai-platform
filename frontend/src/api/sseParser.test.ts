@@ -74,6 +74,39 @@ describe('SseParser', () => {
     ])
   })
 
+  it('parses tool lifecycle frames', () => {
+    const parser = new SseParser()
+
+    const frames = parser.feed(
+      'event: tool_start\ndata: {"type":"tool_start","id":"resp_1","tool_name":"web_search","call_id":"call-1","timestamp":"t0"}\n\n' +
+        'event: tool_end\ndata: {"type":"tool_end","id":"resp_1","tool_name":"web_search","call_id":"call-1","success":true,"timestamp":"t1"}\n\n',
+    )
+
+    expect(frames).toEqual([
+      {
+        event: 'tool_start',
+        data: {
+          type: 'tool_start',
+          id: 'resp_1',
+          tool_name: 'web_search',
+          call_id: 'call-1',
+          timestamp: 't0',
+        },
+      },
+      {
+        event: 'tool_end',
+        data: {
+          type: 'tool_end',
+          id: 'resp_1',
+          tool_name: 'web_search',
+          call_id: 'call-1',
+          success: true,
+          timestamp: 't1',
+        },
+      },
+    ])
+  })
+
   it('ignores frames with no data line', () => {
     const parser = new SseParser()
 

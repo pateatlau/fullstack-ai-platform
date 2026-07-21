@@ -35,6 +35,8 @@ from app.schemas.chat import (
     ProviderName,
     Role,
     StartFrame,
+    ToolEndFrame,
+    ToolStartFrame,
 )
 from app.services.usage_service import build_usage_record
 
@@ -265,10 +267,17 @@ def normalize_chat_error(exc: Exception) -> ChatServiceError:
     return ProviderError()
 
 
-def _format_sse(
-    event: str, data: StartFrame | DeltaFrame | EndFrame | ErrorFrame
-) -> str:
+SseFrame = (
+    StartFrame | DeltaFrame | EndFrame | ErrorFrame | ToolStartFrame | ToolEndFrame
+)
+
+
+def format_sse(event: str, data: SseFrame) -> str:
     return f"event: {event}\ndata: {data.model_dump_json()}\n\n"
+
+
+def _format_sse(event: str, data: SseFrame) -> str:
+    return format_sse(event, data)
 
 
 class ChatService:

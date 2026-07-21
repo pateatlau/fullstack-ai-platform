@@ -47,7 +47,11 @@ from app.schemas.chat import (
     ChatSessionListItem,
     ChatSessionOut,
 )
-from app.services.chat_service import ChatService, SessionNotFoundError
+from app.services.chat_service import (
+    ChatService,
+    ChatServiceError,
+    SessionNotFoundError,
+)
 from app.services.quota_service import QuotaService
 from app.services.tool_chat_service import ToolChatService
 from app.services.unified_chat_service import UnifiedChatService
@@ -261,6 +265,7 @@ async def create_chat_stream(
     caller: CallerContext | None = Depends(get_optional_caller),
     settings: Settings = Depends(get_settings),
     service: ChatService = Depends(get_chat_service),
+    unified_service: UnifiedChatService = Depends(get_unified_chat_service),
 ) -> StreamingResponse:
     if not settings.chat_streaming_enabled:
         raise AppError(
@@ -269,16 +274,38 @@ async def create_chat_stream(
             status_code=503,
         )
 
+    if _effective_documents(request, settings):
+        raise AppError(
+            code="validation_error",
+            message=(
+                "Document grounding on the streaming chat path is not supported yet. "
+                "Use non-streaming POST /api/chat or disable the My documents toggle."
+            ),
+            status_code=422,
+        )
+
     if caller is not None and caller.user_id is not None:
         bind_context(user_id=str(caller.user_id))
     logger.info("Chat stream accepted", route="/api/chat/stream", method="POST")
+
+    try:
+        if _effective_web_search(request, settings):
+            unified_service.validate_stream_web_search(request, caller)
+    except ChatServiceError as exc:
+        raise AppError(
+            code=exc.code, message=exc.message, status_code=exc.status_code
+        ) from exc
+
     # Pre-flight (quota/session/user-append) runs before streaming so quota or
     # ownership failures surface as normal HTTP errors.
     prep = await service.prepare_stream(request, caller)
-    response = StreamingResponse(
-        service.stream_chat(request, http_request, caller, prep),
-        media_type="text/event-stream",
-    )
+
+    if _effective_web_search(request, settings):
+        stream = unified_service.stream_execute(request, http_request, caller, prep)
+    else:
+        stream = service.stream_chat(request, http_request, caller, prep)
+
+    response = StreamingResponse(stream, media_type="text/event-stream")
     await _set_guest_headers(response, caller, service)
     return response
 

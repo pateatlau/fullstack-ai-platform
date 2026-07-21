@@ -109,9 +109,9 @@ from app.routers.chat import get_tool_chat_service
 - **`web_search`** — Tavily-backed handler (`app/ai/tools/implementations/web_search.py`); registered at startup when `TOOLS_ENABLED=true`.
 - **Multi-provider tool calling (V1.1a)** — `complete_chat_with_tools` on all four LLM adapters (OpenAI, Gemini, Groq, Anthropic). Per-request web search via `use_web_search=true` on `POST /api/chat` when `TOOLS_ENABLED=true` (V1.1b). Capability flags are exposed on `GET /api/health` under `capabilities.by_provider` (see `app/providers/capabilities.py`).
 - **Unified chat (V1.1b)** — `UnifiedChatService` orchestrates document grounding (`use_documents`) and web search (`use_web_search`) toggles on non-streaming `POST /api/chat`. Plain chat is unchanged when both toggles are off.
-- **Streaming policy (V1)** — `POST /api/chat/stream` always uses standard streaming chat; tool calling and document grounding are skipped even when toggles/flags are on (unchanged until V1.1c / Phase 4).
+- **Streaming policy (V1.1c)** — `POST /api/chat/stream` routes through `UnifiedChatService.stream_execute` when `use_web_search=true` and `TOOLS_ENABLED=true` (authenticated users). Emits SSE `tool_start` / `tool_end` during the tool loop, then streams the final answer. Plain streaming (no toggles) still uses `ChatService.stream_chat`. `use_documents=true` on the stream route returns **422** until Phase 5 streaming RAG.
 - **Retry policy** — shared utility in `app/core/retry.py` (HTTP 429/503, timeouts; max 3 attempts with exponential backoff).
-- **Metrics** — `tool_calls_total`, `tool_errors_total` (Phase 3); `search_latency_ms` on each web search (no query text in logs).
+- **Metrics** — `tool_calls_total`, `tool_errors_total` (Phase 3); `search_latency_ms` on each web search; `stream_tool_rounds` on unified streaming tool path (Phase 4).
 
 Unit tests register the stub **`echo`** tool in fixtures only (`tests/test_tool_platform.py`). Tool arguments and search queries are never logged.
 
@@ -128,9 +128,11 @@ Query capabilities via **`GET /api/health`** — response includes `capabilities
 
 When tools are enabled but the resolved provider lacks tool support, `ToolChatService` returns **422** `validation_error` with message `Tool calling is not supported for provider '<name>'.` — no silent plain-chat fallback.
 
-Non-streaming unified path: `POST /api/chat` with optional `use_web_search` / `use_documents` (authenticated users only). Global flags gate capabilities; request toggles default off. Streaming still skips tools/RAG until Phase 4 (`CHAT_STREAMING_ENABLED` policy unchanged).
+Non-streaming unified path: `POST /api/chat` with optional `use_web_search` / `use_documents` (authenticated users only). Global flags gate capabilities; request toggles default off.
 
-Known limitations: tool calling is validated on the non-streaming path only; model-specific restrictions (e.g. Groq model availability) follow each provider's SDK constraints.
+Streaming unified path (V1.1c): `POST /api/chat/stream` with `use_web_search=true` when `TOOLS_ENABLED=true` — tool loop with SSE lifecycle events, then streamed final answer. Document grounding on the stream route is rejected with **422** until Phase 5.
+
+Known limitations: model-specific restrictions (e.g. Groq model availability) follow each provider's SDK constraints.
 
 ### Unified chat orchestration (V1.1b)
 
@@ -616,7 +618,41 @@ Additional behavior tied to these settings:
 - `GET /` - welcome message
 - `GET /api/health` - status + active provider + app version
 - `POST /api/chat` - non-streaming completion
-- `POST /api/chat/stream` - SSE streaming completion
+- `POST /api/chat/stream` - SSE streaming completion (plain chat, or web search when `use_web_search=true`)
+
+### SSE event protocol (`POST /api/chat/stream`)
+
+Frames are Server-Sent Events: `event: <name>` plus a JSON `data:` line. Additive events — older clients may ignore unknown types.
+
+| Event        | When emitted | Payload fields |
+| ------------ | ------------ | -------------- |
+| `start`      | Final answer streaming begins | `type`, `id`, `session_id?`, `timestamp` |
+| `delta`      | Token/chunk of assistant text | `type`, `id`, `content`, `timestamp` |
+| `end`        | Stream complete | `type`, `id`, `finish_reason`, `timestamp` |
+| `error`      | Provider or server failure after stream started | `type`, `id`, `code`, `message`, `timestamp` |
+| `tool_start` | Before a tool handler runs (streaming web search) | `type`, `id`, `tool_name`, `call_id`, `timestamp` |
+| `tool_end`   | After tool handler completes (no result body) | `type`, `id`, `tool_name`, `call_id`, `success`, `timestamp` |
+
+Example (web search then streamed answer):
+
+```text
+event: tool_start
+data: {"type":"tool_start","id":"resp_abc","tool_name":"web_search","call_id":"call_1","timestamp":"2026-07-21T12:00:00Z"}
+
+event: tool_end
+data: {"type":"tool_end","id":"resp_abc","tool_name":"web_search","call_id":"call_1","success":true,"timestamp":"2026-07-21T12:00:01Z"}
+
+event: start
+data: {"type":"start","id":"resp_abc","session_id":null,"timestamp":"2026-07-21T12:00:01Z"}
+
+event: delta
+data: {"type":"delta","id":"resp_abc","content":"Based on recent results, ","timestamp":"2026-07-21T12:00:02Z"}
+
+event: end
+data: {"type":"end","id":"resp_abc","finish_reason":"stop","timestamp":"2026-07-21T12:00:03Z"}
+```
+
+Provider strategy for streaming tools: **two-phase** — non-streaming `complete_chat_with_tools` for tool-call detection iterations, then `stream_chat` for the final answer (same pattern as the V1.1 plan).
 
 ## Observability
 

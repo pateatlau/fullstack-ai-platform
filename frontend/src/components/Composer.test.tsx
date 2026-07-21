@@ -476,21 +476,15 @@ describe('Composer unified chat toggles', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders toggles and disables them for guests', () => {
+  it('hides web search and document toggles for guests', () => {
     window.localStorage.clear()
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', withChatPageFetchStubs(fetchMock))
 
     renderWithProviders(<ChatPage />)
 
-    expect(screen.getByRole('checkbox', { name: 'Web search' })).toBeTruthy()
-    expect(screen.getByRole('checkbox', { name: 'My documents' })).toBeTruthy()
-    expect(
-      (screen.getByRole('checkbox', { name: 'Web search' }) as HTMLInputElement).disabled,
-    ).toBe(true)
-    expect(
-      (screen.getByRole('checkbox', { name: 'My documents' }) as HTMLInputElement).disabled,
-    ).toBe(true)
+    expect(screen.queryByRole('checkbox', { name: 'Web search' })).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: 'My documents' })).toBeNull()
   })
 
   it('includes toggle fields in the chat request when enabled', async () => {

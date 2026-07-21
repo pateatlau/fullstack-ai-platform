@@ -150,6 +150,23 @@ class ErrorFrame(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class ToolStartFrame(BaseModel):
+    type: Literal["tool_start"] = "tool_start"
+    id: str
+    tool_name: str
+    call_id: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ToolEndFrame(BaseModel):
+    type: Literal["tool_end"] = "tool_end"
+    id: str
+    tool_name: str
+    call_id: str
+    success: bool
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class ChatMessageOut(BaseModel):
     """A persisted chat message returned when resuming a session."""
 

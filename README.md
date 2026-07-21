@@ -58,7 +58,7 @@ Validation record: [docs/plans/post-mvp-v1-implementation-plan.md](docs/plans/po
 - Google OAuth login with app-issued JWT; anonymous guest token flow
 - Chat persistence (sessions, messages, guest quota) when enabled
 - Non-streaming and SSE streaming chat across four LLM providers
-- Unified chat toggles on main chat (`use_web_search`, `use_documents`) for authenticated users (V1.1b, non-streaming)
+- Unified chat toggles on main chat (`use_web_search`, `use_documents`) for authenticated users (V1.1b non-streaming; V1.1c adds **streaming web search** via SSE `tool_start` / `tool_end` when `use_web_search=true` on `POST /api/chat/stream`)
 - Typed error envelopes and SSE error frames with `request_id`
 - Request-size and schema validation; provider timeout normalization
 

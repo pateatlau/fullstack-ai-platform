@@ -38,6 +38,21 @@ export type ChatChunk =
       message: string
       timestamp: string
     }
+  | {
+      type: 'tool_start'
+      id: string
+      tool_name: string
+      call_id: string
+      timestamp: string
+    }
+  | {
+      type: 'tool_end'
+      id: string
+      tool_name: string
+      call_id: string
+      success: boolean
+      timestamp: string
+    }
 
 export interface ChatSession {
   id: string // anticipates future persistence; unused server-side in MVP

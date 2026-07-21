@@ -7,6 +7,8 @@ export interface UseChatStreamOptions {
   onStart?: (chunk: Extract<ChatChunk, { type: 'start' }>) => void
   onDelta?: (chunk: Extract<ChatChunk, { type: 'delta' }>) => void
   onEnd?: (chunk: Extract<ChatChunk, { type: 'end' }>) => void
+  onToolStart?: (chunk: Extract<ChatChunk, { type: 'tool_start' }>) => void
+  onToolEnd?: (chunk: Extract<ChatChunk, { type: 'tool_end' }>) => void
   onError?: (error: Extract<ChatChunk, { type: 'error' }> | Error) => void
 }
 
@@ -51,6 +53,10 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
               options.onDelta?.(chunk)
             } else if (chunk.type === 'end') {
               options.onEnd?.(chunk)
+            } else if (chunk.type === 'tool_start') {
+              options.onToolStart?.(chunk)
+            } else if (chunk.type === 'tool_end') {
+              options.onToolEnd?.(chunk)
             } else if (chunk.type === 'error') {
               options.onError?.(chunk)
               return
