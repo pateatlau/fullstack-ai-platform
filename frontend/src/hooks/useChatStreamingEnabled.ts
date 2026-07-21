@@ -1,13 +1,19 @@
 import { useEffect, useState } from 'react'
 import { fetchHealth } from '../api/healthClient'
 
+export interface ChatHealthFlags {
+  chatStreamingEnabled: boolean
+  toolsEnabled: boolean
+}
+
 /**
- * Reads ``chat_streaming_enabled`` from ``GET /api/health`` so the UI picks the
- * correct chat transport without a build-time flag. Defaults to streaming while
- * loading or when the health probe fails (matches backend default).
+ * Reads feature flags from ``GET /api/health`` so the UI picks the correct chat
+ * transport and pending-state labels without build-time flags. Defaults to
+ * streaming enabled and tools disabled while loading or when the probe fails.
  */
-export function useChatStreamingEnabled() {
+export function useChatStreamingEnabled(): ChatHealthFlags {
   const [chatStreamingEnabled, setChatStreamingEnabled] = useState(true)
+  const [toolsEnabled, setToolsEnabled] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -16,10 +22,11 @@ export function useChatStreamingEnabled() {
       .then((health) => {
         if (!cancelled) {
           setChatStreamingEnabled(health.chat_streaming_enabled)
+          setToolsEnabled(health.tools_enabled)
         }
       })
       .catch(() => {
-        // Keep streaming as the default when health is unreachable.
+        // Keep defaults when health is unreachable.
       })
 
     return () => {
@@ -27,5 +34,5 @@ export function useChatStreamingEnabled() {
     }
   }, [])
 
-  return chatStreamingEnabled
+  return { chatStreamingEnabled, toolsEnabled }
 }

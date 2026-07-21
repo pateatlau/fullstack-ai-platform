@@ -8,8 +8,11 @@ opens a request-scoped session, and persists the chat lifecycle.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 from collections.abc import AsyncIterator
+from typing import cast
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
@@ -32,6 +35,9 @@ from app.db.engine import get_sessionmaker
 from app.db.identity import SqlGuestQuotaStore
 from app.db.usage import SqlUsageStore
 from app.schemas.chat import (
+    ChatActivityFrame,
+    ChatActivityPhase,
+    ChatCompleteFrame,
     ChatRequestSchema,
     ChatResponseSchema,
     ChatSessionListItem,
@@ -43,6 +49,51 @@ from app.services.tool_chat_service import ToolChatService
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+CHAT_NDJSON_MEDIA = "application/x-ndjson"
+
+
+def _wants_chat_progress(request: Request) -> bool:
+    accept = request.headers.get("accept", "")
+    return CHAT_NDJSON_MEDIA in accept
+
+
+async def _stream_tool_chat_ndjson(
+    *,
+    request: ChatRequestSchema,
+    caller: CallerContext | None,
+    tool_service: ToolChatService,
+) -> AsyncIterator[str]:
+    """Yield activity frames during tool chat, then a terminal complete frame."""
+    queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+
+    async def on_activity(phase: str) -> None:
+        await queue.put(("activity", phase))
+
+    async def run_chat() -> None:
+        try:
+            result = await tool_service.complete_chat(
+                request, caller, on_activity=on_activity
+            )
+            await queue.put(("complete", result))
+        except Exception as exc:
+            await queue.put(("error", exc))
+
+    task = asyncio.create_task(run_chat())
+    try:
+        while True:
+            kind, payload = await queue.get()
+            if kind == "activity":
+                frame = ChatActivityFrame(phase=cast(ChatActivityPhase, payload))
+                yield json.dumps(frame.model_dump()) + "\n"
+            elif kind == "complete":
+                frame = ChatCompleteFrame(response=cast(ChatResponseSchema, payload))
+                yield json.dumps(frame.model_dump(mode="json")) + "\n"
+                break
+            elif kind == "error":
+                raise payload  # type: ignore[misc]
+    finally:
+        await task
 
 
 async def get_optional_session(
@@ -125,15 +176,29 @@ async def _set_guest_headers(
 @router.post("/api/chat", response_model=ChatResponseSchema)
 async def create_chat(
     request: ChatRequestSchema,
+    http_request: Request,
     response: Response,
     caller: CallerContext | None = Depends(get_optional_caller),
     settings: Settings = Depends(get_settings),
     service: ChatService = Depends(get_chat_service),
     tool_service: ToolChatService = Depends(get_tool_chat_service),
-) -> ChatResponseSchema:
+) -> ChatResponseSchema | StreamingResponse:
     if caller is not None and caller.user_id is not None:
         bind_context(user_id=str(caller.user_id))
     logger.info("Chat request accepted", route="/api/chat", method="POST")
+
+    if settings.tools_enabled and _wants_chat_progress(http_request):
+        stream_response = StreamingResponse(
+            _stream_tool_chat_ndjson(
+                request=request,
+                caller=caller,
+                tool_service=tool_service,
+            ),
+            media_type=CHAT_NDJSON_MEDIA,
+        )
+        await _set_guest_headers(stream_response, caller, service)
+        return stream_response
+
     active_service = tool_service if settings.tools_enabled else service
     result = await active_service.complete_chat(request, caller)
     await _set_guest_headers(response, caller, service)

@@ -9,7 +9,7 @@ describe('useChatStreamingEnabled', () => {
     vi.restoreAllMocks()
   })
 
-  it('reads chat_streaming_enabled from GET /api/health', async () => {
+  it('reads chat and tool flags from GET /api/health', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -17,6 +17,7 @@ describe('useChatStreamingEnabled', () => {
           provider: 'openai',
           version: '0.1.0',
           chat_streaming_enabled: false,
+          tools_enabled: true,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),
@@ -26,7 +27,8 @@ describe('useChatStreamingEnabled', () => {
     const { result } = renderHook(() => useChatStreamingEnabled())
 
     await waitFor(() => {
-      expect(result.current).toBe(false)
+      expect(result.current.chatStreamingEnabled).toBe(false)
+      expect(result.current.toolsEnabled).toBe(true)
     })
   })
 })

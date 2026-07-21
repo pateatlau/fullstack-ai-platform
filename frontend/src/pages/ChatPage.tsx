@@ -91,7 +91,7 @@ function ChatPageContent() {
   // never overwrite the transcript of the session the user is now viewing.
   const sessionLoadSeqRef = useRef(0)
   const isAuthenticated = status === 'authenticated'
-  const chatStreamingEnabled = useChatStreamingEnabled()
+  const { chatStreamingEnabled, toolsEnabled } = useChatStreamingEnabled()
   const activeSessionIdRef = useRef(state.activeSessionId)
   useEffect(() => {
     activeSessionIdRef.current = state.activeSessionId
@@ -212,7 +212,9 @@ function ChatPageContent() {
     start: completionStart,
     stop: completionStop,
     isPending,
+    activityPhase,
   } = useChatCompletion({
+    useProgress: !chatStreamingEnabled && toolsEnabled && isAuthenticated,
     onComplete: (response) => {
       const localMessageId = currentMessageIdRef.current ?? response.id
 
@@ -406,6 +408,8 @@ function ChatPageContent() {
   }
 
   const isGenerating = chatStreamingEnabled ? isStreaming : isPending
+  const assistantWaitingVariant =
+    activityPhase === 'web_search' ? ('searching_web' as const) : ('typing' as const)
 
   const handleSend = (content: string, provider?: ProviderName, model?: string) => {
     const userMessage: Message = {
@@ -835,6 +839,7 @@ function ChatPageContent() {
             onRetryMessage={handleRetry}
             isStreaming={isGenerating}
             showStreamingStatus={chatStreamingEnabled}
+            waitingVariant={assistantWaitingVariant}
           />
           <Composer
             onSend={handleSend}

@@ -1,3 +1,5 @@
+import json
+import uuid
 from typing import Any, AsyncIterator, cast
 
 from groq import AsyncGroq, AsyncStream
@@ -5,12 +7,14 @@ from groq.types.chat import (
     ChatCompletion,
     ChatCompletionChunk,
     ChatCompletionMessageParam,
+    ChatCompletionToolParam,
 )
 
 from app.providers.base import (
     ChatMessageInput,
     ProviderChunk,
     ProviderCompletion,
+    ProviderToolCall,
     ProviderToolCompletion,
     ProviderUsage,
 )
@@ -31,10 +35,31 @@ def _usage_from_response(response: Any) -> ProviderUsage | None:
 def _to_groq_messages(
     messages: list[ChatMessageSchema],
 ) -> list[ChatCompletionMessageParam]:
-    return cast(
-        list[ChatCompletionMessageParam],
-        [{"role": message.role, "content": message.content} for message in messages],
-    )
+    return _to_groq_tool_messages(cast(list[ChatMessageInput], messages))
+
+
+def _to_groq_tool_messages(
+    messages: list[ChatMessageInput],
+) -> list[ChatCompletionMessageParam]:
+    converted: list[dict[str, Any]] = []
+    for message in messages:
+        if isinstance(message, ChatMessageSchema):
+            converted.append({"role": message.role, "content": message.content})
+        else:
+            converted.append(dict(message))
+    return cast(list[ChatCompletionMessageParam], converted)
+
+
+def _parse_tool_arguments(raw: str | None) -> dict[str, object]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(parsed, dict):
+        return cast(dict[str, object], parsed)
+    return {}
 
 
 def _coerce_message_content(content: Any) -> str:
@@ -121,5 +146,38 @@ class GroqProvider:
         tools: list[dict[str, object]],
         temperature: float = 0.7,
     ) -> ProviderToolCompletion:
-        del messages, model, tools, temperature
-        raise NotImplementedError("Tool calling is not supported for Groq in V1")
+        response: ChatCompletion = await self._client.chat.completions.create(
+            model=model,
+            messages=_to_groq_tool_messages(messages),
+            tools=cast(list[ChatCompletionToolParam], tools),
+            temperature=temperature,
+            stream=False,
+        )
+        usage = _usage_from_response(response)
+        if not response.choices:
+            return ProviderToolCompletion(
+                content="",
+                tool_calls=[],
+                usage=usage,
+            )
+
+        choice = response.choices[0]
+        message = choice.message
+        tool_calls: list[ProviderToolCall] = []
+        for call in message.tool_calls or []:
+            if call.type != "function":
+                continue
+            tool_calls.append(
+                ProviderToolCall(
+                    id=call.id or f"call_{uuid.uuid4().hex[:12]}",
+                    name=call.function.name,
+                    arguments=_parse_tool_arguments(call.function.arguments),
+                )
+            )
+
+        return ProviderToolCompletion(
+            content=_coerce_message_content(message.content) or None,
+            tool_calls=tool_calls,
+            finish_reason=getattr(choice, "finish_reason", None),
+            usage=usage,
+        )

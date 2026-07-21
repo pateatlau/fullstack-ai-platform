@@ -37,13 +37,16 @@ function jsonResponse(body: unknown, status = 200): Response {
  */
 function createRoutedFetchMock(
   handler: (url: string, method: string) => Response | Promise<Response>,
-  options?: { chatStreamingEnabled?: boolean },
+  options?: { chatStreamingEnabled?: boolean; toolsEnabled?: boolean },
 ): ReturnType<typeof vi.fn> {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
     const method = init?.method ?? 'GET'
     if (url.endsWith('/api/health') && method === 'GET') {
-      return jsonHealthResponse(options?.chatStreamingEnabled ?? true)
+      return jsonHealthResponse(
+        options?.chatStreamingEnabled ?? true,
+        options?.toolsEnabled ?? false,
+      )
     }
     return handler(url, method)
   })
@@ -359,5 +362,110 @@ describe('ChatPage session sidebar wiring', () => {
         return url.endsWith('/api/chat/stream')
       }),
     ).toBe(false)
+  })
+
+  it('shows searching web while waiting on non-streaming tool-enabled chat', async () => {
+    const completePayload = {
+      id: 'resp_nonstream',
+      role: 'assistant',
+      content: 'Here is the news',
+      model: 'gpt-4o-mini',
+      provider: 'openai',
+      created_at: '2026-01-01T00:00:00Z',
+    }
+    const ndjsonBody =
+      '{"type":"activity","phase":"web_search"}\n' +
+      `{"type":"complete","response":${JSON.stringify(completePayload)}}\n`
+
+    const fetchMock = createRoutedFetchMock(
+      (url, method) => {
+        if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+          return jsonResponse([])
+        }
+        if (url.endsWith('/api/chat') && method === 'POST') {
+          return new Response(ndjsonBody, {
+            status: 200,
+            headers: { 'Content-Type': 'application/x-ndjson' },
+          })
+        }
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      },
+      { chatStreamingEnabled: false, toolsEnabled: true },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled()
+    })
+
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'Latest news?')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Here is the news')).not.toBeNull()
+    })
+
+    const chatCall = fetchMock.mock.calls.find(([input, init]) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      return url.endsWith('/api/chat') && (init?.method ?? 'GET') === 'POST'
+    })
+    expect(chatCall).toBeTruthy()
+    const chatInit = chatCall?.[1] as RequestInit
+    expect((chatInit.headers as Record<string, string>).Accept).toBe('application/x-ndjson')
+  })
+
+  it('shows typing while waiting when no web search activity is reported', async () => {
+    let resolveChat!: (value: Response) => void
+    const chatResponse = new Promise<Response>((resolve) => {
+      resolveChat = resolve
+    })
+
+    const fetchMock = createRoutedFetchMock(
+      (url, method) => {
+        if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+          return jsonResponse([])
+        }
+        if (url.endsWith('/api/chat') && method === 'POST') {
+          return chatResponse
+        }
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      },
+      { chatStreamingEnabled: false, toolsEnabled: true },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled()
+    })
+
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'thanks')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    expect(await screen.findByLabelText('Assistant is typing')).not.toBeNull()
+    expect(screen.queryByLabelText('Assistant is searching the web')).toBeNull()
+
+    resolveChat(
+      new Response(
+        `{"type":"complete","response":${JSON.stringify({
+          id: 'resp_nonstream',
+          role: 'assistant',
+          content: 'You are welcome',
+          model: 'gpt-4o-mini',
+          provider: 'openai',
+          created_at: '2026-01-01T00:00:00Z',
+        })}}\n`,
+        { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } },
+      ),
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('You are welcome')).not.toBeNull()
+    })
   })
 })

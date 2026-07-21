@@ -165,3 +165,20 @@ class ChatSessionListItem(BaseModel):
     title: str | None = None
     last_message_at: datetime | None = None
     created_at: datetime
+
+
+ChatActivityPhase = Literal["thinking", "web_search"]
+
+
+class ChatActivityFrame(BaseModel):
+    """In-flight activity hint for non-streaming tool chat (NDJSON progress)."""
+
+    type: Literal["activity"] = "activity"
+    phase: ChatActivityPhase
+
+
+class ChatCompleteFrame(BaseModel):
+    """Terminal frame wrapping ``ChatResponseSchema`` for NDJSON progress."""
+
+    type: Literal["complete"] = "complete"
+    response: ChatResponseSchema

@@ -5,17 +5,22 @@ from sqlalchemy import text
 from app.core.config import APP_VERSION, Settings, get_settings
 from app.core.errors import DATABASE_ERROR_MESSAGE, error_response
 from app.db.engine import get_engine
+from app.providers.capabilities import capabilities_by_provider
 
 router = APIRouter()
 
 
 @router.get("/api/health")
-async def health(settings: Settings = Depends(get_settings)) -> dict[str, str | bool]:
+async def health(settings: Settings = Depends(get_settings)) -> dict[str, object]:
     return {
         "status": "ok",
         "provider": settings.llm_provider,
         "version": APP_VERSION,
         "chat_streaming_enabled": settings.chat_streaming_enabled,
+        "tools_enabled": settings.tools_enabled,
+        "capabilities": {
+            "by_provider": capabilities_by_provider(),
+        },
     }
 
 

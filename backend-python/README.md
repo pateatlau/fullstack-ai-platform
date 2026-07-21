@@ -107,12 +107,29 @@ from app.routers.chat import get_tool_chat_service
 ```
 
 - **`web_search`** — Tavily-backed handler (`app/ai/tools/implementations/web_search.py`); registered at startup when `TOOLS_ENABLED=true`.
-- **OpenAI-first tool calling** — `complete_chat_with_tools` on the OpenAI adapter; other LLM providers raise `NotImplementedError` until extended incrementally.
-- **Streaming policy (V1)** — `POST /api/chat/stream` always uses standard streaming chat; tool calling is silently skipped even when `TOOLS_ENABLED=true`.
+- **Multi-provider tool calling (V1.1a)** — `complete_chat_with_tools` on all four LLM adapters (OpenAI, Gemini, Groq, Anthropic). Non-streaming `POST /api/chat` runs the tool loop for any provider when `TOOLS_ENABLED=true`. Capability flags are exposed on `GET /api/health` under `capabilities.by_provider` (see `app/providers/capabilities.py`).
+- **Streaming policy (V1)** — `POST /api/chat/stream` always uses standard streaming chat; tool calling is silently skipped even when `TOOLS_ENABLED=true` (unchanged until V1.1c / Phase 4).
 - **Retry policy** — shared utility in `app/core/retry.py` (HTTP 429/503, timeouts; max 3 attempts with exponential backoff).
 - **Metrics** — `tool_calls_total`, `tool_errors_total` (Phase 3); `search_latency_ms` on each web search (no query text in logs).
 
 Unit tests register the stub **`echo`** tool in fixtures only (`tests/test_tool_platform.py`). Tool arguments and search queries are never logged.
+
+#### Multi-provider tool calling (V1.1a)
+
+| Provider  | `supports_streaming` | `supports_tool_calling` | Notes |
+| --------- | -------------------- | ----------------------- | ----- |
+| OpenAI    | yes                  | yes                     | Reference adapter; OpenAI-compatible tool schema |
+| Gemini    | yes                  | yes                     | `google-genai` function calling; prompt-based streaming unchanged |
+| Groq      | yes                  | yes                     | OpenAI-compatible chat completions API |
+| Anthropic | yes                  | yes                     | Messages API `tool_use` / `tool_result` blocks |
+
+Query capabilities via **`GET /api/health`** — response includes `capabilities.by_provider` with all `ProviderCapabilities` fields (`supports_streaming`, `supports_tool_calling`, and deferred V2 flags defaulting to `false`). Option A (extend health) was chosen over a separate config route to keep the contract minimal for Phase 3 frontend gating.
+
+When tools are enabled but the resolved provider lacks tool support, `ToolChatService` returns **422** `validation_error` with message `Tool calling is not supported for provider '<name>'.` — no silent plain-chat fallback.
+
+Non-streaming tool path: `POST /api/chat` with `TOOLS_ENABLED=true`. Streaming still skips tools until Phase 4 (`CHAT_STREAMING_ENABLED` policy unchanged).
+
+Known limitations: tool calling is validated on the non-streaming path only; model-specific restrictions (e.g. Groq model availability) follow each provider's SDK constraints.
 
 ### Document Ingestion (Phase 5)
 
@@ -353,7 +370,7 @@ LLM provider selection remains `LLM_PROVIDER` in `app/core/config.py`.
 
 - `RAG_ENABLED=false` (default) — no RAG routes or pipeline; MVP chat unchanged.
 - `TOOLS_ENABLED=false` (default) — standard `ChatService` path; no tool execution or production tool registration.
-- `TOOLS_ENABLED=true` — non-streaming `POST /api/chat` uses `ToolChatService` (OpenAI tool calling first); requires `WEB_SEARCH_API_KEY`. Streaming chat is unchanged.
+- `TOOLS_ENABLED=true` — non-streaming `POST /api/chat` uses `ToolChatService` with multi-provider tool calling; requires `WEB_SEARCH_API_KEY`. Streaming chat is unchanged.
 - `CHAT_STREAMING_ENABLED=true` (default) — `POST /api/chat/stream` serves SSE; set `false` to return **503** `feature_disabled` on the stream route and use non-streaming `POST /api/chat` instead. Exposed on `GET /api/health` as `chat_streaming_enabled` for the frontend.
 - When a flag is `true`, startup fails fast if required secrets are missing (`OPENAI_API_KEY` for RAG with `EMBEDDING_PROVIDER=openai`; `WEB_SEARCH_API_KEY` for tools).
 - With both flags off, no new secrets are required and behavior matches the MVP baseline.

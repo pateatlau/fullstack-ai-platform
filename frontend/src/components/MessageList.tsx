@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import type { Message } from '../types/chat'
 import { ArrowDownIcon } from './icons/ShellIcons'
 import { MessageBubble } from './MessageBubble'
+import type { StreamingIndicatorVariant } from './StreamingIndicator'
 
 interface MessageListProps {
   messages: Message[]
   onRetryMessage?: (messageId: string) => void
   isStreaming?: boolean
   showStreamingStatus?: boolean
+  waitingVariant?: StreamingIndicatorVariant
 }
 
 const NEAR_BOTTOM_THRESHOLD_PX = 120
@@ -17,6 +19,7 @@ export function MessageList({
   onRetryMessage,
   isStreaming = false,
   showStreamingStatus = true,
+  waitingVariant = 'typing',
 }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -68,6 +71,7 @@ export function MessageList({
             message={message}
             onRetry={onRetryMessage}
             showStreamingStatus={showStreamingStatus}
+            waitingVariant={waitingVariant}
           />
         ))}
       </div>

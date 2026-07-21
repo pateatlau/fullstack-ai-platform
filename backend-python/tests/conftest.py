@@ -8,6 +8,8 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 # Existing chat tests exercise the stateless contract; persistence is opt-in and
 # enabled explicitly by the Phase 5 persistence tests.
 os.environ.setdefault("CHAT_PERSISTENCE_ENABLED", "false")
+# Streaming tests assume the default enabled path; local .env may set false for dev.
+os.environ.setdefault("CHAT_STREAMING_ENABLED", "true")
 
 import pytest
 from collections.abc import Iterator

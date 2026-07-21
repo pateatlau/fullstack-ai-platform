@@ -14,6 +14,7 @@ describe('healthClient', () => {
           provider: 'openai',
           version: '0.1.0',
           chat_streaming_enabled: false,
+          tools_enabled: true,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),
@@ -23,6 +24,7 @@ describe('healthClient', () => {
     const health = await fetchHealth()
 
     expect(health.chat_streaming_enabled).toBe(false)
+    expect(health.tools_enabled).toBe(true)
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/health')
   })
 })

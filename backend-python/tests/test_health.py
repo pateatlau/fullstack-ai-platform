@@ -3,6 +3,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.config import APP_VERSION, get_settings
 from app.main import app
+from app.providers.capabilities import capabilities_by_provider
 
 
 @pytest.mark.anyio
@@ -18,7 +19,24 @@ async def test_health_returns_expected_shape() -> None:
         "provider": get_settings().llm_provider,
         "version": APP_VERSION,
         "chat_streaming_enabled": get_settings().chat_streaming_enabled,
+        "tools_enabled": get_settings().tools_enabled,
+        "capabilities": {
+            "by_provider": capabilities_by_provider(),
+        },
     }
+
+
+@pytest.mark.anyio
+async def test_health_capabilities_include_tool_calling_flags() -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get("/api/health")
+
+    capabilities = response.json()["capabilities"]["by_provider"]
+    for provider in ("openai", "gemini", "groq", "anthropic"):
+        assert capabilities[provider]["supports_streaming"] is True
+        assert capabilities[provider]["supports_tool_calling"] is True
 
 
 @pytest.mark.anyio

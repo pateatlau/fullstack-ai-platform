@@ -6,6 +6,7 @@ export interface HealthResponse {
   provider: string
   version: string
   chat_streaming_enabled: boolean
+  tools_enabled: boolean
 }
 
 /** Fetches server health and feature flags exposed by ``GET /api/health``. */

@@ -1,17 +1,20 @@
 import type { Message } from '../types/chat'
-import { StreamingIndicator } from './StreamingIndicator'
+import { StreamingIndicator, type StreamingIndicatorVariant } from './StreamingIndicator'
 
 interface MessageBubbleProps {
   message: Message
   onRetry?: (messageId: string) => void
   /** When false, in-flight assistant messages omit the "Streaming" status label. */
   showStreamingStatus?: boolean
+  /** Label shown while waiting for the first token on an in-flight assistant message. */
+  waitingVariant?: StreamingIndicatorVariant
 }
 
 export function MessageBubble({
   message,
   onRetry,
   showStreamingStatus = true,
+  waitingVariant = 'typing',
 }: MessageBubbleProps) {
   const isWaitingForFirstToken = message.status === 'streaming' && message.content === ''
   const canRetry = message.canRetry && onRetry && message.role === 'assistant'
@@ -46,7 +49,7 @@ export function MessageBubble({
       </div>
 
       {isWaitingForFirstToken ? (
-        <StreamingIndicator />
+        <StreamingIndicator variant={waitingVariant} />
       ) : (
         <p className="text-sm leading-7 whitespace-pre-wrap [overflow-wrap:anywhere]">
           {message.content}

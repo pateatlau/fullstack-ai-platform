@@ -69,6 +69,70 @@ async def test_tools_disabled_uses_standard_chat_path(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("provider_name", ["openai", "gemini", "groq", "anthropic"])
+async def test_tools_enabled_non_streaming_invokes_tool_loop_per_provider(
+    monkeypatch: MonkeyPatch,
+    provider_name: str,
+) -> None:
+    monkeypatch.setenv("TOOLS_ENABLED", "true")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-tavily-key")
+    get_settings.cache_clear()
+
+    registry = get_tool_registry()
+    register_production_tools(
+        registry,
+        Settings(tools_enabled=True, web_search_api_key="test-tavily-key"),
+        web_search_client=_FakeSearchClient(),
+    )
+
+    fake_provider = FakeProvider(
+        tool_completions=[
+            ProviderToolCompletion(
+                content=None,
+                tool_calls=[
+                    ProviderToolCall(
+                        id="call-1",
+                        name=WEB_SEARCH_TOOL_NAME,
+                        arguments={"query": "news"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderToolCompletion(
+                content="Grounded answer from Example — https://example.com",
+                tool_calls=[],
+                finish_reason="stop",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(fake_provider),
+    )
+
+    async def _authenticated_caller() -> CallerContext:
+        return CallerContext.for_user(uuid.uuid4())
+
+    app.dependency_overrides[get_optional_caller] = _authenticated_caller
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/chat",
+            json={
+                "messages": [{"role": "user", "content": "Search for news"}],
+                "provider": provider_name,
+            },
+        )
+
+    assert response.status_code == 200
+    assert "Grounded answer" in response.json()["content"]
+    assert fake_provider.tool_completion_calls >= 1
+
+
+@pytest.mark.anyio
 async def test_tools_enabled_non_streaming_invokes_tool_loop(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -128,6 +192,73 @@ async def test_tools_enabled_non_streaming_invokes_tool_loop(
 
     assert response.status_code == 200
     assert "Grounded answer" in response.json()["content"]
+    assert fake_provider.tool_completion_calls == 2
+
+
+@pytest.mark.anyio
+async def test_tools_enabled_ndjson_reports_web_search_activity(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TOOLS_ENABLED", "true")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-tavily-key")
+    get_settings.cache_clear()
+
+    registry = get_tool_registry()
+    register_production_tools(
+        registry,
+        Settings(tools_enabled=True, web_search_api_key="test-tavily-key"),
+        web_search_client=_FakeSearchClient(),
+    )
+
+    fake_provider = FakeProvider(
+        tool_completions=[
+            ProviderToolCompletion(
+                content=None,
+                tool_calls=[
+                    ProviderToolCall(
+                        id="call-1",
+                        name=WEB_SEARCH_TOOL_NAME,
+                        arguments={"query": "news"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderToolCompletion(
+                content="Grounded answer from Example — https://example.com",
+                tool_calls=[],
+                finish_reason="stop",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(fake_provider),
+    )
+
+    async def _authenticated_caller() -> CallerContext:
+        return CallerContext.for_user(uuid.uuid4())
+
+    app.dependency_overrides[get_optional_caller] = _authenticated_caller
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/chat",
+            headers={"Accept": "application/x-ndjson"},
+            json={
+                "messages": [{"role": "user", "content": "Search for news"}],
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    lines = [line for line in response.text.strip().split("\n") if line]
+    assert any('"phase": "web_search"' in line for line in lines)
+    assert any('"type": "complete"' in line for line in lines)
     assert fake_provider.tool_completion_calls == 2
 
 

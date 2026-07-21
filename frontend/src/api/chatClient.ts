@@ -125,6 +125,77 @@ export async function sendChat(request: ChatRequest, signal?: AbortSignal): Prom
   return (await response.json()) as ChatResponse
 }
 
+export type ChatActivityPhase = 'thinking' | 'web_search'
+
+const CHAT_NDJSON_ACCEPT = 'application/x-ndjson'
+
+interface ChatNdjsonFrame {
+  type: string
+  phase?: ChatActivityPhase
+  response?: ChatResponse
+}
+
+/**
+ * Non-streaming tool chat with NDJSON activity frames from the backend.
+ * Used when streaming is off but tools are enabled so the UI can show
+ * "searching web…" only during an actual web search.
+ */
+export async function sendChatWithProgress(
+  request: ChatRequest,
+  options: {
+    onActivity?: (phase: ChatActivityPhase) => void
+    signal?: AbortSignal
+  } = {},
+): Promise<ChatResponse> {
+  const headers = { ...(buildRequestHeaders() as Record<string, string>) }
+  headers.Accept = CHAT_NDJSON_ACCEPT
+
+  const response = await fetch(`${API_BASE_URL}/api/chat`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(request),
+    signal: options.signal,
+  })
+
+  captureGuestToken(response)
+  captureRequestId(response)
+
+  if (!response.ok) {
+    throw await toChatApiError(response, `Chat request failed: ${response.status}`)
+  }
+
+  const reader = response.body?.getReader()
+  if (!reader) {
+    throw new Error('Chat progress stream unavailable')
+  }
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) {
+      break
+    }
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue
+      }
+      const frame = JSON.parse(line) as ChatNdjsonFrame
+      if (frame.type === 'activity' && frame.phase) {
+        options.onActivity?.(frame.phase)
+      } else if (frame.type === 'complete' && frame.response) {
+        return frame.response
+      }
+    }
+  }
+
+  throw new Error('Chat progress stream ended without a completion frame')
+}
+
 /**
  * Opens the `POST /api/chat/stream` SSE connection. Returns the raw
  * `Response` so callers (see `useChatStream`) can read `response.body` with
