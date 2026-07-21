@@ -58,7 +58,7 @@ Validation record: [docs/plans/post-mvp-v1-implementation-plan.md](docs/plans/po
 - Google OAuth login with app-issued JWT; anonymous guest token flow
 - Chat persistence (sessions, messages, guest quota) when enabled
 - Non-streaming and SSE streaming chat across four LLM providers
-- Unified chat toggles on main chat (`use_web_search`, `use_documents`) for authenticated users (V1.1b non-streaming; V1.1c adds **streaming web search** via SSE `tool_start` / `tool_end` when `use_web_search=true` on `POST /api/chat/stream`)
+- Unified chat toggles on main chat (`use_web_search`, `use_documents`) for authenticated users — non-streaming and **streaming** (document grounding streams after pre-retrieval; web search via SSE `tool_start` / `tool_end` and optional `retrieval_complete` when `use_documents=true` on `POST /api/chat/stream`)
 - Typed error envelopes and SSE error frames with `request_id`
 - Request-size and schema validation; provider timeout normalization
 
@@ -491,7 +491,12 @@ POST /api/chat/stream
 Content-Type: application/json
 ```
 
-Returns `text/event-stream` with frames: `start`, `delta`, `end`, and `error`.
+Returns `text/event-stream`. Core frames: `start`, `delta`, `end`, and `error`. Additive unified-chat frames (authenticated users; ignored by older clients):
+
+- `retrieval_complete` — emitted after document pre-retrieval when `use_documents=true` and `RAG_ENABLED=true`, before `start` or any tool loop
+- `tool_start` / `tool_end` — web search tool lifecycle when `use_web_search=true` and `TOOLS_ENABLED=true`, before the final answer stream
+
+Plain streaming (no toggles) uses `start` → `delta*` → `end` only. When both toggles are on: `retrieval_complete` → `tool_start`/`tool_end` (as needed) → `start` → `delta*` → `end`.
 Before running locally, make sure the selected backend provider has a real API key in the backend `.env` file you are using.
 
 ## Development Commands

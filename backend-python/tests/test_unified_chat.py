@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -755,3 +755,337 @@ async def test_unified_chat_persists_session_messages_with_documents(
     assert [message.role for message in messages] == ["user", "assistant"]
     assert messages[0].content == "What is in my documents?"
     assert "Plain text fixture content" in messages[1].content
+
+
+def _parse_sse_frames(payload: str) -> list[tuple[str, dict[str, Any]]]:
+    import json
+
+    frames: list[tuple[str, dict[str, Any]]] = []
+    for block in payload.strip().split("\n\n"):
+        if not block:
+            continue
+        event = next(
+            line.removeprefix("event: ")
+            for line in block.splitlines()
+            if line.startswith("event: ")
+        )
+        data = next(
+            line.removeprefix("data: ")
+            for line in block.splitlines()
+            if line.startswith("data: ")
+        )
+        frames.append((event, json.loads(data)))
+    return frames
+
+
+@pytest.mark.anyio
+async def test_stream_with_use_documents_returns_grounded_answer(
+    pgvector_session,
+    unified_api_dependencies,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    user_id = await _make_user(pgvector_session)
+    headers = _auth_headers(user_id)
+
+    stream_provider = FakeProvider(
+        response="Grounded answer references Plain text fixture content."
+    )
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(stream_provider),
+    )
+
+    async def _authenticated_caller() -> CallerContext:
+        return CallerContext.for_user(user_id)
+
+    app.dependency_overrides[get_optional_caller] = _authenticated_caller
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        upload = await client.post(
+            "/api/documents/upload",
+            files={
+                "file": (
+                    "sample.txt",
+                    (FIXTURES / "sample.txt").read_bytes(),
+                    "text/plain",
+                )
+            },
+            headers=headers,
+        )
+        assert upload.status_code == 200
+
+        response = await client.post(
+            "/api/chat/stream",
+            json={
+                "messages": [
+                    {"role": "user", "content": "What does the plain text fixture say?"}
+                ],
+                "use_documents": True,
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+            },
+            headers=headers,
+        )
+
+    frames = _parse_sse_frames(response.text)
+    events = [event for event, _ in frames]
+
+    assert response.status_code == 200
+    assert "retrieval_complete" in events
+    assert events.index("retrieval_complete") < events.index("start")
+    assert "delta" in events
+    delta_content = "".join(
+        str(frame["content"]) for event, frame in frames if event == "delta"
+    )
+    assert "Plain text fixture content" in delta_content
+    assert stream_provider.tool_completion_calls == 0
+
+
+@pytest.mark.anyio
+async def test_stream_with_documents_and_web_search(
+    pgvector_session,
+    unified_api_dependencies,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _register_web_search_tools(monkeypatch)
+    user_id = await _make_user(pgvector_session)
+    headers = _auth_headers(user_id)
+
+    tool_provider = FakeProvider(
+        tool_completions=[
+            ProviderToolCompletion(
+                content=None,
+                tool_calls=[
+                    ProviderToolCall(
+                        id="call-1",
+                        name=WEB_SEARCH_TOOL_NAME,
+                        arguments={"query": "news"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderToolCompletion(
+                content=None,
+                tool_calls=[],
+                finish_reason="stop",
+            ),
+        ]
+    )
+
+    class _RoutingProvider(FakeProvider):
+        async def complete_chat_with_tools(
+            self, messages, model, tools, temperature=0.7
+        ):
+            return await tool_provider.complete_chat_with_tools(
+                messages, model, tools, temperature
+            )
+
+        async def stream_chat(self, messages, model, temperature=0.7):
+            async for chunk in FakeProvider(
+                response="Combined docs and web search answer"
+            ).stream_chat(messages, model, temperature):
+                yield chunk
+
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(_RoutingProvider()),
+    )
+
+    async def _authenticated_caller() -> CallerContext:
+        return CallerContext.for_user(user_id)
+
+    app.dependency_overrides[get_optional_caller] = _authenticated_caller
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        upload = await client.post(
+            "/api/documents/upload",
+            files={
+                "file": (
+                    "sample.txt",
+                    (FIXTURES / "sample.txt").read_bytes(),
+                    "text/plain",
+                )
+            },
+            headers=headers,
+        )
+        assert upload.status_code == 200
+
+        response = await client.post(
+            "/api/chat/stream",
+            json={
+                "messages": [
+                    {"role": "user", "content": "Search and use my documents"}
+                ],
+                "use_documents": True,
+                "use_web_search": True,
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+            },
+            headers=headers,
+        )
+
+    frames = _parse_sse_frames(response.text)
+    events = [event for event, _ in frames]
+
+    assert response.status_code == 200
+    assert "retrieval_complete" in events
+    assert "tool_start" in events
+    assert "tool_end" in events
+    assert events.index("retrieval_complete") < events.index("tool_start")
+    assert events.index("tool_end") < events.index("start")
+    assert tool_provider.tool_completion_calls >= 1
+
+
+@pytest.mark.anyio
+async def test_stream_use_documents_empty_corpus(
+    pgvector_session,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from app.ai.rag.service import EMPTY_CORPUS_MESSAGE
+
+    monkeypatch.setenv("RAG_ENABLED", "true")
+    get_settings.cache_clear()
+
+    def _override_retriever() -> Retriever:
+        settings = Settings(openai_api_key="test-key", rag_enabled=True)
+        return Retriever(
+            embedding_provider=_FakeEmbeddingProvider(),
+            vector_store=PgVectorStore(pgvector_session, settings),
+            settings=settings,
+        )
+
+    app.dependency_overrides[get_retriever] = _override_retriever
+
+    fake_provider = FakeProvider("Should not stream LLM answer")
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(fake_provider),
+    )
+
+    user_id = await _make_user(pgvector_session)
+    headers = _auth_headers(user_id)
+
+    async def _authenticated_caller() -> CallerContext:
+        return CallerContext.for_user(user_id)
+
+    app.dependency_overrides[get_optional_caller] = _authenticated_caller
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/chat/stream",
+            json={
+                "messages": [{"role": "user", "content": "Anything in my docs?"}],
+                "use_documents": True,
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+            },
+            headers=headers,
+        )
+
+    frames = _parse_sse_frames(response.text)
+    delta_content = "".join(
+        str(frame["content"]) for event, frame in frames if event == "delta"
+    )
+
+    assert response.status_code == 200
+    assert delta_content == EMPTY_CORPUS_MESSAGE
+    assert fake_provider.tool_completion_calls == 0
+
+
+@pytest.mark.anyio
+async def test_stream_use_documents_retrieval_failure(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAG_ENABLED", "true")
+    get_settings.cache_clear()
+
+    class _FailingRetriever:
+        async def retrieve(
+            self, *, question: str, user_id: uuid.UUID, top_k: int | None
+        ):
+            del question, user_id, top_k
+            raise RuntimeError("retriever unavailable")
+
+    def _override_retriever() -> Retriever:
+        return cast(Retriever, _FailingRetriever())
+
+    app.dependency_overrides[get_retriever] = _override_retriever
+
+    fake_provider = FakeProvider("Should not run")
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(fake_provider),
+    )
+
+    async def _authenticated_caller() -> CallerContext:
+        return CallerContext.for_user(uuid.uuid4())
+
+    app.dependency_overrides[get_optional_caller] = _authenticated_caller
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/chat/stream",
+            json={
+                "messages": [{"role": "user", "content": "Ask my docs"}],
+                "use_documents": True,
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+            },
+        )
+
+    frames = _parse_sse_frames(response.text)
+    error_frames = [frame for event, frame in frames if event == "error"]
+
+    assert response.status_code == 200
+    assert error_frames
+    assert error_frames[0]["code"] == "retrieval_error"
+    assert fake_provider.tool_completion_calls == 0
+
+
+@pytest.mark.anyio
+async def test_stream_use_documents_guest_denied(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAG_ENABLED", "true")
+    get_settings.cache_clear()
+
+    fake_provider = FakeProvider("Should not run")
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(fake_provider),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/chat/stream",
+            json={
+                "messages": [{"role": "user", "content": "Docs"}],
+                "use_documents": True,
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+            },
+        )
+
+    frames = _parse_sse_frames(response.text)
+    delta_content = "".join(
+        str(frame["content"]) for event, frame in frames if event == "delta"
+    )
+
+    assert response.status_code == 200
+    assert delta_content == _GUEST_TOOL_DENIED_MESSAGE
+    assert fake_provider.tool_completion_calls == 0

@@ -89,6 +89,7 @@ function ChatPageContent() {
   type ActiveChatTransport = 'streaming' | 'completion'
   const activeTransportRef = useRef<ActiveChatTransport | null>(null)
   const [streamingToolActive, setStreamingToolActive] = useState(false)
+  const [streamingRetrievalActive, setStreamingRetrievalActive] = useState(false)
   // Monotonic counter guarding loadSession against out-of-order responses: a
   // superseded fetch (an older selection resolving after a newer one) must
   // never overwrite the transcript of the session the user is now viewing.
@@ -264,6 +265,9 @@ function ChatPageContent() {
   })
 
   const { start, stop, isStreaming } = useChatStream({
+    onRetrievalComplete: () => {
+      setStreamingRetrievalActive(false)
+    },
     onToolStart: () => {
       setStreamingToolActive(true)
     },
@@ -271,7 +275,11 @@ function ChatPageContent() {
       setStreamingToolActive(false)
     },
     onStart: (chunk) => {
-      const localMessageId = retryTargetMessageIdRef.current ?? chunk.id
+      setStreamingRetrievalActive(false)
+      const localMessageId =
+        retryTargetMessageIdRef.current ?? currentMessageIdRef.current ?? chunk.id
+      const prestartedAssistantMessage =
+        currentMessageIdRef.current === localMessageId && !retryTargetMessageIdRef.current
       stoppedStreamIdsRef.current.delete(chunk.id)
 
       currentMessageIdRef.current = localMessageId
@@ -290,6 +298,10 @@ function ChatPageContent() {
 
       if (retryTargetMessageIdRef.current) {
         retryTargetMessageIdRef.current = null
+        return
+      }
+
+      if (prestartedAssistantMessage) {
         return
       }
 
@@ -337,9 +349,11 @@ function ChatPageContent() {
         void refreshSessions()
       }
       setStreamingToolActive(false)
+      setStreamingRetrievalActive(false)
     },
     onError: (error) => {
       setStreamingToolActive(false)
+      setStreamingRetrievalActive(false)
       if (activeTransportRef.current !== 'streaming') {
         return
       }
@@ -424,7 +438,7 @@ function ChatPageContent() {
     retryTargetMessageIdRef.current = retryMessageId ?? null
     dispatch({ type: 'CLEAR_ERROR' })
 
-    const useStreamingTransport = chatStreamingEnabled && !request.use_documents
+    const useStreamingTransport = chatStreamingEnabled
 
     if (retryMessageId) {
       currentMessageIdRef.current = retryMessageId
@@ -443,6 +457,18 @@ function ChatPageContent() {
 
     if (useStreamingTransport) {
       activeTransportRef.current = 'streaming'
+      const documentRetrievalPending =
+        Boolean(request.use_documents && ragEnabled) && !retryMessageId
+      setStreamingRetrievalActive(documentRetrievalPending)
+      if (documentRetrievalPending) {
+        const messageId = crypto.randomUUID()
+        currentMessageIdRef.current = messageId
+        dispatch({
+          type: 'START_MESSAGE',
+          id: messageId,
+          createdAt: new Date().toISOString(),
+        })
+      }
       void start(request)
     } else {
       activeTransportRef.current = 'completion'
@@ -458,7 +484,7 @@ function ChatPageContent() {
   const assistantWaitingVariant =
     streamingToolActive || activityPhase === 'web_search'
       ? ('searching_web' as const)
-      : activityPhase === 'document_retrieval'
+      : streamingRetrievalActive || activityPhase === 'document_retrieval'
         ? ('searching_documents' as const)
         : ('typing' as const)
 
@@ -913,7 +939,6 @@ function ChatPageContent() {
             toolsEnabled={toolsEnabled}
             ragEnabled={ragEnabled}
             capabilitiesByProvider={capabilitiesByProvider}
-            streamingOnlyMode={chatStreamingEnabled}
           />
         </main>
       </section>

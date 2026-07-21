@@ -73,4 +73,42 @@ describe('useChatStream', () => {
       expect(onEnd).toHaveBeenCalled()
     })
   })
+
+  it('invokes onRetrievalComplete for retrieval_complete frames', async () => {
+    const onRetrievalComplete = vi.fn()
+    const onStart = vi.fn()
+
+    vi.spyOn(chatClient, 'streamChat').mockResolvedValue(
+      createSseResponse(
+        [
+          'event: retrieval_complete',
+          'data: {"type":"retrieval_complete","id":"resp_1","chunk_count":2,"timestamp":"t0"}',
+          '',
+          '',
+          'event: start',
+          'data: {"type":"start","id":"resp_1","timestamp":"t1"}',
+          '',
+          '',
+          'event: end',
+          'data: {"type":"end","id":"resp_1","finish_reason":"stop","timestamp":"t2"}',
+          '',
+          '',
+        ].join('\n'),
+      ),
+    )
+
+    const { result } = renderHook(() => useChatStream({ onRetrievalComplete, onStart }))
+
+    await result.current.start({
+      messages: [{ role: 'user', content: 'Search my docs' }],
+      use_documents: true,
+    })
+
+    await waitFor(() => {
+      expect(onRetrievalComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'retrieval_complete', chunk_count: 2 }),
+      )
+      expect(onStart).toHaveBeenCalled()
+    })
+  })
 })

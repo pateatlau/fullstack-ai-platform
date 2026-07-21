@@ -1,4 +1,4 @@
-"""Unified chat orchestration (V1.1b non-streaming, V1.1c streaming tools).
+"""Unified chat orchestration (V1.1b non-streaming, V1.1c streaming tools + RAG).
 
 Composes ``ChatService``, ``ToolChatService``, and RAG retrieval components
 without adding domain logic to ``app/ai/rag/`` framework modules.
@@ -41,6 +41,7 @@ from app.schemas.chat import (
     ErrorFrame,
     ProviderName,
     RetrievedChunkMetaSchema,
+    RetrievalCompleteFrame,
     StartFrame,
     ToolEndFrame,
     ToolStartFrame,
@@ -191,10 +192,14 @@ class UnifiedChatService:
         caller: CallerContext | None = None,
         prep: _StreamPrep | None = None,
     ) -> AsyncIterator[str]:
-        """SSE generator for streaming chat with web search tool loop (V1.1c)."""
+        """SSE generator for streaming chat with document grounding and/or web search."""
+        effective_web_search = request.use_web_search and self._settings.tools_enabled
+        effective_documents = request.use_documents and self._settings.rag_enabled
+
         provider, model, provider_name = self._chat_service._resolve_provider(request)
         response_id = f"resp_{uuid.uuid4().hex[:12]}"
         session_id = prep.session_id if prep is not None else None
+        request_start_time = time.perf_counter()
 
         if prep is not None and prep.idempotent_reply is not None:
             yield format_sse("start", StartFrame(id=response_id, session_id=session_id))
@@ -224,68 +229,157 @@ class UnifiedChatService:
                 yield frame
             return
 
-        stream_messages: list[ChatMessageInput] = list(request.messages)
-        tool_rounds = 0
+        working_request = request
+        retrieval_latency_ms: int | None = None
 
         try:
-            loop_result = await self._run_stream_tool_loop(
-                provider=provider,
-                request=request,
-                model=model,
-                provider_name=provider_name,
-                caller=caller,
-                response_id=response_id,
-                http_request=http_request,
-            )
-            for frame in loop_result.frames:
-                yield frame
+            if effective_documents:
+                assert caller is not None and caller.user_id is not None
+                question = self._chat_service._last_user_content(request)
+                retrieval_start = time.perf_counter()
+                try:
+                    chunks = await self._retriever.retrieve(
+                        question=question,
+                        user_id=caller.user_id,
+                        top_k=self._settings.rag_top_k,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Document retrieval failed during unified stream",
+                        response_id=response_id,
+                    )
+                    try:
+                        await self._chat_service._persist_stream_result(
+                            caller=caller,
+                            prep=prep,
+                            provider=provider,
+                            provider_name=provider_name,
+                            model=model,
+                            content="",
+                            finish_reason=None,
+                            status="error",
+                        )
+                    except Exception:  # noqa: BLE001 - best-effort error persistence
+                        logger.exception(
+                            "Failed to persist unified stream retrieval error state",
+                            response_id=response_id,
+                        )
+                    yield format_sse(
+                        "start", StartFrame(id=response_id, session_id=session_id)
+                    )
+                    yield format_sse(
+                        "error",
+                        ErrorFrame(
+                            id=response_id,
+                            code="retrieval_error",
+                            message=("Could not retrieve documents. Please try again."),
+                        ),
+                    )
+                    return
 
-            if loop_result.guest_denied:
-                async for frame in self._stream_static_content(
+                retrieval_latency_ms = int(
+                    (time.perf_counter() - retrieval_start) * 1000
+                )
+                logger.info(
+                    "Unified stream document retrieval completed",
                     response_id=response_id,
-                    session_id=session_id,
-                    content=_GUEST_TOOL_DENIED_MESSAGE,
-                    finish_reason="stop",
-                    caller=caller,
-                    prep=prep,
-                    provider=provider,
-                    provider_name=provider_name,
-                    model=model,
-                ):
-                    yield frame
-                return
+                    retrieval_latency_ms=retrieval_latency_ms,
+                    chunk_count=len(chunks),
+                )
 
-            if loop_result.iteration_limit_content is not None:
-                async for frame in self._stream_static_content(
+                if not chunks:
+                    async for frame in self._stream_static_content(
+                        response_id=response_id,
+                        session_id=session_id,
+                        content=EMPTY_CORPUS_MESSAGE,
+                        finish_reason="stop",
+                        caller=caller,
+                        prep=prep,
+                        provider=provider,
+                        provider_name=provider_name,
+                        model=model,
+                    ):
+                        yield frame
+                    return
+
+                built_context = self._context_builder.build(chunks)
+                working_request = self._merge_document_context(
+                    request=request,
+                    question=question,
+                    context_text=built_context.text,
+                )
+                yield format_sse(
+                    "retrieval_complete",
+                    RetrievalCompleteFrame(
+                        id=response_id,
+                        chunk_count=len(built_context.included_chunks),
+                    ),
+                )
+
+            stream_messages: list[ChatMessageInput] = list(working_request.messages)
+            tool_rounds = 0
+
+            if effective_web_search:
+                loop_result = await self._run_stream_tool_loop(
+                    provider=provider,
+                    request=working_request,
+                    model=model,
+                    provider_name=provider_name,
+                    caller=caller,
                     response_id=response_id,
-                    session_id=session_id,
-                    content=loop_result.iteration_limit_content,
-                    finish_reason="tool_iteration_cap",
-                    caller=caller,
-                    prep=prep,
-                    provider=provider,
-                    provider_name=provider_name,
-                    model=model,
-                ):
+                    http_request=http_request,
+                )
+                for frame in loop_result.frames:
                     yield frame
-                return
 
-            tool_rounds = loop_result.tool_rounds
-            if tool_rounds > 0:
-                stream_messages = loop_result.loop_messages
+                if loop_result.guest_denied:
+                    async for frame in self._stream_static_content(
+                        response_id=response_id,
+                        session_id=session_id,
+                        content=_GUEST_TOOL_DENIED_MESSAGE,
+                        finish_reason="stop",
+                        caller=caller,
+                        prep=prep,
+                        provider=provider,
+                        provider_name=provider_name,
+                        model=model,
+                    ):
+                        yield frame
+                    return
+
+                if loop_result.iteration_limit_content is not None:
+                    async for frame in self._stream_static_content(
+                        response_id=response_id,
+                        session_id=session_id,
+                        content=loop_result.iteration_limit_content,
+                        finish_reason="tool_iteration_cap",
+                        caller=caller,
+                        prep=prep,
+                        provider=provider,
+                        provider_name=provider_name,
+                        model=model,
+                    ):
+                        yield frame
+                    return
+
+                tool_rounds = loop_result.tool_rounds
+                if tool_rounds > 0:
+                    stream_messages = loop_result.loop_messages
 
             async for frame in self._stream_provider_answer(
                 provider=provider,
                 messages=cast(list[ChatMessageSchema], stream_messages),
                 model=model,
                 provider_name=provider_name,
-                temperature=request.temperature,
+                temperature=working_request.temperature,
                 response_id=response_id,
                 session_id=session_id,
                 caller=caller,
                 prep=prep,
                 http_request=http_request,
                 tool_rounds=tool_rounds,
+                request_start_time=request_start_time,
+                retrieval_latency_ms=retrieval_latency_ms,
             ):
                 yield frame
         except ChatServiceError:
@@ -486,6 +580,8 @@ class UnifiedChatService:
         prep: _StreamPrep | None,
         http_request: Request,
         tool_rounds: int,
+        request_start_time: float | None = None,
+        retrieval_latency_ms: int | None = None,
     ) -> AsyncIterator[str]:
         yield format_sse("start", StartFrame(id=response_id, session_id=session_id))
 
@@ -494,6 +590,7 @@ class UnifiedChatService:
         collected: list[str] = []
         finish_reason = "stop"
         stream_start = time.perf_counter()
+        first_delta_logged = False
 
         try:
             provider_stream = provider.stream_chat(
@@ -530,6 +627,17 @@ class UnifiedChatService:
                     break
 
                 if chunk["content"]:
+                    if not first_delta_logged and request_start_time is not None:
+                        time_to_first_delta_ms = int(
+                            (time.perf_counter() - request_start_time) * 1000
+                        )
+                        logger.info(
+                            "Unified stream first delta",
+                            response_id=response_id,
+                            time_to_first_delta_ms=time_to_first_delta_ms,
+                            retrieval_latency_ms=retrieval_latency_ms,
+                        )
+                        first_delta_logged = True
                     collected.append(chunk["content"])
                     yield format_sse(
                         "delta", DeltaFrame(id=response_id, content=chunk["content"])
@@ -555,6 +663,7 @@ class UnifiedChatService:
                 latency_ms=latency_ms,
                 response_id=response_id,
                 stream_tool_rounds=tool_rounds,
+                retrieval_latency_ms=retrieval_latency_ms,
             )
             yield format_sse(
                 "end", EndFrame(id=response_id, finish_reason=finish_reason)

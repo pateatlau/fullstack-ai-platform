@@ -109,9 +109,9 @@ from app.routers.chat import get_tool_chat_service
 - **`web_search`** — Tavily-backed handler (`app/ai/tools/implementations/web_search.py`); registered at startup when `TOOLS_ENABLED=true`.
 - **Multi-provider tool calling (V1.1a)** — `complete_chat_with_tools` on all four LLM adapters (OpenAI, Gemini, Groq, Anthropic). Per-request web search via `use_web_search=true` on `POST /api/chat` when `TOOLS_ENABLED=true` (V1.1b). Capability flags are exposed on `GET /api/health` under `capabilities.by_provider` (see `app/providers/capabilities.py`).
 - **Unified chat (V1.1b)** — `UnifiedChatService` orchestrates document grounding (`use_documents`) and web search (`use_web_search`) toggles on non-streaming `POST /api/chat`. Plain chat is unchanged when both toggles are off.
-- **Streaming policy (V1.1c)** — `POST /api/chat/stream` routes through `UnifiedChatService.stream_execute` when `use_web_search=true` and `TOOLS_ENABLED=true` (authenticated users). Emits SSE `tool_start` / `tool_end` during the tool loop, then streams the final answer. Plain streaming (no toggles) still uses `ChatService.stream_chat`. `use_documents=true` on the stream route returns **422** until Phase 5 streaming RAG.
+- **Streaming policy (V1.1c)** — `POST /api/chat/stream` routes through `UnifiedChatService.stream_execute` when `use_web_search=true` and/or `use_documents=true` (when respective flags are on). Document retrieval completes **before** the first `delta` frame; optional SSE `retrieval_complete` signals retrieval phase to clients. Web search emits `tool_start` / `tool_end` during the tool loop, then streams the final answer. Combined toggles run in order: retrieval → tool loop → stream. Plain streaming (no toggles) still uses `ChatService.stream_chat`.
 - **Retry policy** — shared utility in `app/core/retry.py` (HTTP 429/503, timeouts; max 3 attempts with exponential backoff).
-- **Metrics** — `tool_calls_total`, `tool_errors_total` (Phase 3); `search_latency_ms` on each web search; `stream_tool_rounds` on unified streaming tool path (Phase 4).
+- **Metrics** — `tool_calls_total`, `tool_errors_total` (Phase 3); `search_latency_ms` on each web search; `stream_tool_rounds` on unified streaming tool path (Phase 4); `retrieval_latency_ms` and `time_to_first_delta_ms` on unified streaming document path (Phase 5).
 
 Unit tests register the stub **`echo`** tool in fixtures only (`tests/test_tool_platform.py`). Tool arguments and search queries are never logged.
 
@@ -130,7 +130,7 @@ When tools are enabled but the resolved provider lacks tool support, `ToolChatSe
 
 Non-streaming unified path: `POST /api/chat` with optional `use_web_search` / `use_documents` (authenticated users only). Global flags gate capabilities; request toggles default off.
 
-Streaming unified path (V1.1c): `POST /api/chat/stream` with `use_web_search=true` when `TOOLS_ENABLED=true` — tool loop with SSE lifecycle events, then streamed final answer. Document grounding on the stream route is rejected with **422** until Phase 5.
+Streaming unified path (V1.1c): `POST /api/chat/stream` with `use_web_search=true` and/or `use_documents=true` when flags are on — pre-stream document retrieval (when documents toggle on), optional `retrieval_complete` SSE, tool loop with SSE lifecycle events (when web search on), then streamed final answer. Empty corpus returns a graceful static streamed message without an LLM call.
 
 Known limitations: model-specific restrictions (e.g. Groq model availability) follow each provider's SDK constraints.
 
@@ -618,20 +618,37 @@ Additional behavior tied to these settings:
 - `GET /` - welcome message
 - `GET /api/health` - status + active provider + app version
 - `POST /api/chat` - non-streaming completion
-- `POST /api/chat/stream` - SSE streaming completion (plain chat, or web search when `use_web_search=true`)
+- `POST /api/chat/stream` - SSE streaming completion (plain chat, document grounding, and/or web search toggles)
 
 ### SSE event protocol (`POST /api/chat/stream`)
 
 Frames are Server-Sent Events: `event: <name>` plus a JSON `data:` line. Additive events — older clients may ignore unknown types.
 
-| Event        | When emitted | Payload fields |
-| ------------ | ------------ | -------------- |
-| `start`      | Final answer streaming begins | `type`, `id`, `session_id?`, `timestamp` |
-| `delta`      | Token/chunk of assistant text | `type`, `id`, `content`, `timestamp` |
-| `end`        | Stream complete | `type`, `id`, `finish_reason`, `timestamp` |
-| `error`      | Provider or server failure after stream started | `type`, `id`, `code`, `message`, `timestamp` |
-| `tool_start` | Before a tool handler runs (streaming web search) | `type`, `id`, `tool_name`, `call_id`, `timestamp` |
-| `tool_end`   | After tool handler completes (no result body) | `type`, `id`, `tool_name`, `call_id`, `success`, `timestamp` |
+| Event                | When emitted | Payload fields |
+| -------------------- | ------------ | -------------- |
+| `retrieval_complete` | After document retrieval, before tool loop or final stream | `type`, `id`, `chunk_count`, `timestamp` |
+| `start`              | Final answer streaming begins | `type`, `id`, `session_id?`, `timestamp` |
+| `delta`              | Token/chunk of assistant text | `type`, `id`, `content`, `timestamp` |
+| `end`                | Stream complete | `type`, `id`, `finish_reason`, `timestamp` |
+| `error`              | Provider, retrieval, or server failure after stream started | `type`, `id`, `code`, `message`, `timestamp` |
+| `tool_start`         | Before a tool handler runs (streaming web search) | `type`, `id`, `tool_name`, `call_id`, `timestamp` |
+| `tool_end`           | After tool handler completes (no result body) | `type`, `id`, `tool_name`, `call_id`, `success`, `timestamp` |
+
+Example (document retrieval then streamed answer):
+
+```text
+event: retrieval_complete
+data: {"type":"retrieval_complete","id":"resp_abc","chunk_count":3,"timestamp":"2026-07-21T12:00:00Z"}
+
+event: start
+data: {"type":"start","id":"resp_abc","session_id":null,"timestamp":"2026-07-21T12:00:00Z"}
+
+event: delta
+data: {"type":"delta","id":"resp_abc","content":"Based on your documents, ","timestamp":"2026-07-21T12:00:01Z"}
+
+event: end
+data: {"type":"end","id":"resp_abc","finish_reason":"stop","timestamp":"2026-07-21T12:00:02Z"}
+```
 
 Example (web search then streamed answer):
 
@@ -653,6 +670,8 @@ data: {"type":"end","id":"resp_abc","finish_reason":"stop","timestamp":"2026-07-
 ```
 
 Provider strategy for streaming tools: **two-phase** — non-streaming `complete_chat_with_tools` for tool-call detection iterations, then `stream_chat` for the final answer (same pattern as the V1.1 plan).
+
+Streaming RAG policy: retrieval and context merge complete **before** the first `delta` frame (no mid-stream retrieval in V1.1). When both toggles are on, order is retrieval → tool loop → stream. Retrieval failures emit an SSE `error` frame with code `retrieval_error`. Structured logs include `retrieval_latency_ms` and `time_to_first_delta_ms` on unified streaming paths.
 
 ## Observability
 

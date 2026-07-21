@@ -570,35 +570,6 @@ async def test_stream_cancel_during_tool_execution(
     assert "tool_start" in collected
 
 
-@pytest.mark.anyio
-async def test_stream_with_use_documents_returns_422(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("RAG_ENABLED", "true")
-    get_settings.cache_clear()
-
-    async def _authenticated_caller() -> CallerContext:
-        return CallerContext.for_user(uuid.uuid4())
-
-    app.dependency_overrides[get_optional_caller] = _authenticated_caller
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://testserver"
-    ) as client:
-        response = await client.post(
-            "/api/chat/stream",
-            json={
-                "messages": [{"role": "user", "content": "Ask my docs"}],
-                "use_documents": True,
-                "provider": "openai",
-                "model": "gpt-4o-mini",
-            },
-        )
-
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "validation_error"
-
-
 def test_startup_registers_web_search_when_tools_enabled(
     monkeypatch: MonkeyPatch,
 ) -> None:

@@ -30,6 +30,37 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
+function createControllableSseResponse(): {
+  response: Response
+  enqueue: (chunk: string) => void
+  close: () => void
+} {
+  const encoder = new TextEncoder()
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
+
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller
+      },
+    }),
+    {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    },
+  )
+
+  return {
+    response,
+    enqueue: (chunk: string) => {
+      streamController?.enqueue(encoder.encode(chunk))
+    },
+    close: () => {
+      streamController?.close()
+    },
+  }
+}
+
 /**
  * Routes `fetch` calls by URL/method to fixture responses (plan Section 6.2's
  * `GET/POST /api/chat/sessions` and `GET /api/chat/sessions/{id}`), so each
@@ -468,7 +499,69 @@ describe('ChatPage session sidebar wiring', () => {
     })
   })
 
-  it('shows searching documents while document-grounded chat is in progress', async () => {
+  it('shows searching documents while streaming document-grounded chat is in progress', async () => {
+    const retrievalCompleteSse =
+      'event: retrieval_complete\n' +
+      'data: {"type":"retrieval_complete","id":"resp_docs","chunk_count":1,"timestamp":"t0"}\n\n'
+    const remainingSse =
+      'event: start\n' +
+      'data: {"type":"start","id":"resp_docs","timestamp":"t1"}\n\n' +
+      'event: delta\n' +
+      'data: {"type":"delta","id":"resp_docs","content":"From your documents: fixture content.","timestamp":"t2"}\n\n' +
+      'event: end\n' +
+      'data: {"type":"end","id":"resp_docs","finish_reason":"stop","timestamp":"t3"}\n\n'
+
+    const { response: streamResponse, enqueue, close } = createControllableSseResponse()
+
+    const fetchMock = createRoutedFetchMock(
+      (url, method) => {
+        if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+          return jsonResponse([])
+        }
+        if (url.endsWith('/api/chat/stream') && method === 'POST') {
+          return streamResponse
+        }
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      },
+      { chatStreamingEnabled: true, toolsEnabled: false, ragEnabled: true },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled()
+    })
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('checkbox', { name: 'My documents' }))
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'What is in my docs?')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Assistant is searching docs')).not.toBeNull()
+    })
+    expect(screen.queryByLabelText('Assistant is typing')).toBeNull()
+
+    enqueue(retrievalCompleteSse)
+    enqueue(remainingSse)
+    close()
+
+    await waitFor(() => {
+      expect(screen.getByText('From your documents: fixture content.')).not.toBeNull()
+    })
+
+    const streamCall = fetchMock.mock.calls.find(([input, init]) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      return url.endsWith('/api/chat/stream') && (init?.method ?? 'GET') === 'POST'
+    })
+    expect(streamCall).toBeTruthy()
+    const streamInit = streamCall?.[1] as RequestInit
+    const body = JSON.parse(String(streamInit.body)) as { use_documents?: boolean }
+    expect(body.use_documents).toBe(true)
+  })
+
+  it('shows searching documents while document-grounded chat is in progress (non-streaming fallback)', async () => {
     const completePayload = {
       id: 'resp_docs',
       role: 'assistant',

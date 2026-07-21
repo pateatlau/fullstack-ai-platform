@@ -32,8 +32,6 @@ interface ComposerProps {
   toolsEnabled: boolean
   ragEnabled: boolean
   capabilitiesByProvider: Partial<Record<ProviderName, ProviderCapabilityFlags>>
-  /** When true, unified toggles route through non-streaming chat (Phase 3). */
-  streamingOnlyMode: boolean
 }
 
 const TEXTAREA_LINE_HEIGHT_PX = 24
@@ -52,7 +50,6 @@ export function Composer({
   toolsEnabled,
   ragEnabled,
   capabilitiesByProvider,
-  streamingOnlyMode,
 }: ComposerProps) {
   const [value, setValue] = useState('')
   const [selectedProvider, setSelectedProvider] = useState<ProviderName>('openai')
@@ -331,13 +328,6 @@ export function Composer({
               Manage documents
             </a>
           </div>
-        ) : null}
-
-        {isAuthenticated && streamingOnlyMode && useDocuments ? (
-          <p className="text-xs text-zinc-600">
-            Document grounding uses non-streaming chat until streaming RAG ships in a later release.
-            Web search works in streaming mode when enabled.
-          </p>
         ) : null}
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
