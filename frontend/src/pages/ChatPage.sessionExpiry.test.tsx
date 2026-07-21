@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPage } from './ChatPage'
 import { storeSession } from '../auth/tokenStorage'
+import { renderWithProviders } from '../test/renderWithProviders'
 import type { AuthenticatedUser } from '../types/auth'
 
 function createStreamResponse(chunks: string[]): Response {
@@ -91,7 +92,7 @@ describe('ChatPage session-expiry UX', () => {
       )
     vi.stubGlobal('fetch', withSessionsListStub(fetchMock))
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     await waitFor(() => {
       expect(screen.getByText('Person')).not.toBeNull()

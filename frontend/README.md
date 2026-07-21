@@ -110,6 +110,25 @@ Frontend expects backend endpoints:
 - `POST /api/chat`
 - `POST /api/chat/stream` (SSE)
 
+Document and RAG endpoints (auth-only, Phase 11 backend):
+
+- `POST /api/documents/upload`
+- `GET /api/documents`
+- `GET /api/documents/{id}`
+- `DELETE /api/documents/{id}`
+- `POST /api/rag/ask`
+
+See [backend-python/README.md](../backend-python/README.md) → **Knowledge and RAG API (Phase 11)** for request/response shapes and env requirements (`RAG_ENABLED=true` for ask).
+
+## Documents and RAG UI (Phase 12)
+
+- **Route:** `/documents` (authenticated users only)
+- **Chat route:** `/` (unchanged — guest and authenticated)
+- **Required env:** `VITE_API_BASE_URL` (unchanged; no new `VITE_*` flags — RAG availability is detected via API `503 feature_disabled`)
+- **Backend:** Set `RAG_ENABLED=true` on the Python backend for RAG ask to succeed
+- **Guest policy:** Guests see a login prompt on `/documents`; the Documents nav link is hidden until signed in
+- **Features:** Upload (PDF, DOCX, MD, TXT), list/delete documents, generic RAG ask via `POST /api/rag/ask`
+
 If the backend is not running or CORS is misconfigured, streaming requests will fail.
 
 The frontend expects the Python production backend to support:
@@ -123,7 +142,7 @@ The frontend expects the Python production backend to support:
 
 ## Tests
 
-Current frontend tests: **90 passed** (Vitest, 2026-07-19).
+Current frontend tests: **106 passed** (Vitest, 2026-07-21).
 
 Coverage includes:
 

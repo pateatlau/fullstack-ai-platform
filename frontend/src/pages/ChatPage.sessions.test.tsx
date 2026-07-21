@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPage } from './ChatPage'
 import { storeSession } from '../auth/tokenStorage'
+import { renderWithProviders } from '../test/renderWithProviders'
 import type { AuthenticatedUser } from '../types/auth'
 
 const user: AuthenticatedUser = {
@@ -107,7 +108,7 @@ describe('ChatPage session sidebar wiring', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     await waitFor(() => {
       expect(screen.getByText('Where should I go?')).not.toBeNull()
@@ -130,7 +131,7 @@ describe('ChatPage session sidebar wiring', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     const currentEntry = await screen.findByRole('button', { name: /New conversation/ })
     await userEvent.setup().click(currentEntry)
@@ -190,7 +191,7 @@ describe('ChatPage session sidebar wiring', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     const secondChatButton = await screen.findByRole('button', { name: /Second chat/ })
     await userEvent.setup().click(secondChatButton)
@@ -225,7 +226,7 @@ describe('ChatPage session sidebar wiring', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     const newChatButton = await screen.findByRole('button', { name: '+ New chat' })
     await userEvent.setup().click(newChatButton)
@@ -288,7 +289,7 @@ describe('ChatPage session sidebar wiring', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     await waitFor(() => {
       expect(screen.getByText('Hello from the first chat')).not.toBeNull()

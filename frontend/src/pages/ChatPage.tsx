@@ -8,9 +8,10 @@ import {
   setRetryRequestId,
 } from '../api/chatClient'
 import { type ProviderName } from '../constants/providerModels'
+import { AppNav } from '../components/AppNav'
 import { AuthControls } from '../components/AuthControls'
 import { MenuIcon, PanelCollapseIcon, PanelExpandIcon } from '../components/icons/ShellIcons'
-import { AuthProvider, useAuthContext } from '../context/AuthContext'
+import { useAuthContext } from '../context/AuthContext'
 import { ChatProvider, useChatContext } from '../context/ChatContext'
 import { useChatStream } from '../hooks/useChatStream'
 import { MessageList } from '../components/MessageList'
@@ -709,6 +710,7 @@ function ChatPageContent() {
                   <span className="sr-only">Collapse</span>
                 </button>
               )}
+              <AppNav current="chat" />
               <h1 className="min-w-0 truncate text-sm font-semibold tracking-wide text-shell-900 sm:text-base">
                 AI Chat Assistant
               </h1>
@@ -755,10 +757,8 @@ function ChatPageContent() {
 
 export function ChatPage() {
   return (
-    <AuthProvider>
-      <ChatProvider>
-        <ChatPageContent />
-      </ChatProvider>
-    </AuthProvider>
+    <ChatProvider>
+      <ChatPageContent />
+    </ChatProvider>
   )
 }

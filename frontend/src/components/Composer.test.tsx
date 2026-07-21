@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPage } from '../pages/ChatPage'
 import { storeSession } from '../auth/tokenStorage'
+import { renderWithProviders } from '../test/renderWithProviders'
 import type { AuthenticatedUser } from '../types/auth'
 
 const authenticatedUser: AuthenticatedUser = {
@@ -135,7 +136,7 @@ describe('Composer behavior', () => {
   })
 
   it('exposes accessible shell landmarks and primary controls', () => {
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     expect(screen.getByLabelText('Chat sessions')).not.toBeNull()
     expect(screen.getByLabelText('Conversation')).not.toBeNull()
@@ -156,7 +157,7 @@ describe('Composer behavior', () => {
   })
 
   it('collapses provider and model controls behind a mobile summary toggle', async () => {
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     const toggle = screen.getByRole('button', { name: /Provider & model/i })
     const settings = screen.getByLabelText('Provider').closest('#provider-model-settings')
@@ -172,7 +173,7 @@ describe('Composer behavior', () => {
   })
 
   it('collapses provider settings again after changing provider on mobile', async () => {
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /Provider & model/i }))
@@ -197,7 +198,7 @@ describe('Composer behavior', () => {
       )
     vi.stubGlobal('fetch', withSessionsListStub(fetchMock))
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     const user = userEvent.setup()
     await user.selectOptions(screen.getByLabelText('Provider'), 'groq')
@@ -234,7 +235,7 @@ describe('Composer behavior', () => {
       )
     vi.stubGlobal('fetch', withSessionsListStub(fetchMock))
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     const user = userEvent.setup()
     await user.selectOptions(screen.getByLabelText('Provider'), 'anthropic')
@@ -275,7 +276,7 @@ describe('Composer behavior', () => {
       )
     vi.stubGlobal('fetch', withSessionsListStub(fetchMock))
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     const user = userEvent.setup()
 
@@ -327,7 +328,7 @@ describe('Composer behavior', () => {
       )
     vi.stubGlobal('fetch', withSessionsListStub(fetchMock))
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     const user = userEvent.setup()
     expect(screen.getAllByText('Waiting for input').length).toBeGreaterThan(0)
@@ -359,7 +360,7 @@ describe('Composer behavior', () => {
       })
     vi.stubGlobal('fetch', withSessionsListStub(fetchMock))
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     const user = userEvent.setup()
     await user.type(screen.getByPlaceholderText('Ask something…'), 'Stop early')
@@ -396,14 +397,14 @@ describe('Composer guest gating and quota UX', () => {
   })
 
   it('hides the provider/model switcher for guests', () => {
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     expect(screen.queryByLabelText('Provider')).toBeNull()
     expect(screen.queryByLabelText('Model')).toBeNull()
   })
 
   it('hides the + New chat control for guests and shows a login affordance instead', () => {
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     expect(screen.queryByRole('button', { name: '+ New chat' })).toBeNull()
     expect(screen.getByText(/sign in above to start additional chats/i)).not.toBeNull()
@@ -421,7 +422,7 @@ describe('Composer guest gating and quota UX', () => {
       )
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     const user = userEvent.setup()
     await user.type(screen.getByPlaceholderText('Ask something…'), 'Hi as a guest')
@@ -455,7 +456,7 @@ describe('Composer guest gating and quota UX', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<ChatPage />)
+    renderWithProviders(<ChatPage />)
 
     const user = userEvent.setup()
     await user.type(screen.getByPlaceholderText('Ask something…'), 'One too many')
