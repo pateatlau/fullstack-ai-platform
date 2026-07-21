@@ -491,7 +491,12 @@ POST /api/chat/stream
 Content-Type: application/json
 ```
 
-Returns `text/event-stream` with frames: `start`, `delta`, `end`, and `error`.
+Returns `text/event-stream`. Core frames: `start`, `delta`, `end`, and `error`. Additive unified-chat frames (authenticated users; ignored by older clients):
+
+- `retrieval_complete` — emitted after document pre-retrieval when `use_documents=true` and `RAG_ENABLED=true`, before `start` or any tool loop
+- `tool_start` / `tool_end` — web search tool lifecycle when `use_web_search=true` and `TOOLS_ENABLED=true`, before the final answer stream
+
+Plain streaming (no toggles) uses `start` → `delta*` → `end` only. When both toggles are on: `retrieval_complete` → `tool_start`/`tool_end` (as needed) → `start` → `delta*` → `end`.
 Before running locally, make sure the selected backend provider has a real API key in the backend `.env` file you are using.
 
 ## Development Commands

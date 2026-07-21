@@ -30,6 +30,37 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
+function createControllableSseResponse(): {
+  response: Response
+  enqueue: (chunk: string) => void
+  close: () => void
+} {
+  const encoder = new TextEncoder()
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
+
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller
+      },
+    }),
+    {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    },
+  )
+
+  return {
+    response,
+    enqueue: (chunk: string) => {
+      streamController?.enqueue(encoder.encode(chunk))
+    },
+    close: () => {
+      streamController?.close()
+    },
+  }
+}
+
 /**
  * Routes `fetch` calls by URL/method to fixture responses (plan Section 6.2's
  * `GET/POST /api/chat/sessions` and `GET /api/chat/sessions/{id}`), so each
@@ -469,9 +500,10 @@ describe('ChatPage session sidebar wiring', () => {
   })
 
   it('shows searching documents while streaming document-grounded chat is in progress', async () => {
-    const sseBody =
+    const retrievalCompleteSse =
       'event: retrieval_complete\n' +
-      'data: {"type":"retrieval_complete","id":"resp_docs","chunk_count":1,"timestamp":"t0"}\n\n' +
+      'data: {"type":"retrieval_complete","id":"resp_docs","chunk_count":1,"timestamp":"t0"}\n\n'
+    const remainingSse =
       'event: start\n' +
       'data: {"type":"start","id":"resp_docs","timestamp":"t1"}\n\n' +
       'event: delta\n' +
@@ -479,16 +511,15 @@ describe('ChatPage session sidebar wiring', () => {
       'event: end\n' +
       'data: {"type":"end","id":"resp_docs","finish_reason":"stop","timestamp":"t3"}\n\n'
 
+    const { response: streamResponse, enqueue, close } = createControllableSseResponse()
+
     const fetchMock = createRoutedFetchMock(
       (url, method) => {
         if (url.endsWith('/api/chat/sessions') && method === 'GET') {
           return jsonResponse([])
         }
         if (url.endsWith('/api/chat/stream') && method === 'POST') {
-          return new Response(sseBody, {
-            status: 200,
-            headers: { 'Content-Type': 'text/event-stream' },
-          })
+          return streamResponse
         }
         throw new Error(`Unexpected fetch: ${method} ${url}`)
       },
@@ -506,6 +537,15 @@ describe('ChatPage session sidebar wiring', () => {
     await user.click(screen.getByRole('checkbox', { name: 'My documents' }))
     await user.type(screen.getByPlaceholderText('Ask something…'), 'What is in my docs?')
     await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Assistant is searching docs')).not.toBeNull()
+    })
+    expect(screen.queryByLabelText('Assistant is typing')).toBeNull()
+
+    enqueue(retrievalCompleteSse)
+    enqueue(remainingSse)
+    close()
 
     await waitFor(() => {
       expect(screen.getByText('From your documents: fixture content.')).not.toBeNull()

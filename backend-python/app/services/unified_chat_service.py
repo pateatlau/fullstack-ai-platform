@@ -248,6 +248,22 @@ class UnifiedChatService:
                         "Document retrieval failed during unified stream",
                         response_id=response_id,
                     )
+                    try:
+                        await self._chat_service._persist_stream_result(
+                            caller=caller,
+                            prep=prep,
+                            provider=provider,
+                            provider_name=provider_name,
+                            model=model,
+                            content="",
+                            finish_reason=None,
+                            status="error",
+                        )
+                    except Exception:  # noqa: BLE001 - best-effort error persistence
+                        logger.exception(
+                            "Failed to persist unified stream retrieval error state",
+                            response_id=response_id,
+                        )
                     yield format_sse(
                         "start", StartFrame(id=response_id, session_id=session_id)
                     )

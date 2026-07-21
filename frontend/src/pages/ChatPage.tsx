@@ -276,7 +276,10 @@ function ChatPageContent() {
     },
     onStart: (chunk) => {
       setStreamingRetrievalActive(false)
-      const localMessageId = retryTargetMessageIdRef.current ?? chunk.id
+      const localMessageId =
+        retryTargetMessageIdRef.current ?? currentMessageIdRef.current ?? chunk.id
+      const prestartedAssistantMessage =
+        currentMessageIdRef.current === localMessageId && !retryTargetMessageIdRef.current
       stoppedStreamIdsRef.current.delete(chunk.id)
 
       currentMessageIdRef.current = localMessageId
@@ -295,6 +298,10 @@ function ChatPageContent() {
 
       if (retryTargetMessageIdRef.current) {
         retryTargetMessageIdRef.current = null
+        return
+      }
+
+      if (prestartedAssistantMessage) {
         return
       }
 
@@ -450,7 +457,18 @@ function ChatPageContent() {
 
     if (useStreamingTransport) {
       activeTransportRef.current = 'streaming'
-      setStreamingRetrievalActive(Boolean(request.use_documents && ragEnabled))
+      const documentRetrievalPending =
+        Boolean(request.use_documents && ragEnabled) && !retryMessageId
+      setStreamingRetrievalActive(documentRetrievalPending)
+      if (documentRetrievalPending) {
+        const messageId = crypto.randomUUID()
+        currentMessageIdRef.current = messageId
+        dispatch({
+          type: 'START_MESSAGE',
+          id: messageId,
+          createdAt: new Date().toISOString(),
+        })
+      }
       void start(request)
     } else {
       activeTransportRef.current = 'completion'
