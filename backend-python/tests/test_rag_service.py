@@ -23,7 +23,9 @@ from app.ai.vectorstores.pgvector import PgVectorStore
 from app.core.config import Settings
 from app.db.identity import SqlUserStore
 from app.providers.base import ProviderCompletion
+from app.providers.factory import ProviderFactory
 from app.schemas.chat import ChatMessageSchema
+from app.services.chat_service import ChatServiceError
 from app.services.knowledge_service import KnowledgeService
 from tests.fakes import FakeProvider
 
@@ -73,6 +75,9 @@ def _chunk(*, index: int, content: str, score: float) -> ScoredChunk:
 def _settings(**overrides: object) -> Settings:
     base = {
         "openai_api_key": "test-key",
+        "gemini_api_key": "test-gemini-key",
+        "groq_api_key": "test-groq-key",
+        "anthropic_api_key": "test-anthropic-key",
         "llm_provider": "openai",
         "openai_model": "gpt-4o-mini",
         "default_temperature": 0.7,
@@ -83,8 +88,30 @@ def _settings(**overrides: object) -> Settings:
     return Settings(**base)  # type: ignore[arg-type]
 
 
+def _mock_provider_factory(provider: _CapturingLLMProvider):
+    def get_provider(
+        name: str | None = None, settings: Settings | None = None
+    ) -> _CapturingLLMProvider:
+        del name, settings
+        return provider
+
+    return staticmethod(get_provider)
+
+
+def _patch_provider_factory(
+    monkeypatch: pytest.MonkeyPatch,
+    llm: _CapturingLLMProvider,
+) -> None:
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(llm),
+    )
+
+
 def _service(
     *,
+    monkeypatch: pytest.MonkeyPatch,
     retriever: Retriever | None = None,
     context_builder: ContextBuilder | None = None,
     prompt_builder: PromptBuilder | None = None,
@@ -94,6 +121,8 @@ def _service(
     RAGService, _CapturingLLMProvider, AsyncMock, AsyncMock, MagicMock, Settings
 ]:
     resolved_settings = settings or _settings()
+    llm = llm_provider or _CapturingLLMProvider()
+    _patch_provider_factory(monkeypatch, llm)
     embed = AsyncMock()
     store = AsyncMock()
     mock_retriever = retriever or Retriever(
@@ -108,12 +137,10 @@ def _service(
         prompt_manager=prompt_manager,
         settings=resolved_settings,
     )
-    llm = llm_provider or _CapturingLLMProvider()
     service = RAGService(
         retriever=mock_retriever,
         context_builder=mock_context_builder,
         prompt_builder=mock_prompt_builder,
-        llm_provider=llm,
         settings=resolved_settings,
     )
     return service, llm, embed, store, prompt_manager, resolved_settings
@@ -153,10 +180,13 @@ def _knowledge_service(session) -> KnowledgeService:
 
 def _integration_rag_service(
     session,
+    monkeypatch: pytest.MonkeyPatch,
     *,
     llm_provider: _CapturingLLMProvider | None = None,
 ) -> RAGService:
     settings = _settings()
+    llm = llm_provider or _CapturingLLMProvider()
+    _patch_provider_factory(monkeypatch, llm)
     retriever = Retriever(
         embedding_provider=_FakeEmbeddingProvider(),
         vector_store=PgVectorStore(session, settings),
@@ -169,7 +199,6 @@ def _integration_rag_service(
             prompt_manager=create_prompt_manager(),
             settings=settings,
         ),
-        llm_provider=llm_provider or _CapturingLLMProvider(),
         settings=settings,
     )
 
@@ -182,7 +211,7 @@ async def pgvector_session(db_session):
 
 
 @pytest.mark.anyio
-async def test_rag_service_ask_happy_path() -> None:
+async def test_rag_service_ask_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     user_id = uuid.uuid4()
     chunks = [_chunk(index=0, content="alpha facts", score=0.95)]
     embed = AsyncMock()
@@ -197,6 +226,7 @@ async def test_rag_service_ask_happy_path() -> None:
     )
     llm = _CapturingLLMProvider(response="The answer is alpha.")
     service, llm, _, _, _, _ = _service(
+        monkeypatch=monkeypatch,
         retriever=retriever,
         llm_provider=llm,
         settings=settings,
@@ -215,7 +245,7 @@ async def test_rag_service_ask_happy_path() -> None:
 
 
 @pytest.mark.anyio
-async def test_rag_service_orchestration_order() -> None:
+async def test_rag_service_orchestration_order(monkeypatch: pytest.MonkeyPatch) -> None:
     user_id = uuid.uuid4()
     chunks = [_chunk(index=0, content="context body", score=0.9)]
     embed = AsyncMock()
@@ -240,11 +270,11 @@ async def test_rag_service_orchestration_order() -> None:
         user_prompt="rendered prompt with context",
     )
     llm = _CapturingLLMProvider()
+    _patch_provider_factory(monkeypatch, llm)
     service = RAGService(
         retriever=retriever,
         context_builder=context_builder,
         prompt_builder=prompt_builder,
-        llm_provider=llm,
         settings=settings,
     )
 
@@ -259,7 +289,9 @@ async def test_rag_service_orchestration_order() -> None:
 
 
 @pytest.mark.anyio
-async def test_rag_service_allows_prompts_longer_than_chat_max_message_length() -> None:
+async def test_rag_service_allows_prompts_longer_than_chat_max_message_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """RAG context can exceed chat max_message_length without failing assembly."""
     long_prompt = "x" * 5000
 
@@ -280,11 +312,11 @@ async def test_rag_service_allows_prompts_longer_than_chat_max_message_length() 
         user_prompt=long_prompt,
     )
     llm = _CapturingLLMProvider()
+    _patch_provider_factory(monkeypatch, llm)
     service = RAGService(
         retriever=retriever,
         context_builder=ContextBuilder(settings),
         prompt_builder=prompt_builder,
-        llm_provider=llm,
         settings=settings,
     )
 
@@ -295,7 +327,9 @@ async def test_rag_service_allows_prompts_longer_than_chat_max_message_length() 
 
 
 @pytest.mark.anyio
-async def test_rag_service_empty_retrieval_skips_llm() -> None:
+async def test_rag_service_empty_retrieval_skips_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     embed = AsyncMock()
     embed.embed_texts = AsyncMock(return_value=[[0.1]])
     store = AsyncMock()
@@ -308,6 +342,7 @@ async def test_rag_service_empty_retrieval_skips_llm() -> None:
     )
     llm = _CapturingLLMProvider()
     service, llm, _, _, _, _ = _service(
+        monkeypatch=monkeypatch,
         retriever=retriever,
         llm_provider=llm,
         settings=settings,
@@ -323,7 +358,9 @@ async def test_rag_service_empty_retrieval_skips_llm() -> None:
 
 
 @pytest.mark.anyio
-async def test_rag_service_prompt_template_override_passed_to_prompt_builder() -> None:
+async def test_rag_service_prompt_template_override_passed_to_prompt_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     chunks = [_chunk(index=0, content="x", score=1.0)]
     embed = AsyncMock()
     embed.embed_texts = AsyncMock(return_value=[[0.1]])
@@ -341,11 +378,11 @@ async def test_rag_service_prompt_template_override_passed_to_prompt_builder() -
         user_prompt="custom template output",
     )
     llm = _CapturingLLMProvider()
+    _patch_provider_factory(monkeypatch, llm)
     service = RAGService(
         retriever=retriever,
         context_builder=ContextBuilder(settings),
         prompt_builder=prompt_builder,
-        llm_provider=llm,
         settings=settings,
     )
 
@@ -360,7 +397,9 @@ async def test_rag_service_prompt_template_override_passed_to_prompt_builder() -
 
 
 @pytest.mark.anyio
-async def test_rag_service_instructions_passed_to_prompt_builder() -> None:
+async def test_rag_service_instructions_passed_to_prompt_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     chunks = [_chunk(index=0, content="x", score=1.0)]
     embed = AsyncMock()
     embed.embed_texts = AsyncMock(return_value=[[0.1]])
@@ -378,11 +417,11 @@ async def test_rag_service_instructions_passed_to_prompt_builder() -> None:
         user_prompt="with instructions",
     )
     llm = _CapturingLLMProvider()
+    _patch_provider_factory(monkeypatch, llm)
     service = RAGService(
         retriever=retriever,
         context_builder=ContextBuilder(settings),
         prompt_builder=prompt_builder,
-        llm_provider=llm,
         settings=settings,
     )
 
@@ -396,7 +435,9 @@ async def test_rag_service_instructions_passed_to_prompt_builder() -> None:
 
 
 @pytest.mark.anyio
-async def test_rag_service_truncation_reflected_in_response() -> None:
+async def test_rag_service_truncation_reflected_in_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     chunks = [
         _chunk(index=0, content="keep", score=0.95),
         _chunk(index=1, content="drop", score=0.50),
@@ -413,6 +454,7 @@ async def test_rag_service_truncation_reflected_in_response() -> None:
     )
     llm = _CapturingLLMProvider()
     service, _, _, _, _, _ = _service(
+        monkeypatch=monkeypatch,
         retriever=retriever,
         llm_provider=llm,
         settings=settings,
@@ -426,7 +468,9 @@ async def test_rag_service_truncation_reflected_in_response() -> None:
 
 
 @pytest.mark.anyio
-async def test_rag_service_retrieved_chunks_metadata_populated() -> None:
+async def test_rag_service_retrieved_chunks_metadata_populated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     chunk = _chunk(index=3, content="secret body", score=0.88)
     embed = AsyncMock()
     embed.embed_texts = AsyncMock(return_value=[[0.1]])
@@ -440,6 +484,7 @@ async def test_rag_service_retrieved_chunks_metadata_populated() -> None:
     )
     llm = _CapturingLLMProvider()
     service, _, _, _, _, _ = _service(
+        monkeypatch=monkeypatch,
         retriever=retriever,
         llm_provider=llm,
         settings=settings,
@@ -456,6 +501,7 @@ async def test_rag_service_retrieved_chunks_metadata_populated() -> None:
 
 @pytest.mark.anyio
 async def test_rag_service_emits_metrics_log_fields(
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO, logger="app.ai.rag.service")
@@ -472,6 +518,7 @@ async def test_rag_service_emits_metrics_log_fields(
     )
     llm = _CapturingLLMProvider()
     service, _, _, _, _, _ = _service(
+        monkeypatch=monkeypatch,
         retriever=retriever,
         llm_provider=llm,
         settings=settings,
@@ -496,6 +543,7 @@ async def test_rag_service_emits_metrics_log_fields(
 
 @pytest.mark.anyio
 async def test_rag_service_logs_no_sensitive_content(
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO, logger="app.ai.rag.service")
@@ -515,6 +563,7 @@ async def test_rag_service_logs_no_sensitive_content(
     )
     llm = _CapturingLLMProvider(response=secret_answer)
     service, _, _, _, _, _ = _service(
+        monkeypatch=monkeypatch,
         retriever=retriever,
         llm_provider=llm,
         settings=settings,
@@ -528,7 +577,9 @@ async def test_rag_service_logs_no_sensitive_content(
 
 
 @pytest.mark.anyio
-async def test_rag_service_completes_within_eight_second_target() -> None:
+async def test_rag_service_completes_within_eight_second_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     chunks = [_chunk(index=0, content="x", score=1.0)]
     embed = AsyncMock()
     embed.embed_texts = AsyncMock(return_value=[[0.1]])
@@ -542,6 +593,7 @@ async def test_rag_service_completes_within_eight_second_target() -> None:
     )
     llm = _CapturingLLMProvider()
     service, _, _, _, _, _ = _service(
+        monkeypatch=monkeypatch,
         retriever=retriever,
         llm_provider=llm,
         settings=settings,
@@ -557,11 +609,16 @@ async def test_rag_service_completes_within_eight_second_target() -> None:
 @pytest.mark.anyio
 async def test_rag_service_integration_ingest_fixture_then_ask(
     pgvector_session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user_id = await _make_user(pgvector_session)
     knowledge = _knowledge_service(pgvector_session)
     llm = _CapturingLLMProvider(response="Based on the fixture.")
-    rag = _integration_rag_service(pgvector_session, llm_provider=llm)
+    rag = _integration_rag_service(
+        pgvector_session,
+        monkeypatch,
+        llm_provider=llm,
+    )
 
     await knowledge.ingest_document(
         user_id=user_id,
@@ -584,10 +641,15 @@ async def test_rag_service_integration_ingest_fixture_then_ask(
 @pytest.mark.anyio
 async def test_rag_service_integration_empty_corpus_graceful_response(
     pgvector_session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user_id = await _make_user(pgvector_session)
     llm = _CapturingLLMProvider()
-    rag = _integration_rag_service(pgvector_session, llm_provider=llm)
+    rag = _integration_rag_service(
+        pgvector_session,
+        monkeypatch,
+        llm_provider=llm,
+    )
 
     response = await rag.ask(user_id=user_id, question="Anything at all?")
 
@@ -597,12 +659,19 @@ async def test_rag_service_integration_empty_corpus_graceful_response(
 
 
 @pytest.mark.anyio
-async def test_rag_service_integration_owner_isolation(pgvector_session) -> None:
+async def test_rag_service_integration_owner_isolation(
+    pgvector_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     owner_id = await _make_user(pgvector_session)
     other_id = await _make_user(pgvector_session)
     knowledge = _knowledge_service(pgvector_session)
     llm = _CapturingLLMProvider()
-    rag = _integration_rag_service(pgvector_session, llm_provider=llm)
+    rag = _integration_rag_service(
+        pgvector_session,
+        monkeypatch,
+        llm_provider=llm,
+    )
 
     await knowledge.ingest_document(
         user_id=owner_id,
@@ -618,4 +687,152 @@ async def test_rag_service_integration_owner_isolation(pgvector_session) -> None
 
     assert response.answer == EMPTY_CORPUS_MESSAGE
     assert response.retrieved_chunks == []
+    assert llm.complete_chat_calls == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("openai", "gpt-4o-mini"),
+        ("gemini", "gemini-3.1-flash-lite"),
+        ("groq", "openai/gpt-oss-20b"),
+        ("anthropic", "claude-haiku-4-5-20251001"),
+    ],
+)
+async def test_rag_service_ask_with_each_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    model: str,
+) -> None:
+    chunks = [_chunk(index=0, content="alpha facts", score=0.95)]
+    embed = AsyncMock()
+    embed.embed_texts = AsyncMock(return_value=[[0.1]])
+    store = AsyncMock()
+    store.similarity_search = AsyncMock(return_value=chunks)
+    settings = _settings()
+    retriever = Retriever(
+        embedding_provider=embed,
+        vector_store=store,
+        settings=settings,
+    )
+    llm = _CapturingLLMProvider(response=f"Answer from {provider}.")
+    resolved_providers: list[str | None] = []
+
+    def tracking_get_provider(
+        name: str | None = None, settings_arg: Settings | None = None
+    ) -> _CapturingLLMProvider:
+        del settings_arg
+        resolved_providers.append(name)
+        return llm
+
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        staticmethod(tracking_get_provider),
+    )
+    service = RAGService(
+        retriever=retriever,
+        context_builder=ContextBuilder(settings),
+        prompt_builder=PromptBuilder(
+            prompt_manager=MagicMock(render=MagicMock(return_value="rendered")),
+            settings=settings,
+        ),
+        settings=settings,
+    )
+
+    response = await service.ask(
+        user_id=uuid.uuid4(),
+        question="What is alpha?",
+        provider=provider,  # type: ignore[arg-type]
+        model=model,
+    )
+
+    assert resolved_providers == [provider]
+    assert response.provider == provider
+    assert response.model == model
+    assert llm.complete_chat_calls == 1
+
+
+@pytest.mark.anyio
+async def test_rag_service_ask_defaults_to_settings_when_provider_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunks = [_chunk(index=0, content="alpha facts", score=0.95)]
+    embed = AsyncMock()
+    embed.embed_texts = AsyncMock(return_value=[[0.1]])
+    store = AsyncMock()
+    store.similarity_search = AsyncMock(return_value=chunks)
+    settings = _settings(llm_provider="openai")
+    retriever = Retriever(
+        embedding_provider=embed,
+        vector_store=store,
+        settings=settings,
+    )
+    llm = _CapturingLLMProvider(response="Default provider answer.")
+    service, llm, _, _, _, _ = _service(
+        monkeypatch=monkeypatch,
+        retriever=retriever,
+        llm_provider=llm,
+        settings=settings,
+    )
+
+    response = await service.ask(user_id=uuid.uuid4(), question="What is alpha?")
+
+    assert response.provider == "openai"
+    assert response.model == settings.openai_model
+    assert llm.complete_chat_calls == 1
+
+
+@pytest.mark.anyio
+async def test_rag_service_ask_missing_api_key_for_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(anthropic_api_key=None)
+    service, _, _, _, _, _ = _service(monkeypatch=monkeypatch, settings=settings)
+
+    with pytest.raises(ChatServiceError) as exc_info:
+        await service.ask(
+            user_id=uuid.uuid4(),
+            question="Hello?",
+            provider="anthropic",
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.code == "validation_error"
+    assert "ANTHROPIC_API_KEY" in exc_info.value.message
+
+
+@pytest.mark.anyio
+async def test_rag_service_empty_corpus_uses_resolved_provider_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    embed = AsyncMock()
+    embed.embed_texts = AsyncMock(return_value=[[0.1]])
+    store = AsyncMock()
+    store.similarity_search = AsyncMock(return_value=[])
+    settings = _settings()
+    retriever = Retriever(
+        embedding_provider=embed,
+        vector_store=store,
+        settings=settings,
+    )
+    llm = _CapturingLLMProvider()
+    service, llm, _, _, _, _ = _service(
+        monkeypatch=monkeypatch,
+        retriever=retriever,
+        llm_provider=llm,
+        settings=settings,
+    )
+
+    response = await service.ask(
+        user_id=uuid.uuid4(),
+        question="anything?",
+        provider="groq",
+        model="openai/gpt-oss-20b",
+    )
+
+    assert response.answer == EMPTY_CORPUS_MESSAGE
+    assert response.provider == "groq"
+    assert response.model == "openai/gpt-oss-20b"
     assert llm.complete_chat_calls == 0

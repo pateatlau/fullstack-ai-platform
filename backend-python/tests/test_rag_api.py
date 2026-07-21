@@ -22,6 +22,7 @@ from app.core.security import create_access_token
 from app.db.identity import SqlUserStore
 from app.main import app
 from app.providers.base import ProviderCompletion
+from app.providers.factory import ProviderFactory
 from app.schemas.chat import ChatMessageSchema
 from app.services.knowledge_service import KnowledgeService
 from tests.fakes import FakeProvider
@@ -91,8 +92,24 @@ def _knowledge_service(session) -> KnowledgeService:
     )
 
 
+def _mock_provider_factory(provider: FakeProvider):
+    def get_provider(
+        name: str | None = None, settings: Settings | None = None
+    ) -> FakeProvider:
+        del name, settings
+        return provider
+
+    return staticmethod(get_provider)
+
+
 def _rag_service(session, llm_provider: _CapturingLLMProvider) -> RAGService:
-    settings = Settings(openai_api_key="test-key", rag_enabled=True)
+    settings = Settings(
+        openai_api_key="test-key",
+        gemini_api_key="test-gemini-key",
+        groq_api_key="test-groq-key",
+        anthropic_api_key="test-anthropic-key",
+        rag_enabled=True,
+    )
     retriever = Retriever(
         embedding_provider=_FakeEmbeddingProvider(),
         vector_store=PgVectorStore(session, settings),
@@ -105,7 +122,6 @@ def _rag_service(session, llm_provider: _CapturingLLMProvider) -> RAGService:
             prompt_manager=create_prompt_manager(),
             settings=settings,
         ),
-        llm_provider=llm_provider,
         settings=settings,
     )
 
@@ -128,6 +144,11 @@ def rag_api_dependencies(pgvector_session, monkeypatch: pytest.MonkeyPatch):
     llm = _CapturingLLMProvider()
     monkeypatch.setenv("RAG_ENABLED", "true")
     get_settings.cache_clear()
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(llm),
+    )
 
     def _override_knowledge_service() -> KnowledgeService:
         return _knowledge_service(pgvector_session)
@@ -263,3 +284,104 @@ async def test_rag_api_error_envelope_includes_request_id(
     assert body["error"]["code"] == "validation_error"
     assert body["error"]["request_id"] is not None
     assert response.headers.get("X-Request-ID") == body["error"]["request_id"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "provider",
+    ["openai", "gemini", "groq", "anthropic"],
+)
+async def test_rag_api_ask_with_provider_override(
+    pgvector_session,
+    rag_api_dependencies,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    user_id = await _make_user(pgvector_session)
+    headers = _auth_headers(user_id)
+    llm = rag_api_dependencies
+    resolved_providers: list[str | None] = []
+
+    def tracking_get_provider(
+        name: str | None = None, settings: Settings | None = None
+    ) -> _CapturingLLMProvider:
+        del settings
+        resolved_providers.append(name)
+        return llm
+
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        staticmethod(tracking_get_provider),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/rag/ask",
+            json={"question": "Anything at all?", "provider": provider},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"] == provider
+    assert resolved_providers == [provider]
+
+
+@pytest.mark.anyio
+async def test_rag_api_ask_without_provider_backward_compatible(
+    pgvector_session,
+    rag_api_dependencies,
+) -> None:
+    user_id = await _make_user(pgvector_session)
+    headers = _auth_headers(user_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/rag/ask",
+            json={"question": "Anything at all?"},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"] == "openai"
+    assert body["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("openai", "claude-haiku-4-5-20251001"),
+        ("groq", "gemini-3.1-flash-lite"),
+    ],
+)
+async def test_rag_api_invalid_provider_model_combo(
+    pgvector_session,
+    rag_api_dependencies,
+    provider: str,
+    model: str,
+) -> None:
+    user_id = await _make_user(pgvector_session)
+    headers = _auth_headers(user_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/rag/ask",
+            json={
+                "question": "Hello?",
+                "provider": provider,
+                "model": model,
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"

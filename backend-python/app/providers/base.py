@@ -37,6 +37,8 @@ class ProviderToolCall:
     id: str
     name: str
     arguments: dict[str, object]
+    # Gemini 3.x requires this on functionCall parts when resubmitting tool history.
+    thought_signature: bytes | None = None
 
 
 @dataclass(frozen=True)

@@ -69,6 +69,8 @@ async def ask_rag(
             instructions=request.instructions,
             top_k=request.top_k,
             temperature=request.temperature,
+            provider=request.provider,
+            model=request.model,
         )
     except ChatServiceError:
         raise

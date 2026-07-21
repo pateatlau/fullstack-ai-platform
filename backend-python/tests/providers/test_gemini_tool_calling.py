@@ -25,9 +25,16 @@ class _FakeFunctionCall:
 
 
 class _FakePart:
-    def __init__(self, *, function_call: Any | None = None, text: str | None = None):
+    def __init__(
+        self,
+        *,
+        function_call: Any | None = None,
+        text: str | None = None,
+        thought_signature: bytes | None = None,
+    ):
         self.function_call = function_call
         self.text = text
+        self.thought_signature = thought_signature
 
 
 class _FakeContent:
@@ -80,6 +87,39 @@ async def test_gemini_complete_chat_with_tools_parses_tool_calls(
         )
     ]
     assert completion.content is None
+
+
+async def test_gemini_complete_chat_with_tools_preserves_thought_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = GeminiProvider(api_key="test-key")
+    monkeypatch.setattr(
+        provider,
+        "_generate_content_with_tools",
+        lambda **kwargs: _FakeGeminiResponse(
+            [
+                _FakePart(
+                    function_call=_FakeFunctionCall(),
+                    thought_signature=b"gemini-thought-signature",
+                )
+            ]
+        ),
+    )
+
+    completion = await provider.complete_chat_with_tools(
+        [ChatMessageSchema(role="user", content="What's the weather?")],
+        model="gemini-2.0-flash",
+        tools=[],
+    )
+
+    assert completion.tool_calls == [
+        ProviderToolCall(
+            id="call_gemini",
+            name="web_search",
+            arguments={"query": "weather"},
+            thought_signature=b"gemini-thought-signature",
+        )
+    ]
 
 
 async def test_gemini_complete_chat_with_tools_handles_direct_answer(
@@ -146,6 +186,7 @@ def test_to_gemini_contents_preserves_function_name_on_tool_result() -> None:
                             "name": "web_search",
                             "arguments": '{"query": "news"}',
                         },
+                        "thought_signature": b"sig-bytes",
                     }
                 ],
             },
@@ -157,6 +198,8 @@ def test_to_gemini_contents_preserves_function_name_on_tool_result() -> None:
         ]
     )
 
+    function_call_part = contents[1].parts[0]
+    assert function_call_part.thought_signature == b"sig-bytes"
     function_response = contents[-1].parts[0].function_response
     assert function_response.id == "call-1"
     assert function_response.name == "web_search"
