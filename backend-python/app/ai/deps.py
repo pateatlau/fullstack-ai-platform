@@ -19,6 +19,9 @@ from app.ai.documents.pipeline import IngestionPipeline
 from app.ai.embeddings.factory import create_embedding_provider
 from app.ai.interfaces.embedding_provider import EmbeddingProvider
 from app.ai.prompts.manager import PromptManager, create_prompt_manager
+from app.ai.rag.context_builder import ContextBuilder
+from app.ai.rag.prompt_builder import PromptBuilder
+from app.ai.rag.retriever import Retriever
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.implementations.web_search import (
     WebSearchClient,
@@ -118,4 +121,32 @@ def get_knowledge_service(
     )
 
 
-# Phase 8+: get_rag_service() -> RAGService (app-scoped singleton)
+def get_retriever(
+    embedding_provider: EmbeddingProvider = Depends(get_embedding_provider),
+    vector_store: PgVectorStore = Depends(get_vector_store),
+    settings: Settings = Depends(get_ai_settings),
+) -> Retriever:
+    """Return a request-scoped retriever wired to embed + vector search."""
+    return Retriever(
+        embedding_provider=embedding_provider,
+        vector_store=vector_store,
+        settings=settings,
+    )
+
+
+def get_context_builder(
+    settings: Settings = Depends(get_ai_settings),
+) -> ContextBuilder:
+    """Return a ``ContextBuilder`` using application RAG settings."""
+    return ContextBuilder(settings)
+
+
+def get_prompt_builder(
+    prompt_manager: PromptManager = Depends(get_prompt_manager),
+    settings: Settings = Depends(get_ai_settings),
+) -> PromptBuilder:
+    """Return a ``PromptBuilder`` wired to the app-scoped prompt manager."""
+    return PromptBuilder(prompt_manager=prompt_manager, settings=settings)
+
+
+# Phase 9+: get_rag_service() -> RAGService (app-scoped singleton)

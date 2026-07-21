@@ -189,6 +189,38 @@ from app.ai.deps import (
 )
 ```
 
+### Generic RAG retrieval (Phase 8)
+
+Domain-agnostic retrieval-side components in `app/ai/rag/` — no LLM orchestration in this phase (`RAGService` is Phase 9).
+
+| Component | Responsibility |
+| --------- | -------------- |
+| `Retriever` | Embed query → `VectorStore.similarity_search` → ranked `ScoredChunk` list (`user_id`-scoped) |
+| `ContextBuilder` | Numbered context blocks with `rag_context_max_chars` budget; drops lowest-scoring chunks when over budget |
+| `PromptBuilder` | Render configurable RAG template via `PromptManager` (default `rag/answer/v1`) |
+
+Settings:
+
+| Setting | Env var | Default |
+| ------- | ------- | ------- |
+| Top-K retrieval | `RAG_TOP_K` | `5` |
+| Context char budget | `RAG_CONTEXT_MAX_CHARS` | `8000` |
+| Default RAG template | `RAG_DEFAULT_PROMPT_TEMPLATE` | `rag/answer/v1` |
+
+Structured logs emit `retrieval_latency_ms` and result **count** only — never question text, chunk content, or embedding values.
+
+Components are independently testable with mocked dependencies. Domain-specific assistants compose these via prompts and application services (Phase 9+) — not by adding business logic to `app/ai/rag/`.
+
+Wire via DI:
+
+```python
+from app.ai.deps import (
+    get_context_builder,
+    get_prompt_builder,
+    get_retriever,
+)
+```
+
 ### Module boundaries
 
 | Layer | Location | Responsibility |
