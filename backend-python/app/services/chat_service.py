@@ -33,6 +33,7 @@ from app.schemas.chat import (
     ErrorFrame,
     MessageStatus,
     ProviderName,
+    RetrievalCompleteFrame,
     Role,
     StartFrame,
     ToolEndFrame,
@@ -268,7 +269,13 @@ def normalize_chat_error(exc: Exception) -> ChatServiceError:
 
 
 SseFrame = (
-    StartFrame | DeltaFrame | EndFrame | ErrorFrame | ToolStartFrame | ToolEndFrame
+    StartFrame
+    | DeltaFrame
+    | EndFrame
+    | ErrorFrame
+    | ToolStartFrame
+    | ToolEndFrame
+    | RetrievalCompleteFrame
 )
 
 

@@ -167,6 +167,13 @@ class ToolEndFrame(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class RetrievalCompleteFrame(BaseModel):
+    type: Literal["retrieval_complete"] = "retrieval_complete"
+    id: str
+    chunk_count: int
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class ChatMessageOut(BaseModel):
     """A persisted chat message returned when resuming a session."""
 

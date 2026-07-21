@@ -39,6 +39,12 @@ export type ChatChunk =
       timestamp: string
     }
   | {
+      type: 'retrieval_complete'
+      id: string
+      chunk_count: number
+      timestamp: string
+    }
+  | {
       type: 'tool_start'
       id: string
       tool_name: string

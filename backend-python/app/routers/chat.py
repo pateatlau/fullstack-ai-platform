@@ -274,16 +274,6 @@ async def create_chat_stream(
             status_code=503,
         )
 
-    if _effective_documents(request, settings):
-        raise AppError(
-            code="validation_error",
-            message=(
-                "Document grounding on the streaming chat path is not supported yet. "
-                "Use non-streaming POST /api/chat or disable the My documents toggle."
-            ),
-            status_code=422,
-        )
-
     if caller is not None and caller.user_id is not None:
         bind_context(user_id=str(caller.user_id))
     logger.info("Chat stream accepted", route="/api/chat/stream", method="POST")
@@ -300,7 +290,9 @@ async def create_chat_stream(
     # ownership failures surface as normal HTTP errors.
     prep = await service.prepare_stream(request, caller)
 
-    if _effective_web_search(request, settings):
+    if _effective_web_search(request, settings) or _effective_documents(
+        request, settings
+    ):
         stream = unified_service.stream_execute(request, http_request, caller, prep)
     else:
         stream = service.stream_chat(request, http_request, caller, prep)
