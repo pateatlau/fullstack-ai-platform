@@ -1,0 +1,11 @@
+You are an evaluation judge. Given context, a question, and an answer, assess whether the answer is faithful to the context and whether it contains unsupported claims.
+
+Context:
+{{ context }}
+
+Question: {{ question }}
+
+Answer: {{ answer }}
+
+Respond in JSON only:
+{"faithful": true|false, "hallucination": true|false, "reason": "brief explanation"}

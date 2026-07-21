@@ -247,6 +247,34 @@ Question → Retriever → ContextBuilder → PromptBuilder → LLM → RAGRespo
 
 Business knowledge lives in **documents** and **prompt templates**; framework code stays domain-agnostic. HTTP endpoints (`POST /api/rag/ask`) arrive in Phase 11.
 
+### Evaluation framework (Phase 10)
+
+Objective quality measurement at three levels — **prompt**, **retrieval**, and **end-to-end** — via a CLI harness. Run eval before API exposure to tune chunk size, overlap, top-K, embedding model, and prompt templates.
+
+| Level | Runner | Measures |
+| ----- | ------ | -------- |
+| Prompt | `PromptEvalRunner` | Template rendering correctness / regression snapshots |
+| Retrieval | `RetrievalEvalRunner` | Precision and recall vs labeled chunk sets |
+| End-to-end | `EndToEndEvalRunner` | Correctness, faithfulness, hallucination, latency |
+
+**Run evaluation:**
+
+```bash
+make eval
+# or
+uv run python -m app.ai.evaluation.cli --level all
+uv run python -m app.ai.evaluation.cli --level prompt
+uv run python -m app.ai.evaluation.cli --level retrieval --dataset tests/data/evaluation/sample.yaml
+uv run python -m app.ai.evaluation.cli --level e2e --use-judge
+```
+
+- Sample dataset: `tests/data/evaluation/sample.yaml` (3–5 cases covering all levels).
+- JSON baseline report (for Phase 13 comparison): `.eval/eval-report.json` by default (`--output` to override).
+- **Offline mode:** fake embeddings + mocked LLM — no live API key required for prompt-level runs; retrieval/e2e need local Postgres with pgvector.
+- Optional `--use-judge` enables LLM-as-judge faithfulness/hallucination via `app/ai/prompts/evaluation/judge.v1.j2`.
+
+**Tuning workflow:** re-run eval after changing env vars (`LLM_PROVIDER`, `RAG_TOP_K`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `EMBEDDING_MODEL`, prompt templates) and compare JSON reports to pick better settings before Phase 11 API exposure.
+
 ### Module boundaries
 
 | Layer | Location | Responsibility |

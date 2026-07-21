@@ -1,0 +1,41 @@
+cases:
+  - id: rag_answer_renders
+    level: prompt
+    prompt_category: rag
+    prompt_name: answer
+    prompt_version: '1'
+    prompt_variables:
+      question: 'What is in the document?'
+      context: 'The document mentions plain text fixture content.'
+      instructions: null
+    expected_render_contains:
+      - 'plain text fixture content'
+      - 'What is in the document?'
+
+  - id: chat_summarize_system_snapshot
+    level: prompt
+    prompt_category: chat
+    prompt_name: summarize_system
+    prompt_version: '1'
+    prompt_variables: {}
+    expected_render_exact: >-
+      You produce concise summaries of conversations, preserving key facts and
+      decisions.
+
+  - id: retrieval_finds_fixture
+    level: retrieval
+    question: 'What content is in the plain text fixture?'
+    document_fixture: sample.txt
+    relevant_chunk_ids: []
+
+  - id: empty_corpus_retrieval
+    level: retrieval
+    question: 'What content is available in my documents?'
+    relevant_chunk_ids: []
+
+  - id: e2e_fixture_answer
+    level: e2e
+    question: 'What does the plain text fixture contain?'
+    document_fixture: sample.txt
+    expected_answer: 'plain text fixture content'
+    expected_answer_match: fuzzy
