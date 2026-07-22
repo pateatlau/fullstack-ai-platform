@@ -11,7 +11,7 @@ export function WhyLoginInfo() {
     <div className="relative sm:inline-block">
       <button
         type="button"
-        className="cursor-pointer rounded-lg border border-shell-800/20 px-2 py-2 text-xs font-medium text-shell-700 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+        className="inline-flex min-h-11 cursor-pointer items-center justify-center rounded-lg border border-shell-800/20 px-3 text-xs font-medium text-shell-700 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
         aria-expanded={isOpen}
         aria-controls="why-login-popover"
         onClick={() => setIsOpen((value) => !value)}

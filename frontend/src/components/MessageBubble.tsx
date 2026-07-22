@@ -21,7 +21,7 @@ export function MessageBubble({
   const roleLabel = message.role === 'user' ? 'You' : 'Assistant'
 
   const alignment = message.role === 'user' ? 'ml-auto' : 'mr-auto'
-  const baseBubble = 'max-w-[92%] border px-4 py-3 shadow-sm sm:max-w-[78%]'
+  const baseBubble = 'max-w-[92%] min-w-0 border px-4 py-3 shadow-sm sm:max-w-[78%]'
   const roleBubble =
     message.role === 'user'
       ? 'rounded-[1.5rem] rounded-br-md border-zinc-300 bg-zinc-200 text-zinc-950'
@@ -51,9 +51,11 @@ export function MessageBubble({
       {isWaitingForFirstToken ? (
         <StreamingIndicator variant={waitingVariant} />
       ) : (
-        <p className="text-sm leading-7 whitespace-pre-wrap [overflow-wrap:anywhere]">
-          {message.content}
-        </p>
+        <div className="max-w-full overflow-x-auto">
+          <p className="text-sm leading-7 whitespace-pre-wrap [overflow-wrap:anywhere]">
+            {message.content}
+          </p>
+        </div>
       )}
 
       {message.status === 'error' && (

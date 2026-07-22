@@ -106,7 +106,7 @@ export function DocumentList({
                 type="button"
                 aria-label={`Delete ${document.filename}`}
                 disabled={deletingId === document.id}
-                className="shrink-0 rounded-lg border border-shell-800/20 px-3 py-2 text-sm font-medium text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex min-h-11 w-full shrink-0 items-center justify-center rounded-lg border border-shell-800/20 px-3 text-sm font-medium text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                 onClick={() => void handleDelete(document.id, document.filename)}
               >
                 {deletingId === document.id ? 'Deleting…' : 'Delete'}

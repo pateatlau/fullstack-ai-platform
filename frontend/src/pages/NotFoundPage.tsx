@@ -17,16 +17,16 @@ export function NotFoundPage() {
         <p className="text-sm text-shell-700">
           We couldn&apos;t find that page. It may have been moved or the link is incorrect.
         </p>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:flex-wrap">
           <Link
             to="/"
-            className="rounded-lg border border-shell-800/20 bg-white px-4 py-2 text-sm font-semibold text-shell-900 shadow-sm transition hover:bg-shell-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-shell-800/20 bg-white px-4 text-sm font-semibold text-shell-900 shadow-sm transition hover:bg-shell-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:w-auto"
           >
             Back to Chat
           </Link>
           <Link
             to="/"
-            className="rounded-lg border border-shell-800/20 px-4 py-2 text-sm font-medium text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-shell-800/20 px-4 text-sm font-medium text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:w-auto"
           >
             Go Home
           </Link>

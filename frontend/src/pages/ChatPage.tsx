@@ -720,7 +720,7 @@ function ChatPageContent() {
   const renderDeleteButton = (sessionId: string, sessionTitle: string) => (
     <button
       type="button"
-      className="shrink-0 cursor-pointer rounded-full p-1.5 text-zinc-700 transition-colors hover:bg-danger-600/15 hover:text-danger-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
+      className="inline-flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center rounded-full text-zinc-700 transition-colors hover:bg-danger-600/15 hover:text-danger-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
       aria-label={`Delete ${sessionTitle}`}
       disabled={areSessionControlsDisabled || isDeletingSession}
       onClick={(event) => handleDeleteSession(sessionId, event)}
@@ -805,7 +805,7 @@ function ChatPageContent() {
             <h2 className="text-sm font-semibold tracking-wide text-zinc-900">Sessions</h2>
             <button
               type="button"
-              className="cursor-pointer rounded-full border border-zinc-400/60 px-3 py-1.5 text-xs font-semibold text-zinc-900 transition hover:bg-zinc-300/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 md:hidden"
+              className="inline-flex min-h-11 cursor-pointer items-center justify-center rounded-full border border-zinc-400/60 px-4 text-xs font-semibold text-zinc-900 transition hover:bg-zinc-300/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 md:hidden"
               onClick={handleCloseMobileSidebar}
             >
               Close
@@ -917,7 +917,7 @@ function ChatPageContent() {
                 <ul className="space-y-2" aria-label="Saved chat sessions">
                   {savedSessions.map((session) => (
                     <li key={session.id}>
-                      <div className="flex items-start gap-2">
+                      <div className="flex items-start gap-1 sm:gap-2">
                         <button
                           type="button"
                           aria-label={session.title}
@@ -992,7 +992,7 @@ function ChatPageContent() {
             <div className="flex min-w-0 items-center gap-2">
               <button
                 type="button"
-                className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-shell-800/20 p-2 text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 md:hidden"
+                className="inline-flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-shell-800/20 text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 md:hidden"
                 aria-label="Open sidebar"
                 onClick={() => setIsMobileSidebarOpen(true)}
               >

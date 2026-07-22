@@ -84,7 +84,7 @@ export function DocumentUpload({ onUploaded, onInvalidAccessToken }: DocumentUpl
         <button
           type="submit"
           disabled={!selectedFile || isUploading}
-          className="inline-flex items-center justify-center gap-2 rounded-chat bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-chat-card transition hover:bg-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-chat bg-brand-600 px-4 text-sm font-semibold text-white shadow-chat-card transition hover:bg-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
         >
           {isUploading ? (
             <>
