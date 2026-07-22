@@ -73,6 +73,28 @@ Post-MVP V1.1 engineering is **complete**. Unified chat on `/` integrates web se
 
 Validation record: [docs/plans/post-mvp-v1.1-implementation-plan.md](docs/plans/post-mvp-v1.1-implementation-plan.md) (Phase 6 Completion Record).
 
+## Post-MVP V1.1.1 Status (Complete — 2026-07-22)
+
+Post-MVP V1.1.1 is a **polish release** on top of V1.1 unified chat — production-grade UX and operational safety without new platform capabilities.
+
+| Polish item | Status |
+| ----------- | ------ |
+| Delete chat session (`DELETE /api/chat/sessions/{id}` + UI confirmation + post-delete fallback) | Done |
+| Auto-generate chat titles (~50 chars from first user message) | Done |
+| Protected routes (`/documents` requires sign-in; session expiry redirect + banner on `/`) | Done |
+| Friendly 404 page (catch-all with **Back to Chat** / **Go Home**) | Done |
+| Public demo protection (guest output token cap, upload quota, ops spending-alert docs) | Done |
+| Consistent loading states (`LoadingIndicator` across long operations) | Done |
+| Graceful provider errors (friendly copy; no raw SDK text) | Done |
+| Empty state improvements (`EmptyState` + actionable CTAs) | Done |
+| Mobile responsiveness review (375px / 390px checklist) | Done |
+
+**Release summary:** [docs/releases/post-mvp-v1.1.1-release-summary.md](docs/releases/post-mvp-v1.1.1-release-summary.md)
+
+**Ops:** [docs/ops/public-demo-protection.md](docs/ops/public-demo-protection.md)
+
+Validation record: [docs/plans/post-mvp-v1.1.1-implementation-plan.md](docs/plans/post-mvp-v1.1.1-implementation-plan.md) (Phase 10 Completion Record).
+
 ## Current Capabilities
 
 - Responsive ChatGPT-like UI with sidebar, streaming, stop, and retry

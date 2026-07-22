@@ -39,7 +39,7 @@
       "error": null,
       "faithfulness": null,
       "hallucination": null,
-      "latency_ms": 25,
+      "latency_ms": 24,
       "latency_warning": null,
       "level": "retrieval",
       "passed": true,
@@ -71,7 +71,7 @@
       "error": null,
       "faithfulness": 1.0,
       "hallucination": false,
-      "latency_ms": 134,
+      "latency_ms": 133,
       "latency_warning": null,
       "level": "e2e",
       "passed": true,
@@ -98,9 +98,9 @@
   "summary": {
     "failed": 0,
     "mean_latency_ms": {
-      "e2e": 134.0,
+      "e2e": 133.0,
       "prompt": 0.5,
-      "retrieval": 13.0
+      "retrieval": 12.5
     },
     "passed": 5,
     "retrieval": {
@@ -109,5 +109,5 @@
     },
     "skipped": 0
   },
-  "timestamp": "2026-07-22T11:32:50.181707+00:00"
+  "timestamp": "2026-07-22T12:39:00.435283+00:00"
 }
