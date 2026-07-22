@@ -36,15 +36,6 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Chatbot Backend", version="0.1.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_allowed_origins_list,
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["*"],
-    expose_headers=["X-Guest-Token", "X-Guest-Quota-Remaining", REQUEST_ID_HEADER],
-)
-
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(chat.router)
@@ -159,6 +150,18 @@ async def assign_correlation_id(
     request: Request, call_next: RequestResponseEndpoint
 ) -> Response:
     return await correlation_id_middleware(request, call_next)
+
+
+# Outermost middleware so CORS headers are applied to early returns (429, 413, …)
+# from inner HTTP middleware, not only successful route responses.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins_list,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["*"],
+    expose_headers=["X-Guest-Token", "X-Guest-Quota-Remaining", REQUEST_ID_HEADER],
+)
 
 
 @app.get("/")
