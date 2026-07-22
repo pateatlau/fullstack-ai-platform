@@ -851,47 +851,47 @@ function ChatPageContent() {
 
                   return (
                     <li key={session.id}>
-                      <button
-                        type="button"
-                        aria-label={session.title}
-                        className={[
-                          'w-full rounded-chat border p-3',
-                          SESSION_ITEM_BASE,
-                          isActive
-                            ? [
-                                'border-brand-500/40 bg-white shadow-sm',
-                                SESSION_ITEM_ACTIVE_HOVER,
-                              ].join(' ')
-                            : ['border-zinc-300 bg-zinc-100', SESSION_ITEM_HOVER].join(' '),
-                        ].join(' ')}
-                        onClick={() => handleSelectSession(session.id)}
-                        aria-current={isActive ? 'page' : undefined}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <p
-                              className="truncate text-sm font-semibold text-zinc-950"
-                              title={session.title}
-                            >
-                              {session.title}
-                            </p>
-                            <p className="mt-1 line-clamp-2 text-xs text-zinc-700">
-                              {session.preview}
-                            </p>
-                          </div>
-                          <div className="flex shrink-0 items-start gap-2">
-                            {isAuthenticated &&
-                            state.activeSessionId &&
-                            session.id === state.activeSessionId
-                              ? renderDeleteButton(session.id, session.title)
-                              : null}
-                            <span className="rounded-chip bg-zinc-200 px-2 py-1 text-[11px] font-medium text-zinc-700">
+                      <div className="flex items-start gap-1 sm:gap-2">
+                        <button
+                          type="button"
+                          aria-label={session.title}
+                          className={[
+                            'min-w-0 flex-1 rounded-chat border p-3',
+                            SESSION_ITEM_BASE,
+                            isActive
+                              ? [
+                                  'border-brand-500/40 bg-white shadow-sm',
+                                  SESSION_ITEM_ACTIVE_HOVER,
+                                ].join(' ')
+                              : ['border-zinc-300 bg-zinc-100', SESSION_ITEM_HOVER].join(' '),
+                          ].join(' ')}
+                          onClick={() => handleSelectSession(session.id)}
+                          aria-current={isActive ? 'page' : undefined}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <p
+                                className="truncate text-sm font-semibold text-zinc-950"
+                                title={session.title}
+                              >
+                                {session.title}
+                              </p>
+                              <p className="mt-1 line-clamp-2 text-xs text-zinc-700">
+                                {session.preview}
+                              </p>
+                            </div>
+                            <span className="shrink-0 rounded-chip bg-zinc-200 px-2 py-1 text-[11px] font-medium text-zinc-700">
                               {session.messageCount}
                             </span>
                           </div>
-                        </div>
-                        <p className="mt-2 text-[11px] text-zinc-600">{session.updatedLabel}</p>
-                      </button>
+                          <p className="mt-2 text-[11px] text-zinc-600">{session.updatedLabel}</p>
+                        </button>
+                        {isAuthenticated &&
+                        state.activeSessionId &&
+                        session.id === state.activeSessionId
+                          ? renderDeleteButton(session.id, session.title)
+                          : null}
+                      </div>
                     </li>
                   )
                 })}
