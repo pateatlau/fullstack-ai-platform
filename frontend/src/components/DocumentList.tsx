@@ -6,6 +6,7 @@ interface DocumentListProps {
   documents: DocumentSummary[]
   isLoading: boolean
   onChanged: () => void
+  onInvalidAccessToken?: () => void
 }
 
 function statusBadgeClass(status: string): string {
@@ -21,7 +22,12 @@ function statusBadgeClass(status: string): string {
   }
 }
 
-export function DocumentList({ documents, isLoading, onChanged }: DocumentListProps) {
+export function DocumentList({
+  documents,
+  isLoading,
+  onChanged,
+  onInvalidAccessToken,
+}: DocumentListProps) {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -34,6 +40,10 @@ export function DocumentList({ documents, isLoading, onChanged }: DocumentListPr
       onChanged()
     } catch (deleteError) {
       if (deleteError instanceof DocumentsApiError) {
+        if (deleteError.code === 'invalid_access_token' || deleteError.status === 401) {
+          onInvalidAccessToken?.()
+          return
+        }
         setError(deleteError.message)
       } else {
         setError(`Could not delete "${filename}". Try again.`)

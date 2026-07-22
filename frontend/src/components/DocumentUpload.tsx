@@ -3,11 +3,12 @@ import { DocumentsApiError, uploadDocument } from '../api/documentsClient'
 
 interface DocumentUploadProps {
   onUploaded: () => void
+  onInvalidAccessToken?: () => void
 }
 
 const ACCEPTED_TYPES = '.pdf,.docx,.md,.txt'
 
-export function DocumentUpload({ onUploaded }: DocumentUploadProps) {
+export function DocumentUpload({ onUploaded, onInvalidAccessToken }: DocumentUploadProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [isUploading, setIsUploading] = useState(false)
@@ -31,6 +32,10 @@ export function DocumentUpload({ onUploaded }: DocumentUploadProps) {
       onUploaded()
     } catch (uploadError) {
       if (uploadError instanceof DocumentsApiError) {
+        if (uploadError.code === 'invalid_access_token' || uploadError.status === 401) {
+          onInvalidAccessToken?.()
+          return
+        }
         if (uploadError.status === 413) {
           setError('File exceeds the upload size limit. Choose a smaller file.')
         } else {

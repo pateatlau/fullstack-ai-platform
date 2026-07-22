@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { cleanup, screen } from '@testing-library/react'
+import { Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ProtectedRoute } from '../components/ProtectedRoute'
 import { ChatPage } from './ChatPage'
 import { DocumentsPage } from './DocumentsPage'
 import { storeSession } from '../auth/tokenStorage'
@@ -22,19 +24,43 @@ function makeJwt(expSecondsFromNow: number): string {
   return `${header}.${payload}.signature`
 }
 
-describe('DocumentsPage guest gate', () => {
+function renderDocumentsRoute(initialRoute: string) {
+  return renderWithProviders(
+    <Routes>
+      <Route path="/" element={<ChatPage />} />
+      <Route
+        path="/documents"
+        element={
+          <ProtectedRoute>
+            <DocumentsPage />
+          </ProtectedRoute>
+        }
+      />
+    </Routes>,
+    { initialRoute, withChatProvider: true },
+  )
+}
+
+describe('DocumentsPage guest redirect', () => {
+  beforeEach(() => {
+    Object.defineProperty(globalThis.HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    })
+  })
+
   afterEach(() => {
     cleanup()
     window.localStorage.clear()
+    vi.restoreAllMocks()
   })
 
-  it('shows login prompt and hides upload UI for guests', () => {
-    renderWithProviders(<DocumentsPage />, { initialRoute: '/documents' })
+  it('redirects guests to chat instead of showing a login prompt', () => {
+    renderDocumentsRoute('/documents')
 
-    expect(screen.getByText(/Sign in to continue/i)).toBeTruthy()
-    expect(screen.getByText(/Documents & Knowledge Base/i)).toBeTruthy()
+    expect(screen.getByPlaceholderText('Ask something…')).toBeTruthy()
+    expect(screen.queryByText(/Sign in to continue/i)).toBeNull()
     expect(screen.queryByLabelText(/Choose a document file/i)).toBeNull()
-    expect(screen.queryByText(/Ask about your documents in chat/i)).toBeNull()
   })
 })
 
@@ -55,12 +81,49 @@ describe('DocumentsPage authenticated layout', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    renderWithProviders(<DocumentsPage />, { initialRoute: '/documents' })
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/documents"
+          element={
+            <ProtectedRoute>
+              <DocumentsPage />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>,
+      { initialRoute: '/documents' },
+    )
 
     expect(await screen.findByRole('heading', { name: 'Upload document' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Your documents' })).toBeTruthy()
     expect(screen.getByText(/Ask about your documents in chat/i)).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Go to chat' })).toBeTruthy()
+  })
+
+  it('calls handleInvalidAccessToken when listDocuments returns invalid_access_token', async () => {
+    storeSession(makeJwt(3600), user)
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'invalid_access_token',
+            message: 'The provided access token is invalid or expired.',
+          },
+        }),
+        {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderDocumentsRoute('/documents')
+
+    expect(await screen.findByPlaceholderText('Ask something…')).toBeTruthy()
+    expect(screen.getByText(/Your session expired/i)).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalled()
   })
 })
 

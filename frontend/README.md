@@ -135,7 +135,7 @@ Release summaries: [docs/releases/post-mvp-v1-release-summary.md](../docs/releas
 
 ## Documents and RAG UI (Phase 12 + V1.1)
 
-- **Route:** `/documents` (authenticated users only) — upload, list, delete
+- **Route:** `/documents` (authenticated users only via `ProtectedRoute`; unauthenticated/expired sessions redirect to `/`) — upload, list, delete
 - **Chat route:** `/` — primary ask surface; authenticated users enable web search / document grounding via composer toggles (V1.1)
 - **Required env:** `VITE_API_BASE_URL` (unchanged; no new `VITE_*` flags — feature availability is detected via `GET /api/health`)
 - **Backend:** Set `RAG_ENABLED=true` and/or `TOOLS_ENABLED=true` for document / web search toggles; `WEB_SEARCH_API_KEY` required when tools are on
