@@ -137,6 +137,7 @@ Release summaries: [docs/releases/post-mvp-v1-release-summary.md](../docs/releas
 
 - **Route:** `/documents` (authenticated users only via `ProtectedRoute`; unauthenticated/expired sessions redirect to `/`) — upload, list, delete
 - **Chat route:** `/` — primary ask surface; authenticated users enable web search / document grounding via composer toggles (V1.1)
+- **404 catch-all:** unknown paths (e.g. `/unknown-path`) render `NotFoundPage` with **Back to Chat** → `/` (V1.1.1 Phase 5)
 - **Required env:** `VITE_API_BASE_URL` (unchanged; no new `VITE_*` flags — feature availability is detected via `GET /api/health`)
 - **Backend:** Set `RAG_ENABLED=true` and/or `TOOLS_ENABLED=true` for document / web search toggles; `WEB_SEARCH_API_KEY` required when tools are on
 - **Guest policy:** Guests cannot use toggles; see sign-in prompt in composer. Documents nav link hidden until signed in
