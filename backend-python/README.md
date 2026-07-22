@@ -625,8 +625,39 @@ Additional behavior tied to these settings:
 
 - `GET /` - welcome message
 - `GET /api/health` - status + active provider + app version
+- `GET /api/health/ready` - readiness probe (DB `SELECT 1`; returns `{"status":"ok","db":"ok"}`)
 - `POST /api/chat` - non-streaming completion
 - `POST /api/chat/stream` - SSE streaming completion (plain chat, document grounding, and/or web search toggles)
+
+### Chat session API (V1.1.1)
+
+Requires `CHAT_PERSISTENCE_ENABLED=true`. Session list/create/resume unchanged from V1.1; V1.1.1 adds delete and auto-title behavior.
+
+| Method | Path | Auth | Purpose |
+| ------ | ---- | ---- | ------- |
+| GET | `/api/chat/sessions` | Bearer JWT | List caller's sessions (newest activity first) |
+| POST | `/api/chat/sessions` | Bearer JWT | Create empty session (`title: null` until first chat turn) |
+| GET | `/api/chat/sessions/{id}` | Bearer JWT | Session metadata + messages |
+| DELETE | `/api/chat/sessions/{id}` | Bearer JWT | Delete session and cascade children (**204**); **403** for guests; **404** if not owned |
+
+**Delete cascade:** DB foreign keys remove `chat_messages`, `session_summaries`, and `usage_events` for the session. Frontend confirms deletion and selects the most recent remaining session, or creates a new empty session when the list is empty.
+
+**Auto-title (V1.1.1):** On the first persisted user message when `session.title IS NULL`, `derive_session_title()` in `app/core/text_utils.py` sets the title — first line only, whitespace collapsed, ~50 characters. Existing titles are never overwritten. Empty sessions created via `POST /api/chat/sessions` display **"New chat"** in the UI until the first turn.
+
+### Public demo protection (V1.1.1)
+
+Config-driven caps for public deployments. See [docs/ops/public-demo-protection.md](../docs/ops/public-demo-protection.md) for the operator checklist (rate limits, token caps, upload quotas, provider spending alerts).
+
+| Setting | Dev default | Public demo note |
+| ------- | ----------- | ---------------- |
+| `GUEST_MAX_OUTPUT_TOKENS` | `4096` | Lower to `512` (or use `DEMO_MODE_STRICT=true`) |
+| `AUTHENTICATED_DAILY_UPLOAD_QUOTA` | unset (unlimited) | e.g. `20` uploads per UTC day |
+| `GUEST_DAILY_UPLOAD_QUOTA` | `5` | Future-proof if guest upload is enabled |
+| `DEMO_MODE_STRICT` | `false` | `true` tightens guest tokens and upload quota defaults |
+| `RATE_LIMIT_ANONYMOUS_PER_MINUTE` | `30` | Review for production demo profile |
+| `RATE_LIMIT_AUTHENTICATED_PER_MINUTE` | `120` | Review for production demo profile |
+
+Guests remain denied `use_web_search` and `use_documents` (V1.1 policy unchanged).
 
 ### SSE event protocol (`POST /api/chat/stream`)
 
