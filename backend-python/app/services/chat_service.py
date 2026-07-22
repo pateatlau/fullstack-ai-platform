@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.caller import CallerContext
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
+from app.core.text_utils import derive_session_title
 from app.ai.deps import get_prompt_manager
 from app.ai.prompts.manager import PromptManager
 from app.db.models import ChatMessage, ChatSession, SessionSummary, UsageEvent
@@ -103,6 +104,8 @@ class ChatStore(Protocol):
     ) -> ChatMessage | None: ...
 
     async def mark_last_message_at(self, session_id: uuid.UUID) -> None: ...
+
+    async def update_title(self, session_id: uuid.UUID, title: str) -> None: ...
 
     async def list_messages_after_seq(
         self, session_id: uuid.UUID, after_seq: int
@@ -442,12 +445,22 @@ class ChatService:
             )
         return last_message.content
 
-    @staticmethod
-    def _derive_title(request: ChatRequestSchema) -> str | None:
-        for message in request.messages:
-            if message.role == "user":
-                return message.content[:80]
-        return None
+    async def _maybe_set_session_title(
+        self, chat_session: ChatSession, user_content: str
+    ) -> None:
+        if chat_session.title is not None:
+            return
+        title = derive_session_title(user_content)
+        if title is None:
+            return
+        assert self._chat_store is not None
+        await self._chat_store.update_title(chat_session.id, title)
+        chat_session.title = title
+        logger.info(
+            "Session title auto-generated",
+            title_auto_generated_total=True,
+            session_id=str(chat_session.id),
+        )
 
     async def _commit(self) -> None:
         if self._session is not None:
@@ -512,7 +525,7 @@ class ChatService:
         return await self._chat_store.create_session(
             user_id=caller.user_id,
             guest_id=caller.guest_id,
-            title=self._derive_title(request),
+            title=None,
         )
 
     async def _maybe_check_quota(self, caller: CallerContext) -> None:
@@ -798,6 +811,7 @@ class ChatService:
                 content=prompt_text,
                 client_message_id=request.client_message_id,
             )
+            await self._maybe_set_session_title(chat_session, prompt_text)
         except ChatServiceError:
             raise
         except (OperationalError, InterfaceError, DBAPIError) as exc:
@@ -1038,6 +1052,7 @@ class ChatService:
                 content=prompt_text,
                 client_message_id=request.client_message_id,
             )
+            await self._maybe_set_session_title(chat_session, prompt_text)
         except ChatServiceError:
             raise
         except (OperationalError, InterfaceError, DBAPIError) as exc:

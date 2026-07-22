@@ -153,6 +153,7 @@ class ToolChatService:
                 content=prompt_text,
                 client_message_id=request.client_message_id,
             )
+            await self._chat_service._maybe_set_session_title(chat_session, prompt_text)
         except ChatServiceError:
             raise
         except (OperationalError, InterfaceError, DBAPIError) as exc:

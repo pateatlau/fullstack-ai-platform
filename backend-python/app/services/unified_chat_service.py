@@ -790,6 +790,9 @@ class UnifiedChatService:
                     content=prompt_text,
                     client_message_id=request.client_message_id,
                 )
+                await self._chat_service._maybe_set_session_title(
+                    chat_session, prompt_text
+                )
             assistant_seq = await chat_store.allocate_seq(chat_session.id)
             await chat_store.add_message(
                 session_id=chat_session.id,
@@ -860,6 +863,7 @@ class UnifiedChatService:
                 content=prompt_text,
                 client_message_id=request.client_message_id,
             )
+            await self._chat_service._maybe_set_session_title(chat_session, prompt_text)
             assistant_seq = await chat_store.allocate_seq(chat_session.id)
             await chat_store.add_message(
                 session_id=chat_session.id,
@@ -920,6 +924,7 @@ class UnifiedChatService:
                 content=prompt_text,
                 client_message_id=request.client_message_id,
             )
+            await self._chat_service._maybe_set_session_title(chat_session, prompt_text)
             assistant_seq = await chat_store.allocate_seq(chat_session.id)
             await chat_store.add_message(
                 session_id=chat_session.id,

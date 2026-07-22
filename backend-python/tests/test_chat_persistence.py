@@ -546,6 +546,48 @@ async def test_delete_owned_session_returns_204_and_subsequent_get_404(
 
 
 @pytest.mark.anyio
+async def test_post_empty_session_then_first_chat_turn_sets_title(
+    app_persistence: FakeProvider,
+    db_session: AsyncSession,
+) -> None:
+    """Phase 3: POST empty session keeps title null; first chat turn sets title."""
+    _ = app_persistence
+    user_store = SqlUserStore(db_session)
+    user = await user_store.create(
+        sub=f"title-{uuid.uuid4()}", email=None, name=None, picture=None
+    )
+    await db_session.commit()
+    headers = _auth_headers(user.id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        created = await client.post("/api/chat/sessions", headers=headers)
+        assert created.status_code == 201
+        session_id = created.json()["id"]
+        assert created.json()["title"] is None
+
+        chat = await client.post(
+            "/api/chat",
+            json={
+                "messages": [{"role": "user", "content": "Integration title message"}],
+                "session_id": session_id,
+            },
+            headers=headers,
+        )
+        assert chat.status_code == 200
+
+        listed = await client.get("/api/chat/sessions", headers=headers)
+        resumed = await client.get(f"/api/chat/sessions/{session_id}", headers=headers)
+
+    assert listed.status_code == 200
+    listed_item = next(item for item in listed.json() if item["id"] == session_id)
+    assert listed_item["title"] == "Integration title message"
+    assert resumed.status_code == 200
+    assert resumed.json()["title"] == "Integration title message"
+
+
+@pytest.mark.anyio
 async def test_delete_foreign_session_returns_404(
     app_persistence: FakeProvider,
     db_session: AsyncSession,

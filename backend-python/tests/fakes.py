@@ -435,6 +435,11 @@ class FakeChatStore:
         if chat_session is not None:
             chat_session.last_message_at = datetime.datetime.now(datetime.timezone.utc)
 
+    async def update_title(self, session_id: uuid.UUID, title: str) -> None:
+        chat_session = self.sessions.get(session_id)
+        if chat_session is not None:
+            chat_session.title = title
+
     async def list_messages_after_seq(
         self, session_id: uuid.UUID, after_seq: int
     ) -> list[ChatMessage]:

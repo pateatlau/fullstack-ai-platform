@@ -157,7 +157,7 @@ describe('ChatPage session sidebar wiring', () => {
 
     expect(screen.getAllByText('Trip planning').length).toBeGreaterThan(0)
     // The untitled second session shows up as a selectable "Saved" entry.
-    expect(screen.getByRole('button', { name: 'New conversation' })).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'New chat' })).not.toBeNull()
   })
 
   it('clicking the current entry with no active session does not fetch a sentinel session id', async () => {
@@ -173,7 +173,7 @@ describe('ChatPage session sidebar wiring', () => {
 
     renderWithProviders(<ChatPage />)
 
-    const currentEntry = await screen.findByRole('button', { name: 'New conversation' })
+    const currentEntry = await screen.findByRole('button', { name: 'New chat' })
     await userEvent.setup().click(currentEntry)
 
     // No GET to /api/chat/sessions/unsaved-session (or any other id) and no

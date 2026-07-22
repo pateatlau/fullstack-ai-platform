@@ -143,7 +143,7 @@ describe('Composer behavior', () => {
     expect(screen.getByDisplayValue('gpt-4o-mini')).not.toBeNull()
     expect(
       screen
-        .getByRole('button', { name: /New conversation|Current session/ })
+        .getByRole('button', { name: 'New chat', current: 'page' })
         .getAttribute('aria-current'),
     ).toBe('page')
   })

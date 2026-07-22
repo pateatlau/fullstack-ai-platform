@@ -222,6 +222,11 @@ class SqlChatStore:
             .values(last_message_at=func.now())
         )
 
+    async def update_title(self, session_id: uuid.UUID, title: str) -> None:
+        await self._session.execute(
+            update(ChatSession).where(ChatSession.id == session_id).values(title=title)
+        )
+
     # ---- summaries (plan Sections 2.6, 5.5, 5.6) ----------------------------
 
     async def list_messages_after_seq(

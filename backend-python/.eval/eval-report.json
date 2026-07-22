@@ -71,7 +71,7 @@
       "error": null,
       "faithfulness": 1.0,
       "hallucination": false,
-      "latency_ms": 168,
+      "latency_ms": 141,
       "latency_warning": null,
       "level": "e2e",
       "passed": true,
@@ -98,7 +98,7 @@
   "summary": {
     "failed": 0,
     "mean_latency_ms": {
-      "e2e": 168.0,
+      "e2e": 141.0,
       "prompt": 0.0,
       "retrieval": 16.0
     },
@@ -109,5 +109,5 @@
     },
     "skipped": 0
   },
-  "timestamp": "2026-07-22T07:19:06.950303+00:00"
+  "timestamp": "2026-07-22T08:32:08.598993+00:00"
 }

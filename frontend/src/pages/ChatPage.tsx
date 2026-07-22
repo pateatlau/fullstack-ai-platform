@@ -583,10 +583,10 @@ function ChatPageContent() {
   const currentSession = useMemo<ChatSessionSummary>(() => {
     const title =
       isAuthenticated && activeSessionListItem
-        ? (activeSessionListItem.title ?? 'New conversation')
+        ? (activeSessionListItem.title ?? 'New chat')
         : state.messages.length > 0
           ? 'Current session'
-          : 'New conversation'
+          : 'New chat'
 
     return {
       id: isAuthenticated ? (state.activeSessionId ?? 'unsaved-session') : 'current-session',
@@ -609,7 +609,7 @@ function ChatPageContent() {
       .filter((session) => session.id !== state.activeSessionId)
       .map((session) => ({
         id: session.id,
-        title: session.title ?? 'New conversation',
+        title: session.title ?? 'New chat',
         preview: session.last_message_at ? 'Continue this conversation.' : 'No messages yet.',
         updatedLabel: session.last_message_at
           ? new Date(session.last_message_at).toLocaleString()
@@ -873,7 +873,10 @@ function ChatPageContent() {
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-semibold text-zinc-950">
+                            <p
+                              className="truncate text-sm font-semibold text-zinc-950"
+                              title={session.title}
+                            >
                               {session.title}
                             </p>
                             <p className="mt-1 line-clamp-2 text-xs text-zinc-700">
@@ -937,7 +940,10 @@ function ChatPageContent() {
                           onClick={() => handleSelectSession(session.id)}
                           disabled={!session.isSelectable}
                         >
-                          <p className="truncate text-sm font-semibold text-zinc-950">
+                          <p
+                            className="truncate text-sm font-semibold text-zinc-950"
+                            title={session.title}
+                          >
                             {session.title}
                           </p>
                           <p className="mt-1 line-clamp-2 text-xs text-zinc-700">
