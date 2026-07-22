@@ -51,6 +51,7 @@ from app.services.chat_service import (
     ChatServiceError,
     ClosableAsyncIterator,
     DbUnavailableError,
+    EmptyProviderResponseError,
     _StreamPrep,
     format_sse,
     normalize_chat_error,
@@ -652,6 +653,35 @@ class UnifiedChatService:
                     )
                 if chunk["finish_reason"]:
                     finish_reason = chunk["finish_reason"]
+
+            if not collected:
+                empty_error = EmptyProviderResponseError()
+                logger.warning(
+                    "Unified provider stream returned no content",
+                    provider=provider_name,
+                    model=model,
+                    response_id=response_id,
+                    finish_reason=finish_reason,
+                )
+                await self._chat_service._persist_stream_result(
+                    caller=caller,
+                    prep=prep,
+                    provider=provider,
+                    provider_name=provider_name,
+                    model=model,
+                    content="",
+                    finish_reason=None,
+                    status="error",
+                )
+                yield format_sse(
+                    "error",
+                    ErrorFrame(
+                        id=response_id,
+                        code=empty_error.code,
+                        message=empty_error.message,
+                    ),
+                )
+                return
 
             await self._chat_service._persist_stream_result(
                 caller=caller,

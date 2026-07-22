@@ -26,13 +26,8 @@ import { useChatStreamingEnabled } from '../hooks/useChatStreamingEnabled'
 import { MessageList } from '../components/MessageList'
 import { PageBanner } from '../components/PageBanner'
 import { Composer } from '../components/Composer'
-import type {
-  ChatChunk,
-  ChatRequest,
-  ChatSessionSummary,
-  Message,
-  PersistedChatMessage,
-} from '../types/chat'
+import type { ChatChunk, ChatRequest, ChatSessionSummary, Message } from '../types/chat'
+import { toApiMessages, toLocalMessage } from '../utils/chatMessages'
 
 const INVALID_ACCESS_TOKEN_CODE = 'invalid_access_token'
 const QUOTA_EXCEEDED_CODE = 'quota_exceeded'
@@ -70,16 +65,6 @@ function toConnectionErrorMessage(error: Error): string {
     return 'Could not reach the backend. Check the server connection and retry.'
   }
   return error.message
-}
-
-function toLocalMessage(message: PersistedChatMessage): Message {
-  return {
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    status: message.status,
-    createdAt: message.created_at,
-  }
 }
 
 function ChatPageContent() {
@@ -517,10 +502,7 @@ function ChatPageContent() {
     }
     dispatch({ type: 'ADD_USER_MESSAGE', message: userMessage })
 
-    const history = [...state.messages, userMessage].map(({ role, content: text }) => ({
-      role,
-      content: text,
-    }))
+    const history = toApiMessages([...state.messages, userMessage])
     // Guests omit provider/model (server applies the system default, plan
     // Section 3.2) and session_id (the backend reuses their single default
     // chat automatically). Authenticated turns continue the active session.

@@ -225,6 +225,17 @@ def _extract_text(payload: Any) -> str:
     return "".join(collected)
 
 
+def _extract_stream_chunk(payload: Any) -> tuple[str, str | None]:
+    content = _extract_text(payload)
+    finish_reason: str | None = None
+    candidates = getattr(payload, "candidates", None)
+    if candidates:
+        raw_finish_reason = getattr(candidates[0], "finish_reason", None)
+        if raw_finish_reason is not None:
+            finish_reason = str(raw_finish_reason)
+    return content, finish_reason
+
+
 @dataclass
 class _NextChunkResult:
     done: bool
@@ -248,7 +259,8 @@ class GeminiProvider:
         self,
         *,
         model: str,
-        prompt: str,
+        contents: str | list[Any],
+        system_instruction: str | None = None,
         temperature: float,
         max_tokens: int | None = None,
     ) -> Iterator[Any]:
@@ -260,11 +272,13 @@ class GeminiProvider:
             models_api.generate_content_stream,
         )
         config: dict[str, Any] = {"temperature": temperature}
+        if system_instruction is not None:
+            config["system_instruction"] = system_instruction
         if max_tokens is not None:
             config["max_output_tokens"] = max_tokens
         return generate_content_stream(
             model=model,
-            contents=prompt,
+            contents=contents,
             config=config,
         )
 
@@ -326,10 +340,15 @@ class GeminiProvider:
         *,
         max_tokens: int | None = None,
     ) -> AsyncIterator[ProviderChunk]:
-        prompt = _messages_to_prompt(messages)
+        # Unified chat may pass tool-loop history as dict messages after web
+        # search; use the native contents API so those turns round-trip correctly.
+        system_instruction, contents = _to_gemini_contents(
+            cast(list[ChatMessageInput], messages)
+        )
         stream = self._generate_content_stream(
             model=model,
-            prompt=prompt,
+            contents=contents,
+            system_instruction=system_instruction,
             temperature=temperature,
             max_tokens=max_tokens,
         )
@@ -340,9 +359,11 @@ class GeminiProvider:
             if result.done:
                 break
 
-            content = _extract_text(result.payload)
-            if content:
-                yield ProviderChunk(content=content, finish_reason=None)
+            content, finish_reason = _extract_stream_chunk(result.payload)
+            if not content and finish_reason is None:
+                continue
+
+            yield ProviderChunk(content=content, finish_reason=finish_reason)
 
     async def complete_chat(
         self,

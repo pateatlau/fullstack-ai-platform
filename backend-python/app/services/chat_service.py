@@ -208,6 +208,15 @@ class ProviderError(ChatServiceError):
         )
 
 
+class EmptyProviderResponseError(ChatServiceError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="empty_provider_response",
+            message="The model returned an empty response. Please try again.",
+            status_code=502,
+        )
+
+
 class SessionNotFoundError(ChatServiceError):
     def __init__(self) -> None:
         super().__init__(
@@ -825,6 +834,22 @@ class ChatService:
                 provider_name,
                 caller=caller,
             )
+            if not completion.content.strip():
+                raise EmptyProviderResponseError()
+        except EmptyProviderResponseError as exc:
+            error_seq = await self._chat_store.allocate_seq(chat_session.id)
+            await self._chat_store.add_message(
+                session_id=chat_session.id,
+                seq=error_seq,
+                role="assistant",
+                content="",
+                provider=provider_name,
+                model=model,
+                status="error",
+            )
+            await self._chat_store.mark_last_message_at(chat_session.id)
+            await self._commit()
+            raise exc
         except Exception as exc:  # noqa: BLE001 - normalize provider failures
             app_error = normalize_chat_error(exc)
             error_seq = await self._chat_store.allocate_seq(chat_session.id)
@@ -1145,6 +1170,35 @@ class ChatService:
                     )
                 if chunk["finish_reason"]:
                     finish_reason = chunk["finish_reason"]
+
+            if not collected:
+                empty_error = EmptyProviderResponseError()
+                logger.warning(
+                    "Provider stream returned no content",
+                    provider=provider_name,
+                    model=model,
+                    response_id=response_id,
+                    finish_reason=finish_reason,
+                )
+                await self._persist_stream_result(
+                    caller=caller,
+                    prep=prep,
+                    provider=provider,
+                    provider_name=provider_name,
+                    model=model,
+                    content="",
+                    finish_reason=None,
+                    status="error",
+                )
+                yield _format_sse(
+                    "error",
+                    ErrorFrame(
+                        id=response_id,
+                        code=empty_error.code,
+                        message=empty_error.message,
+                    ),
+                )
+                return
 
             await self._persist_stream_result(
                 caller=caller,

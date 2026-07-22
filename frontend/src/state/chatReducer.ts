@@ -1,4 +1,5 @@
 import type { ChatSessionListItem, Message } from '../types/chat'
+import { EMPTY_ASSISTANT_RESPONSE_MESSAGE } from '../utils/chatMessages'
 
 export interface ChatState {
   messages: Message[]
@@ -126,19 +127,31 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'END_MESSAGE':
       return {
         ...state,
-        messages: state.messages.map((message) =>
-          message.id === action.id
-            ? {
-                ...message,
-                status: 'complete',
-                errorMessage: undefined,
-                errorCode: undefined,
-                canRetry: false,
-                toolsUsed: action.toolsUsed,
-                retrievedChunkCount: action.retrievedChunkCount,
-              }
-            : message,
-        ),
+        messages: state.messages.map((message) => {
+          if (message.id !== action.id) {
+            return message
+          }
+
+          if (message.role === 'assistant' && message.content.trim().length === 0) {
+            return {
+              ...message,
+              status: 'error',
+              errorMessage: EMPTY_ASSISTANT_RESPONSE_MESSAGE,
+              errorCode: 'empty_provider_response',
+              canRetry: true,
+            }
+          }
+
+          return {
+            ...message,
+            status: 'complete',
+            errorMessage: undefined,
+            errorCode: undefined,
+            canRetry: false,
+            toolsUsed: action.toolsUsed,
+            retrievedChunkCount: action.retrievedChunkCount,
+          }
+        }),
       }
 
     case 'RETRY_MESSAGE':

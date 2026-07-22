@@ -92,7 +92,13 @@ describe('chatReducer', () => {
       createdAt: 't1',
     })
 
-    const ended = chatReducer(started, { type: 'END_MESSAGE', id: 'resp_1' })
+    const withContent = chatReducer(started, {
+      type: 'APPEND_DELTA',
+      id: 'resp_1',
+      content: 'Done',
+    })
+
+    const ended = chatReducer(withContent, { type: 'END_MESSAGE', id: 'resp_1' })
 
     expect(ended.messages[0].status).toBe('complete')
     expect(ended.messages[0].canRetry).toBe(false)
@@ -174,6 +180,27 @@ describe('chatReducer', () => {
       errorMessage: 'The connection dropped before the response finished.',
       canRetry: true,
     })
+  })
+
+  it('END_MESSAGE marks empty assistant responses as retryable errors', () => {
+    const started = chatReducer(initialChatState, {
+      type: 'START_MESSAGE',
+      id: 'resp_1',
+      createdAt: 't1',
+    })
+
+    const completed = chatReducer(started, {
+      type: 'END_MESSAGE',
+      id: 'resp_1',
+    })
+
+    expect(completed.messages[0]).toMatchObject({
+      status: 'error',
+      content: '',
+      errorCode: 'empty_provider_response',
+      canRetry: true,
+    })
+    expect(completed.messages[0].errorMessage).toContain('empty response')
   })
 
   it('STREAM_ERROR marks the message errored and stores provider metadata', () => {

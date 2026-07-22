@@ -93,6 +93,20 @@ class CapturingStreamProvider(FakeProvider):
         yield ProviderChunk(content="default stream response", finish_reason="stop")
 
 
+class EmptyStreamProvider(FakeProvider):
+    async def stream_chat(
+        self,
+        messages: list[ChatMessageSchema],
+        model: str,
+        temperature: float = 0.7,
+        *,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[ProviderChunk]:
+        del messages, model, temperature, max_tokens
+        if False:  # pragma: no cover - keeps this an async generator
+            yield ProviderChunk(content="", finish_reason=None)
+
+
 class DisconnectAfterFirstChunkRequest:
     def __init__(self) -> None:
         self.calls = 0
@@ -211,6 +225,32 @@ async def test_chat_stream_surfaces_provider_error_frame(
     assert [event for event, _ in frames] == ["start", "error"]
     assert frames[-1][1]["code"] == "provider_error"
     assert frames[-1][1]["message"] == "Upstream provider failed."
+
+
+@pytest.mark.anyio
+async def test_chat_stream_surfaces_empty_provider_response_as_error_frame(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(EmptyStreamProvider()),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/chat/stream",
+            json={"messages": [{"role": "user", "content": "Hello"}]},
+        )
+
+    frames = _parse_sse_frames(response.text)
+
+    assert response.status_code == 200
+    assert [event for event, _ in frames] == ["start", "error"]
+    assert frames[-1][1]["code"] == "empty_provider_response"
+    assert "empty response" in frames[-1][1]["message"].lower()
 
 
 def test_chat_service_stops_streaming_when_client_disconnects(

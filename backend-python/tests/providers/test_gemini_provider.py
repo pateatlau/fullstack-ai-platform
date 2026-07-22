@@ -2,7 +2,7 @@ import asyncio
 import sys
 from pathlib import Path
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -38,7 +38,7 @@ class _FakeModels:
         return _FakeResponse("Gemini full response")
 
     def generate_content_stream(
-        self, model: str, contents: str, config: dict[str, Any]
+        self, model: str, contents: str | list[Any], config: dict[str, Any]
     ) -> Iterator[_FakeChunk]:
         assert model
         assert contents
@@ -87,6 +87,98 @@ def test_stream_chat_yields_incremental_chunks() -> None:
         {"content": "Gemini ", "finish_reason": None},
         {"content": "stream", "finish_reason": None},
     ]
+
+
+def test_stream_chat_yields_terminal_finish_reason_without_text() -> None:
+    class _FinishOnlyChunk:
+        def __init__(self) -> None:
+            self.candidates = [_FakeFinishCandidate()]
+
+    class _FakeFinishCandidate:
+        def __init__(self) -> None:
+            self.content = type("Content", (), {"parts": []})()
+            self.finish_reason = "STOP"
+
+    class _FinishOnlyModels:
+        def generate_content_stream(
+            self, model: str, contents: str, config: dict[str, Any]
+        ) -> Iterator[_FinishOnlyChunk]:
+            del model, contents, config
+            yield _FinishOnlyChunk()
+
+    provider = GeminiProvider(api_key="test-key")
+    provider._client = type("Client", (), {"models": _FinishOnlyModels()})()  # type: ignore[assignment]
+
+    async def gather_chunks() -> list[ProviderChunk]:
+        chunks: list[ProviderChunk] = []
+        async for chunk in provider.stream_chat(
+            messages=[ChatMessageSchema(role="user", content="hello")],
+            model="gemini-3.1-flash-lite",
+            temperature=0.7,
+        ):
+            chunks.append(chunk)
+        return chunks
+
+    chunks = asyncio.run(gather_chunks())
+
+    assert chunks == [{"content": "", "finish_reason": "STOP"}]
+
+
+def test_stream_chat_accepts_tool_loop_dict_messages() -> None:
+    captured: dict[str, Any] = {}
+
+    class _CapturingModels:
+        def generate_content_stream(
+            self, model: str, contents: list[Any], config: dict[str, Any]
+        ) -> Iterator[_FakeChunk]:
+            captured["model"] = model
+            captured["contents"] = contents
+            captured["config"] = config
+            yield _FakeChunk("Grounded answer")
+
+    provider = GeminiProvider(api_key="test-key")
+    provider._client = type("Client", (), {"models": _CapturingModels()})()  # type: ignore[assignment]
+
+    async def gather_chunks() -> list[ProviderChunk]:
+        chunks: list[ProviderChunk] = []
+        async for chunk in provider.stream_chat(
+            cast(
+                list[ChatMessageSchema],
+                [
+                    ChatMessageSchema(role="user", content="Search for news"),
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "web_search",
+                                    "arguments": '{"query": "news"}',
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call-1",
+                        "content": '{"success": true, "results": []}',
+                    },
+                ],
+            ),
+            model="gemini-3.1-flash-lite",
+            temperature=0.7,
+        ):
+            chunks.append(chunk)
+        return chunks
+
+    chunks = asyncio.run(gather_chunks())
+
+    assert chunks == [{"content": "Grounded answer", "finish_reason": None}]
+    assert len(captured["contents"]) == 3
+    function_response = captured["contents"][-1].parts[0].function_response
+    assert function_response.name == "web_search"
 
 
 def test_factory_returns_gemini_when_settings_select_it() -> None:
