@@ -24,6 +24,10 @@ from app.services.chat_service import (
     normalize_chat_error,
 )
 from tests.fakes import FakeProvider
+from tests.provider_error_assertions import (
+    assert_json_error_has_no_sdk_leakage,
+    assert_no_provider_sdk_leakage,
+)
 
 
 class ErroringProvider(FakeProvider):
@@ -260,6 +264,7 @@ async def test_chat_endpoint_normalizes_provider_errors(
     body = response.json()
     assert body["error"]["code"] == "provider_error"
     assert body["error"]["message"] == "Upstream provider failed."
+    assert_json_error_has_no_sdk_leakage(body)
     assert body["error"]["request_id"] is not None
     assert response.headers.get("X-Request-ID") == body["error"]["request_id"]
 
@@ -302,6 +307,7 @@ def test_normalize_chat_error_handles_provider_specific_sdk_errors(
     normalized = normalize_chat_error(exception)
 
     assert normalized.code == expected_code
+    assert_no_provider_sdk_leakage(normalized.message)
 
 
 @pytest.mark.anyio

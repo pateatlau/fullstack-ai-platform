@@ -16,6 +16,7 @@ from app.ai.tools.implementations.web_search import (
 from app.ai.tools.schemas import ToolExecutionContext
 from app.core.caller import CallerContext
 from app.core.config import Settings
+from tests.provider_error_assertions import assert_no_provider_sdk_leakage
 
 pytestmark = pytest.mark.anyio
 
@@ -145,6 +146,8 @@ async def test_search_provider_failure_returns_normalized_error(
 
     assert result.success is False
     assert result.error_code == "provider_error"
+    assert result.error is not None
+    assert_no_provider_sdk_leakage(result.error)
     assert "secret-query" not in caplog.text
 
 

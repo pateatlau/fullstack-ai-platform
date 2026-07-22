@@ -1,5 +1,6 @@
 import { useRef, useState, type FormEvent } from 'react'
 import { DocumentsApiError, uploadDocument } from '../api/documentsClient'
+import { friendlyErrorMessage } from '../utils/friendlyErrors'
 import { LoadingIndicator, LoadingSpinner } from './LoadingIndicator'
 
 interface DocumentUploadProps {
@@ -40,7 +41,7 @@ export function DocumentUpload({ onUploaded, onInvalidAccessToken }: DocumentUpl
         if (uploadError.status === 413) {
           setError('File exceeds the upload size limit. Choose a smaller file.')
         } else {
-          setError(uploadError.message)
+          setError(friendlyErrorMessage(uploadError.code, uploadError.message))
         }
       } else {
         setError('Upload failed. Check your connection and try again.')

@@ -13,6 +13,7 @@ from app.providers.factory import ProviderFactory
 from app.schemas.chat import ChatMessageSchema, ChatRequestSchema
 from app.services.chat_service import ChatService
 from tests.fakes import FakeProvider
+from tests.provider_error_assertions import assert_no_provider_sdk_leakage
 
 
 def _parse_sse_frames(payload: str) -> list[tuple[str, dict[str, Any]]]:
@@ -225,6 +226,7 @@ async def test_chat_stream_surfaces_provider_error_frame(
     assert [event for event, _ in frames] == ["start", "error"]
     assert frames[-1][1]["code"] == "provider_error"
     assert frames[-1][1]["message"] == "Upstream provider failed."
+    assert_no_provider_sdk_leakage(frames[-1][1]["message"])
 
 
 @pytest.mark.anyio

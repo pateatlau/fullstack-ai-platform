@@ -29,6 +29,7 @@ import { PageBanner } from '../components/PageBanner'
 import { Composer } from '../components/Composer'
 import type { ChatChunk, ChatRequest, ChatSessionSummary, Message } from '../types/chat'
 import { toApiMessages, toLocalMessage } from '../utils/chatMessages'
+import { friendlyErrorMessage } from '../utils/friendlyErrors'
 
 const INVALID_ACCESS_TOKEN_CODE = 'invalid_access_token'
 const QUOTA_EXCEEDED_CODE = 'quota_exceeded'
@@ -66,6 +67,10 @@ function toConnectionErrorMessage(error: Error): string {
     return 'Could not reach the backend. Check the server connection and retry.'
   }
   return error.message
+}
+
+function toChatDisplayError(code: string | undefined, message: string): string {
+  return friendlyErrorMessage(code, message)
 }
 
 function ChatPageContent() {
@@ -195,11 +200,14 @@ function ChatPageContent() {
           dispatch({
             type: 'STREAM_ERROR',
             id,
-            message: error.message,
+            message: toChatDisplayError(error.code, error.message),
             code: error.code,
           })
         } else {
-          dispatch({ type: 'SET_ERROR', message: error.message })
+          dispatch({
+            type: 'SET_ERROR',
+            message: toChatDisplayError(error.code, error.message),
+          })
         }
       } else if (id) {
         dispatch({
@@ -378,15 +386,16 @@ function ChatPageContent() {
           handleInvalidAccessToken()
         } else {
           const localMessageId = streamMessageMapRef.current.get(error.id) ?? id
+          const displayMessage = toChatDisplayError(error.code, error.message)
           if (localMessageId) {
             dispatch({
               type: 'STREAM_ERROR',
               id: localMessageId,
-              message: error.message,
+              message: displayMessage,
               code: error.code,
             })
           } else {
-            dispatch({ type: 'SET_ERROR', message: error.message })
+            dispatch({ type: 'SET_ERROR', message: displayMessage })
           }
         }
         streamMessageMapRef.current.delete(error.id)
@@ -404,11 +413,14 @@ function ChatPageContent() {
             dispatch({
               type: 'STREAM_ERROR',
               id,
-              message: error.message,
+              message: toChatDisplayError(error.code, error.message),
               code: error.code,
             })
           } else {
-            dispatch({ type: 'SET_ERROR', message: error.message })
+            dispatch({
+              type: 'SET_ERROR',
+              message: toChatDisplayError(error.code, error.message),
+            })
           }
         } else if (id) {
           dispatch({
