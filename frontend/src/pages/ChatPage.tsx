@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import {
   ChatApiError,
   createChatSession,
+  deleteChatSession,
   getChatSession,
   getLastRequestId,
   listChatSessions,
@@ -10,7 +11,13 @@ import {
 import { type ProviderName } from '../constants/providerModels'
 import { AppNav } from '../components/AppNav'
 import { AuthControls } from '../components/AuthControls'
-import { MenuIcon, PanelCollapseIcon, PanelExpandIcon } from '../components/icons/ShellIcons'
+import {
+  MenuIcon,
+  PanelCollapseIcon,
+  PanelExpandIcon,
+  TrashIcon,
+} from '../components/icons/ShellIcons'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { useAuthContext } from '../context/AuthContext'
 import { ChatProvider, useChatContext } from '../context/ChatContext'
 import { useChatStream } from '../hooks/useChatStream'
@@ -79,6 +86,8 @@ function ChatPageContent() {
   const [isSessionsLoading, setIsSessionsLoading] = useState(false)
   const [isTranscriptLoading, setIsTranscriptLoading] = useState(false)
   const [isCreatingSession, setIsCreatingSession] = useState(false)
+  const [sessionPendingDelete, setSessionPendingDelete] = useState<string | null>(null)
+  const [isDeletingSession, setIsDeletingSession] = useState(false)
   const currentMessageIdRef = useRef<string | null>(null)
   const currentStreamIdRef = useRef<string | null>(null)
   const pendingRequestRef = useRef<ChatRequest | null>(null)
@@ -585,7 +594,7 @@ function ChatPageContent() {
       messageCount: state.messages.length,
       isSelectable: true,
     }
-  }, [isAuthenticated, activeSessionListItem, state.messages])
+  }, [isAuthenticated, activeSessionListItem, state.messages, state.activeSessionId])
 
   const sidebarSessions = useMemo<ChatSessionSummary[]>(() => [currentSession], [currentSession])
 
@@ -650,6 +659,62 @@ function ChatPageContent() {
     })()
   }
 
+  const handleDeleteSession = (sessionId: string, event: MouseEvent) => {
+    event.stopPropagation()
+    if (!isAuthenticated || areSessionControlsDisabled || isDeletingSession) {
+      return
+    }
+    setSessionPendingDelete(sessionId)
+  }
+
+  const handleCancelDelete = () => {
+    setSessionPendingDelete(null)
+  }
+
+  const handleConfirmDelete = () => {
+    const sessionId = sessionPendingDelete
+    if (!sessionId || !isAuthenticated) {
+      return
+    }
+    setSessionPendingDelete(null)
+    if (isGenerating) {
+      handleStop()
+    }
+    void (async () => {
+      setIsDeletingSession(true)
+      try {
+        await deleteChatSession(sessionId)
+        const sessions = await refreshSessions()
+        if (sessions && sessions.length > 0) {
+          await loadSession(sessions[0].id)
+        } else {
+          const created = await createChatSession()
+          dispatch({ type: 'LOAD_SESSION', sessionId: created.id, messages: [] })
+          await refreshSessions()
+        }
+      } catch {
+        dispatch({
+          type: 'SET_ERROR',
+          message: 'Could not delete that conversation. Try again.',
+        })
+      } finally {
+        setIsDeletingSession(false)
+      }
+    })()
+  }
+
+  const renderDeleteButton = (sessionId: string, sessionTitle: string) => (
+    <button
+      type="button"
+      className="shrink-0 rounded-full border border-zinc-400/60 p-1.5 text-zinc-700 transition hover:bg-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
+      aria-label={`Delete ${sessionTitle}`}
+      disabled={areSessionControlsDisabled || isDeletingSession}
+      onClick={(event) => handleDeleteSession(sessionId, event)}
+    >
+      <TrashIcon className="h-4 w-4" />
+    </button>
+  )
+
   const handleCloseMobileSidebar = useCallback(() => {
     setIsMobileSidebarOpen(false)
   }, [])
@@ -694,6 +759,16 @@ function ChatPageContent() {
 
   return (
     <div className="relative mx-auto flex h-dvh w-full max-w-375 overflow-hidden bg-linear-to-b from-shell-50 via-shell-100 to-[#ebeff6]">
+      <ConfirmDialog
+        open={sessionPendingDelete !== null}
+        title="Delete conversation"
+        message="Delete this conversation? This cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        isDestructive
+        onConfirm={handleConfirmDelete}
+        onCancel={handleCancelDelete}
+      />
       {isMobileSidebarOpen ? (
         <button
           type="button"
@@ -764,6 +839,7 @@ function ChatPageContent() {
                     <li key={session.id}>
                       <button
                         type="button"
+                        aria-label={session.title}
                         className={[
                           'w-full rounded-chat border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
                           isActive
@@ -782,9 +858,16 @@ function ChatPageContent() {
                               {session.preview}
                             </p>
                           </div>
-                          <span className="rounded-chip bg-zinc-200 px-2 py-1 text-[11px] font-medium text-zinc-700">
-                            {session.messageCount}
-                          </span>
+                          <div className="flex shrink-0 items-start gap-2">
+                            {isAuthenticated &&
+                            state.activeSessionId &&
+                            session.id === state.activeSessionId
+                              ? renderDeleteButton(session.id, session.title)
+                              : null}
+                            <span className="rounded-chip bg-zinc-200 px-2 py-1 text-[11px] font-medium text-zinc-700">
+                              {session.messageCount}
+                            </span>
+                          </div>
                         </div>
                         <p className="mt-2 text-[11px] text-zinc-600">{session.updatedLabel}</p>
                       </button>
@@ -819,17 +902,23 @@ function ChatPageContent() {
                 <ul className="space-y-2" aria-label="Saved chat sessions">
                   {savedSessions.map((session) => (
                     <li key={session.id}>
-                      <button
-                        type="button"
-                        className="w-full rounded-chat border border-zinc-300 bg-zinc-100 p-3 text-left transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-                        onClick={() => handleSelectSession(session.id)}
-                        disabled={!session.isSelectable}
-                      >
-                        <p className="truncate text-sm font-semibold text-zinc-950">
-                          {session.title}
-                        </p>
-                        <p className="mt-1 line-clamp-2 text-xs text-zinc-700">{session.preview}</p>
-                      </button>
+                      <div className="flex items-stretch gap-2">
+                        <button
+                          type="button"
+                          aria-label={session.title}
+                          className="min-w-0 flex-1 rounded-chat border border-zinc-300 bg-zinc-100 p-3 text-left transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                          onClick={() => handleSelectSession(session.id)}
+                          disabled={!session.isSelectable}
+                        >
+                          <p className="truncate text-sm font-semibold text-zinc-950">
+                            {session.title}
+                          </p>
+                          <p className="mt-1 line-clamp-2 text-xs text-zinc-700">
+                            {session.preview}
+                          </p>
+                        </button>
+                        {renderDeleteButton(session.id, session.title)}
+                      </div>
                     </li>
                   ))}
                 </ul>

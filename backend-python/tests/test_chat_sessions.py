@@ -458,6 +458,89 @@ async def test_create_session_without_caller_raises_session_not_found() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Session delete (Phase 2)                                                    #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.anyio
+async def test_delete_owned_session_removes_session_and_messages() -> None:
+    settings = Settings(chat_persistence_enabled=True)
+    chat_store = FakeChatStore()
+    service = _service(settings, chat_store=chat_store)
+    user_id = uuid.uuid4()
+    caller = CallerContext.for_user(user_id)
+    session = await chat_store.create_session(user_id=user_id)
+    await chat_store.add_message(
+        session_id=session.id, seq=1, role="user", content="hello"
+    )
+    await chat_store.add_summary(
+        session_id=session.id,
+        version=1,
+        covers_through_seq=1,
+        content="summary",
+        provider="openai",
+        model="gpt-4o-mini",
+    )
+
+    await service.delete_session(session.id, caller)
+
+    assert session.id not in chat_store.sessions
+    assert not any(m.session_id == session.id for m in chat_store.messages)
+    assert not any(s.session_id == session.id for s in chat_store.summaries)
+
+
+@pytest.mark.anyio
+async def test_delete_foreign_session_raises_session_not_found() -> None:
+    settings = Settings(chat_persistence_enabled=True)
+    chat_store = FakeChatStore()
+    service = _service(settings, chat_store=chat_store)
+    owner_id = uuid.uuid4()
+    other_session = await chat_store.create_session(user_id=uuid.uuid4())
+    caller = CallerContext.for_user(owner_id)
+
+    with pytest.raises(SessionNotFoundError):
+        await service.delete_session(other_session.id, caller)
+
+
+@pytest.mark.anyio
+async def test_guest_delete_session_raises_new_chat_forbidden() -> None:
+    settings = Settings(chat_persistence_enabled=True)
+    chat_store = FakeChatStore()
+    service = _service(settings, chat_store=chat_store)
+    guest_id = uuid.uuid4()
+    session = await chat_store.create_session(guest_id=guest_id)
+    caller = CallerContext.anonymous(guest_id=guest_id)
+
+    with pytest.raises(NewChatForbiddenError):
+        await service.delete_session(session.id, caller)
+
+
+@pytest.mark.anyio
+async def test_delete_linked_guest_session_succeeds_for_authenticated_user() -> None:
+    settings = Settings(chat_persistence_enabled=True)
+    chat_store = FakeChatStore()
+    service = _service(settings, chat_store=chat_store)
+    user_id = uuid.uuid4()
+    guest_id = uuid.uuid4()
+    chat_store.linked_guest_ids_by_user[user_id] = {guest_id}
+    linked_session = await chat_store.create_session(guest_id=guest_id)
+    caller = CallerContext.for_user(user_id)
+
+    await service.delete_session(linked_session.id, caller)
+
+    assert linked_session.id not in chat_store.sessions
+
+
+@pytest.mark.anyio
+async def test_delete_session_without_caller_raises_session_not_found() -> None:
+    settings = Settings(chat_persistence_enabled=True)
+    service = _service(settings)
+
+    with pytest.raises(SessionNotFoundError):
+        await service.delete_session(uuid.uuid4(), None)
+
+
+# --------------------------------------------------------------------------- #
 # Session list/create integration against real Postgres (skips when unavailable) #
 # --------------------------------------------------------------------------- #
 # The ``db_session`` fixture is provided by tests/conftest.py.

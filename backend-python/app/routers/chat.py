@@ -342,3 +342,17 @@ async def get_chat_session(
     result = await service.get_session_transcript(session_id, caller)
     _set_guest_token(response, caller)
     return result
+
+
+@router.delete("/api/chat/sessions/{session_id}", status_code=204)
+async def delete_chat_session(
+    session_id: uuid.UUID,
+    response: Response,
+    caller: CallerContext | None = Depends(get_optional_caller),
+    service: ChatService = Depends(get_chat_service),
+) -> Response:
+    if caller is None:
+        raise SessionNotFoundError()
+    await service.delete_session(session_id, caller)
+    _set_guest_token(response, caller)
+    return Response(status_code=204)

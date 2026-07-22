@@ -12,12 +12,17 @@ from collections.abc import AsyncIterator
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pytest import MonkeyPatch
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 from starlette.types import Message, Scope
 
 from app.core.caller import CallerContext
 from app.core.config import Settings, get_settings
+from app.core.security import create_access_token
+from app.db.chat import SqlChatStore
+from app.db.identity import SqlUserStore
+from app.db.models import ChatMessage, SessionSummary, UsageEvent
 from app.main import app
 from app.providers.base import ProviderCompletion
 from app.providers.factory import ProviderFactory
@@ -498,3 +503,163 @@ async def test_stream_records_guest_quota_tokens(
     key = (caller.guest_id, window)
     assert quota_store.counters[key] == 1
     assert quota_store.token_totals[key] == usage_store.events[0].total_tokens
+
+
+def _auth_headers(user_id: uuid.UUID) -> dict[str, str]:
+    token = create_access_token(user_id=user_id, settings=get_settings())
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.anyio
+async def test_delete_owned_session_returns_204_and_subsequent_get_404(
+    app_persistence: FakeProvider,
+    db_session: AsyncSession,
+) -> None:
+    _ = app_persistence
+    user_store = SqlUserStore(db_session)
+    user = await user_store.create(
+        sub=f"delete-owned-{uuid.uuid4()}", email=None, name=None, picture=None
+    )
+    chat_store = SqlChatStore(db_session)
+    session = await chat_store.create_session(user_id=user.id)
+    await chat_store.add_message(
+        session_id=session.id, seq=1, role="user", content="hello"
+    )
+    await db_session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        deleted = await client.delete(
+            f"/api/chat/sessions/{session.id}",
+            headers=_auth_headers(user.id),
+        )
+        assert deleted.status_code == 204
+
+        resumed = await client.get(
+            f"/api/chat/sessions/{session.id}",
+            headers=_auth_headers(user.id),
+        )
+
+    assert resumed.status_code == 404
+    assert resumed.json()["error"]["code"] == "session_not_found"
+
+
+@pytest.mark.anyio
+async def test_delete_foreign_session_returns_404(
+    app_persistence: FakeProvider,
+    db_session: AsyncSession,
+) -> None:
+    _ = app_persistence
+    user_store = SqlUserStore(db_session)
+    owner = await user_store.create(
+        sub=f"delete-owner-{uuid.uuid4()}", email=None, name=None, picture=None
+    )
+    other = await user_store.create(
+        sub=f"delete-other-{uuid.uuid4()}", email=None, name=None, picture=None
+    )
+    chat_store = SqlChatStore(db_session)
+    foreign_session = await chat_store.create_session(user_id=other.id)
+    await db_session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        resp = await client.delete(
+            f"/api/chat/sessions/{foreign_session.id}",
+            headers=_auth_headers(owner.id),
+        )
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "session_not_found"
+
+
+@pytest.mark.anyio
+async def test_guest_delete_session_returns_403(
+    app_persistence: FakeProvider,
+) -> None:
+    _ = app_persistence
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        created = await client.post(
+            "/api/chat", json={"messages": [{"role": "user", "content": "Guest chat"}]}
+        )
+        assert created.status_code == 200
+        session_id = created.json()["session_id"]
+        guest_token = created.headers["X-Guest-Token"]
+
+        deleted = await client.delete(
+            f"/api/chat/sessions/{session_id}",
+            headers={"X-Guest-Token": guest_token},
+        )
+
+    assert deleted.status_code == 403
+    assert deleted.json()["error"]["code"] == "new_chat_forbidden"
+
+
+@pytest.mark.anyio
+async def test_delete_session_cascades_messages_summaries_and_usage_events(
+    app_persistence: FakeProvider,
+    db_session: AsyncSession,
+) -> None:
+    _ = app_persistence
+    user_store = SqlUserStore(db_session)
+    user = await user_store.create(
+        sub=f"delete-cascade-{uuid.uuid4()}", email=None, name=None, picture=None
+    )
+    chat_store = SqlChatStore(db_session)
+    session = await chat_store.create_session(user_id=user.id)
+    message = await chat_store.add_message(
+        session_id=session.id, seq=1, role="user", content="cascade test"
+    )
+    await chat_store.add_summary(
+        session_id=session.id,
+        version=1,
+        covers_through_seq=1,
+        content="summary text",
+        provider="openai",
+        model="gpt-4o-mini",
+    )
+    usage = UsageEvent(
+        session_id=session.id,
+        user_id=user.id,
+        provider="openai",
+        model="gpt-4o-mini",
+        token_source="provider_reported",
+        kind="chat",
+        message_id=message.id,
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+    )
+    db_session.add(usage)
+    await db_session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        deleted = await client.delete(
+            f"/api/chat/sessions/{session.id}",
+            headers=_auth_headers(user.id),
+        )
+        assert deleted.status_code == 204
+
+    message_count = await db_session.scalar(
+        select(func.count())
+        .select_from(ChatMessage)
+        .where(ChatMessage.session_id == session.id)
+    )
+    summary_count = await db_session.scalar(
+        select(func.count())
+        .select_from(SessionSummary)
+        .where(SessionSummary.session_id == session.id)
+    )
+    usage_count = await db_session.scalar(
+        select(func.count())
+        .select_from(UsageEvent)
+        .where(UsageEvent.session_id == session.id)
+    )
+    assert message_count == 0
+    assert summary_count == 0
+    assert usage_count == 0

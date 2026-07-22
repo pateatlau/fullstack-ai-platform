@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, screen, waitFor } from '@testing-library/react'
+import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPage } from './ChatPage'
@@ -157,7 +157,7 @@ describe('ChatPage session sidebar wiring', () => {
 
     expect(screen.getAllByText('Trip planning').length).toBeGreaterThan(0)
     // The untitled second session shows up as a selectable "Saved" entry.
-    expect(screen.getByRole('button', { name: /New conversation/ })).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'New conversation' })).not.toBeNull()
   })
 
   it('clicking the current entry with no active session does not fetch a sentinel session id', async () => {
@@ -173,7 +173,7 @@ describe('ChatPage session sidebar wiring', () => {
 
     renderWithProviders(<ChatPage />)
 
-    const currentEntry = await screen.findByRole('button', { name: /New conversation/ })
+    const currentEntry = await screen.findByRole('button', { name: 'New conversation' })
     await userEvent.setup().click(currentEntry)
 
     // No GET to /api/chat/sessions/unsaved-session (or any other id) and no
@@ -233,7 +233,7 @@ describe('ChatPage session sidebar wiring', () => {
 
     renderWithProviders(<ChatPage />)
 
-    const secondChatButton = await screen.findByRole('button', { name: /Second chat/ })
+    const secondChatButton = await screen.findByRole('button', { name: 'Second chat' })
     await userEvent.setup().click(secondChatButton)
 
     await waitFor(() => {
@@ -335,7 +335,7 @@ describe('ChatPage session sidebar wiring', () => {
       expect(screen.getByText('Hello from the first chat')).not.toBeNull()
     })
 
-    const goneButton = await screen.findByRole('button', { name: /Deleted elsewhere/ })
+    const goneButton = await screen.findByRole('button', { name: 'Deleted elsewhere' })
     await userEvent.setup().click(goneButton)
 
     await waitFor(() => {
@@ -617,5 +617,300 @@ describe('ChatPage session sidebar wiring', () => {
     expect((chatInit.headers as Record<string, string>).Accept).toBe('application/x-ndjson')
     const body = JSON.parse(String(chatInit.body)) as { use_documents?: boolean }
     expect(body.use_documents).toBe(true)
+  })
+
+  it('deleting a saved session calls DELETE, refreshes the list, and loads a fallback session', async () => {
+    let secondSessionDeleted = false
+    const fetchMock = createRoutedFetchMock((url, method) => {
+      if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+        return jsonResponse(
+          secondSessionDeleted
+            ? [
+                {
+                  id: 's1',
+                  title: 'First chat',
+                  last_message_at: '2026-01-02T00:00:00Z',
+                  created_at: '2026-01-01T00:00:00Z',
+                },
+              ]
+            : [
+                {
+                  id: 's1',
+                  title: 'First chat',
+                  last_message_at: '2026-01-02T00:00:00Z',
+                  created_at: '2026-01-01T00:00:00Z',
+                },
+                {
+                  id: 's2',
+                  title: 'Second chat',
+                  last_message_at: '2026-01-01T00:00:00Z',
+                  created_at: '2025-12-01T00:00:00Z',
+                },
+              ],
+        )
+      }
+      if (url.endsWith('/api/chat/sessions/s1') && method === 'GET') {
+        return jsonResponse({
+          id: 's1',
+          title: 'First chat',
+          last_message_at: null,
+          messages: [
+            {
+              id: 'm1',
+              seq: 1,
+              role: 'user',
+              content: 'Active chat message',
+              provider: null,
+              model: null,
+              status: 'complete',
+              finish_reason: null,
+              created_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+        })
+      }
+      if (url.endsWith('/api/chat/sessions/s2') && method === 'GET') {
+        return jsonResponse({
+          id: 's2',
+          title: 'Second chat',
+          last_message_at: null,
+          messages: [
+            {
+              id: 'm2',
+              seq: 1,
+              role: 'user',
+              content: 'Second chat message',
+              provider: null,
+              model: null,
+              status: 'complete',
+              finish_reason: null,
+              created_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+        })
+      }
+      if (url.endsWith('/api/chat/sessions/s2') && method === 'DELETE') {
+        secondSessionDeleted = true
+        return new Response(null, { status: 204 })
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Active chat message')).not.toBeNull()
+    })
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Delete Second chat' }))
+    await userEvent
+      .setup()
+      .click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input, init]) => {
+          const url = typeof input === 'string' ? input : input.toString()
+          return url.endsWith('/api/chat/sessions/s2') && init?.method === 'DELETE'
+        }),
+      ).toBe(true)
+      expect(screen.getByText('Active chat message')).not.toBeNull()
+    })
+  })
+
+  it('canceling delete confirmation does not call DELETE', async () => {
+    const fetchMock = createRoutedFetchMock((url, method) => {
+      if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+        return jsonResponse([
+          {
+            id: 's1',
+            title: 'First chat',
+            last_message_at: '2026-01-02T00:00:00Z',
+            created_at: '2026-01-01T00:00:00Z',
+          },
+          {
+            id: 's2',
+            title: 'Second chat',
+            last_message_at: '2026-01-01T00:00:00Z',
+            created_at: '2025-12-01T00:00:00Z',
+          },
+        ])
+      }
+      if (url.endsWith('/api/chat/sessions/s1') && method === 'GET') {
+        return jsonResponse({ id: 's1', title: 'First chat', last_message_at: null, messages: [] })
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Delete Second chat' })).not.toBeNull()
+    })
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Delete Second chat' }))
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Cancel' }))
+
+    const deleteCalls = fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE')
+    expect(deleteCalls).toHaveLength(0)
+  })
+
+  it('deleting the last remaining active session creates a new empty session', async () => {
+    let onlySessionDeleted = false
+    let createdSessionExists = false
+    const fetchMock = createRoutedFetchMock((url, method) => {
+      if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+        if (createdSessionExists) {
+          return jsonResponse([
+            {
+              id: 'new-after-delete',
+              title: null,
+              last_message_at: null,
+              created_at: '2026-02-01T00:00:00Z',
+            },
+          ])
+        }
+        if (onlySessionDeleted) {
+          return jsonResponse([])
+        }
+        return jsonResponse([
+          {
+            id: 'only',
+            title: 'Only chat',
+            last_message_at: null,
+            created_at: '2026-01-01T00:00:00Z',
+          },
+        ])
+      }
+      if (url.endsWith('/api/chat/sessions/only') && method === 'GET') {
+        return jsonResponse({
+          id: 'only',
+          title: 'Only chat',
+          last_message_at: null,
+          messages: [
+            {
+              id: 'm1',
+              seq: 1,
+              role: 'user',
+              content: 'Only session message',
+              provider: null,
+              model: null,
+              status: 'complete',
+              finish_reason: null,
+              created_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+        })
+      }
+      if (url.endsWith('/api/chat/sessions/only') && method === 'DELETE') {
+        onlySessionDeleted = true
+        return new Response(null, { status: 204 })
+      }
+      if (url.endsWith('/api/chat/sessions') && method === 'POST') {
+        createdSessionExists = true
+        return jsonResponse(
+          { id: 'new-after-delete', title: null, last_message_at: null, messages: [] },
+          201,
+        )
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Only session message')).not.toBeNull()
+    })
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Delete Only chat' }))
+    await userEvent
+      .setup()
+      .click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      const postCalls = fetchMock.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === 'POST',
+      )
+      expect(postCalls.length).toBe(1)
+      expect(screen.getByText('Start a conversation to build your first session.')).not.toBeNull()
+    })
+  })
+
+  it('deleting one of multiple sessions selects the first remaining session', async () => {
+    let sessionsAfterDelete = false
+    const fetchMock = createRoutedFetchMock((url, method) => {
+      if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+        return jsonResponse(
+          sessionsAfterDelete
+            ? [
+                {
+                  id: 's1',
+                  title: 'First chat',
+                  last_message_at: '2026-01-02T00:00:00Z',
+                  created_at: '2026-01-01T00:00:00Z',
+                },
+              ]
+            : [
+                {
+                  id: 's1',
+                  title: 'First chat',
+                  last_message_at: '2026-01-02T00:00:00Z',
+                  created_at: '2026-01-01T00:00:00Z',
+                },
+                {
+                  id: 's2',
+                  title: 'Second chat',
+                  last_message_at: '2026-01-01T00:00:00Z',
+                  created_at: '2025-12-01T00:00:00Z',
+                },
+              ],
+        )
+      }
+      if (url.endsWith('/api/chat/sessions/s1') && method === 'GET') {
+        return jsonResponse({
+          id: 's1',
+          title: 'First chat',
+          last_message_at: null,
+          messages: [
+            {
+              id: 'm1',
+              seq: 1,
+              role: 'user',
+              content: 'First chat message',
+              provider: null,
+              model: null,
+              status: 'complete',
+              finish_reason: null,
+              created_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+        })
+      }
+      if (url.endsWith('/api/chat/sessions/s2') && method === 'DELETE') {
+        sessionsAfterDelete = true
+        return new Response(null, { status: 204 })
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('First chat message')).not.toBeNull()
+    })
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Delete Second chat' }))
+    await userEvent
+      .setup()
+      .click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('First chat message')).not.toBeNull()
+      expect(screen.queryByRole('button', { name: 'Delete Second chat' })).toBeNull()
+    })
   })
 })

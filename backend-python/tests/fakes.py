@@ -360,6 +360,14 @@ class FakeChatStore:
             return [default] if default is not None else []
         return []
 
+    async def delete_session(self, session_id: uuid.UUID) -> bool:
+        if session_id not in self.sessions:
+            return False
+        del self.sessions[session_id]
+        self.messages = [m for m in self.messages if m.session_id != session_id]
+        self.summaries = [s for s in self.summaries if s.session_id != session_id]
+        return True
+
     async def allocate_seq(self, session_id: uuid.UUID) -> int:
         chat_session = self.sessions[session_id]
         seq = chat_session.next_seq

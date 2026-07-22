@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  deleteChatSession,
   getLastRequestId,
   sendChat,
   setRetryRequestId,
@@ -253,5 +254,48 @@ describe('chatClient request-id retry wiring', () => {
     }
     expect(body.use_web_search).toBe(true)
     expect(body.use_documents).toBe(true)
+  })
+})
+
+describe('chatClient session delete', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
+  afterEach(() => {
+    window.localStorage.clear()
+    vi.restoreAllMocks()
+  })
+
+  it('deleteChatSession sends DELETE and succeeds on 204', async () => {
+    storeSession('test-jwt', user)
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await deleteChatSession('session-123')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/chat/sessions/session-123')
+    expect(init.method).toBe('DELETE')
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer test-jwt')
+  })
+
+  it('deleteChatSession throws ChatApiError on failure', async () => {
+    storeSession('test-jwt', user)
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: { code: 'session_not_found', message: 'Chat session not found.' },
+        }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(deleteChatSession('missing')).rejects.toMatchObject({
+      status: 404,
+      code: 'session_not_found',
+    })
   })
 })

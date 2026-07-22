@@ -274,3 +274,20 @@ export async function getChatSession(sessionId: string): Promise<ChatSessionDeta
 
   return (await response.json()) as ChatSessionDetail
 }
+
+/** Deletes a chat session (authenticated-only; 204 on success; 404 if not owned). */
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/chat/sessions/${sessionId}`, {
+    method: 'DELETE',
+    headers: buildRequestHeaders(),
+  })
+
+  captureGuestToken(response)
+  captureRequestId(response)
+
+  if (response.status === 204) {
+    return
+  }
+
+  throw await toChatApiError(response, `Failed to delete chat session: ${response.status}`)
+}

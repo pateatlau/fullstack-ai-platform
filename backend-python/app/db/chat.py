@@ -127,6 +127,17 @@ class SqlChatStore:
 
         return []
 
+    async def delete_session(self, session_id: uuid.UUID) -> bool:
+        """Delete a chat session row by id (ownership verified by service layer).
+
+        Child rows cascade via FK ``ondelete="CASCADE"``.
+        """
+        chat_session = await self._session.get(ChatSession, session_id)
+        if chat_session is None:
+            return False
+        await self._session.delete(chat_session)
+        return True
+
     async def allocate_seq(self, session_id: uuid.UUID) -> int:
         """Assign the next gap-free per-session sequence number (plan Section 2.11).
 

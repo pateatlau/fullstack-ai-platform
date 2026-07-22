@@ -74,6 +74,8 @@ class ChatStore(Protocol):
         limit: int = 50,
     ) -> list[ChatSession]: ...
 
+    async def delete_session(self, session_id: uuid.UUID) -> bool: ...
+
     async def allocate_seq(self, session_id: uuid.UUID) -> int: ...
 
     async def add_message(
@@ -954,6 +956,39 @@ class ChatService:
             title=chat_session.title,
             last_message_at=chat_session.last_message_at,
             messages=[],
+        )
+
+    async def delete_session(
+        self, session_id: uuid.UUID, caller: CallerContext | None
+    ) -> None:
+        """Delete an owned session and cascade child rows (plan Section Phase 2).
+
+        Auth-only mutation — guests receive ``NewChatForbiddenError`` (403),
+        matching ``create_session`` policy. Foreign/unknown sessions → 404.
+        """
+        if self._chat_store is None or caller is None:
+            raise SessionNotFoundError()
+        if caller.kind != "user":
+            raise NewChatForbiddenError()
+
+        try:
+            chat_session = await self._chat_store.get_owned_session(
+                session_id, user_id=caller.user_id
+            )
+            if chat_session is None:
+                raise SessionNotFoundError()
+            await self._chat_store.delete_session(session_id)
+        except ChatServiceError:
+            raise
+        except (OperationalError, InterfaceError, DBAPIError) as exc:
+            raise DbUnavailableError() from exc
+
+        await self._commit()
+        logger.info(
+            "Chat session deleted",
+            session_delete_total=True,
+            session_id=str(session_id),
+            user_id=str(caller.user_id),
         )
 
     # ---- streaming ----------------------------------------------------------
