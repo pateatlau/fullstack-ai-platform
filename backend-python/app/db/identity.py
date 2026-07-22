@@ -179,7 +179,13 @@ class SqlUploadQuotaStore:
         )
         return value or 0
 
-    async def increment(self, user_id: uuid.UUID, window_start: datetime.date) -> None:
+    async def try_reserve(
+        self,
+        user_id: uuid.UUID,
+        window_start: datetime.date,
+        *,
+        quota: int,
+    ) -> bool:
         stmt = pg_insert(UploadQuotaCounter).values(
             user_id=user_id,
             window_start=window_start,
@@ -191,5 +197,22 @@ class SqlUploadQuotaStore:
                 "upload_count": UploadQuotaCounter.upload_count + 1,
                 "updated_at": func.now(),
             },
+            where=(UploadQuotaCounter.upload_count < quota),
+        ).returning(UploadQuotaCounter.upload_count)
+        result = await self._session.scalar(stmt)
+        return result is not None
+
+    async def release(self, user_id: uuid.UUID, window_start: datetime.date) -> None:
+        stmt = (
+            update(UploadQuotaCounter)
+            .where(
+                UploadQuotaCounter.user_id == user_id,
+                UploadQuotaCounter.window_start == window_start,
+                UploadQuotaCounter.upload_count > 0,
+            )
+            .values(
+                upload_count=UploadQuotaCounter.upload_count - 1,
+                updated_at=func.now(),
+            )
         )
         await self._session.execute(stmt)

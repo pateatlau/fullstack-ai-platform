@@ -5,6 +5,7 @@ SQL stores against the compose Postgres and skip automatically when the database
 is unavailable (CI Postgres wiring lands in Phase 6).
 """
 
+import asyncio
 import datetime
 import uuid
 
@@ -135,7 +136,7 @@ async def test_upload_quota_allows_below_limit() -> None:
         upload_store=FakeUploadQuotaStore(),
         settings=settings,
     )
-    await service.check_upload(uuid.uuid4())
+    await service.reserve_upload(uuid.uuid4())
 
 
 @pytest.mark.anyio
@@ -148,13 +149,50 @@ async def test_upload_quota_denies_at_limit() -> None:
         settings=settings,
     )
     user_id = uuid.uuid4()
-    await service.record_upload(user_id)
+    await service.reserve_upload(user_id)
 
     with pytest.raises(UploadQuotaExceededError) as exc_info:
-        await service.check_upload(user_id)
+        await service.reserve_upload(user_id)
 
     assert exc_info.value.code == "quota_exceeded"
     assert exc_info.value.status_code == 429
+
+
+@pytest.mark.anyio
+async def test_upload_quota_concurrent_reservations_respect_limit() -> None:
+    settings = Settings(authenticated_daily_upload_quota=3)
+    service = QuotaService(
+        store=FakeGuestQuotaStore(),
+        upload_store=FakeUploadQuotaStore(),
+        settings=settings,
+    )
+    user_id = uuid.uuid4()
+
+    async def attempt() -> str:
+        try:
+            await service.reserve_upload(user_id)
+            return "ok"
+        except UploadQuotaExceededError:
+            return "denied"
+
+    results = await asyncio.gather(*(attempt() for _ in range(10)))
+    assert results.count("ok") == 3
+    assert results.count("denied") == 7
+
+
+@pytest.mark.anyio
+async def test_upload_quota_release_allows_retry() -> None:
+    settings = Settings(authenticated_daily_upload_quota=1)
+    service = QuotaService(
+        store=FakeGuestQuotaStore(),
+        upload_store=FakeUploadQuotaStore(),
+        settings=settings,
+    )
+    user_id = uuid.uuid4()
+
+    await service.reserve_upload(user_id)
+    await service.release_upload(user_id)
+    await service.reserve_upload(user_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -202,7 +240,7 @@ async def test_sql_quota_counter_upsert_is_atomic(db_session) -> None:
 
 
 @pytest.mark.anyio
-async def test_sql_upload_quota_counter_upsert_is_atomic(db_session) -> None:
+async def test_sql_upload_quota_try_reserve_is_atomic(db_session) -> None:
     user_store = SqlUserStore(db_session)
     upload_store = SqlUploadQuotaStore(db_session)
     user = await user_store.create(
@@ -214,10 +252,14 @@ async def test_sql_upload_quota_counter_upsert_is_atomic(db_session) -> None:
     window = datetime.datetime.now(datetime.timezone.utc).date()
 
     assert await upload_store.get_upload_count(user.id, window) == 0
-    await upload_store.increment(user.id, window)
-    await upload_store.increment(user.id, window)
-
+    assert await upload_store.try_reserve(user.id, window, quota=2) is True
+    assert await upload_store.try_reserve(user.id, window, quota=2) is True
+    assert await upload_store.try_reserve(user.id, window, quota=2) is False
     assert await upload_store.get_upload_count(user.id, window) == 2
+
+    await upload_store.release(user.id, window)
+    assert await upload_store.get_upload_count(user.id, window) == 1
+    assert await upload_store.try_reserve(user.id, window, quota=2) is True
 
 
 @pytest.mark.anyio

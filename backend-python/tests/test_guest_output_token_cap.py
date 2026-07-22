@@ -152,3 +152,21 @@ def test_demo_mode_strict_lowers_guest_cap(monkeypatch: pytest.MonkeyPatch) -> N
         demo_mode_strict=True,
     )
     assert settings.effective_guest_max_output_tokens == 512
+
+
+@pytest.mark.anyio
+async def test_guest_summarization_passes_capped_max_tokens_to_provider() -> None:
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="test-key",
+        chat_persistence_enabled=True,
+        guest_max_output_tokens=256,
+        summary_trigger_message_count=2,
+    )
+    provider = FakeProvider(response="A concise summary.")
+    service = _chat_service(settings=settings, provider=provider)
+    request = ChatRequestSchema(messages=[ChatMessageSchema(role="user", content="Hi")])
+
+    await service.complete_chat(request, _guest_caller())
+
+    assert provider.last_max_tokens == 256

@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     # V1.1.1 public demo protection (Phase 1): cap guest completion length.
     guest_max_output_tokens: int = Field(default=4096, ge=1)
     # Daily document upload count (auth-only upload path). ``None`` disables quota.
-    authenticated_daily_upload_quota: int | None = None
+    authenticated_daily_upload_quota: int | None = Field(default=None, ge=1)
     # Future-proof if guest upload is ever enabled.
     guest_daily_upload_quota: int = Field(default=5, ge=1)
     # When true, tighten demo caps for public deploy (see effective_* helpers).

@@ -244,13 +244,32 @@ class FakeUploadQuotaStore:
 
     def __init__(self) -> None:
         self.counters: dict[tuple[uuid.UUID, object], int] = {}
+        self._lock = asyncio.Lock()
 
     async def get_upload_count(self, user_id: uuid.UUID, window_start: object) -> int:
         return self.counters.get((user_id, window_start), 0)
 
-    async def increment(self, user_id: uuid.UUID, window_start: object) -> None:
-        key = (user_id, window_start)
-        self.counters[key] = self.counters.get(key, 0) + 1
+    async def try_reserve(
+        self,
+        user_id: uuid.UUID,
+        window_start: object,
+        *,
+        quota: int,
+    ) -> bool:
+        async with self._lock:
+            key = (user_id, window_start)
+            count = self.counters.get(key, 0)
+            if count >= quota:
+                return False
+            self.counters[key] = count + 1
+            return True
+
+    async def release(self, user_id: uuid.UUID, window_start: object) -> None:
+        async with self._lock:
+            key = (user_id, window_start)
+            count = self.counters.get(key, 0)
+            if count > 0:
+                self.counters[key] = count - 1
 
 
 class FakeChatStore:

@@ -50,7 +50,15 @@ class UploadQuotaStore(Protocol):
         self, user_id: uuid.UUID, window_start: datetime.date
     ) -> int: ...
 
-    async def increment(
+    async def try_reserve(
+        self,
+        user_id: uuid.UUID,
+        window_start: datetime.date,
+        *,
+        quota: int,
+    ) -> bool: ...
+
+    async def release(
         self, user_id: uuid.UUID, window_start: datetime.date
     ) -> None: ...
 
@@ -94,14 +102,19 @@ class QuotaService:
         count = await self._store.get_message_count(guest_id, _utc_window())
         return max(0, self._settings.guest_daily_message_quota - count)
 
-    async def check_upload(self, user_id: uuid.UUID) -> None:
-        """Raise ``UploadQuotaExceededError`` when daily upload quota is exceeded."""
+    async def reserve_upload(self, user_id: uuid.UUID) -> None:
+        """Atomically reserve one upload slot for the current UTC window."""
         quota = self._settings.effective_authenticated_daily_upload_quota
         if quota is None or self._upload_store is None:
             return
 
-        count = await self._upload_store.get_upload_count(user_id, _utc_window())
-        if count >= quota:
+        reserved = await self._upload_store.try_reserve(
+            user_id,
+            _utc_window(),
+            quota=quota,
+        )
+        if not reserved:
+            count = await self._upload_store.get_upload_count(user_id, _utc_window())
             logger.info(
                 "Upload quota denied",
                 upload_quota_denied_total=True,
@@ -111,11 +124,11 @@ class QuotaService:
             )
             raise UploadQuotaExceededError()
 
-    async def record_upload(self, user_id: uuid.UUID) -> None:
-        """Increment the authenticated user's upload counter after success."""
+    async def release_upload(self, user_id: uuid.UUID) -> None:
+        """Return a reserved upload slot after a failed or cancelled ingest."""
         if (
             self._settings.effective_authenticated_daily_upload_quota is None
             or self._upload_store is None
         ):
             return
-        await self._upload_store.increment(user_id, _utc_window())
+        await self._upload_store.release(user_id, _utc_window())

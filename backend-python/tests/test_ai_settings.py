@@ -193,5 +193,30 @@ def test_authenticated_daily_upload_quota_empty_env_means_unlimited() -> None:
     assert settings.authenticated_daily_upload_quota is None
 
 
+@pytest.mark.parametrize("invalid_quota", [0, -1])
+def test_authenticated_daily_upload_quota_rejects_non_positive(
+    invalid_quota: int,
+) -> None:
+    with pytest.raises(ValueError, match="greater than or equal to 1"):
+        Settings.model_validate(
+            {
+                "llm_provider": "openai",
+                "openai_api_key": "sk-placeholder",
+                "authenticated_daily_upload_quota": invalid_quota,
+            }
+        )
+
+
+def test_authenticated_daily_upload_quota_accepts_positive_value() -> None:
+    settings = Settings.model_validate(
+        {
+            "llm_provider": "openai",
+            "openai_api_key": "sk-placeholder",
+            "authenticated_daily_upload_quota": 20,
+        }
+    )
+    assert settings.authenticated_daily_upload_quota == 20
+
+
 def test_ai_package_imports_cleanly() -> None:
     assert ai_deps.get_ai_settings is not None

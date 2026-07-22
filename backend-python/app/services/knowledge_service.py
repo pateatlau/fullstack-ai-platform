@@ -19,9 +19,9 @@ _logger = get_logger(__name__)
 
 
 class UploadQuotaChecker(Protocol):
-    async def check_upload(self, user_id: uuid.UUID) -> None: ...
+    async def reserve_upload(self, user_id: uuid.UUID) -> None: ...
 
-    async def record_upload(self, user_id: uuid.UUID) -> None: ...
+    async def release_upload(self, user_id: uuid.UUID) -> None: ...
 
 
 class KnowledgeServiceError(Exception):
@@ -59,15 +59,17 @@ class KnowledgeService:
         filename: str,
         mime_type: str | None,
     ) -> uuid.UUID:
-        if self._quota_service is not None:
-            await self._quota_service.check_upload(user_id)
-
         validate_document_upload(
             self._settings,
             file_bytes=file_bytes,
             filename=filename,
             mime_type=mime_type,
         )
+
+        quota_reserved = False
+        if self._quota_service is not None:
+            await self._quota_service.reserve_upload(user_id)
+            quota_reserved = True
 
         document = await self._store.create_document(
             user_id=user_id,
@@ -99,10 +101,10 @@ class KnowledgeService:
                 documents_ingested_total=1,
                 document_id=str(document_id),
             )
-            if self._quota_service is not None:
-                await self._quota_service.record_upload(user_id)
             return document_id
         except Exception:
+            if quota_reserved and self._quota_service is not None:
+                await self._quota_service.release_upload(user_id)
             await self._cleanup_failed_ingest(document_id)
             _logger.error(
                 "Document ingestion failed",

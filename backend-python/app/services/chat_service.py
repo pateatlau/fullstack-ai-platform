@@ -675,9 +675,19 @@ class ChatService:
             threshold=threshold,
         )
         summary_input = self._build_summary_input(latest, pending)
+        max_tokens = resolve_max_tokens(
+            caller,
+            self._settings,
+            provider_name=provider_name,
+        )
         try:
             completion = await asyncio.wait_for(
-                provider.complete_chat(summary_input, model, 0.3),
+                provider.complete_chat(
+                    summary_input,
+                    model,
+                    0.3,
+                    max_tokens=max_tokens,
+                ),
                 timeout=self._settings.request_timeout_seconds,
             )
         except Exception:  # noqa: BLE001 - summary is best-effort; retry next turn
