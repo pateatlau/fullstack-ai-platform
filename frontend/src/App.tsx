@@ -3,6 +3,7 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 import { AuthProvider } from './context/AuthContext'
 import { ChatPage } from './pages/ChatPage'
 import { DocumentsPage } from './pages/DocumentsPage'
+import { NotFoundPage } from './pages/NotFoundPage'
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </div>
       </BrowserRouter>
