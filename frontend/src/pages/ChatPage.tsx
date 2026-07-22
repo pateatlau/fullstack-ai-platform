@@ -706,7 +706,7 @@ function ChatPageContent() {
   const renderDeleteButton = (sessionId: string, sessionTitle: string) => (
     <button
       type="button"
-      className="shrink-0 rounded-full border border-zinc-400/60 p-1.5 text-zinc-700 transition hover:bg-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
+      className="shrink-0 rounded-full p-1.5 text-zinc-700 transition-colors hover:text-danger-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
       aria-label={`Delete ${sessionTitle}`}
       disabled={areSessionControlsDisabled || isDeletingSession}
       onClick={(event) => handleDeleteSession(sessionId, event)}
