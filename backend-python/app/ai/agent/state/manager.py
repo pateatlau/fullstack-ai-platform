@@ -11,6 +11,7 @@ from app.ai.agent.models.state import (
     AgentExecutionState,
     AgentExecutionStatus,
 )
+from app.ai.agent.scratchpad.store import ScratchpadStore, get_scratchpad_store
 
 
 class InvalidStateTransitionError(AgentError):
@@ -35,9 +36,13 @@ class AgentStateManager:
     def create_initial_state(
         context: AgentContext,
         config: AgentConfig | None = None,
+        *,
+        scratchpad_store: ScratchpadStore | None = None,
     ) -> AgentExecutionState:
         """Build execution-scoped state for a new agent run."""
         resolved = config or AgentConfig()
+        store = scratchpad_store or get_scratchpad_store()
+        store.create(context.execution_id)
         return AgentExecutionState(
             execution_id=context.execution_id,
             max_iterations=resolved.max_iterations,
