@@ -2,7 +2,19 @@
 
 from app.ai.agent.models.config import AgentConfig
 from app.ai.agent.models.context import AgentContext
-from app.ai.agent.models.events import AgentStreamEvent, AgentStreamEventType
+from app.ai.agent.models.events import (
+    AgentStreamEvent,
+    AgentStreamEventType,
+    CompleteEventPayload,
+    ErrorEventPayload,
+    PlanningEventPayload,
+    ReflectionDecision,
+    ReflectionEventPayload,
+    StartEventPayload,
+    TokenEventPayload,
+    ToolEndEventPayload,
+    ToolStartEventPayload,
+)
 from app.ai.agent.models.messages import AgentMessage, AgentMessageRole
 from app.ai.agent.models.plan import ExecutionPlan, PlannedStep, StepAction
 from app.ai.agent.models.request import AgentRequest
@@ -17,6 +29,15 @@ __all__ = [
     "AgentResponse",
     "AgentStreamEvent",
     "AgentStreamEventType",
+    "CompleteEventPayload",
+    "ErrorEventPayload",
+    "PlanningEventPayload",
+    "ReflectionDecision",
+    "ReflectionEventPayload",
+    "StartEventPayload",
+    "TokenEventPayload",
+    "ToolEndEventPayload",
+    "ToolStartEventPayload",
     "ExecutionPlan",
     "PlannedStep",
     "StepAction",
