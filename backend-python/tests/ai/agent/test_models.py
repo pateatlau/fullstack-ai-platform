@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from pydantic import ValidationError
 
@@ -17,6 +19,7 @@ from app.ai.agent import (
     PlannedStep,
     StepAction,
 )
+from app.core.caller import CallerContext
 from app.ai.tools.schemas import ToolCall
 
 
@@ -50,7 +53,15 @@ def test_agent_context_generates_execution_id() -> None:
     context = AgentContext()
     assert len(context.execution_id) == 32
     assert context.request_id is None
+    assert context.caller is None
     assert context.allowed_tool_names is None
+
+
+def test_agent_context_accepts_typed_caller() -> None:
+    user_id = uuid.uuid4()
+    context = AgentContext(caller=CallerContext.for_user(user_id))
+    assert context.caller is not None
+    assert context.caller.user_id == user_id
 
 
 def test_execution_plan_and_planned_step() -> None:

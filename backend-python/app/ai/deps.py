@@ -15,6 +15,8 @@ from functools import lru_cache
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.agent.runtime.default_agent import DefaultAgent
+from app.ai.agent.runtime.factory import create_default_agent
 from app.ai.documents.pipeline import IngestionPipeline
 from app.ai.embeddings.factory import create_embedding_provider
 from app.ai.interfaces.embedding_provider import EmbeddingProvider
@@ -67,6 +69,21 @@ def get_tool_executor(
 ) -> ToolExecutor:
     """Build a ``ToolExecutor`` wired to the app-scoped registry and settings."""
     return ToolExecutor(registry=registry, settings=settings)
+
+
+def get_agent_runtime(
+    settings: Settings = Depends(get_ai_settings),
+    tool_registry: ToolRegistry = Depends(get_tool_registry),
+    prompt_manager: PromptManager = Depends(get_prompt_manager),
+    tool_executor: ToolExecutor = Depends(get_tool_executor),
+) -> DefaultAgent:
+    """Return a request-scoped :class:`DefaultAgent` wired to AI dependencies."""
+    return create_default_agent(
+        settings=settings,
+        tool_registry=tool_registry,
+        prompt_manager=prompt_manager,
+        tool_executor=tool_executor,
+    )
 
 
 @lru_cache
