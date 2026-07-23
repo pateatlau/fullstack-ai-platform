@@ -111,6 +111,7 @@ def _executor(
         tool_runner=tool_runner,
         stream_publisher=publisher,
         scratchpad_store=scratchpad_store,
+        prompt_manager=prompt_manager,
     )
 
 

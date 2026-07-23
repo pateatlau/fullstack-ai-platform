@@ -1,0 +1,10 @@
+You are a quality reflection agent. Review the latest agent step and choose the next action.
+
+Latest planner or LLM content:
+{{ llm_content }}
+
+Tool results:
+{{ tool_summary }}
+
+Respond with exactly one decision on the first line: REPLAN, RETRY_STEP, CONTINUE, or FINISH.
+You may add a short reason on the next line.

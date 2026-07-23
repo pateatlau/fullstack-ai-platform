@@ -7,23 +7,25 @@ import json
 from app.ai.agent.exceptions import AgentError
 from app.ai.agent.executor.finalizer import finalize_execution
 from app.ai.agent.executor.llm_step import complete_llm_step
-from app.ai.agent.executor.result_aggregator import ToolRunRecord
+from app.ai.agent.executor.result_aggregator import AggregatedToolResults, ToolRunRecord
 from app.ai.agent.executor.tool_runner import ToolRunner
 from app.ai.agent.interfaces.planner import Planner
 from app.ai.agent.interfaces.streaming import StreamPublisher
 from app.ai.agent.models.config import AgentConfig
 from app.ai.agent.models.context import AgentContext
-from app.ai.agent.models.events import AgentStreamEvent
+from app.ai.agent.models.events import AgentStreamEvent, ReflectionDecision
 from app.ai.agent.models.plan import ExecutionPlan, PlannedStep, StepAction
 from app.ai.agent.models.request import AgentRequest
 from app.ai.agent.models.response import AgentResponse
 from app.ai.agent.models.state import AgentExecutionState, AgentExecutionStatus
 from app.ai.agent.planner.parser import build_iteration_limit_plan
+from app.ai.agent.reflection.engine import ReflectionEngine
 from app.ai.agent.scratchpad.scratchpad import Scratchpad
 from app.ai.agent.scratchpad.store import ScratchpadStore, get_scratchpad_store
 from app.ai.agent.state.manager import AgentStateManager
 from app.ai.agent.streaming.publisher import NoOpStreamPublisher
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext, ToolResult
+from app.ai.prompts.manager import PromptManager
 from app.core.logging import get_logger
 from app.providers.base import LLMProvider
 
@@ -41,12 +43,16 @@ class AgentExecutor:
         *,
         stream_publisher: StreamPublisher | None = None,
         scratchpad_store: ScratchpadStore | None = None,
+        reflection_engine: ReflectionEngine | None = None,
+        prompt_manager: PromptManager | None = None,
     ) -> None:
         self._planner = planner
         self._provider = provider
         self._tool_runner = tool_runner
         self._publisher = stream_publisher or NoOpStreamPublisher()
         self._scratchpad_store = scratchpad_store or get_scratchpad_store()
+        self._reflection_engine = reflection_engine
+        self._prompt_manager = prompt_manager
 
     async def run(
         self,
@@ -109,17 +115,55 @@ class AgentExecutor:
                     state,
                     AgentExecutionStatus.EXECUTING,
                 )
-                state = await self._execute_tool_plan(
+                state, tool_results = await self._execute_tool_plan(
                     plan,
                     context=context,
                     state=state,
                     tool_context=tool_context,
                     scratchpad=scratchpad,
                 )
-                state = AgentStateManager.transition(
-                    state,
-                    AgentExecutionStatus.PLANNING,
+                state, should_finalize, retry_plan = await self._maybe_reflect(
+                    request=request,
+                    context=context,
+                    state=state,
+                    scratchpad=scratchpad,
+                    tool_results=tool_results,
+                    llm_content=last_planner_content,
+                    last_tool_plan=plan,
                 )
+                if retry_plan is not None:
+                    state, _ = await self._execute_tool_plan(
+                        retry_plan,
+                        context=context,
+                        state=state,
+                        tool_context=tool_context,
+                        scratchpad=scratchpad,
+                    )
+                if should_finalize:
+                    finalize_plan = ExecutionPlan(
+                        steps=[
+                            PlannedStep(
+                                step_id=f"finalize-reflect-{state.current_iteration}",
+                                action=StepAction.FINALIZE,
+                                reasoning=last_planner_content,
+                            )
+                        ],
+                        iteration=state.current_iteration,
+                        is_final=True,
+                    )
+                    return await self._finalize_and_complete(
+                        finalize_plan,
+                        request=request,
+                        context=context,
+                        state=state,
+                        scratchpad=scratchpad,
+                        last_planner_content=last_planner_content,
+                    )
+                if state.status != AgentExecutionStatus.PLANNING:
+                    state = AgentStateManager.transition(
+                        state,
+                        AgentExecutionStatus.PLANNING,
+                    )
 
             limit_plan = build_iteration_limit_plan(iteration=state.current_iteration)
             state = AgentStateManager.mark_iteration_limit_reached(state)
@@ -199,7 +243,7 @@ class AgentExecutor:
             raise ValueError("tool_context is required for non-final plans")
 
         state = AgentStateManager.transition(state, AgentExecutionStatus.EXECUTING)
-        state = await self._execute_tool_plan(
+        state, _ = await self._execute_tool_plan(
             plan,
             context=context,
             state=state,
@@ -264,6 +308,85 @@ class AgentExecutor:
 
         raise ValueError(f"Unsupported step action: {step.action}")
 
+    async def _maybe_reflect(
+        self,
+        *,
+        request: AgentRequest,
+        context: AgentContext,
+        state: AgentExecutionState,
+        scratchpad: Scratchpad,
+        tool_results: AggregatedToolResults | None,
+        llm_content: str | None,
+        last_tool_plan: ExecutionPlan,
+    ) -> tuple[AgentExecutionState, bool, ExecutionPlan | None]:
+        """Run optional reflection and map the decision to executor control flow."""
+        config = request.config or AgentConfig()
+        if not config.reflection_enabled:
+            return state, False, None
+        if tool_results is None or not tool_results.records:
+            return state, False, None
+        if state.reflection_count >= config.max_reflections:
+            return state, False, None
+
+        engine = self._resolve_reflection_engine()
+        state = AgentStateManager.transition(
+            state,
+            AgentExecutionStatus.REFLECTING,
+        )
+        result = await engine.reflect(
+            request=request,
+            context=context,
+            scratchpad=scratchpad,
+            tool_results=tool_results,
+            llm_content=llm_content,
+        )
+        state = AgentStateManager.record_reflection(state)
+        await self._publisher.publish(
+            AgentStreamEvent.reflection(
+                context.execution_id,
+                decision=result.decision,
+                reason=result.reason,
+            )
+        )
+
+        if result.decision == ReflectionDecision.REPLAN:
+            state = AgentStateManager.transition(
+                state,
+                AgentExecutionStatus.PLANNING,
+            )
+            return state, False, None
+
+        if result.decision == ReflectionDecision.RETRY_STEP:
+            state = AgentStateManager.transition(
+                state,
+                AgentExecutionStatus.EXECUTING,
+            )
+            return state, False, last_tool_plan
+
+        if result.decision == ReflectionDecision.FINISH:
+            state = AgentStateManager.transition(
+                state,
+                AgentExecutionStatus.EXECUTING,
+            )
+            return state, True, None
+
+        state = AgentStateManager.transition(state, AgentExecutionStatus.PLANNING)
+        return state, False, None
+
+    def _resolve_reflection_engine(self) -> ReflectionEngine:
+        if self._reflection_engine is not None:
+            return self._reflection_engine
+        if self._prompt_manager is None:
+            raise ValueError(
+                "prompt_manager is required when reflection is enabled "
+                "and no reflection_engine is provided"
+            )
+        self._reflection_engine = ReflectionEngine(
+            provider=self._provider,
+            prompt_manager=self._prompt_manager,
+        )
+        return self._reflection_engine
+
     async def _execute_tool_plan(
         self,
         plan: ExecutionPlan,
@@ -272,12 +395,12 @@ class AgentExecutor:
         state: AgentExecutionState,
         tool_context: ToolExecutionContext,
         scratchpad: Scratchpad,
-    ) -> AgentExecutionState:
+    ) -> tuple[AgentExecutionState, AggregatedToolResults | None]:
         tool_steps = [
             step for step in plan.steps if step.action == StepAction.TOOL_CALL
         ]
         if not tool_steps:
-            return state
+            return state, None
 
         for step in tool_steps:
             if step.tool_calls:
@@ -294,7 +417,7 @@ class AgentExecutor:
 
         for tool_name in results.tools_used:
             state = AgentStateManager.record_tool_used(state, tool_name)
-        return state
+        return state, results
 
     async def _finalize_and_complete(
         self,
