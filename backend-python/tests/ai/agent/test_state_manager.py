@@ -11,17 +11,23 @@ from app.ai.agent.exceptions import AgentIterationLimitError
 from app.ai.agent.models.config import AgentConfig
 from app.ai.agent.models.context import AgentContext
 from app.ai.agent.models.state import AgentExecutionState, AgentExecutionStatus
+from app.ai.agent.scratchpad import ScratchpadStore
 from app.ai.agent.state.manager import AgentStateManager, InvalidStateTransitionError
 
 
 def test_create_initial_state_uses_context_and_config_defaults() -> None:
+    store = ScratchpadStore()
     context = AgentContext(
         execution_id="exec-123",
         metadata={"request_source": "test", "api_key": "secret-value"},
     )
     config = AgentConfig(max_iterations=3)
 
-    state = AgentStateManager.create_initial_state(context, config)
+    state = AgentStateManager.create_initial_state(
+        context,
+        config,
+        scratchpad_store=store,
+    )
 
     assert state.execution_id == "exec-123"
     assert state.status == AgentExecutionStatus.CREATED
@@ -29,6 +35,7 @@ def test_create_initial_state_uses_context_and_config_defaults() -> None:
     assert state.current_iteration == 0
     assert state.metadata["request_source"] == "test"
     assert state.metadata["api_key"] == "secret-value"
+    assert store.get("exec-123") is not None
 
 
 def test_full_happy_path_lifecycle_created_to_completed() -> None:
