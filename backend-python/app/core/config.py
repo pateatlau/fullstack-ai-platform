@@ -109,6 +109,10 @@ class Settings(BaseSettings):
     web_search_api_key: str | None = None
     web_search_max_results: int = Field(default=5, ge=1)
 
+    # V2 Epic 1 (Phase 1): agent runtime feature flag. When disabled, chat
+    # endpoints keep the V1.1 orchestration path unchanged.
+    agent_runtime_enabled: bool = False
+
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, value: object) -> str:
