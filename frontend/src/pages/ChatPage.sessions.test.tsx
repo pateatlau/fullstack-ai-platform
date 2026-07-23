@@ -579,6 +579,70 @@ describe('ChatPage session sidebar wiring', () => {
     expect(body.use_documents).toBe(true)
   })
 
+  it('shows searching web while streaming web-search chat is in progress', async () => {
+    const toolStartSse =
+      'event: tool_start\n' +
+      'data: {"type":"tool_start","id":"resp_web","tool_name":"web_search","call_id":"call-1","timestamp":"t0"}\n\n'
+    const remainingSse =
+      'event: tool_end\n' +
+      'data: {"type":"tool_end","id":"resp_web","tool_name":"web_search","call_id":"call-1","success":true,"timestamp":"t1"}\n\n' +
+      'event: start\n' +
+      'data: {"type":"start","id":"resp_web","timestamp":"t2"}\n\n' +
+      'event: delta\n' +
+      'data: {"type":"delta","id":"resp_web","content":"Latest news headline.","timestamp":"t3"}\n\n' +
+      'event: end\n' +
+      'data: {"type":"end","id":"resp_web","finish_reason":"stop","timestamp":"t4"}\n\n'
+
+    const { response: streamResponse, enqueue, close } = createControllableSseResponse()
+
+    const fetchMock = createRoutedFetchMock(
+      (url, method) => {
+        if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+          return jsonResponse([])
+        }
+        if (url.endsWith('/api/chat/stream') && method === 'POST') {
+          return streamResponse
+        }
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      },
+      { chatStreamingEnabled: true, toolsEnabled: true, ragEnabled: false },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled()
+    })
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('checkbox', { name: 'Web search' }))
+    await user.type(screen.getByPlaceholderText('Ask something…'), 'Latest news?')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Assistant is searching the web')).not.toBeNull()
+    })
+    expect(screen.queryByLabelText('Assistant is typing')).toBeNull()
+
+    enqueue(toolStartSse)
+    enqueue(remainingSse)
+    close()
+
+    await waitFor(() => {
+      expect(screen.getByText('Latest news headline.')).not.toBeNull()
+    })
+
+    const streamCall = fetchMock.mock.calls.find(([input, init]) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      return url.endsWith('/api/chat/stream') && (init?.method ?? 'GET') === 'POST'
+    })
+    expect(streamCall).toBeTruthy()
+    const streamInit = streamCall?.[1] as RequestInit
+    const body = JSON.parse(String(streamInit.body)) as { use_web_search?: boolean }
+    expect(body.use_web_search).toBe(true)
+  })
+
   it('shows searching documents while document-grounded chat is in progress (non-streaming fallback)', async () => {
     const completePayload = {
       id: 'resp_docs',

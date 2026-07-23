@@ -16,6 +16,9 @@ from typing import cast
 from fastapi import Request
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 
+from app.ai.agent.adapters.chat_adapter import ChatAgentAdapter
+from app.ai.agent.adapters.chat_stream_adapter import stream_agent_chat
+from app.ai.agent.runtime.default_agent import DefaultAgent
 from app.ai.interfaces.vector_store import ScoredChunk
 from app.ai.prompts.manager import PromptManager
 from app.ai.rag.context_builder import ContextBuilder
@@ -80,6 +83,7 @@ class UnifiedChatService:
         context_builder: ContextBuilder,
         prompt_manager: PromptManager,
         settings: Settings,
+        agent: DefaultAgent | None = None,
     ) -> None:
         self._chat_service = chat_service
         self._tool_chat_service = tool_chat_service
@@ -87,6 +91,16 @@ class UnifiedChatService:
         self._context_builder = context_builder
         self._prompt_manager = prompt_manager
         self._settings = settings
+        self._agent = agent
+        self._chat_agent_adapter = (
+            ChatAgentAdapter(
+                agent=agent,
+                chat_service=chat_service,
+                settings=settings,
+            )
+            if agent is not None
+            else None
+        )
 
     def validate_stream_web_search(
         self,
@@ -172,12 +186,21 @@ class UnifiedChatService:
             )
 
         if effective_web_search:
-            response = await self._tool_chat_service.complete_chat(
-                working_request,
-                caller,
-                on_activity=on_activity,
-                allowed_tool_names=frozenset({WEB_SEARCH_TOOL_NAME}),
-            )
+            if self._use_agent_runtime():
+                assert self._chat_agent_adapter is not None
+                response = await self._chat_agent_adapter.complete_chat(
+                    working_request,
+                    caller,
+                    on_activity=on_activity,
+                    allowed_tool_names=frozenset({WEB_SEARCH_TOOL_NAME}),
+                )
+            else:
+                response = await self._tool_chat_service.complete_chat(
+                    working_request,
+                    caller,
+                    on_activity=on_activity,
+                    allowed_tool_names=frozenset({WEB_SEARCH_TOOL_NAME}),
+                )
         else:
             response = await self._chat_service.complete_chat(working_request, caller)
 
@@ -318,72 +341,93 @@ class UnifiedChatService:
                     ),
                 )
 
-            stream_messages: list[ChatMessageInput] = list(working_request.messages)
-            tool_rounds = 0
-
-            if effective_web_search:
-                loop_result = await self._run_stream_tool_loop(
-                    provider=provider,
+            if effective_web_search and self._use_agent_runtime():
+                assert self._agent is not None
+                async for frame in stream_agent_chat(
+                    agent=self._agent,
+                    chat_service=self._chat_service,
+                    settings=self._settings,
                     request=working_request,
+                    http_request=http_request,
+                    caller=caller,
+                    prep=prep,
+                    response_id=response_id,
+                    session_id=session_id,
+                    provider=provider,
+                    provider_name=provider_name,
+                    model=model,
+                    allowed_tool_names=frozenset({WEB_SEARCH_TOOL_NAME}),
+                    request_start_time=request_start_time,
+                    retrieval_latency_ms=retrieval_latency_ms,
+                ):
+                    yield frame
+            else:
+                stream_messages: list[ChatMessageInput] = list(working_request.messages)
+                tool_rounds = 0
+
+                if effective_web_search:
+                    loop_result = await self._run_stream_tool_loop(
+                        provider=provider,
+                        request=working_request,
+                        model=model,
+                        provider_name=provider_name,
+                        caller=caller,
+                        response_id=response_id,
+                        http_request=http_request,
+                    )
+                    for frame in loop_result.frames:
+                        yield frame
+
+                    if loop_result.guest_denied:
+                        async for frame in self._stream_static_content(
+                            response_id=response_id,
+                            session_id=session_id,
+                            content=_GUEST_TOOL_DENIED_MESSAGE,
+                            finish_reason="stop",
+                            caller=caller,
+                            prep=prep,
+                            provider=provider,
+                            provider_name=provider_name,
+                            model=model,
+                        ):
+                            yield frame
+                        return
+
+                    if loop_result.iteration_limit_content is not None:
+                        async for frame in self._stream_static_content(
+                            response_id=response_id,
+                            session_id=session_id,
+                            content=loop_result.iteration_limit_content,
+                            finish_reason="tool_iteration_cap",
+                            caller=caller,
+                            prep=prep,
+                            provider=provider,
+                            provider_name=provider_name,
+                            model=model,
+                        ):
+                            yield frame
+                        return
+
+                    tool_rounds = loop_result.tool_rounds
+                    if tool_rounds > 0:
+                        stream_messages = loop_result.loop_messages
+
+                async for frame in self._stream_provider_answer(
+                    provider=provider,
+                    messages=cast(list[ChatMessageSchema], stream_messages),
                     model=model,
                     provider_name=provider_name,
-                    caller=caller,
+                    temperature=working_request.temperature,
                     response_id=response_id,
+                    session_id=session_id,
+                    caller=caller,
+                    prep=prep,
                     http_request=http_request,
-                )
-                for frame in loop_result.frames:
+                    tool_rounds=tool_rounds,
+                    request_start_time=request_start_time,
+                    retrieval_latency_ms=retrieval_latency_ms,
+                ):
                     yield frame
-
-                if loop_result.guest_denied:
-                    async for frame in self._stream_static_content(
-                        response_id=response_id,
-                        session_id=session_id,
-                        content=_GUEST_TOOL_DENIED_MESSAGE,
-                        finish_reason="stop",
-                        caller=caller,
-                        prep=prep,
-                        provider=provider,
-                        provider_name=provider_name,
-                        model=model,
-                    ):
-                        yield frame
-                    return
-
-                if loop_result.iteration_limit_content is not None:
-                    async for frame in self._stream_static_content(
-                        response_id=response_id,
-                        session_id=session_id,
-                        content=loop_result.iteration_limit_content,
-                        finish_reason="tool_iteration_cap",
-                        caller=caller,
-                        prep=prep,
-                        provider=provider,
-                        provider_name=provider_name,
-                        model=model,
-                    ):
-                        yield frame
-                    return
-
-                tool_rounds = loop_result.tool_rounds
-                if tool_rounds > 0:
-                    stream_messages = loop_result.loop_messages
-
-            async for frame in self._stream_provider_answer(
-                provider=provider,
-                messages=cast(list[ChatMessageSchema], stream_messages),
-                model=model,
-                provider_name=provider_name,
-                temperature=working_request.temperature,
-                response_id=response_id,
-                session_id=session_id,
-                caller=caller,
-                prep=prep,
-                http_request=http_request,
-                tool_rounds=tool_rounds,
-                request_start_time=request_start_time,
-                retrieval_latency_ms=retrieval_latency_ms,
-            ):
-                yield frame
         except ChatServiceError:
             raise
         except Exception as exc:  # noqa: BLE001 - normalize provider failures
@@ -857,6 +901,9 @@ class UnifiedChatService:
     def _resolve_provider_name(self, request: ChatRequestSchema) -> ProviderName:
         _, _, provider_name = self._chat_service._resolve_provider(request)
         return provider_name
+
+    def _use_agent_runtime(self) -> bool:
+        return self._settings.agent_runtime_enabled and self._agent is not None
 
     @staticmethod
     def _is_guest_or_anonymous(caller: CallerContext | None) -> bool:

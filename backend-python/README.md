@@ -66,6 +66,7 @@ Routers → Services → AI Framework (`app/ai/`) → Providers → External API
 | `app/ai/vectorstores/` | Vector store adapters (V1: pgvector only) |
 | `app/ai/rag/` | Generic RAG framework (retriever, context builder, orchestration) |
 | `app/ai/evaluation/` | Prompt, retrieval, and end-to-end evaluation helpers |
+| `app/ai/agent/` | Reusable agent runtime (planner, executor, streaming, adapters) |
 | `app/ai/interfaces/` | Protocols added incrementally per phase |
 | `app/ai/deps.py` | FastAPI dependency wiring for AI components |
 
@@ -114,6 +115,7 @@ from app.routers.chat import get_tool_chat_service
 - **Multi-provider tool calling (V1.1a)** — `complete_chat_with_tools` on all four LLM adapters (OpenAI, Gemini, Groq, Anthropic). Per-request web search via `use_web_search=true` on `POST /api/chat` when `TOOLS_ENABLED=true` (V1.1b). Capability flags are exposed on `GET /api/health` under `capabilities.by_provider` (see `app/providers/capabilities.py`).
 - **Unified chat (V1.1b)** — `UnifiedChatService` orchestrates document grounding (`use_documents`) and web search (`use_web_search`) toggles on non-streaming `POST /api/chat`. Plain chat is unchanged when both toggles are off.
 - **Streaming policy (V1.1c)** — `POST /api/chat/stream` routes through `UnifiedChatService.stream_execute` when `use_web_search=true` and/or `use_documents=true` (when respective flags are on). Document retrieval completes **before** the first `delta` frame; optional SSE `retrieval_complete` signals retrieval phase to clients. Web search emits `tool_start` / `tool_end` during the tool loop, then streams the final answer. Combined toggles run in order: retrieval → tool loop → stream. Plain streaming (no toggles) still uses `ChatService.stream_chat`.
+- **Agent runtime (V2 Epic 1, Phase 11)** — When `AGENT_RUNTIME_ENABLED=true`, unified web-search chat (non-streaming and streaming) routes through `app/ai/agent/adapters/` instead of the legacy `ToolChatService` tool loop. RAG document grounding still runs in `UnifiedChatService` before agent handoff. Default is **off** so V1.1 behaviour is unchanged unless the flag is set.
 - **Retry policy** — shared utility in `app/core/retry.py` (HTTP 429/503, timeouts; max 3 attempts with exponential backoff).
 - **Metrics** — `tool_calls_total`, `tool_errors_total` (Phase 3); `search_latency_ms` on each web search; `stream_tool_rounds` on unified streaming tool path (Phase 4); `retrieval_latency_ms` and `time_to_first_delta_ms` on unified streaming document path (Phase 5).
 

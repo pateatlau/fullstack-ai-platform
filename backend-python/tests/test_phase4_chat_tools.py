@@ -513,7 +513,10 @@ async def test_stream_tool_iteration_limit_mid_stream(
 
     assert response.status_code == 200
     assert sum(1 for event, _ in frames if event == "tool_start") == 3
-    assert "tool-use limit" in response.text
+    delta_content = "".join(
+        frame["content"] for event, frame in frames if event == "delta"
+    )
+    assert "tool-use limit" in delta_content
 
 
 @pytest.mark.anyio

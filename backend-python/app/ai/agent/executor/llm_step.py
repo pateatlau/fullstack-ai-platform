@@ -51,6 +51,19 @@ async def stream_final_answer(
     return "".join(content_parts)
 
 
+async def emit_answer_stream_start(
+    execution_id: str,
+    publisher: StreamPublisher,
+) -> None:
+    """Signal that the final answer stream is beginning (Phase 11 SSE parity).
+
+    The chat stream adapter maps the first token event — even when empty — to
+    an SSE ``start`` frame so the UI can show the assistant bubble while the
+    provider stream warms up, matching ``UnifiedChatService._stream_provider_answer``.
+    """
+    await publisher.publish(AgentStreamEvent.token(execution_id, content=""))
+
+
 async def emit_final_content_as_tokens(
     *,
     content: str,

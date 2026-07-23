@@ -472,8 +472,11 @@ function ChatPageContent() {
       activeTransportRef.current = 'streaming'
       const documentRetrievalPending =
         Boolean(request.use_documents && ragEnabled) && !retryMessageId
+      const webSearchPending = Boolean(request.use_web_search && toolsEnabled) && !retryMessageId
+      const assistantBubblePending = documentRetrievalPending || webSearchPending
       setStreamingRetrievalActive(documentRetrievalPending)
-      if (documentRetrievalPending) {
+      setStreamingToolActive(webSearchPending && !documentRetrievalPending)
+      if (assistantBubblePending) {
         const messageId = crypto.randomUUID()
         currentMessageIdRef.current = messageId
         dispatch({

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.ai.agent.executor.llm_step import (
+    emit_answer_stream_start,
     emit_final_content_as_tokens,
     stream_final_answer,
 )
@@ -40,6 +41,7 @@ async def finalize_execution(
     last_planner_content: str | None = None,
 ) -> FinalizeResult:
     """Produce the final user-facing answer and stream token events."""
+    await emit_answer_stream_start(execution_id, publisher)
     step = _resolve_finalize_step(plan)
     if _is_iteration_limit_plan(step):
         content = last_planner_content or ITERATION_LIMIT_MESSAGE

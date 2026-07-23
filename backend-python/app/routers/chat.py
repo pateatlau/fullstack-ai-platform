@@ -19,12 +19,14 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.deps import (
+    get_agent_runtime,
     get_context_builder,
     get_prompt_manager,
     get_retriever,
     get_tool_executor,
     get_tool_registry,
 )
+from app.ai.agent.runtime.default_agent import DefaultAgent
 from app.ai.prompts.manager import PromptManager
 from app.ai.rag.context_builder import ContextBuilder
 from app.ai.rag.retriever import Retriever
@@ -196,6 +198,7 @@ def get_unified_chat_service(
     retriever: Retriever = Depends(get_retriever),
     context_builder: ContextBuilder = Depends(get_context_builder),
     prompt_manager: PromptManager = Depends(get_prompt_manager),
+    agent: DefaultAgent = Depends(get_agent_runtime),
 ) -> UnifiedChatService:
     return UnifiedChatService(
         chat_service=chat_service,
@@ -204,6 +207,7 @@ def get_unified_chat_service(
         context_builder=context_builder,
         prompt_manager=prompt_manager,
         settings=settings,
+        agent=agent,
     )
 
 
