@@ -95,6 +95,26 @@ Post-MVP V1.1.1 is a **polish release** on top of V1.1 unified chat — producti
 
 Validation record: [docs/plans/post-mvp-v1.1.1-implementation-plan.md](docs/plans/post-mvp-v1.1.1-implementation-plan.md) (Phase 10 Completion Record).
 
+## Post-MVP V2 Epic 01 Agent Framework — Complete
+
+V2 Epic 01 engineering is **complete**. A reusable, provider-agnostic agent runtime lives under `app/ai/agent/` and can power unified web-search chat behind a default-off feature flag.
+
+| Capability | Status |
+| ---------- | ------ |
+| Agent runtime (`DefaultAgent`, planner, executor, scratchpad, reflection, retry, streaming) | Done |
+| Public Protocols/models frozen after Phase 1 | Done |
+| Chat adapter (`UnifiedChatService` ↔ agent) behind `AGENT_RUNTIME_ENABLED` | Done |
+| V1.1 path unchanged when flag off; parity when on | Verified |
+| Coverage ≥80% on `app/` and `app/ai/agent/`; `make eval` | Verified |
+
+**Feature flag** (default off — V1.1.1 unchanged when disabled):
+
+- `AGENT_RUNTIME_ENABLED=false` — legacy `ToolChatService` tool loop remains the hot path; set `true` to route unified web-search chat through `app/ai/agent/adapters/`
+
+**Release summary:** [docs/releases/post-mvp-v2-epic1-release-summary.md](docs/releases/post-mvp-v2-epic1-release-summary.md)
+
+Validation record: [docs/plans/post-mvp-v2-epic-01-agent-framework.md](docs/plans/post-mvp-v2-epic-01-agent-framework.md) (Phase 12 Completion Record).
+
 ## Current Capabilities
 
 - Responsive ChatGPT-like UI with sidebar, streaming, stop, and retry
@@ -102,6 +122,7 @@ Validation record: [docs/plans/post-mvp-v1.1.1-implementation-plan.md](docs/plan
 - Chat persistence (sessions, messages, guest quota) when enabled
 - Non-streaming and SSE streaming chat across four LLM providers
 - Unified chat toggles on main chat (`use_web_search`, `use_documents`) for authenticated users — non-streaming and **streaming** (document grounding streams after pre-retrieval; web search via SSE `tool_start` / `tool_end` and optional `retrieval_complete` when `use_documents=true` on `POST /api/chat/stream`)
+- Optional agent runtime for web-search chat when `AGENT_RUNTIME_ENABLED=true` (default off)
 - Typed error envelopes and SSE error frames with `request_id`
 - Request-size and schema validation; provider timeout normalization
 
