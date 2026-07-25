@@ -104,6 +104,39 @@ describe('chatReducer', () => {
     expect(ended.messages[0].canRetry).toBe(false)
   })
 
+  it('END_MESSAGE stores retrievedChunkCount and citations', () => {
+    const started = chatReducer(initialChatState, {
+      type: 'START_MESSAGE',
+      id: 'resp_1',
+      createdAt: 't1',
+    })
+    const withContent = chatReducer(started, {
+      type: 'APPEND_DELTA',
+      id: 'resp_1',
+      content: 'Grounded answer',
+    })
+    const citations = [
+      {
+        index: 1,
+        chunk_id: 'c1',
+        document_id: 'd1',
+        snippet: 'snippet',
+        score: 0.5,
+        filename: 'doc.txt',
+      },
+    ]
+
+    const ended = chatReducer(withContent, {
+      type: 'END_MESSAGE',
+      id: 'resp_1',
+      retrievedChunkCount: 1,
+      citations,
+    })
+
+    expect(ended.messages[0].retrievedChunkCount).toBe(1)
+    expect(ended.messages[0].citations).toEqual(citations)
+  })
+
   it('RETRY_MESSAGE clears error metadata and returns the assistant message to streaming', () => {
     const interruptedState = {
       error: 'Could not reach the backend.',

@@ -1,4 +1,4 @@
-import type { ChatSessionListItem, Message } from '../types/chat'
+import type { Citation, ChatSessionListItem, Message } from '../types/chat'
 import { EMPTY_ASSISTANT_RESPONSE_MESSAGE } from '../utils/chatMessages'
 
 export interface ChatState {
@@ -28,7 +28,13 @@ export type ChatAction =
   | { type: 'SET_ERROR'; message: string }
   | { type: 'START_MESSAGE'; id: string; createdAt: string }
   | { type: 'APPEND_DELTA'; id: string; content: string }
-  | { type: 'END_MESSAGE'; id: string; toolsUsed?: string[]; retrievedChunkCount?: number }
+  | {
+      type: 'END_MESSAGE'
+      id: string
+      toolsUsed?: string[]
+      retrievedChunkCount?: number
+      citations?: Citation[] | null
+    }
   | { type: 'RETRY_MESSAGE'; id: string }
   | { type: 'STOP_MESSAGE'; id: string }
   | { type: 'INTERRUPT_MESSAGE'; id: string; message: string }
@@ -150,6 +156,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             canRetry: false,
             toolsUsed: action.toolsUsed,
             retrievedChunkCount: action.retrievedChunkCount,
+            citations: action.citations,
           }
         }),
       }

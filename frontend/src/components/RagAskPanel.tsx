@@ -6,6 +6,7 @@ import {
   RAG_FEATURE_DISABLED_CODE,
 } from '../api/ragClient'
 import type { RAGAskResponse } from '../types/rag'
+import { CitationList } from './CitationList'
 
 export function RagAskPanel() {
   const [question, setQuestion] = useState('')
@@ -111,6 +112,9 @@ export function RagAskPanel() {
               {response.retrieved_chunks.length === 1 ? '' : 's'} from your documents.
             </p>
           )}
+          {response.citations && response.citations.length > 0 ? (
+            <CitationList citations={response.citations} />
+          ) : null}
         </div>
       ) : null}
     </section>

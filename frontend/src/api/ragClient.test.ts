@@ -107,4 +107,59 @@ describe('ragClient', () => {
     await askRag('hello')
     expect(getLastRequestId()).toBe('req-rag-123')
   })
+
+  it('askRag preserves additive citations from the response body', async () => {
+    storeSession('rag-jwt', user)
+    const citations = [
+      {
+        index: 1,
+        chunk_id: '11111111-1111-1111-1111-111111111111',
+        document_id: '22222222-2222-2222-2222-222222222222',
+        snippet: 'Snippet text',
+        score: 0.9,
+        filename: 'handbook.md',
+        source: 'handbook.md',
+        page: null,
+      },
+    ]
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        answer: 'From the handbook.',
+        retrieved_chunks: [
+          {
+            chunk_id: '11111111-1111-1111-1111-111111111111',
+            document_id: '22222222-2222-2222-2222-222222222222',
+            chunk_index: 0,
+            score: 0.9,
+          },
+        ],
+        truncated: false,
+        model: 'gpt-4o-mini',
+        provider: 'openai',
+        citations,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await askRag('What does the handbook say?')
+    expect(response.citations).toEqual(citations)
+  })
+
+  it('askRag accepts null citations without throwing', async () => {
+    storeSession('rag-jwt', user)
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        answer: 'ok',
+        retrieved_chunks: [],
+        truncated: false,
+        model: 'gpt-4o-mini',
+        provider: 'openai',
+        citations: null,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await askRag('hello')
+    expect(response.citations).toBeNull()
+  })
 })

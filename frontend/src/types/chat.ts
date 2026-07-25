@@ -1,4 +1,8 @@
+import type { Citation } from './citation'
+
 export type Role = 'system' | 'user' | 'assistant'
+
+export type { Citation }
 
 export interface Message {
   id: string
@@ -11,6 +15,8 @@ export interface Message {
   canRetry?: boolean
   toolsUsed?: string[]
   retrievedChunkCount?: number
+  /** Present when advanced RAG returned citations (non-streaming chat). */
+  citations?: Citation[] | null
 }
 
 export interface ChatRequest {
@@ -42,6 +48,8 @@ export type ChatChunk =
       type: 'retrieval_complete'
       id: string
       chunk_count: number
+      /** Additive (advanced RAG); SSE does not include citation payloads. */
+      citation_count?: number
       timestamp: string
     }
   | {
