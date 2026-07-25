@@ -94,8 +94,11 @@ describe('ChatPage session-expiry UX', () => {
     await userEventInstance.type(screen.getByPlaceholderText('Ask something…'), 'Hello')
     await userEventInstance.click(screen.getByRole('button', { name: 'Send' }))
 
-    const banner = await screen.findByRole('status')
-    expect(banner.textContent).toContain('Your session expired')
+    const banner = await screen.findByText(/Your session expired/)
+    expect(banner).not.toBeNull()
+    // Auth identity remount clears the prior transcript to a blank guest chat.
+    expect(screen.queryByText('Hello')).toBeNull()
+    expect(screen.getByText('Start the conversation')).not.toBeNull()
 
     // No stale/duplicate chat error banner for the same invalid_access_token
     // event — the session-expired banner already communicates it.
@@ -106,7 +109,7 @@ describe('ChatPage session-expiry UX', () => {
     expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull()
 
     await userEventInstance.click(screen.getByRole('button', { name: 'Dismiss' }))
-    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByText(/Your session expired/)).toBeNull()
 
     // Chat keeps working as guest after the expiry.
     await userEventInstance.type(screen.getByPlaceholderText('Ask something…'), 'Still there?')
