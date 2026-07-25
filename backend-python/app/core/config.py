@@ -113,6 +113,10 @@ class Settings(BaseSettings):
     # endpoints keep the V1.1 orchestration path unchanged.
     agent_runtime_enabled: bool = False
 
+    # V2 Epic 2 (Phase 1): advanced RAG feature flag. When disabled, chat/RAG
+    # keep the V1 dense Retriever → ContextBuilder path unchanged.
+    advanced_rag_enabled: bool = False
+
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, value: object) -> str:
