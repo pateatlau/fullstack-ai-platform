@@ -12,6 +12,7 @@
 ### Changed
 
 - Chat and RAG hot paths optionally route through `AdvancedRetrievalPipeline` when the flag is on; V1 dense-only path remains the default when off
+- Compact chat composer: single input + toolbar shell, collapsed provider/model picker, visible tool checkboxes, and hover tooltips for provider/model, web search, documents, and Manage
 
 ### Fixed
 

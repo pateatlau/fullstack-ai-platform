@@ -12,6 +12,7 @@ import {
   type ProviderName,
 } from '../constants/providerModels'
 import type { ProviderCapabilityFlags } from '../hooks/useChatStreamingEnabled'
+import { ChevronDownIcon, DocumentIcon, GlobeIcon } from './icons/ShellIcons'
 
 interface ComposerProps {
   onSend: (
@@ -36,8 +37,25 @@ interface ComposerProps {
 
 const TEXTAREA_LINE_HEIGHT_PX = 24
 const TEXTAREA_MAX_LINES = 6
-const TEXTAREA_MIN_HEIGHT_PX = TEXTAREA_LINE_HEIGHT_PX * 2
+const TEXTAREA_MIN_HEIGHT_PX = TEXTAREA_LINE_HEIGHT_PX
 const TEXTAREA_MAX_HEIGHT_PX = TEXTAREA_LINE_HEIGHT_PX * TEXTAREA_MAX_LINES
+
+const PROVIDER_MODEL_TOOLTIP = 'Choose which AI provider and model to use for this message.'
+const WEB_SEARCH_TOOLTIP = 'Search the web for current information to include in the reply.'
+const MY_DOCUMENTS_TOOLTIP = 'Ground the reply in your uploaded documents.'
+const MANAGE_DOCUMENTS_TOOLTIP = 'Open your documents library to upload or manage files.'
+
+function toolChipClassName(active: boolean, disabled: boolean): string {
+  return [
+    'inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition',
+    'focus-within:outline-none focus-within:ring-2 focus-within:ring-brand-500',
+    disabled
+      ? 'cursor-not-allowed border-zinc-200 bg-zinc-100 text-zinc-400'
+      : active
+        ? 'border-brand-500/40 bg-brand-500/10 text-brand-600'
+        : 'border-zinc-200 bg-zinc-50 text-shell-950 hover:bg-zinc-100',
+  ].join(' ')
+}
 
 export function Composer({
   onSend,
@@ -60,6 +78,7 @@ export function Composer({
   const selectedProviderRef = useRef<ProviderName>('openai')
   const selectedModelRef = useRef(getProviderOption('openai').model)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const providerPanelRef = useRef<HTMLDivElement>(null)
   const [keyboardInset, setKeyboardInset] = useState(0)
   const hasMessage = value.trim().length > 0
   const isBlocked = isStreaming || disabled
@@ -79,22 +98,18 @@ export function Composer({
     : null
 
   const webSearchDisabled = isBlocked || !toolsEnabled || !providerSupportsTools
-
   const documentsDisabled = isBlocked || !ragEnabled
+  const showStatusChip = isStreaming || disabled
 
-  const statusTone = isStreaming
-    ? 'bg-amber-100 text-amber-800'
-    : disabled
-      ? 'bg-danger-100 text-danger-600'
-      : 'bg-zinc-100 text-zinc-600'
+  const statusTone = isStreaming ? 'bg-amber-100 text-amber-800' : 'bg-danger-100 text-danger-600'
 
   const statusChipClassName = [
-    'shrink-0 whitespace-nowrap rounded-chip px-2.5 py-1 text-[11px] font-medium',
+    'shrink-0 whitespace-nowrap rounded-chip px-2 py-1 text-[11px] font-medium',
     statusTone,
   ].join(' ')
 
-  const renderStatusChip = (className?: string) => (
-    <span className={[statusChipClassName, className].filter(Boolean).join(' ')} aria-live="polite">
+  const renderStatusChip = () => (
+    <span className={statusChipClassName} aria-live="polite">
       {isStreaming ? (
         showStreamingStatus ? (
           <>
@@ -107,20 +122,10 @@ export function Composer({
             <span className="hidden sm:inline">Waiting for response</span>
           </>
         )
-      ) : disabled ? (
+      ) : (
         <>
           <span className="sm:hidden">Blocked</span>
           <span className="hidden sm:inline">Sending blocked</span>
-        </>
-      ) : hasMessage ? (
-        <>
-          <span className="sm:hidden">Ready</span>
-          <span className="hidden sm:inline">Ready to send</span>
-        </>
-      ) : (
-        <>
-          <span className="sm:hidden">Waiting</span>
-          <span className="hidden sm:inline">Waiting for input</span>
         </>
       )}
     </span>
@@ -204,138 +209,46 @@ export function Composer({
     }
   }, [])
 
+  useEffect(() => {
+    if (!isProviderSettingsExpanded) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (providerPanelRef.current?.contains(target)) return
+      setIsProviderSettingsExpanded(false)
+    }
+
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsProviderSettingsExpanded(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [isProviderSettingsExpanded])
+
   return (
     <form
-      className="sticky bottom-0 z-10 mt-3 bg-linear-to-t from-shell-100 via-shell-100/95 to-transparent px-1 pt-4 sm:px-0"
+      className="sticky bottom-0 z-10 mt-2 bg-linear-to-t from-shell-100 via-shell-100/95 to-transparent px-1 pt-2 sm:px-0"
       style={{
         paddingBottom: `calc(${keyboardInset}px + env(safe-area-inset-bottom) + 0.5rem)`,
       }}
       onSubmit={handleSubmit}
       aria-label="Message composer"
     >
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-3 rounded-[1.75rem] border border-zinc-200 bg-white/96 p-3 shadow-chat-card backdrop-blur sm:p-4">
-        <div className="hidden items-center justify-between gap-3 sm:flex">
-          <p className="text-sm font-semibold text-zinc-950">Message</p>
-          {renderStatusChip()}
-        </div>
-
-        {canSwitchProvider ? (
-          <div className="space-y-3">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-left text-sm text-shell-950 transition hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:hidden"
-              aria-expanded={isProviderSettingsExpanded}
-              aria-controls="provider-model-settings"
-              onClick={() => setIsProviderSettingsExpanded((expanded) => !expanded)}
-            >
-              <span className="min-w-0">
-                <span className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-600">
-                  Provider & model
-                </span>
-                <span className="mt-0.5 block truncate font-medium">
-                  {selectedProviderLabel} · {selectedModel}
-                </span>
-              </span>
-              <span className="shrink-0 text-xs font-semibold text-brand-600">
-                {isProviderSettingsExpanded ? 'Hide' : 'Change'}
-              </span>
-            </button>
-
-            <div
-              id="provider-model-settings"
-              className={[
-                'grid gap-3 sm:grid-cols-2',
-                isProviderSettingsExpanded ? 'grid' : 'hidden sm:grid',
-              ].join(' ')}
-            >
-              <label className="flex flex-col gap-1.5">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">
-                  Provider
-                </span>
-                <select
-                  className="h-11 rounded-xl border border-zinc-200 bg-zinc-50 px-3 text-sm text-shell-950 outline-none transition focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
-                  value={selectedProvider}
-                  onChange={handleProviderChange}
-                  disabled={isBlocked}
-                  aria-label="Provider"
-                >
-                  {providerModelOptions.map((option) => (
-                    <option key={option.provider} value={option.provider}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="flex flex-col gap-1.5">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">
-                  Model
-                </span>
-                <select
-                  className="h-11 rounded-xl border border-zinc-200 bg-zinc-50 px-3 text-sm text-shell-950 outline-none transition focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
-                  value={selectedModel}
-                  onChange={handleModelChange}
-                  disabled={isBlocked}
-                  aria-label="Model"
-                >
-                  {modelOptions.map((option) => (
-                    <option key={option.model} value={option.model}>
-                      {option.model}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          </div>
-        ) : null}
-
-        {isAuthenticated ? (
-          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5">
-            <label
-              className="inline-flex items-center gap-2 text-sm text-shell-950"
-              title={webSearchDisabledReason ?? undefined}
-            >
-              <input
-                type="checkbox"
-                className="size-4 rounded border-zinc-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed"
-                checked={useWebSearch}
-                onChange={(event) => setUseWebSearch(event.target.checked)}
-                disabled={webSearchDisabled}
-                aria-label="Web search"
-              />
-              <span>Web search</span>
-            </label>
-
-            <label
-              className="inline-flex items-center gap-2 text-sm text-shell-950"
-              title={documentsDisabledReason ?? undefined}
-            >
-              <input
-                type="checkbox"
-                className="size-4 rounded border-zinc-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed"
-                checked={useDocuments}
-                onChange={(event) => setUseDocuments(event.target.checked)}
-                disabled={documentsDisabled}
-                aria-label="My documents"
-              />
-              <span>My documents</span>
-            </label>
-
-            <a
-              href="/documents"
-              className="ml-auto text-xs font-semibold text-brand-600 underline-offset-2 hover:underline"
-            >
-              Manage documents
-            </a>
-          </div>
-        ) : null}
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-2 rounded-2xl border border-zinc-200 bg-white/96 p-2 shadow-chat-card backdrop-blur sm:p-2.5">
+        <div className="flex items-end gap-2">
           <label className="flex min-w-0 flex-1">
             <span className="sr-only">Message input</span>
             <textarea
               ref={textareaRef}
-              className="min-h-12 w-full resize-none overflow-y-auto rounded-[1.25rem] border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm leading-6 text-shell-950 outline-none transition placeholder:text-zinc-500 focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100 sm:min-h-24"
+              className="min-h-10 w-full resize-none overflow-y-auto rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-sm leading-6 text-shell-950 outline-none transition placeholder:text-zinc-500 focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
               value={value}
               onChange={(event) => {
                 setValue(event.target.value)
@@ -349,38 +262,155 @@ export function Composer({
             />
           </label>
 
-          <div className="flex items-center justify-end gap-2 self-end sm:flex-col sm:items-stretch sm:self-end">
-            {isStreaming ? (
-              <p className="hidden text-xs text-zinc-500 sm:block sm:max-w-28 sm:text-right">
-                Stop the current response at any time.
-              </p>
+          {isStreaming ? (
+            <button
+              type="button"
+              className="inline-flex min-h-11 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-danger-600 px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-danger-600/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger-600 sm:min-w-20"
+              onMouseDown={(event) => {
+                event.preventDefault()
+                onStop()
+              }}
+              onClick={onStop}
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="inline-flex min-h-11 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-brand-600 px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-brand-500/40 sm:min-w-20"
+              disabled={!hasMessage || disabled}
+            >
+              Send
+            </button>
+          )}
+        </div>
+
+        {canSwitchProvider || isAuthenticated || showStatusChip ? (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {canSwitchProvider ? (
+              <div ref={providerPanelRef} className="relative min-w-0">
+                <button
+                  type="button"
+                  className="inline-flex max-w-full min-h-9 items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-left text-xs font-medium text-shell-950 transition hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+                  aria-expanded={isProviderSettingsExpanded}
+                  aria-controls="provider-model-settings"
+                  title={PROVIDER_MODEL_TOOLTIP}
+                  disabled={isBlocked}
+                  onClick={() => setIsProviderSettingsExpanded((expanded) => !expanded)}
+                >
+                  <span className="sr-only">Provider & model</span>
+                  <span className="truncate">
+                    {selectedProviderLabel} · {selectedModel}
+                  </span>
+                  <ChevronDownIcon
+                    className={[
+                      'h-3.5 w-3.5 shrink-0 text-zinc-500 transition',
+                      isProviderSettingsExpanded ? 'rotate-180' : '',
+                    ].join(' ')}
+                  />
+                </button>
+
+                <div
+                  id="provider-model-settings"
+                  className={[
+                    'absolute bottom-full left-0 z-20 mb-1.5 w-[min(100vw-2rem,22rem)] rounded-xl border border-zinc-200 bg-white p-2.5 shadow-chat-card sm:w-96',
+                    isProviderSettingsExpanded ? 'grid gap-2 sm:grid-cols-2' : 'hidden',
+                  ].join(' ')}
+                >
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
+                      Provider
+                    </span>
+                    <select
+                      className="h-10 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 text-sm text-shell-950 outline-none transition focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
+                      value={selectedProvider}
+                      onChange={handleProviderChange}
+                      disabled={isBlocked}
+                      aria-label="Provider"
+                    >
+                      {providerModelOptions.map((option) => (
+                        <option key={option.provider} value={option.provider}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
+                      Model
+                    </span>
+                    <select
+                      className="h-10 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 text-sm text-shell-950 outline-none transition focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
+                      value={selectedModel}
+                      onChange={handleModelChange}
+                      disabled={isBlocked}
+                      aria-label="Model"
+                    >
+                      {modelOptions.map((option) => (
+                        <option key={option.model} value={option.model}>
+                          {option.model}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </div>
             ) : null}
 
-            {renderStatusChip('sm:hidden')}
+            {isAuthenticated ? (
+              <>
+                <label
+                  className={toolChipClassName(useWebSearch, webSearchDisabled)}
+                  title={webSearchDisabledReason ?? WEB_SEARCH_TOOLTIP}
+                >
+                  <input
+                    type="checkbox"
+                    className="size-3.5 shrink-0 rounded border-zinc-300 accent-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed"
+                    checked={useWebSearch}
+                    onChange={(event) => setUseWebSearch(event.target.checked)}
+                    disabled={webSearchDisabled}
+                    aria-label="Web search"
+                  />
+                  <GlobeIcon className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    <span className="sm:hidden">Search</span>
+                    <span className="hidden sm:inline">Web search</span>
+                  </span>
+                </label>
 
-            {isStreaming ? (
-              <button
-                type="button"
-                className="inline-flex min-h-11 cursor-pointer items-center justify-center rounded-xl bg-danger-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-danger-600/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger-600"
-                onMouseDown={(event) => {
-                  event.preventDefault()
-                  onStop()
-                }}
-                onClick={onStop}
-              >
-                Stop
-              </button>
-            ) : (
-              <button
-                type="submit"
-                className="inline-flex min-h-11 cursor-pointer items-center justify-center rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-brand-500/40"
-                disabled={!hasMessage || disabled}
-              >
-                Send
-              </button>
-            )}
+                <label
+                  className={toolChipClassName(useDocuments, documentsDisabled)}
+                  title={documentsDisabledReason ?? MY_DOCUMENTS_TOOLTIP}
+                >
+                  <input
+                    type="checkbox"
+                    className="size-3.5 shrink-0 rounded border-zinc-300 accent-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed"
+                    checked={useDocuments}
+                    onChange={(event) => setUseDocuments(event.target.checked)}
+                    disabled={documentsDisabled}
+                    aria-label="My documents"
+                  />
+                  <DocumentIcon className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    <span className="sm:hidden">Docs</span>
+                    <span className="hidden sm:inline">My documents</span>
+                  </span>
+                </label>
+
+                <a
+                  href="/documents"
+                  title={MANAGE_DOCUMENTS_TOOLTIP}
+                  className="text-[11px] font-semibold text-brand-600 underline-offset-2 hover:underline sm:text-xs"
+                >
+                  Manage
+                </a>
+              </>
+            ) : null}
+
+            {showStatusChip ? <div className="ml-auto">{renderStatusChip()}</div> : null}
           </div>
-        </div>
+        ) : null}
       </div>
     </form>
   )

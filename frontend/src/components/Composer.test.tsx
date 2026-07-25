@@ -148,7 +148,7 @@ describe('Composer behavior', () => {
     ).toBe('page')
   })
 
-  it('collapses provider and model controls behind a mobile summary toggle', async () => {
+  it('collapses provider and model controls behind a summary toggle', async () => {
     renderWithProviders(<ChatPage />)
 
     const toggle = screen.getByRole('button', { name: /Provider & model/i })
@@ -164,7 +164,7 @@ describe('Composer behavior', () => {
     expect(settings?.className).not.toContain('hidden')
   })
 
-  it('collapses provider settings again after changing provider on mobile', async () => {
+  it('collapses provider settings again after changing provider', async () => {
     renderWithProviders(<ChatPage />)
 
     const user = userEvent.setup()
@@ -323,9 +323,9 @@ describe('Composer behavior', () => {
     renderWithProviders(<ChatPage />)
 
     const user = userEvent.setup()
-    expect(screen.getAllByText('Waiting for input').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Waiting for input')).toBeNull()
+    expect(screen.queryByText('Ready to send')).toBeNull()
     await user.type(screen.getByPlaceholderText('Ask something…'), 'Hello there')
-    expect(screen.getAllByText('Ready to send').length).toBeGreaterThan(0)
     await user.click(screen.getByRole('button', { name: 'Send' }))
 
     await waitFor(() => {
