@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.documents.schemas import DocumentChunk
 from app.ai.interfaces.vector_store import ScoredChunk
+from app.ai.rag.hybrid.lexical import plain_tsquery, ts_rank
 from app.ai.rag.metadata_filter import is_unsatisfiable_filter
 from app.ai.rag.schemas import MetadataFilter
 from app.core.config import Settings
@@ -105,6 +106,61 @@ class PgVectorStore:
         _logger.info(
             "Vector similarity search completed",
             vector_search_latency_ms=latency_ms,
+            result_count=len(rows),
+        )
+
+        return [
+            ScoredChunk(
+                chunk_id=chunk_row.id,
+                document_id=chunk_row.document_id,
+                chunk_index=chunk_row.chunk_index,
+                content=chunk_row.content,
+                metadata=_scored_metadata(chunk_row.metadata_json, mime_type),
+                score=float(score),
+            )
+            for chunk_row, score, mime_type in rows
+        ]
+
+    async def lexical_search(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        user_id: uuid.UUID,
+        filters: MetadataFilter | None = None,
+    ) -> list[ScoredChunk]:
+        if top_k < 1 or not query.strip():
+            return []
+        if filters is not None and is_unsatisfiable_filter(filters):
+            return []
+
+        start = time.perf_counter()
+        tsquery = plain_tsquery(query)
+        rank = ts_rank(DocumentChunkRow.content_tsv, tsquery)
+        stmt = (
+            select(
+                DocumentChunkRow,
+                rank.label("score"),
+                Document.mime_type,
+            )
+            .join(Document, DocumentChunkRow.document_id == Document.id)
+            .where(
+                Document.user_id == user_id,
+                DocumentChunkRow.content_tsv.op("@@")(tsquery),
+                # Parents are expansion-only; V1 chunks without chunk_kind stay searchable.
+                DocumentChunkRow.metadata_json["chunk_kind"]
+                .as_string()
+                .is_distinct_from("parent"),
+                *_metadata_filter_clauses(filters),
+            )
+            .order_by(rank.desc(), DocumentChunkRow.chunk_index.asc())
+            .limit(top_k)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        _logger.info(
+            "Lexical search completed",
+            lexical_search_latency_ms=latency_ms,
             result_count=len(rows),
         )
 

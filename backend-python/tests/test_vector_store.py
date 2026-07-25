@@ -371,3 +371,175 @@ async def test_pgvector_store_unfiltered_search_unchanged(pgvector_session) -> N
     assert len(results) == 2
     assert results[0].chunk_index == 0
     assert results[0].score >= results[1].score
+
+
+async def _fts_available(session) -> bool:
+    try:
+        result = await session.scalar(
+            text(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'document_chunks' AND column_name = 'content_tsv'
+                """
+            )
+        )
+        return result == 1
+    except Exception:
+        return False
+
+
+@pytest.fixture
+async def fts_session(pgvector_session):
+    if not await _fts_available(pgvector_session):
+        pytest.skip("content_tsv FTS column not available — run alembic upgrade head")
+    yield pgvector_session
+
+
+@pytest.mark.anyio
+async def test_pgvector_fts_migration_column_and_gin_index(fts_session) -> None:
+    column = await fts_session.execute(
+        text(
+            """
+            SELECT is_generated
+            FROM information_schema.columns
+            WHERE table_name = 'document_chunks' AND column_name = 'content_tsv'
+            """
+        )
+    )
+    assert column.scalar_one() == "ALWAYS"
+
+    index = await fts_session.scalar(
+        text(
+            """
+            SELECT 1
+            FROM pg_indexes
+            WHERE indexname = 'ix_document_chunks_content_tsv'
+            """
+        )
+    )
+    assert index == 1
+
+
+@pytest.mark.anyio
+async def test_pgvector_store_lexical_search_ranks_and_owner_scope(
+    fts_session,
+) -> None:
+    owner_id = await _make_user(fts_session)
+    other_id = await _make_user(fts_session)
+    await _seed_document_with_chunks(
+        fts_session,
+        user_id=owner_id,
+        chunks=[
+            (0, "refund policy for returns", _unit_vector(0)),
+            (1, "shipping timeline estimates", _unit_vector(1)),
+        ],
+    )
+    store = PgVectorStore(fts_session, Settings(openai_api_key="test-key"))
+
+    results = await store.lexical_search(
+        "refund policy",
+        top_k=5,
+        user_id=owner_id,
+    )
+    assert len(results) >= 1
+    assert results[0].chunk_index == 0
+    assert results[0].score > 0
+
+    other_results = await store.lexical_search(
+        "refund policy",
+        top_k=5,
+        user_id=other_id,
+    )
+    assert other_results == []
+
+
+@pytest.mark.anyio
+async def test_pgvector_store_lexical_search_excludes_parent_chunks(
+    fts_session,
+) -> None:
+    user_id = await _make_user(fts_session)
+    doc_store = SqlDocumentStore(fts_session)
+    document = await doc_store.create_document(
+        user_id=user_id,
+        filename="parent-child.txt",
+        mime_type="text/plain",
+        status="ready",
+    )
+    parent_id = uuid.uuid4()
+    child_id = uuid.uuid4()
+    await doc_store.add_chunks(
+        document.id,
+        [
+            (
+                0,
+                "parent refund policy overview covering returns and exchanges",
+                {"chunk_kind": "parent", "source": "parent-child.txt"},
+                parent_id,
+            ),
+            (
+                1,
+                "child refund policy detail for returns",
+                {
+                    "chunk_kind": "child",
+                    "parent_id": str(parent_id),
+                    "source": "parent-child.txt",
+                },
+                child_id,
+            ),
+        ],
+    )
+    store = PgVectorStore(fts_session, Settings(openai_api_key="test-key"))
+
+    results = await store.lexical_search(
+        "refund policy",
+        top_k=10,
+        user_id=user_id,
+    )
+    assert len(results) == 1
+    assert results[0].chunk_id == child_id
+    assert results[0].metadata.get("chunk_kind") == "child"
+
+
+@pytest.mark.anyio
+async def test_pgvector_store_lexical_search_respects_filters(fts_session) -> None:
+    user_id = await _make_user(fts_session)
+    keep_id = await _seed_document_with_chunks(
+        fts_session,
+        user_id=user_id,
+        filename="keep.pdf",
+        mime_type="application/pdf",
+        chunk_metadata={"source": "keep.pdf", "tags": ["policy"]},
+        chunks=[(0, "refund policy keep", _unit_vector(0))],
+    )
+    await _seed_document_with_chunks(
+        fts_session,
+        user_id=user_id,
+        filename="drop.txt",
+        mime_type="text/plain",
+        chunk_metadata={"source": "drop.txt", "tags": ["other"]},
+        chunks=[(0, "refund policy drop", _unit_vector(0))],
+    )
+    store = PgVectorStore(fts_session, Settings(openai_api_key="test-key"))
+
+    matched = await store.lexical_search(
+        "refund policy",
+        top_k=5,
+        user_id=user_id,
+        filters=MetadataFilter(
+            document_ids=frozenset({keep_id}),
+            tags=frozenset({"policy"}),
+            source="keep.pdf",
+            mime_type="application/pdf",
+        ),
+    )
+    assert len(matched) == 1
+    assert matched[0].document_id == keep_id
+
+    empty = await store.lexical_search(
+        "refund policy",
+        top_k=5,
+        user_id=user_id,
+        filters=MetadataFilter(document_ids=frozenset()),
+    )
+    assert empty == []
