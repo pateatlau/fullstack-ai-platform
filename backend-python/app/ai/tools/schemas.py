@@ -23,6 +23,9 @@ class ToolCall(BaseModel):
     name: str
     arguments: dict[str, object] = Field(default_factory=dict)
     call_id: str | None = None
+    # Gemini 3.x attaches this to functionCall parts; it must be echoed back
+    # on the next model turn or the API rejects the request.
+    thought_signature: bytes | None = None
 
 
 class ToolResult(BaseModel):

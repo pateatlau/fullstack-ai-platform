@@ -86,18 +86,13 @@ def test_planner_prompt_snapshot(prompt_manager) -> None:
             "tool_list": "- echo: Echo a message back to the caller",
             "iteration": 2,
             "max_iterations": 5,
+            "current_date": "2026-07-25 (Saturday)",
         },
     )
-    assert rendered == (
-        "You are a ReAct-style planning agent. Choose the next action to fulfill the user's request.\n\n"
-        "Available tools:\n"
-        "- echo: Echo a message back to the caller\n\n"
-        "Rules:\n"
-        "- Call one or more tools when you need external data or actions.\n"
-        "- When you have enough information to answer, respond without tool calls.\n"
-        "- Independent tools may be requested together in a single turn.\n"
-        "- Current iteration: 2 of 5."
-    )
+    assert "Today's date is 2026-07-25 (Saturday) (UTC)." in rendered
+    assert "MUST call web_search" in rendered
+    assert "Current iteration: 2 of 5." in rendered
+    assert "- echo: Echo a message back to the caller" in rendered
 
 
 def test_parse_tool_completion_single_tool() -> None:
@@ -122,7 +117,26 @@ def test_parse_tool_completion_single_tool() -> None:
     assert step.tool_calls[0].name == "echo"
     assert step.tool_calls[0].arguments == {"message": "hello"}
     assert step.tool_calls[0].call_id == "call-1"
+    assert step.tool_calls[0].thought_signature is None
     assert step.reasoning == "I'll echo the message."
+
+
+def test_parse_tool_completion_preserves_thought_signature() -> None:
+    completion = ProviderToolCompletion(
+        content="Searching.",
+        tool_calls=[
+            ProviderToolCall(
+                id="call-search",
+                name="web_search",
+                arguments={"query": "news"},
+                thought_signature=b"gemini-thought-signature",
+            )
+        ],
+    )
+
+    plan = parse_tool_completion(completion, iteration=0)
+
+    assert plan.steps[0].tool_calls[0].thought_signature == b"gemini-thought-signature"
 
 
 def test_parse_tool_completion_parallel_tools() -> None:
@@ -426,6 +440,12 @@ async def test_react_planner_uses_scratchpad_context_when_present(
     ]
     assert "system" in roles
     assert "assistant" in roles
+    system_message = next(
+        message
+        for message in captured_messages[0]
+        if isinstance(message, dict) and message.get("role") == "system"
+    )
+    assert "Today's date is" in str(system_message.get("content", ""))
 
 
 def test_react_planner_satisfies_planner_protocol(

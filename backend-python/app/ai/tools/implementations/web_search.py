@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import Protocol
@@ -9,10 +10,17 @@ from typing import Protocol
 import httpx
 
 from app.ai.interfaces.tool_handler import ToolHandler
+from app.ai.prompts.time_context import current_utc_date_label
 from app.ai.tools.schemas import ToolDefinition, ToolExecutionContext, ToolResult
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.retry import retry_async
+
+_RELATIVE_TIME_QUERY_RE = re.compile(
+    r"\b(today|tonight|latest|current|now|recent|recently|"
+    r"this\s+(week|month|year)|breaking)\b",
+    re.IGNORECASE,
+)
 
 _logger = get_logger(__name__)
 
@@ -94,14 +102,20 @@ WEB_SEARCH_TOOL_DEFINITION = ToolDefinition(
     name=WEB_SEARCH_TOOL_NAME,
     description=(
         "Search the web for current information, recent events, and facts "
-        "not available in the model's training data."
+        "not available in the model's training data. For time-sensitive topics, "
+        "include specific dates in the query."
     ),
     parameters={
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "The search query.",
+                "description": (
+                    "Single search query string. Parameter name must be "
+                    "'query' (singular), not 'queries'. Prefer concrete dates "
+                    "(for example month and year) over relative phrases "
+                    "like 'this summer' when recency matters."
+                ),
             },
             "max_results": {
                 "type": "integer",
@@ -109,8 +123,61 @@ WEB_SEARCH_TOOL_DEFINITION = ToolDefinition(
             },
         },
         "required": ["query"],
+        "additionalProperties": False,
     },
 )
+
+
+def normalize_web_search_arguments(
+    arguments: dict[str, object],
+) -> dict[str, object]:
+    """Coerce common LLM argument-shape mistakes before schema validation.
+
+    Some models (notably Gemini Flash-Lite) emit ``queries: [str, ...]`` instead
+    of ``query: str``, or send whole-number floats for ``max_results``.
+    """
+    normalized = dict(arguments)
+
+    query = normalized.get("query")
+    if not (isinstance(query, str) and query.strip()):
+        alias = normalized.pop("queries", None)
+        if isinstance(alias, str) and alias.strip():
+            normalized["query"] = alias.strip()
+        elif isinstance(alias, list):
+            parts = [str(item).strip() for item in alias if str(item).strip()]
+            if parts:
+                # Keep a single query string; join only when the model batched terms.
+                normalized["query"] = parts[0] if len(parts) == 1 else " ".join(parts)
+
+    max_results = normalized.get("max_results")
+    if isinstance(max_results, float) and max_results.is_integer():
+        normalized["max_results"] = int(max_results)
+
+    return normalized
+
+
+def ground_web_search_query(
+    query: str,
+    *,
+    today_label: str | None = None,
+) -> str:
+    """Append an explicit calendar date when the query uses relative time words.
+
+    Models often omit the year; search engines then surface evergreen older pages
+    (for example 2024 election coverage) that get narrated as "today".
+    """
+    cleaned = query.strip()
+    if not cleaned:
+        return cleaned
+
+    label = today_label or current_utc_date_label()
+    iso_date = label.split(" ", 1)[0]
+    year = iso_date[:4]
+    if iso_date in cleaned or year in cleaned:
+        return cleaned
+    if not _RELATIVE_TIME_QUERY_RE.search(cleaned):
+        return cleaned
+    return f"{cleaned} {iso_date}"
 
 
 class WebSearchToolHandler:
@@ -125,12 +192,17 @@ class WebSearchToolHandler:
         self._client = client
         self._settings = settings
 
+    @staticmethod
+    def normalize_arguments(arguments: dict[str, object]) -> dict[str, object]:
+        return normalize_web_search_arguments(arguments)
+
     async def execute(
         self,
         args: dict[str, object],
         context: ToolExecutionContext,
     ) -> ToolResult:
         del context
+        args = normalize_web_search_arguments(args)
         query = args.get("query")
         if not isinstance(query, str) or not query.strip():
             return ToolResult(
@@ -139,6 +211,7 @@ class WebSearchToolHandler:
                 error_code="validation_error",
             )
 
+        grounded_query = ground_web_search_query(query)
         max_results_raw = args.get("max_results")
         max_results = self._settings.web_search_max_results
         if isinstance(max_results_raw, int) and max_results_raw >= 1:
@@ -147,7 +220,7 @@ class WebSearchToolHandler:
         start = time.perf_counter()
         try:
             results = await self._client.search(
-                query.strip(),
+                grounded_query,
                 max_results=max_results,
             )
         except httpx.HTTPStatusError as exc:
@@ -180,6 +253,7 @@ class WebSearchToolHandler:
             "Web search completed",
             search_latency_ms=latency_ms,
             result_count=len(results),
+            query=grounded_query,
         )
         return ToolResult(
             success=True,

@@ -75,6 +75,12 @@ def _split_tool_messages_for_anthropic(
             continue
 
         role = message.get("role")
+        if role == "system":
+            text = message.get("content")
+            if isinstance(text, str) and text:
+                system_parts.append(text)
+            continue
+
         if role == "assistant" and message.get("tool_calls"):
             content_blocks: list[dict[str, object]] = []
             text_content = message.get("content")

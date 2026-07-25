@@ -162,6 +162,8 @@ def test_build_agent_request_maps_chat_fields() -> None:
     assert agent_request.model == "gpt-4o-mini"
     assert agent_request.provider == "openai"
     assert agent_request.tool_names == [WEB_SEARCH_TOOL_NAME]
+    assert agent_request.system_prompt is not None
+    assert "Today's date is" in agent_request.system_prompt
     assert agent_request.config is not None
     assert agent_request.config.max_iterations == CHAT_AGENT_MAX_ITERATIONS
     assert agent_request.config.timeout_seconds == 30

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import uuid
 from collections.abc import Iterator
@@ -30,14 +31,6 @@ def _usage_from_response(response: Any) -> ProviderUsage | None:
     )
 
 
-def _message_to_line(message: ChatMessageSchema) -> str:
-    return f"{message.role}: {message.content}"
-
-
-def _messages_to_prompt(messages: list[ChatMessageSchema]) -> str:
-    return "\n".join(_message_to_line(message) for message in messages)
-
-
 def _parse_tool_arguments(raw: str | dict[str, object] | None) -> dict[str, object]:
     if raw is None:
         return {}
@@ -52,6 +45,35 @@ def _parse_tool_arguments(raw: str | dict[str, object] | None) -> dict[str, obje
     if isinstance(parsed, dict):
         return cast(dict[str, object], parsed)
     return {}
+
+
+def _coerce_thought_signature(value: object) -> bytes | None:
+    """Normalize Gemini thought signatures to bytes for round-tripping."""
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, bytearray):
+        return bytes(value)
+    if isinstance(value, str) and value:
+        try:
+            return base64.b64decode(value, validate=True)
+        except Exception:
+            # Opaque provider blobs are occasionally plain strings; echo as UTF-8.
+            return value.encode("utf-8")
+    return None
+
+
+def _message_role_and_content(message: ChatMessageInput) -> tuple[str | None, object]:
+    """Normalize ChatMessageSchema, dict, or duck-typed message objects."""
+    if isinstance(message, ChatMessageSchema):
+        return message.role, message.content
+    if isinstance(message, dict):
+        role = message.get("role")
+        return (str(role) if role is not None else None), message.get("content", "")
+    role = getattr(message, "role", None)
+    content = getattr(message, "content", "")
+    return (str(role) if role is not None else None), content
 
 
 def _to_gemini_contents(
@@ -72,7 +94,29 @@ def _to_gemini_contents(
             )
             continue
 
+        if not isinstance(message, dict):
+            # AgentMessage and similar duck-typed turns from the scratchpad.
+            role, content = _message_role_and_content(message)
+            if role == "system" and isinstance(content, str) and content:
+                system_parts.append(content)
+                continue
+            if role in {"user", "assistant"}:
+                gemini_role = "user" if role == "user" else "model"
+                contents.append(
+                    types.Content(
+                        role=gemini_role,
+                        parts=[types.Part(text=str(content or ""))],
+                    )
+                )
+            continue
+
         role = message.get("role")
+        if role == "system":
+            text = message.get("content")
+            if isinstance(text, str) and text:
+                system_parts.append(text)
+            continue
+
         if role == "assistant" and message.get("tool_calls"):
             parts: list[Any] = []
             text_content = message.get("content")
@@ -91,14 +135,16 @@ def _to_gemini_contents(
                 call_id = str(call.get("id") or f"call_{uuid.uuid4().hex[:12]}")
                 call_name = str(function.get("name", ""))
                 tool_call_names_by_id[call_id] = call_name
-                thought_signature = call.get("thought_signature")
+                thought_signature = _coerce_thought_signature(
+                    call.get("thought_signature")
+                )
                 function_call = types.FunctionCall(
                     id=call_id,
                     name=call_name,
                     args=args,
                 )
                 part_kwargs: dict[str, Any] = {"function_call": function_call}
-                if isinstance(thought_signature, bytes):
+                if thought_signature is not None:
                     part_kwargs["thought_signature"] = thought_signature
                 parts.append(types.Part(**part_kwargs))
             contents.append(types.Content(role="model", parts=parts))
@@ -136,6 +182,39 @@ def _to_gemini_contents(
     return system, contents
 
 
+_GEMINI_UNSUPPORTED_SCHEMA_KEYS = frozenset(
+    {
+        "additionalProperties",
+        "additional_properties",
+        "$schema",
+        "$id",
+        "unevaluatedProperties",
+    }
+)
+
+
+def _sanitize_gemini_schema(schema: object) -> dict[str, object]:
+    """Strip JSON Schema keys Gemini's FunctionDeclaration rejects."""
+    if not isinstance(schema, dict):
+        return {"type": "object"}
+
+    sanitized: dict[str, object] = {}
+    for key, value in schema.items():
+        if key in _GEMINI_UNSUPPORTED_SCHEMA_KEYS:
+            continue
+        if key == "properties" and isinstance(value, dict):
+            sanitized[key] = {
+                prop_name: _sanitize_gemini_schema(prop_schema)
+                for prop_name, prop_schema in value.items()
+            }
+            continue
+        if key == "items":
+            sanitized[key] = _sanitize_gemini_schema(value)
+            continue
+        sanitized[key] = value
+    return sanitized
+
+
 def _to_gemini_tools(tools: list[dict[str, object]]) -> list[Any]:
     declarations: list[Any] = []
     for tool in tools:
@@ -144,11 +223,16 @@ def _to_gemini_tools(tools: list[dict[str, object]]) -> list[Any]:
         function = tool.get("function")
         if not isinstance(function, dict):
             continue
+        # google-genai accepts OpenAPI-style dicts at runtime; stubs require Schema.
+        parameters = cast(
+            Any,
+            _sanitize_gemini_schema(function.get("parameters", {"type": "object"})),
+        )
         declarations.append(
             types.FunctionDeclaration(
                 name=str(function.get("name", "")),
                 description=str(function.get("description", "")),
-                parameters=function.get("parameters", {"type": "object"}),
+                parameters=parameters,
             )
         )
     if not declarations:
@@ -173,18 +257,16 @@ def _extract_tool_completion(response: Any) -> ProviderToolCompletion:
         if function_call is not None:
             raw_args = getattr(function_call, "args", None)
             arguments = raw_args if isinstance(raw_args, dict) else {}
-            thought_signature = getattr(part, "thought_signature", None)
+            thought_signature = _coerce_thought_signature(
+                getattr(part, "thought_signature", None)
+            )
             tool_calls.append(
                 ProviderToolCall(
                     id=getattr(function_call, "id", None)
                     or f"call_{uuid.uuid4().hex[:12]}",
                     name=getattr(function_call, "name", "") or "",
                     arguments=cast(dict[str, object], arguments),
-                    thought_signature=(
-                        thought_signature
-                        if isinstance(thought_signature, bytes)
-                        else None
-                    ),
+                    thought_signature=thought_signature,
                 )
             )
             continue
@@ -282,28 +364,6 @@ class GeminiProvider:
             config=config,
         )
 
-    def _generate_content(
-        self,
-        *,
-        model: str,
-        prompt: str,
-        temperature: float,
-        max_tokens: int | None = None,
-    ) -> Any:
-        models_api = cast(Any, self._client.models)
-        generate_content = cast(
-            Callable[..., Any],
-            models_api.generate_content,
-        )
-        config: dict[str, Any] = {"temperature": temperature}
-        if max_tokens is not None:
-            config["max_output_tokens"] = max_tokens
-        return generate_content(
-            model=model,
-            contents=prompt,
-            config=config,
-        )
-
     def _generate_content_with_tools(
         self,
         *,
@@ -319,7 +379,13 @@ class GeminiProvider:
             Callable[..., Any],
             models_api.generate_content,
         )
-        config: dict[str, Any] = {"temperature": temperature}
+        # Disable SDK auto function-calling; this app owns the tool loop.
+        config: dict[str, Any] = {
+            "temperature": temperature,
+            "automatic_function_calling": types.AutomaticFunctionCallingConfig(
+                disable=True
+            ),
+        }
         if tools:
             config["tools"] = tools
         if system_instruction is not None:
@@ -373,17 +439,45 @@ class GeminiProvider:
         *,
         max_tokens: int | None = None,
     ) -> ProviderCompletion:
-        prompt = _messages_to_prompt(messages)
+        system_instruction, contents = _to_gemini_contents(
+            cast(list[ChatMessageInput], messages)
+        )
         response = await asyncio.to_thread(
-            self._generate_content,
+            self._generate_content_for_chat,
             model=model,
-            prompt=prompt,
+            contents=contents,
+            system_instruction=system_instruction,
             temperature=temperature,
             max_tokens=max_tokens,
         )
         return ProviderCompletion(
             content=_extract_text(response),
             usage=_usage_from_response(response),
+        )
+
+    def _generate_content_for_chat(
+        self,
+        *,
+        model: str,
+        contents: list[Any],
+        system_instruction: str | None,
+        temperature: float,
+        max_tokens: int | None = None,
+    ) -> Any:
+        models_api = cast(Any, self._client.models)
+        generate_content = cast(
+            Callable[..., Any],
+            models_api.generate_content,
+        )
+        config: dict[str, Any] = {"temperature": temperature}
+        if system_instruction is not None:
+            config["system_instruction"] = system_instruction
+        if max_tokens is not None:
+            config["max_output_tokens"] = max_tokens
+        return generate_content(
+            model=model,
+            contents=contents,
+            config=config,
         )
 
     async def complete_chat_with_tools(

@@ -9,8 +9,11 @@ import pytest
 from app.providers.base import ProviderToolCall
 from app.providers.gemini_provider import (
     GeminiProvider,
+    _coerce_thought_signature,
     _extract_tool_completion,
+    _sanitize_gemini_schema,
     _to_gemini_contents,
+    _to_gemini_tools,
 )
 from app.schemas.chat import ChatMessageSchema
 
@@ -171,6 +174,55 @@ async def test_gemini_complete_chat_with_tools_handles_malformed_arguments(
     ]
 
 
+def test_to_gemini_contents_keeps_dict_system_instruction() -> None:
+    system, contents = _to_gemini_contents(
+        [
+            {
+                "role": "system",
+                "content": "Today's date is 2026-07-25 (Saturday) (UTC).",
+            },
+            {"role": "user", "content": "What day is today?"},
+        ]
+    )
+
+    assert system == "Today's date is 2026-07-25 (Saturday) (UTC)."
+    assert len(contents) == 1
+    assert contents[0].role == "user"
+
+
+def test_sanitize_gemini_schema_strips_additional_properties() -> None:
+    sanitized = _sanitize_gemini_schema(
+        {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+            "additionalProperties": False,
+        }
+    )
+    assert "additionalProperties" not in sanitized
+    assert sanitized["required"] == ["query"]
+
+    tools = _to_gemini_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "web_search",
+                    "description": "Search",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        ]
+    )
+    parameters = tools[0].function_declarations[0].parameters
+    assert parameters is not None
+    assert parameters.additional_properties is None
+
+
 def test_to_gemini_contents_preserves_function_name_on_tool_result() -> None:
     _system, contents = _to_gemini_contents(
         [
@@ -204,6 +256,14 @@ def test_to_gemini_contents_preserves_function_name_on_tool_result() -> None:
     assert function_response.id == "call-1"
     assert function_response.name == "web_search"
     assert function_response.response == {"output": '{"success": true}'}
+
+
+def test_coerce_thought_signature_accepts_bytes_and_base64() -> None:
+    assert _coerce_thought_signature(b"raw-sig") == b"raw-sig"
+    assert _coerce_thought_signature(bytearray(b"raw-sig")) == b"raw-sig"
+    assert _coerce_thought_signature("cmF3LXNpZw==") == b"raw-sig"
+    assert _coerce_thought_signature(None) is None
+    assert _coerce_thought_signature(123) is None
 
 
 def test_extract_tool_completion_returns_none_content_without_candidates() -> None:

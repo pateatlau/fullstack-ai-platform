@@ -12,6 +12,7 @@ from app.ai.agent.models.context import AgentContext
 from app.ai.agent.models.messages import AgentMessage
 from app.ai.agent.models.request import AgentRequest
 from app.ai.agent.runtime.default_agent import DefaultAgent
+from app.ai.prompts.time_context import current_utc_date_label
 from app.ai.tools.implementations.web_search import WEB_SEARCH_TOOL_NAME
 from app.core.caller import CallerContext
 from app.core.config import Settings
@@ -33,6 +34,15 @@ from app.services.tool_chat_service import ChatActivityCallback
 
 # V1.1 chat adapter uses a tighter iteration budget than the core default (5).
 CHAT_AGENT_MAX_ITERATIONS = 3
+
+
+def _chat_agent_system_prompt() -> str:
+    return (
+        f"Today's date is {current_utc_date_label()} (UTC). "
+        "Use this when interpreting time-sensitive questions and search results. "
+        "For current events or 'today'/'latest' news, ground answers only in "
+        "web_search results; never invent dates or present older stories as today."
+    )
 
 
 class ChatAgentAdapter:
@@ -258,6 +268,7 @@ def build_agent_request(
             provider_name=provider_name,
         ),
         tool_names=tool_names,
+        system_prompt=_chat_agent_system_prompt(),
         config=AgentConfig(
             max_iterations=CHAT_AGENT_MAX_ITERATIONS,
             timeout_seconds=settings.request_timeout_seconds,
