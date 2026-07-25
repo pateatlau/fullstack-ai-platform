@@ -9,7 +9,8 @@ import pytest
 from sqlalchemy import text
 
 from app.ai.documents.schemas import DocumentChunk
-from app.ai.vectorstores.pgvector import PgVectorStore
+from app.ai.rag.schemas import MetadataFilter
+from app.ai.vectorstores.pgvector import PgVectorStore, _scored_metadata
 from app.core.config import Settings
 from app.db.documents import SqlDocumentStore
 from app.db.identity import SqlUserStore
@@ -48,27 +49,28 @@ async def _seed_document_with_chunks(
     *,
     user_id: uuid.UUID,
     chunks: list[tuple[int, str, list[float]]],
+    filename: str = "fixture.txt",
+    mime_type: str | None = "text/plain",
+    chunk_metadata: dict[str, object] | None = None,
 ) -> uuid.UUID:
     store = SqlDocumentStore(session)
     document = await store.create_document(
         user_id=user_id,
-        filename="fixture.txt",
-        mime_type="text/plain",
+        filename=filename,
+        mime_type=mime_type,
         status="ready",
     )
+    metadata = chunk_metadata or {"source": filename, "tags": []}
     await store.add_chunks(
         document.id,
-        [
-            (index, content, {"source": "fixture.txt"}, None)
-            for index, content, _ in chunks
-        ],
+        [(index, content, dict(metadata), None) for index, content, _ in chunks],
     )
     vector_store = PgVectorStore(session, Settings(openai_api_key="test-key"))
     pipeline_chunks = [
         DocumentChunk(
             chunk_index=index,
             content=content,
-            metadata={"source": "fixture.txt"},
+            metadata=dict(metadata),
             embedding=embedding,
         )
         for index, content, embedding in chunks
@@ -79,6 +81,16 @@ async def _seed_document_with_chunks(
         chunks=pipeline_chunks,
     )
     return document.id
+
+
+def test_scored_metadata_document_mime_type_overwrites_chunk_value() -> None:
+    metadata = _scored_metadata(
+        {"source": "doc.pdf", "mime_type": "text/plain", "tags": ["a"]},
+        "application/pdf",
+    )
+    assert metadata["mime_type"] == "application/pdf"
+    assert metadata["source"] == "doc.pdf"
+    assert metadata["tags"] == ["a"]
 
 
 @pytest.fixture
@@ -239,3 +251,123 @@ async def test_pgvector_store_logs_latency_not_content(
     assert getattr(records[0], "result_count") == 1
     assert secret not in caplog.text
     assert "1.0" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_pgvector_store_filter_match_and_no_match(pgvector_session) -> None:
+    user_id = await _make_user(pgvector_session)
+    doc_keep = await _seed_document_with_chunks(
+        pgvector_session,
+        user_id=user_id,
+        filename="keep.pdf",
+        mime_type="application/pdf",
+        chunk_metadata={
+            "source": "keep.pdf",
+            "tags": ["policy", "hr"],
+        },
+        chunks=[(0, "keep chunk", _unit_vector(0))],
+    )
+    await _seed_document_with_chunks(
+        pgvector_session,
+        user_id=user_id,
+        filename="drop.txt",
+        mime_type="text/plain",
+        chunk_metadata={"source": "drop.txt", "tags": ["other"]},
+        chunks=[(0, "drop chunk", _unit_vector(0))],
+    )
+    store = PgVectorStore(pgvector_session, Settings(openai_api_key="test-key"))
+
+    matched = await store.similarity_search(
+        _unit_vector(0),
+        top_k=5,
+        user_id=user_id,
+        filters=MetadataFilter(
+            document_ids=frozenset({doc_keep}),
+            tags=frozenset({"policy", "hr"}),
+            source="keep.pdf",
+            mime_type="application/pdf",
+        ),
+    )
+    assert len(matched) == 1
+    assert matched[0].document_id == doc_keep
+    assert matched[0].metadata.get("mime_type") == "application/pdf"
+
+    no_match = await store.similarity_search(
+        _unit_vector(0),
+        top_k=5,
+        user_id=user_id,
+        filters=MetadataFilter(source="missing.pdf"),
+    )
+    assert no_match == []
+
+    empty_ids = await store.similarity_search(
+        _unit_vector(0),
+        top_k=5,
+        user_id=user_id,
+        filters=MetadataFilter(document_ids=frozenset()),
+    )
+    assert empty_ids == []
+
+
+@pytest.mark.anyio
+async def test_pgvector_store_filter_preserves_owner_isolation(
+    pgvector_session,
+) -> None:
+    owner_id = await _make_user(pgvector_session)
+    other_id = await _make_user(pgvector_session)
+    doc_id = await _seed_document_with_chunks(
+        pgvector_session,
+        user_id=owner_id,
+        filename="private.pdf",
+        mime_type="application/pdf",
+        chunk_metadata={"source": "private.pdf", "tags": ["secret"]},
+        chunks=[(0, "private", _unit_vector(0))],
+    )
+    store = PgVectorStore(pgvector_session, Settings(openai_api_key="test-key"))
+    filters = MetadataFilter(
+        document_ids=frozenset({doc_id}),
+        tags=frozenset({"secret"}),
+        source="private.pdf",
+        mime_type="application/pdf",
+    )
+
+    owner_results = await store.similarity_search(
+        _unit_vector(0),
+        top_k=5,
+        user_id=owner_id,
+        filters=filters,
+    )
+    other_results = await store.similarity_search(
+        _unit_vector(0),
+        top_k=5,
+        user_id=other_id,
+        filters=filters,
+    )
+
+    assert len(owner_results) == 1
+    assert other_results == []
+
+
+@pytest.mark.anyio
+async def test_pgvector_store_unfiltered_search_unchanged(pgvector_session) -> None:
+    user_id = await _make_user(pgvector_session)
+    await _seed_document_with_chunks(
+        pgvector_session,
+        user_id=user_id,
+        chunks=[
+            (0, "closest", _unit_vector(0)),
+            (1, "middle", _unit_vector(1)),
+        ],
+    )
+    store = PgVectorStore(pgvector_session, Settings(openai_api_key="test-key"))
+
+    results = await store.similarity_search(
+        _unit_vector(0),
+        top_k=2,
+        user_id=user_id,
+        filters=None,
+    )
+
+    assert len(results) == 2
+    assert results[0].chunk_index == 0
+    assert results[0].score >= results[1].score

@@ -1,8 +1,11 @@
-"""Advanced retrieval pipeline protocol and Phase-1 skeleton.
+"""Advanced retrieval pipeline protocol and skeleton.
 
 The skeleton delegates to the V1 dense :class:`~app.ai.rag.retriever.Retriever`
 until later phases fill rewrite → hybrid → filter → parent → rerank → compress
 → cite stages. Chat/RAG hot paths are not wired here (Phase 10).
+
+Phase 3: metadata filters are pushed down through :class:`Retriever` and
+re-applied as Part I stage 3 over ``RetrievedCandidate``s.
 """
 
 from __future__ import annotations
@@ -10,6 +13,10 @@ from __future__ import annotations
 import time
 from typing import Protocol
 
+from app.ai.rag.metadata_filter import (
+    apply_metadata_filter,
+    is_unsatisfiable_filter,
+)
 from app.ai.rag.retriever import Retriever
 from app.ai.rag.schemas import (
     RetrievalRequest,
@@ -35,18 +42,24 @@ class DefaultAdvancedRetrievalPipeline:
         self._retriever = retriever
 
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
-        # Metadata filtering lands in Phase 3; refuse rather than silently drop filters.
-        if request.filters is not None:
-            raise ValueError(
-                "Metadata filters are not supported until advanced RAG "
-                "filtering is implemented."
+        start = time.perf_counter()
+
+        # Empty document_ids/tags frozensets → empty result (not an error).
+        if request.filters is not None and is_unsatisfiable_filter(request.filters):
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return RetrievalResult(
+                candidates=[],
+                citations=[],
+                context_text="",
+                truncated=False,
+                retrieval_latency_ms=latency_ms,
             )
 
-        start = time.perf_counter()
         chunks = await self._retriever.retrieve(
             question=request.question,
             user_id=request.user_id,
             top_k=request.top_k,
+            filters=request.filters,
         )
         candidates = [
             RetrievedCandidate(
@@ -58,6 +71,8 @@ class DefaultAdvancedRetrievalPipeline:
             )
             for chunk in chunks
         ]
+        # Part I stage 3 — filter candidates in place (AND with store push-down).
+        candidates = apply_metadata_filter(candidates, request.filters)
         latency_ms = int((time.perf_counter() - start) * 1000)
         return RetrievalResult(
             candidates=candidates,
