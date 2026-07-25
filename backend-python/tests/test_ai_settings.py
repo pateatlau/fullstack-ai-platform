@@ -39,6 +39,7 @@ def test_ai_settings_load_with_defaults(monkeypatch: pytest.MonkeyPatch) -> None
     assert settings.rag_top_k == 5
     assert settings.rag_default_prompt_template == "rag/answer/v1"
     assert settings.rag_context_max_chars == 8000
+    assert settings.citation_snippet_max_chars == 240
     assert settings.default_temperature == 0.7
     assert settings.default_max_tokens is None
     assert settings.document_upload_max_bytes == 10_485_760

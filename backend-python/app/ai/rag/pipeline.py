@@ -1,10 +1,11 @@
 """Advanced retrieval pipeline protocol and skeleton.
 
 The skeleton delegates to the V1 dense :class:`~app.ai.rag.retriever.Retriever`
-until later phases fill hybrid → filter → parent → cite stages.
+until later phases fill hybrid → filter → parent stages.
 Phase 5 adds optional query rewrite (at most once per request).
 Phase 6 adds optional Protocol-backed rerank with timeout fallback.
 Phase 7 adds optional Protocol-backed context compression.
+Phase 8 builds post-compression citations aligned with ``[n]`` markers.
 Chat/RAG hot paths are not wired here (Phase 10).
 
 Phase 3: metadata filters are pushed down through :class:`Retriever` and
@@ -19,12 +20,15 @@ from typing import Protocol
 from app.ai.interfaces.context_compressor import ContextCompressor
 from app.ai.interfaces.query_rewriter import QueryRewriter
 from app.ai.interfaces.reranker import Reranker
+from app.ai.rag.citations import CitationBuilder
+from app.ai.rag.context_builder import BuiltContext
 from app.ai.rag.metadata_filter import (
     apply_metadata_filter,
     is_unsatisfiable_filter,
 )
 from app.ai.rag.retriever import Retriever
 from app.ai.rag.schemas import (
+    Citation,
     RetrievalRequest,
     RetrievalResult,
     RetrievedCandidate,
@@ -58,6 +62,9 @@ class DefaultAdvancedRetrievalPipeline:
     :class:`ContextCompressor` are set; populates ``context_text`` /
     ``truncated`` from the compressor. Flag-off / missing compressor leave
     context empty (V1 ``ContextBuilder`` remains on the chat/RAG path).
+
+    Cite (Phase 8) runs after compression when advanced RAG is on, assigning
+    contiguous ``[1..n]`` citations for included blocks only.
     """
 
     def __init__(
@@ -67,12 +74,14 @@ class DefaultAdvancedRetrievalPipeline:
         query_rewriter: QueryRewriter | None = None,
         reranker: Reranker | None = None,
         context_compressor: ContextCompressor | None = None,
+        citation_builder: CitationBuilder | None = None,
         settings: Settings | None = None,
     ) -> None:
         self._retriever = retriever
         self._query_rewriter = query_rewriter
         self._reranker = reranker
         self._context_compressor = context_compressor
+        self._citation_builder = citation_builder
         self._settings = settings
 
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
@@ -112,13 +121,15 @@ class DefaultAdvancedRetrievalPipeline:
         # Part I stage 5 — cross-encoder rerank (Protocol); failures keep order.
         candidates = await self._maybe_rerank(search_query, candidates, request)
         # Part I stage 6 — faithful compress into context budget.
-        context_text, truncated = self._maybe_compress(candidates)
+        built = self._maybe_compress(candidates)
+        # Part I stage 7 — citations after compression, before prompt construction.
+        citations = self._maybe_cite(built, candidates)
         latency_ms = int((time.perf_counter() - start) * 1000)
         return RetrievalResult(
             candidates=candidates,
-            citations=[],
-            context_text=context_text,
-            truncated=truncated,
+            citations=citations,
+            context_text=built.text if built is not None else "",
+            truncated=built.truncated if built is not None else False,
             retrieval_latency_ms=latency_ms,
         )
 
@@ -175,17 +186,28 @@ class DefaultAdvancedRetrievalPipeline:
     def _maybe_compress(
         self,
         candidates: list[RetrievedCandidate],
-    ) -> tuple[str, bool]:
+    ) -> BuiltContext | None:
         settings = self._settings
         compressor = self._context_compressor
         if settings is None or compressor is None or not settings.advanced_rag_enabled:
-            return "", False
+            return None
 
-        built = compressor.compress(
+        return compressor.compress(
             candidates,
             max_chars=settings.rag_context_max_chars,
         )
-        return built.text, built.truncated
+
+    def _maybe_cite(
+        self,
+        built: BuiltContext | None,
+        candidates: list[RetrievedCandidate],
+    ) -> list[Citation]:
+        settings = self._settings
+        if settings is None or not settings.advanced_rag_enabled or built is None:
+            return []
+
+        builder = self._citation_builder or CitationBuilder(settings=settings)
+        return builder.build(built.included_chunks, candidates=candidates)
 
     @staticmethod
     def _rerank_top_n(request: RetrievalRequest, settings: Settings) -> int:

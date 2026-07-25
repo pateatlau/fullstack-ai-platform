@@ -96,6 +96,19 @@ class RetrievedChunkMetaSchema(BaseModel):
     score: float
 
 
+class CitationSchema(BaseModel):
+    """Structured citation for an included context block (additive; Phase 8)."""
+
+    index: int
+    chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    snippet: str
+    score: float
+    filename: str | None = None
+    source: str | None = None
+    page: int | str | None = None
+
+
 class ChatResponseSchema(BaseModel):
     id: str
     role: Role = "assistant"
@@ -108,6 +121,9 @@ class ChatResponseSchema(BaseModel):
     # Optional unified-chat metadata (V1.1b).
     retrieved_chunks: list[RetrievedChunkMetaSchema] | None = None
     tools_used: list[str] | None = None
+    # Additive (Epic 02 Phase 8). ``None`` when V1 / not populated; list when
+    # advanced retrieval produced citations.
+    citations: list[CitationSchema] | None = None
 
 
 class ErrorDetail(BaseModel):
@@ -171,6 +187,8 @@ class RetrievalCompleteFrame(BaseModel):
     type: Literal["retrieval_complete"] = "retrieval_complete"
     id: str
     chunk_count: int
+    # Additive (Epic 02 Phase 8); keep chunk_count. Default 0 on V1 path.
+    citation_count: int = 0
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

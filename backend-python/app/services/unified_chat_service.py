@@ -39,6 +39,7 @@ from app.schemas.chat import (
     ChatMessageSchema,
     ChatRequestSchema,
     ChatResponseSchema,
+    CitationSchema,
     DeltaFrame,
     EndFrame,
     ErrorFrame,
@@ -152,6 +153,9 @@ class UnifiedChatService:
 
         working_request = request
         retrieved_chunks: list[RetrievedChunkMetaSchema] | None = None
+        # Additive citations (Phase 8). Populated when advanced retrieval
+        # produces them; V1 path leaves ``None`` until Phase 10 wiring.
+        citations: list[CitationSchema] | None = None
 
         if effective_documents:
             assert caller is not None and caller.user_id is not None
@@ -204,10 +208,13 @@ class UnifiedChatService:
         else:
             response = await self._chat_service.complete_chat(working_request, caller)
 
+        response_updates: dict[str, object] = {}
         if retrieved_chunks is not None:
-            response = response.model_copy(
-                update={"retrieved_chunks": retrieved_chunks}
-            )
+            response_updates["retrieved_chunks"] = retrieved_chunks
+        if citations is not None:
+            response_updates["citations"] = citations
+        if response_updates:
+            response = response.model_copy(update=response_updates)
         return response
 
     async def stream_execute(
@@ -333,11 +340,14 @@ class UnifiedChatService:
                     question=question,
                     context_text=built_context.text,
                 )
+                # citation_count stays 0 on V1 path; Phase 10 sets it from
+                # advanced RetrievalResult.citations.
                 yield format_sse(
                     "retrieval_complete",
                     RetrievalCompleteFrame(
                         id=response_id,
                         chunk_count=len(built_context.included_chunks),
+                        citation_count=0,
                     ),
                 )
 

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 
 from app.ai.deps import get_rag_service
 from app.ai.prompts.exceptions import PromptNotFoundError, PromptRenderError
+from app.ai.rag.citations import to_citation_schemas
 from app.ai.rag.schemas import RAGResponse
 from app.ai.rag.service import RAGService
 from app.core.caller import CallerContext, require_authenticated_caller
@@ -39,6 +40,7 @@ def _to_response(result: RAGResponse) -> RAGAskResponse:
         provider=cast(ProviderName, result.provider),
         retrieval_latency_ms=result.retrieval_latency_ms,
         llm_latency_ms=result.llm_latency_ms,
+        citations=to_citation_schemas(result.citations),
     )
 
 

@@ -26,6 +26,20 @@ class RetrievedChunkMeta:
 
 
 @dataclass(frozen=True)
+class Citation:
+    """Structured citation for an included context block (post-compression)."""
+
+    index: int
+    chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    snippet: str
+    score: float
+    filename: str | None = None
+    source: str | None = None
+    page: int | str | None = None
+
+
+@dataclass(frozen=True)
 class RAGResponse:
     """End-to-end RAG result for callers (HTTP layer maps this in Phase 11)."""
 
@@ -36,6 +50,9 @@ class RAGResponse:
     provider: str
     retrieval_latency_ms: int | None = None
     llm_latency_ms: int | None = None
+    # Additive (Phase 8). ``None`` on V1 / flag-off path; list when advanced
+    # retrieval produced citations (empty list = advanced ran, nothing included).
+    citations: list[Citation] | None = None
 
 
 @dataclass(frozen=True)
@@ -72,20 +89,6 @@ class RetrievedCandidate:
     def __post_init__(self) -> None:
         # Defensive copy + freeze so callers cannot mutate shared dict inputs.
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
-
-
-@dataclass(frozen=True)
-class Citation:
-    """Structured citation for an included context block (post-compression)."""
-
-    index: int
-    chunk_id: uuid.UUID
-    document_id: uuid.UUID
-    snippet: str
-    score: float
-    filename: str | None = None
-    source: str | None = None
-    page: int | str | None = None
 
 
 @dataclass(frozen=True)
