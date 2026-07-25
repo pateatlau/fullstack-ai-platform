@@ -77,8 +77,9 @@ class _StubRetriever:
         question: str,
         user_id: uuid.UUID,
         top_k: int | None = None,
+        filters: MetadataFilter | None = None,
     ) -> list[ScoredChunk]:
-        _ = (question, user_id, top_k)
+        _ = (question, user_id, top_k, filters)
         return list(self._chunks)
 
 
@@ -187,15 +188,24 @@ async def test_default_pipeline_delegates_to_retriever() -> None:
 
 
 @pytest.mark.anyio
-async def test_default_pipeline_rejects_filters_until_phase_3() -> None:
-    pipeline = DefaultAdvancedRetrievalPipeline(
-        retriever=cast(Retriever, _StubRetriever([]))
+async def test_default_pipeline_accepts_filters() -> None:
+    chunk = ScoredChunk(
+        chunk_id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_index=0,
+        content="filtered",
+        metadata={"source": "notes.md"},
+        score=0.5,
     )
-    with pytest.raises(ValueError, match="Metadata filters are not supported"):
-        await pipeline.retrieve(
-            RetrievalRequest(
-                question="hello",
-                user_id=uuid.uuid4(),
-                filters=MetadataFilter(source="notes.md"),
-            )
+    pipeline = DefaultAdvancedRetrievalPipeline(
+        retriever=cast(Retriever, _StubRetriever([chunk]))
+    )
+    result = await pipeline.retrieve(
+        RetrievalRequest(
+            question="hello",
+            user_id=uuid.uuid4(),
+            filters=MetadataFilter(source="notes.md"),
         )
+    )
+    assert len(result.candidates) == 1
+    assert result.candidates[0].chunk.content == "filtered"

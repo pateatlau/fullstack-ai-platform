@@ -7,6 +7,7 @@ import uuid
 
 from app.ai.interfaces.embedding_provider import EmbeddingProvider
 from app.ai.interfaces.vector_store import ScoredChunk, VectorStore
+from app.ai.rag.schemas import MetadataFilter
 from app.core.config import Settings
 from app.core.logging import get_logger
 
@@ -33,6 +34,7 @@ class Retriever:
         question: str,
         user_id: uuid.UUID,
         top_k: int | None = None,
+        filters: MetadataFilter | None = None,
     ) -> list[ScoredChunk]:
         effective_top_k = top_k if top_k is not None else self._settings.rag_top_k
         start = time.perf_counter()
@@ -51,6 +53,7 @@ class Retriever:
             embeddings[0],
             top_k=effective_top_k,
             user_id=user_id,
+            filters=filters,
         )
 
         latency_ms = int((time.perf_counter() - start) * 1000)

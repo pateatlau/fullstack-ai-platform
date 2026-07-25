@@ -6,12 +6,14 @@ import time
 import uuid
 from typing import Any, cast
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import ColumnElement, delete, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.documents.schemas import DocumentChunk
 from app.ai.interfaces.vector_store import ScoredChunk
+from app.ai.rag.metadata_filter import is_unsatisfiable_filter
+from app.ai.rag.schemas import MetadataFilter
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.db.models import Document, DocumentChunk as DocumentChunkRow
@@ -74,18 +76,26 @@ class PgVectorStore:
         *,
         top_k: int,
         user_id: uuid.UUID,
+        filters: MetadataFilter | None = None,
     ) -> list[ScoredChunk]:
         if top_k < 1:
+            return []
+        if filters is not None and is_unsatisfiable_filter(filters):
             return []
 
         start = time.perf_counter()
         distance = DocumentChunkRow.embedding.cosine_distance(query_embedding)
         stmt = (
-            select(DocumentChunkRow, (1 - distance).label("score"))
+            select(
+                DocumentChunkRow,
+                (1 - distance).label("score"),
+                Document.mime_type,
+            )
             .join(Document, DocumentChunkRow.document_id == Document.id)
             .where(
                 Document.user_id == user_id,
                 DocumentChunkRow.embedding.is_not(None),
+                *_metadata_filter_clauses(filters),
             )
             .order_by(distance)
             .limit(top_k)
@@ -104,10 +114,10 @@ class PgVectorStore:
                 document_id=chunk_row.document_id,
                 chunk_index=chunk_row.chunk_index,
                 content=chunk_row.content,
-                metadata=dict(chunk_row.metadata_json),
+                metadata=_scored_metadata(chunk_row.metadata_json, mime_type),
                 score=float(score),
             )
-            for chunk_row, score in rows
+            for chunk_row, score, mime_type in rows
         ]
 
     async def delete_by_document(self, document_id: uuid.UUID) -> None:
@@ -115,3 +125,38 @@ class PgVectorStore:
             delete(DocumentChunkRow).where(DocumentChunkRow.document_id == document_id)
         )
         await self._session.flush()
+
+
+def _metadata_filter_clauses(
+    filters: MetadataFilter | None,
+) -> list[ColumnElement[bool]]:
+    """Build AND predicates for optional metadata / document filters."""
+    if filters is None:
+        return []
+
+    clauses: list[ColumnElement[bool]] = []
+    if filters.document_ids is not None:
+        clauses.append(DocumentChunkRow.document_id.in_(filters.document_ids))
+    if filters.tags is not None:
+        # JSONB @> — chunk tags array must contain every requested tag (AND).
+        clauses.append(
+            DocumentChunkRow.metadata_json.contains({"tags": sorted(filters.tags)})
+        )
+    if filters.source is not None:
+        clauses.append(
+            DocumentChunkRow.metadata_json["source"].as_string() == filters.source
+        )
+    if filters.mime_type is not None:
+        clauses.append(Document.mime_type == filters.mime_type)
+    return clauses
+
+
+def _scored_metadata(
+    metadata_json: dict[str, object],
+    mime_type: str | None,
+) -> dict[str, object]:
+    """Copy chunk metadata and surface document mime_type for candidate filters."""
+    metadata = dict(metadata_json)
+    if mime_type is not None:
+        metadata.setdefault("mime_type", mime_type)
+    return metadata

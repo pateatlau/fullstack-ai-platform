@@ -73,6 +73,7 @@ async def test_retriever_returns_ranked_chunks_for_known_query_embedding() -> No
         query_vector,
         top_k=5,
         user_id=user_id,
+        filters=None,
     )
 
 

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from app.ai.documents.schemas import DocumentChunk
+
+if TYPE_CHECKING:
+    from app.ai.rag.schemas import MetadataFilter
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,7 @@ class VectorStore(Protocol):
         *,
         top_k: int,
         user_id: uuid.UUID,
+        filters: MetadataFilter | None = None,
     ) -> list[ScoredChunk]: ...
 
     async def delete_by_document(self, document_id: uuid.UUID) -> None: ...
