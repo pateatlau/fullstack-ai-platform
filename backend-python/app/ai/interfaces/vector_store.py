@@ -44,4 +44,13 @@ class VectorStore(Protocol):
         filters: MetadataFilter | None = None,
     ) -> list[ScoredChunk]: ...
 
+    async def lexical_search(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        user_id: uuid.UUID,
+        filters: MetadataFilter | None = None,
+    ) -> list[ScoredChunk]: ...
+
     async def delete_by_document(self, document_id: uuid.UUID) -> None: ...

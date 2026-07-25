@@ -21,6 +21,7 @@ import uuid
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     CheckConstraint,
+    Computed,
     Date,
     ForeignKey,
     Index,
@@ -29,7 +30,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.config import Settings
@@ -367,6 +368,12 @@ class DocumentChunk(Base):
     metadata_json: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'")
     )
+    # Epic 02 Phase 4: generated FTS vector (english); maintained by Postgres.
+    content_tsv: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', content)", persisted=True),
+        nullable=True,
+    )
     # Phase 7: pgvector column (nullable until KnowledgeService ingest persists).
     embedding: Mapped[list[float] | None] = mapped_column(
         Vector(_EMBEDDING_DIMENSIONS),
@@ -381,4 +388,9 @@ class DocumentChunk(Base):
             "document_id", "chunk_index", name="uq_document_chunks_document_index"
         ),
         Index("ix_document_chunks_document_id", "document_id"),
+        Index(
+            "ix_document_chunks_content_tsv",
+            "content_tsv",
+            postgresql_using="gin",
+        ),
     )

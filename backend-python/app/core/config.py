@@ -99,6 +99,10 @@ class Settings(BaseSettings):
     child_chunk_overlap: int = Field(default=80, ge=0)
     parent_chunk_size: int = Field(default=2000, ge=1)
     parent_chunk_overlap: int = Field(default=200, ge=0)
+    # V2 Epic 2 (Phase 4): hybrid dense + lexical retrieval (RRF fusion).
+    hybrid_dense_top_k: int = Field(default=20, ge=1)
+    hybrid_lexical_top_k: int = Field(default=20, ge=1)
+    rrf_k: int = Field(default=60, ge=1)
     rag_top_k: int = Field(default=5, ge=1)
     rag_default_prompt_template: str = "rag/answer/v1"
     rag_context_max_chars: int = Field(default=8000, ge=1)

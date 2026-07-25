@@ -28,6 +28,9 @@ def test_ai_settings_load_with_defaults(monkeypatch: pytest.MonkeyPatch) -> None
     assert settings.child_chunk_overlap == 80
     assert settings.parent_chunk_size == 2000
     assert settings.parent_chunk_overlap == 200
+    assert settings.hybrid_dense_top_k == 20
+    assert settings.hybrid_lexical_top_k == 20
+    assert settings.rrf_k == 60
     assert settings.rag_top_k == 5
     assert settings.rag_default_prompt_template == "rag/answer/v1"
     assert settings.rag_context_max_chars == 8000
