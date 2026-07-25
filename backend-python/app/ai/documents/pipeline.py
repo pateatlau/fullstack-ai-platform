@@ -6,6 +6,7 @@ import time
 import uuid
 from dataclasses import replace
 
+from app.ai.documents.chunkers.parent_child import ParentChildChunker
 from app.ai.documents.chunkers.recursive import RecursiveChunker
 from app.ai.documents.parsers.router import select_parser
 from app.ai.documents.schemas import DocumentChunk, ParsedDocument
@@ -26,7 +27,12 @@ class IngestionPipeline:
         embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         self._settings = settings
-        self._chunker = RecursiveChunker(settings)
+        # Flag-off: V1 RecursiveChunker. Flag-on: parent-child for advanced RAG.
+        self._chunker: RecursiveChunker | ParentChildChunker
+        if settings.advanced_rag_enabled:
+            self._chunker = ParentChildChunker(settings)
+        else:
+            self._chunker = RecursiveChunker(settings)
         self._embedding_provider = embedding_provider
 
     async def parse(

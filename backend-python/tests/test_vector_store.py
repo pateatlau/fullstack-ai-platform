@@ -58,7 +58,10 @@ async def _seed_document_with_chunks(
     )
     await store.add_chunks(
         document.id,
-        [(index, content, {"source": "fixture.txt"}) for index, content, _ in chunks],
+        [
+            (index, content, {"source": "fixture.txt"}, None)
+            for index, content, _ in chunks
+        ],
     )
     vector_store = PgVectorStore(session, Settings(openai_api_key="test-key"))
     pipeline_chunks = [

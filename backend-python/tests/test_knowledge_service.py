@@ -98,6 +98,54 @@ async def test_knowledge_service_ingest_persists_embeddings(pgvector_session) ->
 
 
 @pytest.mark.anyio
+async def test_knowledge_service_advanced_rag_embeds_children_only(
+    pgvector_session,
+) -> None:
+    user_id = await _make_user(pgvector_session)
+    settings = Settings(
+        openai_api_key="test-key",
+        advanced_rag_enabled=True,
+        child_chunk_size=40,
+        child_chunk_overlap=8,
+        parent_chunk_size=80,
+        parent_chunk_overlap=10,
+    )
+    pipeline = IngestionPipeline(settings, embedding_provider=_FakeEmbeddingProvider())
+    service = KnowledgeService(
+        session=pgvector_session,
+        settings=settings,
+        pipeline=pipeline,
+        vector_store=PgVectorStore(pgvector_session, settings),
+    )
+    file_bytes = (FIXTURES / "sample.txt").read_bytes()
+
+    document_id = await service.ingest_document(
+        user_id=user_id,
+        file_bytes=file_bytes,
+        filename="sample.txt",
+        mime_type="text/plain",
+    )
+
+    store = SqlDocumentStore(pgvector_session)
+    chunks = await store.list_chunks(document_id)
+    parents = [c for c in chunks if c.metadata_json.get("chunk_kind") == "parent"]
+    children = [c for c in chunks if c.metadata_json.get("chunk_kind") == "child"]
+    assert parents
+    assert children
+    assert all(p.embedding is None for p in parents)
+    assert all(c.embedding is not None for c in children)
+
+    parent_ids = {p.id for p in parents}
+    for child in children:
+        parent_id = uuid.UUID(str(child.metadata_json["parent_id"]))
+        assert parent_id in parent_ids
+
+    contents = await store.get_chunk_contents_by_ids(list(parent_ids))
+    assert set(contents) == parent_ids
+    assert all(contents[pid] for pid in parent_ids)
+
+
+@pytest.mark.anyio
 async def test_knowledge_service_ingest_failure_sets_failed_and_cleans_up(
     pgvector_session,
 ) -> None:
