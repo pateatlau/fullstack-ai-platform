@@ -1,4 +1,4 @@
-"""Unit tests for RecursiveChunker."""
+"""Unit tests for RecursiveChunker (V1 / flag-off path)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ def _settings(*, chunk_size: int = 100, chunk_overlap: int = 20) -> Settings:
     return Settings(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        advanced_rag_enabled=False,
         openai_api_key="test-key",
     )
 

@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     embedding_batch_size: int = Field(default=100, ge=1)
     chunk_size: int = Field(default=1000, ge=1)
     chunk_overlap: int = Field(default=200, ge=0)
+    # V2 Epic 2 (Phase 2): parent-child chunking (honoured when advanced RAG on).
+    child_chunk_size: int = Field(default=400, ge=1)
+    child_chunk_overlap: int = Field(default=80, ge=0)
+    parent_chunk_size: int = Field(default=2000, ge=1)
+    parent_chunk_overlap: int = Field(default=200, ge=0)
     rag_top_k: int = Field(default=5, ge=1)
     rag_default_prompt_template: str = "rag/answer/v1"
     rag_context_max_chars: int = Field(default=8000, ge=1)
@@ -113,9 +118,9 @@ class Settings(BaseSettings):
     # endpoints keep the V1.1 orchestration path unchanged.
     agent_runtime_enabled: bool = False
 
-    # V2 Epic 2 (Phase 1): reserved advanced RAG flag (no-op until Phase 10
-    # wires AdvancedRetrievalPipeline into chat/RAG). Default false; enabling
-    # it currently does not change runtime orchestration.
+    # V2 Epic 2: master advanced RAG flag (default false). Phase 2: when true,
+    # ingest uses ParentChildChunker. Phase 10: chat/RAG use
+    # AdvancedRetrievalPipeline. Flag-off keeps V1 RecursiveChunker + dense path.
     advanced_rag_enabled: bool = False
 
     @field_validator("log_level", mode="before")
@@ -268,6 +273,26 @@ class Settings(BaseSettings):
                 f"Got CHUNK_OVERLAP={self.chunk_overlap}, CHUNK_SIZE={self.chunk_size}."
             )
 
+    def validate_advanced_rag_requirements(self) -> None:
+        """Fail fast when advanced RAG chunk sizing is invalid."""
+        if not self.advanced_rag_enabled:
+            return
+
+        if self.child_chunk_overlap >= self.child_chunk_size:
+            raise ValueError(
+                "CHILD_CHUNK_OVERLAP must be less than CHILD_CHUNK_SIZE when "
+                "ADVANCED_RAG_ENABLED is true. "
+                f"Got CHILD_CHUNK_OVERLAP={self.child_chunk_overlap}, "
+                f"CHILD_CHUNK_SIZE={self.child_chunk_size}."
+            )
+        if self.parent_chunk_overlap >= self.parent_chunk_size:
+            raise ValueError(
+                "PARENT_CHUNK_OVERLAP must be less than PARENT_CHUNK_SIZE when "
+                "ADVANCED_RAG_ENABLED is true. "
+                f"Got PARENT_CHUNK_OVERLAP={self.parent_chunk_overlap}, "
+                f"PARENT_CHUNK_SIZE={self.parent_chunk_size}."
+            )
+
     def validate_tools_requirements(self) -> None:
         """Fail fast when tools are enabled but web search is not configured."""
         if not self.tools_enabled:
@@ -317,6 +342,7 @@ class Settings(BaseSettings):
     def validate_startup(self) -> None:
         self.validate_provider_key()
         self.validate_rag_requirements()
+        self.validate_advanced_rag_requirements()
         self.validate_tools_requirements()
         self.validate_production_requirements()
 

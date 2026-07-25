@@ -92,7 +92,8 @@ class DocumentService:
             parsed = await self._pipeline.parse(file_bytes, filename, mime_type)
             chunks = self._pipeline.chunk(parsed)
             chunk_rows = [
-                (chunk.chunk_index, chunk.content, chunk.metadata) for chunk in chunks
+                (chunk.chunk_index, chunk.content, chunk.metadata, chunk.id)
+                for chunk in chunks
             ]
             await self._store.add_chunks(document_id, chunk_rows)
             await self._store.set_status(document_id, "ready")

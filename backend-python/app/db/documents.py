@@ -42,18 +42,30 @@ class SqlDocumentStore:
     async def add_chunks(
         self,
         document_id: uuid.UUID,
-        chunks: list[tuple[int, str, dict[str, object]]],
+        chunks: list[tuple[int, str, dict[str, object], uuid.UUID | None]],
     ) -> None:
-        for chunk_index, content, metadata in chunks:
-            self._session.add(
-                DocumentChunk(
-                    document_id=document_id,
-                    chunk_index=chunk_index,
-                    content=content,
-                    metadata_json=metadata,
-                )
+        for chunk_index, content, metadata, chunk_id in chunks:
+            row = DocumentChunk(
+                document_id=document_id,
+                chunk_index=chunk_index,
+                content=content,
+                metadata_json=metadata,
             )
+            if chunk_id is not None:
+                row.id = chunk_id
+            self._session.add(row)
         await self._session.flush()
+
+    async def get_chunk_contents_by_ids(
+        self,
+        chunk_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, str]:
+        if not chunk_ids:
+            return {}
+        result = await self._session.scalars(
+            select(DocumentChunk).where(DocumentChunk.id.in_(chunk_ids))
+        )
+        return {row.id: row.content for row in result.all()}
 
     async def delete_chunks(self, document_id: uuid.UUID) -> None:
         await self._session.execute(

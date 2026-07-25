@@ -37,7 +37,12 @@ class _FakeEmbeddingProvider:
 
 @pytest.mark.anyio
 async def test_ingestion_pipeline_parse_and_chunk_without_db() -> None:
-    settings = Settings(chunk_size=50, chunk_overlap=10, openai_api_key="test-key")
+    settings = Settings(
+        chunk_size=50,
+        chunk_overlap=10,
+        advanced_rag_enabled=False,
+        openai_api_key="test-key",
+    )
     pipeline = IngestionPipeline(settings)
     file_bytes = (FIXTURES / "sample.txt").read_bytes()
 
@@ -48,6 +53,32 @@ async def test_ingestion_pipeline_parse_and_chunk_without_db() -> None:
     assert chunks
     assert all(chunk.metadata["source"] == "sample.txt" for chunk in chunks)
     assert all(chunk.embedding is None for chunk in chunks)
+    assert all(chunk.metadata.get("chunk_kind") is None for chunk in chunks)
+
+
+@pytest.mark.anyio
+async def test_ingestion_pipeline_flag_on_uses_parent_child_chunker() -> None:
+    settings = Settings(
+        advanced_rag_enabled=True,
+        child_chunk_size=40,
+        child_chunk_overlap=8,
+        parent_chunk_size=80,
+        parent_chunk_overlap=10,
+        openai_api_key="test-key",
+    )
+    pipeline = IngestionPipeline(settings)
+    file_bytes = (FIXTURES / "sample.txt").read_bytes()
+
+    parsed = await pipeline.parse(file_bytes, "sample.txt", "text/plain")
+    chunks = pipeline.chunk(parsed)
+
+    kinds = {chunk.metadata.get("chunk_kind") for chunk in chunks}
+    assert kinds == {"parent", "child"}
+    children = [c for c in chunks if c.metadata.get("chunk_kind") == "child"]
+    parents = [c for c in chunks if c.metadata.get("chunk_kind") == "parent"]
+    assert children and parents
+    parent_ids = {str(p.id) for p in parents}
+    assert all(c.metadata["parent_id"] in parent_ids for c in children)
 
 
 @pytest.mark.anyio

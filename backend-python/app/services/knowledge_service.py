@@ -84,10 +84,17 @@ class KnowledgeService:
             parsed = await self._pipeline.parse(file_bytes, filename, mime_type)
             chunks = self._pipeline.chunk(parsed)
             chunk_rows = [
-                (chunk.chunk_index, chunk.content, chunk.metadata) for chunk in chunks
+                (chunk.chunk_index, chunk.content, chunk.metadata, chunk.id)
+                for chunk in chunks
             ]
             await self._store.add_chunks(document_id, chunk_rows)
-            embedded = await self._pipeline.embed(chunks)
+            # Parents are stored for expansion but not embedded by default.
+            to_embed = [
+                chunk
+                for chunk in chunks
+                if chunk.metadata.get("chunk_kind") != "parent"
+            ]
+            embedded = await self._pipeline.embed(to_embed)
             await self._pipeline.persist(
                 document_id=document_id,
                 user_id=user_id,

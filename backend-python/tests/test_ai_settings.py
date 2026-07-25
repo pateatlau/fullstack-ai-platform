@@ -24,6 +24,10 @@ def test_ai_settings_load_with_defaults(monkeypatch: pytest.MonkeyPatch) -> None
     assert settings.embedding_dimensions == 1536
     assert settings.chunk_size == 1000
     assert settings.chunk_overlap == 200
+    assert settings.child_chunk_size == 400
+    assert settings.child_chunk_overlap == 80
+    assert settings.parent_chunk_size == 2000
+    assert settings.parent_chunk_overlap == 200
     assert settings.rag_top_k == 5
     assert settings.rag_default_prompt_template == "rag/answer/v1"
     assert settings.rag_context_max_chars == 8000
@@ -108,6 +112,29 @@ def test_rag_disabled_skips_chunk_boundary_validation() -> None:
         rag_enabled=False,
         chunk_size=1000,
         chunk_overlap=1000,
+    )
+    settings.validate_startup()
+
+
+def test_advanced_rag_rejects_invalid_child_chunk_overlap() -> None:
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="sk-placeholder",
+        advanced_rag_enabled=True,
+        child_chunk_size=400,
+        child_chunk_overlap=400,
+    )
+    with pytest.raises(ValueError, match="CHILD_CHUNK_OVERLAP"):
+        settings.validate_startup()
+
+
+def test_advanced_rag_disabled_skips_parent_child_chunk_validation() -> None:
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="sk-placeholder",
+        advanced_rag_enabled=False,
+        child_chunk_size=400,
+        child_chunk_overlap=400,
     )
     settings.validate_startup()
 
