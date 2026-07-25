@@ -1,8 +1,9 @@
 """Advanced retrieval pipeline protocol and skeleton.
 
 The skeleton delegates to the V1 dense :class:`~app.ai.rag.retriever.Retriever`
-until later phases fill hybrid → filter → parent → rerank → compress → cite
-stages. Phase 5 adds optional query rewrite (at most once per request).
+until later phases fill hybrid → filter → parent → compress → cite stages.
+Phase 5 adds optional query rewrite (at most once per request).
+Phase 6 adds optional Protocol-backed rerank with timeout fallback.
 Chat/RAG hot paths are not wired here (Phase 10).
 
 Phase 3: metadata filters are pushed down through :class:`Retriever` and
@@ -15,6 +16,7 @@ import time
 from typing import Protocol
 
 from app.ai.interfaces.query_rewriter import QueryRewriter
+from app.ai.interfaces.reranker import Reranker
 from app.ai.rag.metadata_filter import (
     apply_metadata_filter,
     is_unsatisfiable_filter,
@@ -26,6 +28,9 @@ from app.ai.rag.schemas import (
     RetrievedCandidate,
 )
 from app.core.config import Settings
+from app.core.logging import get_logger
+
+_logger = get_logger(__name__)
 
 
 class AdvancedRetrievalPipeline(Protocol):
@@ -43,6 +48,9 @@ class DefaultAdvancedRetrievalPipeline:
     Query rewrite (Phase 5) runs at most once when ``advanced_rag_enabled``,
     ``query_rewrite_enabled``, and a :class:`QueryRewriter` are all set. The
     rewritten string is never fed back into the rewriter.
+
+    Rerank (Phase 6) runs when ``advanced_rag_enabled`` and a :class:`Reranker`
+    are set. Adapter failures keep pre-rerank order / ``final_score``.
     """
 
     def __init__(
@@ -50,10 +58,12 @@ class DefaultAdvancedRetrievalPipeline:
         *,
         retriever: Retriever,
         query_rewriter: QueryRewriter | None = None,
+        reranker: Reranker | None = None,
         settings: Settings | None = None,
     ) -> None:
         self._retriever = retriever
         self._query_rewriter = query_rewriter
+        self._reranker = reranker
         self._settings = settings
 
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
@@ -90,6 +100,8 @@ class DefaultAdvancedRetrievalPipeline:
         ]
         # Part I stage 3 — filter candidates in place (AND with store push-down).
         candidates = apply_metadata_filter(candidates, request.filters)
+        # Part I stage 5 — cross-encoder rerank (Protocol); failures keep order.
+        candidates = await self._maybe_rerank(search_query, candidates, request)
         latency_ms = int((time.perf_counter() - start) * 1000)
         return RetrievalResult(
             candidates=candidates,
@@ -116,3 +128,42 @@ class DefaultAdvancedRetrievalPipeline:
             request.question,
             user_id=request.user_id,
         )
+
+    async def _maybe_rerank(
+        self,
+        search_query: str,
+        candidates: list[RetrievedCandidate],
+        request: RetrievalRequest,
+    ) -> list[RetrievedCandidate]:
+        settings = self._settings
+        reranker = self._reranker
+        if (
+            settings is None
+            or reranker is None
+            or not settings.advanced_rag_enabled
+            or not candidates
+        ):
+            return candidates
+
+        top_n = self._rerank_top_n(request, settings)
+        try:
+            return await reranker.rerank(
+                search_query,
+                candidates,
+                top_n=top_n,
+            )
+        except Exception:
+            # Safety net: Protocol impls should fall back themselves (Cohere does).
+            _logger.warning(
+                "Rerank raised; keeping pre-rerank order",
+                rerank_failed=True,
+                rerank_failure_reason="exception",
+            )
+            return candidates
+
+    @staticmethod
+    def _rerank_top_n(request: RetrievalRequest, settings: Settings) -> int:
+        # Part I: rerank_top_n defaults to rag_top_k (default 5).
+        if request.top_k is not None:
+            return request.top_k
+        return settings.rag_top_k
