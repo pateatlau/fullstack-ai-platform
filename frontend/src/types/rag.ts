@@ -1,4 +1,7 @@
 import type { ProviderName } from '../constants/providerModels'
+import type { Citation } from './citation'
+
+export type { Citation }
 
 export interface RetrievedChunkMeta {
   chunk_id: string | null
@@ -23,4 +26,6 @@ export interface RAGAskResponse {
   provider: ProviderName
   retrieval_latency_ms?: number | null
   llm_latency_ms?: number | null
+  /** Additive (advanced RAG). ``null`` / omitted on V1 / flag-off. */
+  citations?: Citation[] | null
 }

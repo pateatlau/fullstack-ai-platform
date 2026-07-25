@@ -255,6 +255,66 @@ describe('chatClient request-id retry wiring', () => {
     expect(body.use_web_search).toBe(true)
     expect(body.use_documents).toBe(true)
   })
+
+  it('sendChat preserves additive citations from the response body', async () => {
+    const citations = [
+      {
+        index: 1,
+        chunk_id: '11111111-1111-1111-1111-111111111111',
+        document_id: '22222222-2222-2222-2222-222222222222',
+        snippet: 'Snippet text',
+        score: 0.88,
+        filename: 'policy.pdf',
+        source: null,
+        page: 2,
+      },
+    ]
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        id: 'resp_cite',
+        role: 'assistant',
+        content: 'grounded',
+        model: 'gpt-4o-mini',
+        provider: 'openai',
+        created_at: 't0',
+        retrieved_chunks: [
+          {
+            chunk_id: '11111111-1111-1111-1111-111111111111',
+            document_id: '22222222-2222-2222-2222-222222222222',
+            chunk_index: 0,
+            score: 0.88,
+          },
+        ],
+        citations,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await sendChat({
+      messages: [{ role: 'user', content: 'policy?' }],
+      use_documents: true,
+    })
+
+    expect(response.citations).toEqual(citations)
+  })
+
+  it('sendChat accepts null citations without throwing', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        id: 'resp_no_cite',
+        role: 'assistant',
+        content: 'ungrounded',
+        model: 'gpt-4o-mini',
+        provider: 'openai',
+        created_at: 't0',
+        citations: null,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await sendChat({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(response.citations).toBeNull()
+  })
 })
 
 describe('chatClient session delete', () => {

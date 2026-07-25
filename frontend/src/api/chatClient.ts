@@ -1,6 +1,7 @@
 import { getStoredAccessToken, getStoredGuestToken, storeGuestToken } from '../auth/tokenStorage'
 import { parseErrorEnvelope } from './request'
 import type { ChatRequest, ChatSessionDetail, ChatSessionListItem } from '../types/chat'
+import type { Citation } from '../types/citation'
 
 import { API_BASE_URL } from './request'
 
@@ -73,6 +74,8 @@ export interface ChatResponse {
     score: number
   }> | null
   tools_used?: string[] | null
+  /** Additive (advanced RAG). ``null`` / omitted on V1 / flag-off. */
+  citations?: Citation[] | null
 }
 
 export class ChatApiError extends Error {

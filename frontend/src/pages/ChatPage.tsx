@@ -92,6 +92,8 @@ function ChatPageContent() {
   const messageRequestMapRef = useRef(new Map<string, ChatRequest>())
   const streamMessageMapRef = useRef(new Map<string, string>())
   const stoppedStreamIdsRef = useRef(new Set<string>())
+  // SSE exposes counts only (no citation payloads); used for "Grounded in N…".
+  const streamingRetrievedChunkCountRef = useRef<number | undefined>(undefined)
   type ActiveChatTransport = 'streaming' | 'completion'
   const activeTransportRef = useRef<ActiveChatTransport | null>(null)
   const [streamingToolActive, setStreamingToolActive] = useState(false)
@@ -260,6 +262,7 @@ function ChatPageContent() {
         id: localMessageId,
         toolsUsed: response.tools_used ?? undefined,
         retrievedChunkCount: response.retrieved_chunks?.length ?? undefined,
+        citations: response.citations,
       })
 
       currentMessageIdRef.current = null
@@ -274,7 +277,9 @@ function ChatPageContent() {
   })
 
   const { start, stop, isStreaming } = useChatStream({
-    onRetrievalComplete: () => {
+    onRetrievalComplete: (chunk) => {
+      streamingRetrievedChunkCountRef.current =
+        chunk.chunk_count > 0 ? chunk.chunk_count : undefined
       setStreamingRetrievalActive(false)
     },
     onToolStart: () => {
@@ -343,7 +348,12 @@ function ChatPageContent() {
       }
 
       const localMessageId = streamMessageMapRef.current.get(chunk.id) ?? chunk.id
-      dispatch({ type: 'END_MESSAGE', id: localMessageId })
+      dispatch({
+        type: 'END_MESSAGE',
+        id: localMessageId,
+        retrievedChunkCount: streamingRetrievedChunkCountRef.current,
+      })
+      streamingRetrievedChunkCountRef.current = undefined
       streamMessageMapRef.current.delete(chunk.id)
       if (activeTransportRef.current === 'streaming') {
         activeTransportRef.current = null
@@ -363,6 +373,7 @@ function ChatPageContent() {
     onError: (error) => {
       setStreamingToolActive(false)
       setStreamingRetrievalActive(false)
+      streamingRetrievedChunkCountRef.current = undefined
       if (activeTransportRef.current !== 'streaming') {
         return
       }
@@ -470,6 +481,7 @@ function ChatPageContent() {
 
     if (useStreamingTransport) {
       activeTransportRef.current = 'streaming'
+      streamingRetrievedChunkCountRef.current = undefined
       const documentRetrievalPending =
         Boolean(request.use_documents && ragEnabled) && !retryMessageId
       const webSearchPending = Boolean(request.use_web_search && toolsEnabled) && !retryMessageId

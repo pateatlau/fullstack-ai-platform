@@ -1,4 +1,5 @@
 import type { Message } from '../types/chat'
+import { CitationList } from './CitationList'
 import { MessageContent } from './MessageContent'
 import { StreamingIndicator, type StreamingIndicatorVariant } from './StreamingIndicator'
 
@@ -86,6 +87,12 @@ export function MessageBubble({
               }.`
             : ''}
         </p>
+      ) : null}
+      {message.role === 'assistant' &&
+      message.status === 'complete' &&
+      message.citations &&
+      message.citations.length > 0 ? (
+        <CitationList citations={message.citations} />
       ) : null}
       {canRetry ? (
         <button
