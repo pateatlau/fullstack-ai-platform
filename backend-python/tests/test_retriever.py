@@ -10,6 +10,7 @@ import pytest
 
 from app.ai.interfaces.vector_store import ScoredChunk
 from app.ai.rag.retriever import Retriever
+from app.ai.rag.schemas import MetadataFilter
 from app.core.config import Settings
 
 
@@ -106,6 +107,23 @@ async def test_retriever_empty_embedding_returns_empty_list() -> None:
     )
 
     assert results == []
+    store.similarity_search.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_retriever_unsatisfiable_filter_skips_embed_and_search() -> None:
+    embed = AsyncMock()
+    store = AsyncMock()
+    retriever, _, _, _ = _retriever(embedding_provider=embed, vector_store=store)
+
+    results = await retriever.retrieve(
+        question="anything",
+        user_id=uuid.uuid4(),
+        filters=MetadataFilter(document_ids=frozenset()),
+    )
+
+    assert results == []
+    embed.embed_texts.assert_not_called()
     store.similarity_search.assert_not_called()
 
 

@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from app.ai.documents.schemas import DocumentChunk
 from app.ai.rag.schemas import MetadataFilter
-from app.ai.vectorstores.pgvector import PgVectorStore
+from app.ai.vectorstores.pgvector import PgVectorStore, _scored_metadata
 from app.core.config import Settings
 from app.db.documents import SqlDocumentStore
 from app.db.identity import SqlUserStore
@@ -81,6 +81,16 @@ async def _seed_document_with_chunks(
         chunks=pipeline_chunks,
     )
     return document.id
+
+
+def test_scored_metadata_document_mime_type_overwrites_chunk_value() -> None:
+    metadata = _scored_metadata(
+        {"source": "doc.pdf", "mime_type": "text/plain", "tags": ["a"]},
+        "application/pdf",
+    )
+    assert metadata["mime_type"] == "application/pdf"
+    assert metadata["source"] == "doc.pdf"
+    assert metadata["tags"] == ["a"]
 
 
 @pytest.fixture

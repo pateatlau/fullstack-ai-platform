@@ -155,8 +155,8 @@ def _scored_metadata(
     metadata_json: dict[str, object],
     mime_type: str | None,
 ) -> dict[str, object]:
-    """Copy chunk metadata and surface document mime_type for candidate filters."""
+    """Copy chunk metadata; document mime_type overwrites any chunk-level value."""
     metadata = dict(metadata_json)
     if mime_type is not None:
-        metadata.setdefault("mime_type", mime_type)
+        metadata["mime_type"] = mime_type
     return metadata

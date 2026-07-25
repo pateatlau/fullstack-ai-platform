@@ -7,6 +7,7 @@ import uuid
 
 from app.ai.interfaces.embedding_provider import EmbeddingProvider
 from app.ai.interfaces.vector_store import ScoredChunk, VectorStore
+from app.ai.rag.metadata_filter import is_unsatisfiable_filter
 from app.ai.rag.schemas import MetadataFilter
 from app.core.config import Settings
 from app.core.logging import get_logger
@@ -38,6 +39,16 @@ class Retriever:
     ) -> list[ScoredChunk]:
         effective_top_k = top_k if top_k is not None else self._settings.rag_top_k
         start = time.perf_counter()
+
+        # Empty document_ids/tags frozensets can never match — skip embed/search.
+        if filters is not None and is_unsatisfiable_filter(filters):
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            _logger.info(
+                "Retrieval completed",
+                retrieval_latency_ms=latency_ms,
+                result_count=0,
+            )
+            return []
 
         embeddings = await self._embedding_provider.embed_texts([question])
         if not embeddings:
