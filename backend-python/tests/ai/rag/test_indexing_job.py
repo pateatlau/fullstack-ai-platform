@@ -10,6 +10,7 @@ import pytest
 
 from app.ai.interfaces import IndexingJob
 from app.ai.rag.indexing import (
+    IndexingJobFailedError,
     IndexingJobNotFoundError,
     PendingIndexingWork,
     SyncIndexingRunner,
@@ -69,15 +70,14 @@ async def test_submit_failure_reports_failed_status_and_reraises() -> None:
     work = _work()
     runner.register_pending_work(work)
 
-    with pytest.raises(RuntimeError, match="boom"):
+    with pytest.raises(IndexingJobFailedError) as exc_info:
         await runner.submit(document_id=work.document_id, user_id=work.user_id)
 
-    # submit raises after recording status (job_id not returned on failure).
-    assert len(runner._jobs) == 1
-    status = next(iter(runner._jobs.values()))
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert str(exc_info.value.__cause__) == "boom"
+    status = await runner.get_status(exc_info.value.job_id)
     assert status.state is IndexingJobState.FAILED
     assert status.error_message == "RuntimeError"
-    assert await runner.get_status(status.job_id) == status
 
 
 @pytest.mark.anyio
@@ -94,10 +94,12 @@ async def test_submit_without_pending_work_fails() -> None:
     document_id = uuid.uuid4()
     user_id = uuid.uuid4()
 
-    with pytest.raises(LookupError, match="No pending indexing work"):
+    with pytest.raises(
+        IndexingJobFailedError, match="No pending indexing work"
+    ) as exc_info:
         await runner.submit(document_id=document_id, user_id=user_id)
 
-    status = next(iter(runner._jobs.values()))
+    status = await runner.get_status(exc_info.value.job_id)
     assert status.state is IndexingJobState.FAILED
     assert status.error_message == "pending_work_missing"
 
@@ -108,14 +110,23 @@ async def test_submit_rejects_user_mismatch() -> None:
     work = _work()
     runner.register_pending_work(work)
 
-    with pytest.raises(LookupError, match="No pending indexing work"):
+    with pytest.raises(
+        IndexingJobFailedError, match="No pending indexing work"
+    ) as exc_info:
         await runner.submit(
             document_id=work.document_id,
             user_id=uuid.uuid4(),
         )
 
-    status = next(iter(runner._jobs.values()))
+    status = await runner.get_status(exc_info.value.job_id)
     assert status.state is IndexingJobState.FAILED
+    # Mismatched submit must not consume pending work for the owner.
+    assert work.document_id in runner._pending
+    job_id = await runner.submit(
+        document_id=work.document_id,
+        user_id=work.user_id,
+    )
+    assert (await runner.get_status(job_id)).state is IndexingJobState.SUCCEEDED
 
 
 @pytest.mark.anyio
@@ -133,7 +144,7 @@ async def test_pending_work_consumed_after_submit() -> None:
     await runner.submit(document_id=work.document_id, user_id=work.user_id)
     assert calls == 1
 
-    with pytest.raises(LookupError):
+    with pytest.raises(IndexingJobFailedError):
         await runner.submit(document_id=work.document_id, user_id=work.user_id)
 
 
@@ -153,6 +164,9 @@ async def test_logs_job_id_and_status_without_raw_bytes(
 
     joined = " ".join(record.getMessage() for record in caplog.records)
     assert "hello" not in joined
+    assert all(
+        getattr(record, "file_bytes", None) != b"hello" for record in caplog.records
+    )
     assert job_id
     # Structured extras are on the LogRecord, not always in getMessage().
     assert any(

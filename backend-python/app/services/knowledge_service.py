@@ -9,7 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.documents.pipeline import IngestionPipeline
 from app.ai.interfaces.vector_store import VectorStore
-from app.ai.rag.indexing import PendingIndexingWork, SyncIndexingRunner
+from app.ai.rag.indexing import (
+    IndexingJobFailedError,
+    PendingIndexingWork,
+    SyncIndexingRunner,
+)
 from app.ai.rag.schemas import IndexingJobState
 from app.core.config import Settings
 from app.core.logging import get_logger
@@ -110,7 +114,7 @@ class KnowledgeService:
                 indexing_job_status=status.state.value,
             )
             return document_id
-        except Exception:
+        except Exception as exc:
             if quota_reserved and self._quota_service is not None:
                 await self._quota_service.release_upload(user_id)
             await self._cleanup_failed_ingest(document_id)
@@ -122,6 +126,9 @@ class KnowledgeService:
                 indexing_job_status=failed_status,
                 exc_info=True,
             )
+            # Surface the processor error; submit wraps it with job_id.
+            if isinstance(exc, IndexingJobFailedError) and exc.__cause__ is not None:
+                raise exc.__cause__ from exc
             raise
 
     async def _run_indexing_work(self, work: PendingIndexingWork) -> None:

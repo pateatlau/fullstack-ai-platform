@@ -27,6 +27,18 @@ class IndexingJobNotFoundError(LookupError):
         self.job_id = job_id
 
 
+class IndexingJobFailedError(Exception):
+    """Raised when ``submit`` fails after allocating a job id.
+
+    The job id is always present so callers can ``get_status`` even though
+    ``submit`` re-raises instead of returning.
+    """
+
+    def __init__(self, job_id: str, message: str) -> None:
+        super().__init__(message)
+        self.job_id = job_id
+
+
 @dataclass(frozen=True)
 class PendingIndexingWork:
     """In-memory payload for a sync indexing run (not persisted)."""
@@ -64,7 +76,8 @@ class SyncIndexingRunner:
             state=IndexingJobState.QUEUED,
         )
 
-        work = self._pending.pop(document_id, None)
+        # Inspect first — only consume pending work after ownership matches.
+        work = self._pending.get(document_id)
         if work is None or work.user_id != user_id:
             self._jobs[job_id] = IndexingJobStatus(
                 job_id=job_id,
@@ -77,7 +90,12 @@ class SyncIndexingRunner:
                 indexing_job_status=IndexingJobState.FAILED.value,
                 document_id=str(document_id),
             )
-            raise LookupError(f"No pending indexing work for document_id={document_id}")
+            raise IndexingJobFailedError(
+                job_id,
+                f"No pending indexing work for document_id={document_id}",
+            )
+
+        del self._pending[document_id]
 
         self._jobs[job_id] = IndexingJobStatus(
             job_id=job_id,
@@ -104,7 +122,7 @@ class SyncIndexingRunner:
                 indexing_job_status=IndexingJobState.FAILED.value,
                 document_id=str(document_id),
             )
-            raise
+            raise IndexingJobFailedError(job_id, "Indexing job failed") from exc
 
         self._jobs[job_id] = IndexingJobStatus(
             job_id=job_id,
