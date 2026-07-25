@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,12 +59,12 @@ class SqlDocumentStore:
 
     async def get_chunk_contents_by_ids(
         self,
-        chunk_ids: list[uuid.UUID],
+        chunk_ids: Sequence[uuid.UUID],
     ) -> dict[uuid.UUID, str]:
         if not chunk_ids:
             return {}
         result = await self._session.scalars(
-            select(DocumentChunk).where(DocumentChunk.id.in_(chunk_ids))
+            select(DocumentChunk).where(DocumentChunk.id.in_(list(chunk_ids)))
         )
         return {row.id: row.content for row in result.all()}
 

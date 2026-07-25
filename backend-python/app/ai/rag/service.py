@@ -8,9 +8,16 @@ from typing import cast
 
 from app.ai.interfaces.vector_store import ScoredChunk
 from app.ai.rag.context_builder import ContextBuilder
+from app.ai.rag.pipeline import AdvancedRetrievalPipeline
 from app.ai.rag.prompt_builder import PromptBuilder
 from app.ai.rag.retriever import Retriever
-from app.ai.rag.schemas import RAGResponse, RetrievedChunkMeta
+from app.ai.rag.schemas import (
+    Citation,
+    RAGResponse,
+    RetrievalRequest,
+    RetrievalResult,
+    RetrievedChunkMeta,
+)
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.providers.base import LLMProvider
@@ -23,7 +30,11 @@ EMPTY_CORPUS_MESSAGE = "I couldn't find any relevant documents to answer your qu
 
 
 class RAGService:
-    """Domain-agnostic RAG pipeline orchestrator (non-streaming, V1)."""
+    """Domain-agnostic RAG pipeline orchestrator (non-streaming).
+
+    When ``advanced_rag_enabled``, uses :class:`AdvancedRetrievalPipeline`.
+    Otherwise keeps the V1 dense ``Retriever`` → ``ContextBuilder`` path.
+    """
 
     def __init__(
         self,
@@ -32,11 +43,13 @@ class RAGService:
         context_builder: ContextBuilder,
         prompt_builder: PromptBuilder,
         settings: Settings,
+        advanced_pipeline: AdvancedRetrievalPipeline | None = None,
     ) -> None:
         self._retriever = retriever
         self._context_builder = context_builder
         self._prompt_builder = prompt_builder
         self._settings = settings
+        self._advanced_pipeline = advanced_pipeline
 
     async def ask(
         self,
@@ -62,43 +75,66 @@ class RAGService:
         )
 
         retrieval_start = time.perf_counter()
-        chunks = await self._retriever.retrieve(
-            question=question,
-            user_id=user_id,
-            top_k=top_k,
-        )
-        retrieval_latency_ms = int((time.perf_counter() - retrieval_start) * 1000)
-        retrieval_count = len(chunks)
-        top_score = max((chunk.score for chunk in chunks), default=None)
-
-        if not chunks:
-            duration_ms = int((time.perf_counter() - start) * 1000)
-            self._log_request(
-                duration_ms=duration_ms,
-                retrieval_count=0,
-                included_count=0,
-                top_score=None,
-                truncated=False,
-                retrieval_latency_ms=retrieval_latency_ms,
-                llm_latency_ms=0,
+        if self._use_advanced_pipeline():
+            retrieval = await self._advanced_retrieve(
+                question=question,
+                user_id=user_id,
+                top_k=top_k,
             )
-            return RAGResponse(
-                answer=EMPTY_CORPUS_MESSAGE,
-                retrieved_chunks=[],
-                truncated=False,
-                model=resolved_model,
-                provider=provider_name,
-                retrieval_latency_ms=retrieval_latency_ms,
-                llm_latency_ms=0,
-                # V1 path: citations absent until AdvancedRetrievalPipeline
-                # wiring in Phase 10.
-                citations=None,
+            retrieval_latency_ms = (
+                retrieval.retrieval_latency_ms
+                if retrieval.retrieval_latency_ms is not None
+                else int((time.perf_counter() - retrieval_start) * 1000)
             )
+            if not retrieval.candidates:
+                return self._empty_response(
+                    start=start,
+                    resolved_model=resolved_model,
+                    provider_name=provider_name,
+                    retrieval_latency_ms=retrieval_latency_ms,
+                    citations=[],
+                )
+            context_text = retrieval.context_text
+            truncated = retrieval.truncated
+            retrieved_chunks = _chunk_metas_from_retrieval(retrieval)
+            citations: list[Citation] | None = list(retrieval.citations)
+            retrieval_count = len(retrieval.candidates)
+            included_count = len(retrieved_chunks)
+            top_score = max(
+                (c.final_score for c in retrieval.candidates),
+                default=None,
+            )
+        else:
+            chunks = await self._retriever.retrieve(
+                question=question,
+                user_id=user_id,
+                top_k=top_k,
+            )
+            retrieval_latency_ms = int((time.perf_counter() - retrieval_start) * 1000)
+            retrieval_count = len(chunks)
+            top_score = max((chunk.score for chunk in chunks), default=None)
 
-        built_context = self._context_builder.build(chunks)
+            if not chunks:
+                return self._empty_response(
+                    start=start,
+                    resolved_model=resolved_model,
+                    provider_name=provider_name,
+                    retrieval_latency_ms=retrieval_latency_ms,
+                    citations=None,
+                )
+
+            built_context = self._context_builder.build(chunks)
+            context_text = built_context.text
+            truncated = built_context.truncated
+            retrieved_chunks = [
+                _chunk_meta(chunk) for chunk in built_context.included_chunks
+            ]
+            citations = None
+            included_count = len(built_context.included_chunks)
+
         built_prompt = self._prompt_builder.build(
             question=question,
-            context=built_context.text,
+            context=context_text,
             template_ref=prompt_template,
             instructions=instructions,
         )
@@ -118,26 +154,77 @@ class RAGService:
         self._log_request(
             duration_ms=duration_ms,
             retrieval_count=retrieval_count,
-            included_count=len(built_context.included_chunks),
+            included_count=included_count,
             top_score=top_score,
-            truncated=built_context.truncated,
+            truncated=truncated,
             retrieval_latency_ms=retrieval_latency_ms,
             llm_latency_ms=llm_latency_ms,
+            advanced_rag_enabled=self._use_advanced_pipeline(),
+            citation_count=len(citations) if citations is not None else None,
         )
 
         return RAGResponse(
             answer=completion.content or "",
-            retrieved_chunks=[
-                _chunk_meta(chunk) for chunk in built_context.included_chunks
-            ],
-            truncated=built_context.truncated,
+            retrieved_chunks=retrieved_chunks,
+            truncated=truncated,
             model=resolved_model,
             provider=provider_name,
             retrieval_latency_ms=retrieval_latency_ms,
             llm_latency_ms=llm_latency_ms,
-            # V1 path: citations absent until AdvancedRetrievalPipeline
-            # wiring in Phase 10.
-            citations=None,
+            citations=citations,
+        )
+
+    def _use_advanced_pipeline(self) -> bool:
+        return (
+            self._settings.advanced_rag_enabled and self._advanced_pipeline is not None
+        )
+
+    async def _advanced_retrieve(
+        self,
+        *,
+        question: str,
+        user_id: uuid.UUID,
+        top_k: int | None,
+    ) -> RetrievalResult:
+        assert self._advanced_pipeline is not None
+        return await self._advanced_pipeline.retrieve(
+            RetrievalRequest(
+                question=question,
+                user_id=user_id,
+                top_k=top_k,
+            )
+        )
+
+    def _empty_response(
+        self,
+        *,
+        start: float,
+        resolved_model: str,
+        provider_name: ProviderName,
+        retrieval_latency_ms: int,
+        citations: list[Citation] | None,
+    ) -> RAGResponse:
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        self._log_request(
+            duration_ms=duration_ms,
+            retrieval_count=0,
+            included_count=0,
+            top_score=None,
+            truncated=False,
+            retrieval_latency_ms=retrieval_latency_ms,
+            llm_latency_ms=0,
+            advanced_rag_enabled=self._use_advanced_pipeline(),
+            citation_count=0 if citations is not None else None,
+        )
+        return RAGResponse(
+            answer=EMPTY_CORPUS_MESSAGE,
+            retrieved_chunks=[],
+            truncated=False,
+            model=resolved_model,
+            provider=provider_name,
+            retrieval_latency_ms=retrieval_latency_ms,
+            llm_latency_ms=0,
+            citations=citations,
         )
 
     def _resolve_provider(
@@ -230,6 +317,8 @@ class RAGService:
         truncated: bool,
         retrieval_latency_ms: int,
         llm_latency_ms: int,
+        advanced_rag_enabled: bool = False,
+        citation_count: int | None = None,
     ) -> None:
         _logger.info(
             "RAG request completed",
@@ -241,6 +330,8 @@ class RAGService:
             truncated=truncated,
             retrieval_latency_ms=retrieval_latency_ms,
             llm_latency_ms=llm_latency_ms,
+            advanced_rag_enabled=advanced_rag_enabled,
+            citation_count=citation_count,
         )
 
 
@@ -251,3 +342,26 @@ def _chunk_meta(chunk: ScoredChunk) -> RetrievedChunkMeta:
         chunk_index=chunk.chunk_index,
         score=chunk.score,
     )
+
+
+def _chunk_metas_from_retrieval(result: RetrievalResult) -> list[RetrievedChunkMeta]:
+    """Map post-compression citations to ``retrieved_chunks`` (included only)."""
+    by_id = {
+        candidate.chunk.chunk_id: candidate
+        for candidate in result.candidates
+        if candidate.chunk.chunk_id is not None
+    }
+    metas: list[RetrievedChunkMeta] = []
+    for citation in result.citations:
+        candidate = by_id.get(citation.chunk_id)
+        metas.append(
+            RetrievedChunkMeta(
+                chunk_id=citation.chunk_id,
+                document_id=citation.document_id,
+                chunk_index=(
+                    candidate.chunk.chunk_index if candidate is not None else None
+                ),
+                score=citation.score,
+            )
+        )
+    return metas

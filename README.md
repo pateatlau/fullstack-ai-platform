@@ -115,6 +115,16 @@ V2 Epic 01 engineering is **complete**. A reusable, provider-agnostic agent runt
 
 Validation record: [docs/plans/post-mvp-v2-epic-01-agent-framework.md](docs/plans/post-mvp-v2-epic-01-agent-framework.md) (Phase 12 Completion Record).
 
+## Post-MVP V2 Epic 02 Advanced RAG — In Progress
+
+Advanced retrieval (hybrid search, query rewrite, parent-child, Cohere rerank, faithful compression, citations) extends the V1 RAG stack behind a default-off flag.
+
+**Feature flag** (default off — V1 dense path unchanged when disabled):
+
+- `ADVANCED_RAG_ENABLED=false` — dense `Retriever` → `ContextBuilder`; set `true` to use `AdvancedRetrievalPipeline` on document chat and `/api/rag/ask` (requires `RAG_ENABLED=true` for document grounding). Optional `COHERE_API_KEY` for rerank.
+
+See [docs/plans/post-mvp-v2-epic-02-advanced-rag.md](docs/plans/post-mvp-v2-epic-02-advanced-rag.md) and [backend-python/README.md](backend-python/README.md).
+
 ## Current Capabilities
 
 - Responsive ChatGPT-like UI with sidebar, streaming, stop, and retry
@@ -123,6 +133,7 @@ Validation record: [docs/plans/post-mvp-v2-epic-01-agent-framework.md](docs/plan
 - Non-streaming and SSE streaming chat across four LLM providers
 - Unified chat toggles on main chat (`use_web_search`, `use_documents`) for authenticated users — non-streaming and **streaming** (document grounding streams after pre-retrieval; web search via SSE `tool_start` / `tool_end` and optional `retrieval_complete` when `use_documents=true` on `POST /api/chat/stream`)
 - Optional agent runtime for web-search chat when `AGENT_RUNTIME_ENABLED=true` (default off)
+- Optional advanced RAG when `ADVANCED_RAG_ENABLED=true` (default off) — hybrid retrieval, rewrite, parent expand, Cohere rerank, compression, additive `citations`
 - Typed error envelopes and SSE error frames with `request_id`
 - Request-size and schema validation; provider timeout normalization
 

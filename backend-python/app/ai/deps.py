@@ -21,9 +21,18 @@ from app.ai.documents.pipeline import IngestionPipeline
 from app.ai.embeddings.factory import create_embedding_provider
 from app.ai.interfaces.embedding_provider import EmbeddingProvider
 from app.ai.prompts.manager import PromptManager, create_prompt_manager
+from app.ai.rag.citations import CitationBuilder
+from app.ai.rag.compress import FaithfulContextCompressor
 from app.ai.rag.context_builder import ContextBuilder
+from app.ai.rag.hybrid import HybridRetriever
+from app.ai.rag.pipeline import (
+    AdvancedRetrievalPipeline,
+    DefaultAdvancedRetrievalPipeline,
+)
 from app.ai.rag.prompt_builder import PromptBuilder
+from app.ai.rag.rerank import CohereReranker
 from app.ai.rag.retriever import Retriever
+from app.ai.rag.rewrite import LLMQueryRewriter
 from app.ai.rag.service import RAGService
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.implementations.web_search import (
@@ -33,8 +42,10 @@ from app.ai.tools.implementations.web_search import (
 from app.ai.tools.registry import ToolRegistry
 from app.ai.vectorstores.pgvector import PgVectorStore
 from app.core.config import Settings, get_settings
+from app.db.documents import SqlDocumentStore
 from app.db.identity import SqlUploadQuotaStore
 from app.db.session import get_db_session
+from app.providers.factory import ProviderFactory
 from app.services.document_service import DocumentService
 
 
@@ -185,6 +196,19 @@ def get_retriever(
     )
 
 
+def get_hybrid_retriever(
+    embedding_provider: EmbeddingProvider = Depends(get_embedding_provider),
+    vector_store: PgVectorStore = Depends(get_vector_store),
+    settings: Settings = Depends(get_ai_settings),
+) -> HybridRetriever:
+    """Return a request-scoped hybrid dense + FTS retriever (RRF fusion)."""
+    return HybridRetriever(
+        embedding_provider=embedding_provider,
+        vector_store=vector_store,
+        settings=settings,
+    )
+
+
 def get_context_builder(
     settings: Settings = Depends(get_ai_settings),
 ) -> ContextBuilder:
@@ -200,11 +224,47 @@ def get_prompt_builder(
     return PromptBuilder(prompt_manager=prompt_manager, settings=settings)
 
 
+def get_advanced_retrieval_pipeline(
+    hybrid_retriever: HybridRetriever = Depends(get_hybrid_retriever),
+    context_builder: ContextBuilder = Depends(get_context_builder),
+    prompt_manager: PromptManager = Depends(get_prompt_manager),
+    settings: Settings = Depends(get_ai_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> AdvancedRetrievalPipeline:
+    """Return the flag-on advanced retrieval orchestrator (Phase 10).
+
+    Always constructed for DI; ``UnifiedChatService`` / ``RAGService`` only
+    call it when ``advanced_rag_enabled`` is true. Missing Cohere key falls
+    back to pre-rerank order inside the adapter.
+    """
+    document_store = SqlDocumentStore(session)
+    rewriter = LLMQueryRewriter(
+        provider=ProviderFactory.get_provider(settings=settings),
+        prompt_manager=prompt_manager,
+        settings=settings,
+    )
+    return DefaultAdvancedRetrievalPipeline(
+        hybrid_retriever=hybrid_retriever,
+        parent_content_fetcher=document_store.get_chunk_contents_by_ids,
+        query_rewriter=rewriter,
+        reranker=CohereReranker(settings=settings),
+        context_compressor=FaithfulContextCompressor(
+            settings=settings,
+            context_builder=context_builder,
+        ),
+        citation_builder=CitationBuilder(settings=settings),
+        settings=settings,
+    )
+
+
 def get_rag_service(
     retriever: Retriever = Depends(get_retriever),
     context_builder: ContextBuilder = Depends(get_context_builder),
     prompt_builder: PromptBuilder = Depends(get_prompt_builder),
     settings: Settings = Depends(get_ai_settings),
+    advanced_pipeline: AdvancedRetrievalPipeline = Depends(
+        get_advanced_retrieval_pipeline
+    ),
 ) -> RAGService:
     """Return a request-scoped ``RAGService`` wired to retrieval components."""
     return RAGService(
@@ -212,4 +272,5 @@ def get_rag_service(
         context_builder=context_builder,
         prompt_builder=prompt_builder,
         settings=settings,
+        advanced_pipeline=advanced_pipeline,
     )

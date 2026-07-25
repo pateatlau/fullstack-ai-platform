@@ -149,7 +149,10 @@ Validate Request (auth for toggles, flags, provider capability)
         ↓
 Build Conversation Context
         ↓
-[use_documents?] → Retriever.retrieve → ContextBuilder.build → merge via chat/document_context.v1.j2
+[use_documents?] → flag-off: Retriever → ContextBuilder
+                 → flag-on (`ADVANCED_RAG_ENABLED`): AdvancedRetrievalPipeline
+                   (rewrite → hybrid → filter → parent → rerank → compress → cite)
+                 → merge via chat/document_context.v1.j2
         ↓
 [use_web_search?] → register web_search (this request only) → ToolChatService tool loop
         ↓
@@ -157,7 +160,7 @@ ChatService.complete_chat (or tool loop terminal completion)
         ↓
 Persist Conversation
         ↓
-Return Response (+ optional retrieved_chunks, tools_used)
+Return Response (+ optional retrieved_chunks, citations, tools_used)
 ```
 
 | Service | Responsibility |
@@ -180,6 +183,8 @@ Return Response (+ optional retrieved_chunks, tools_used)
 **Guests:** toggles return the same denial message as V1 tool policy (`_GUEST_TOOL_DENIED_MESSAGE` style) without invoking retrieval or tools.
 
 **Flags off:** when `RAG_ENABLED=false` or `TOOLS_ENABLED=false`, the corresponding toggle is ignored (no-op); plain chat proceeds.
+
+**Advanced RAG** (`ADVANCED_RAG_ENABLED`, default `false`): when on (and `RAG_ENABLED`), document chat and `/api/rag/ask` use `AdvancedRetrievalPipeline` instead of dense-only retrieve. Responses may include additive `citations`; SSE `retrieval_complete` includes `citation_count`. When off, V1 dense `Retriever` → `ContextBuilder` is unchanged. Optional `COHERE_API_KEY` powers Cohere `rerank-v3.5` (missing key keeps RRF order).
 
 **Health:** `GET /api/health` exposes `rag_enabled`, `tools_enabled`, and `capabilities.by_provider` for frontend toggle gating.
 
@@ -307,17 +312,18 @@ from app.ai.deps import (
 
 ### Generic RAG orchestration (Phase 9)
 
-`RAGService.ask` wires the Phase 8 components into a complete non-streaming pipeline:
+`RAGService.ask` wires retrieval into a complete non-streaming pipeline:
 
 ```text
-Question → Retriever → ContextBuilder → PromptBuilder → LLM → RAGResponse
+[flag off] Question → Retriever → ContextBuilder → PromptBuilder → LLM → RAGResponse
+[flag on]  Question → AdvancedRetrievalPipeline → PromptBuilder → LLM → RAGResponse
 ```
 
 | Behavior | Detail |
 | -------- | ------ |
 | Empty corpus | Short-circuits without an LLM call; returns a generic framework message |
-| Response | Answer text + retrieved chunk metadata (scores, IDs) for debugging — not a citations UI |
-| Metrics | `rag_requests_total`, `rag_request_duration_ms`, retrieval/included counts, top score, latency breakdown |
+| Response | Answer text + `retrieved_chunks` metadata; additive `citations` when `ADVANCED_RAG_ENABLED` |
+| Metrics | `rag_requests_total`, `rag_request_duration_ms`, retrieval/included counts, top score, latency breakdown, `advanced_rag_enabled` / `citation_count` |
 | Streaming | Standalone `/api/rag/ask` streaming **deferred**; chat document grounding streams via `UnifiedChatService` (V1.1) |
 
 **Extension philosophy** — domain-specific assistants compose the framework; they do not modify `app/ai/rag/`:

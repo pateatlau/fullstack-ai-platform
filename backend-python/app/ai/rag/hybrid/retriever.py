@@ -20,8 +20,9 @@ _logger = get_logger(__name__)
 class HybridRetriever:
     """Embed + dense search, Postgres FTS, then RRF → ``RetrievedCandidate``s.
 
-    Not wired into chat/RAG hot paths until Phase 10. Flag-off callers continue
-    to use dense-only :class:`~app.ai.rag.retriever.Retriever`.
+    Used by :class:`~app.ai.rag.pipeline.DefaultAdvancedRetrievalPipeline`
+    when ``ADVANCED_RAG_ENABLED``. Flag-off callers keep dense-only
+    :class:`~app.ai.rag.retriever.Retriever`.
     """
 
     def __init__(

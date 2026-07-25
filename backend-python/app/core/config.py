@@ -131,9 +131,9 @@ class Settings(BaseSettings):
     # endpoints keep the V1.1 orchestration path unchanged.
     agent_runtime_enabled: bool = False
 
-    # V2 Epic 2: master advanced RAG flag (default false). Phase 2: when true,
-    # ingest uses ParentChildChunker. Phase 10: chat/RAG use
-    # AdvancedRetrievalPipeline. Flag-off keeps V1 RecursiveChunker + dense path.
+    # V2 Epic 2: master advanced RAG flag (default false). When true: ingest
+    # uses ParentChildChunker; chat/RAG use AdvancedRetrievalPipeline.
+    # Flag-off keeps V1 RecursiveChunker + dense Retriever path.
     advanced_rag_enabled: bool = False
 
     @field_validator("log_level", mode="before")

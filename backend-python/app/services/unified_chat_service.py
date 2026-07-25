@@ -21,8 +21,11 @@ from app.ai.agent.adapters.chat_stream_adapter import stream_agent_chat
 from app.ai.agent.runtime.default_agent import DefaultAgent
 from app.ai.interfaces.vector_store import ScoredChunk
 from app.ai.prompts.manager import PromptManager
+from app.ai.rag.citations import to_citation_schemas
 from app.ai.rag.context_builder import ContextBuilder
+from app.ai.rag.pipeline import AdvancedRetrievalPipeline
 from app.ai.rag.retriever import Retriever
+from app.ai.rag.schemas import RetrievalRequest, RetrievalResult
 from app.ai.rag.service import EMPTY_CORPUS_MESSAGE
 from app.ai.tools.implementations.web_search import WEB_SEARCH_TOOL_NAME
 from app.core.caller import CallerContext
@@ -85,6 +88,7 @@ class UnifiedChatService:
         prompt_manager: PromptManager,
         settings: Settings,
         agent: DefaultAgent | None = None,
+        advanced_pipeline: AdvancedRetrievalPipeline | None = None,
     ) -> None:
         self._chat_service = chat_service
         self._tool_chat_service = tool_chat_service
@@ -93,6 +97,7 @@ class UnifiedChatService:
         self._prompt_manager = prompt_manager
         self._settings = settings
         self._agent = agent
+        self._advanced_pipeline = advanced_pipeline
         self._chat_agent_adapter = (
             ChatAgentAdapter(
                 agent=agent,
@@ -153,8 +158,7 @@ class UnifiedChatService:
 
         working_request = request
         retrieved_chunks: list[RetrievedChunkMetaSchema] | None = None
-        # Additive citations (Phase 8). Populated when advanced retrieval
-        # produces them; V1 path leaves ``None`` until Phase 10 wiring.
+        # Additive citations: populated on advanced path; V1 leaves ``None``.
         citations: list[CitationSchema] | None = None
 
         if effective_documents:
@@ -163,30 +167,28 @@ class UnifiedChatService:
             if on_activity is not None:
                 await on_activity("document_retrieval")
             try:
-                chunks = await self._retriever.retrieve(
+                doc_result = await self._retrieve_document_context(
                     question=question,
                     user_id=caller.user_id,
-                    top_k=self._settings.rag_top_k,
                 )
             finally:
                 if on_activity is not None:
                     await on_activity("thinking")
-            if not chunks:
+            if doc_result.empty:
                 return await self._empty_corpus_response(
                     request=request,
                     caller=caller,
                     model=model,
                     provider_name=provider_name,
+                    citations=doc_result.citations,
                 )
 
-            built_context = self._context_builder.build(chunks)
-            retrieved_chunks = [
-                _chunk_meta(chunk) for chunk in built_context.included_chunks
-            ]
+            retrieved_chunks = doc_result.retrieved_chunks
+            citations = doc_result.citations
             working_request = self._merge_document_context(
                 request=request,
                 question=question,
-                context_text=built_context.text,
+                context_text=doc_result.context_text,
             )
 
         if effective_web_search:
@@ -270,10 +272,9 @@ class UnifiedChatService:
                 question = self._chat_service._last_user_content(request)
                 retrieval_start = time.perf_counter()
                 try:
-                    chunks = await self._retriever.retrieve(
+                    doc_result = await self._retrieve_document_context(
                         question=question,
                         user_id=caller.user_id,
-                        top_k=self._settings.rag_top_k,
                     )
                 except Exception:
                     logger.exception(
@@ -309,17 +310,24 @@ class UnifiedChatService:
                     )
                     return
 
-                retrieval_latency_ms = int(
-                    (time.perf_counter() - retrieval_start) * 1000
+                retrieval_latency_ms = (
+                    doc_result.retrieval_latency_ms
+                    if doc_result.retrieval_latency_ms is not None
+                    else int((time.perf_counter() - retrieval_start) * 1000)
+                )
+                citation_count = (
+                    len(doc_result.citations) if doc_result.citations is not None else 0
                 )
                 logger.info(
                     "Unified stream document retrieval completed",
                     response_id=response_id,
                     retrieval_latency_ms=retrieval_latency_ms,
-                    chunk_count=len(chunks),
+                    chunk_count=len(doc_result.retrieved_chunks),
+                    citation_count=citation_count,
+                    advanced_rag_enabled=self._use_advanced_pipeline(),
                 )
 
-                if not chunks:
+                if doc_result.empty:
                     async for frame in self._stream_static_content(
                         response_id=response_id,
                         session_id=session_id,
@@ -334,20 +342,17 @@ class UnifiedChatService:
                         yield frame
                     return
 
-                built_context = self._context_builder.build(chunks)
                 working_request = self._merge_document_context(
                     request=request,
                     question=question,
-                    context_text=built_context.text,
+                    context_text=doc_result.context_text,
                 )
-                # citation_count stays 0 on V1 path; Phase 10 sets it from
-                # advanced RetrievalResult.citations.
                 yield format_sse(
                     "retrieval_complete",
                     RetrievalCompleteFrame(
                         id=response_id,
-                        chunk_count=len(built_context.included_chunks),
-                        citation_count=0,
+                        chunk_count=len(doc_result.retrieved_chunks),
+                        citation_count=citation_count,
                     ),
                 )
 
@@ -915,6 +920,53 @@ class UnifiedChatService:
     def _use_agent_runtime(self) -> bool:
         return self._settings.agent_runtime_enabled and self._agent is not None
 
+    def _use_advanced_pipeline(self) -> bool:
+        return (
+            self._settings.advanced_rag_enabled and self._advanced_pipeline is not None
+        )
+
+    async def _retrieve_document_context(
+        self,
+        *,
+        question: str,
+        user_id: uuid.UUID,
+    ) -> _DocumentRetrievalResult:
+        """Run V1 dense retrieve→context or flag-on advanced pipeline."""
+        if self._use_advanced_pipeline():
+            assert self._advanced_pipeline is not None
+            result = await self._advanced_pipeline.retrieve(
+                RetrievalRequest(
+                    question=question,
+                    user_id=user_id,
+                    top_k=self._settings.rag_top_k,
+                )
+            )
+            return _document_result_from_advanced(result)
+
+        chunks = await self._retriever.retrieve(
+            question=question,
+            user_id=user_id,
+            top_k=self._settings.rag_top_k,
+        )
+        if not chunks:
+            return _DocumentRetrievalResult(
+                empty=True,
+                context_text="",
+                retrieved_chunks=[],
+                citations=None,
+                retrieval_latency_ms=None,
+            )
+        built_context = self._context_builder.build(chunks)
+        return _DocumentRetrievalResult(
+            empty=False,
+            context_text=built_context.text,
+            retrieved_chunks=[
+                _chunk_meta(chunk) for chunk in built_context.included_chunks
+            ],
+            citations=None,
+            retrieval_latency_ms=None,
+        )
+
     @staticmethod
     def _is_guest_or_anonymous(caller: CallerContext | None) -> bool:
         return caller is None or caller.kind == "guest"
@@ -984,6 +1036,7 @@ class UnifiedChatService:
         caller: CallerContext | None,
         model: str,
         provider_name: ProviderName,
+        citations: list[CitationSchema] | None = None,
     ) -> ChatResponseSchema:
         if not self._chat_service._persistence_active(caller):
             return ChatResponseSchema(
@@ -992,6 +1045,7 @@ class UnifiedChatService:
                 model=model,
                 provider=provider_name,
                 retrieved_chunks=[],
+                citations=citations,
             )
 
         assert caller is not None
@@ -1037,6 +1091,7 @@ class UnifiedChatService:
             provider=provider_name,
             session_id=chat_session.id,
             retrieved_chunks=[],
+            citations=citations,
         )
 
     def _merge_document_context(
@@ -1090,10 +1145,74 @@ class _StreamToolLoopResult:
         self.tool_rounds = tool_rounds
 
 
+class _DocumentRetrievalResult:
+    __slots__ = (
+        "empty",
+        "context_text",
+        "retrieved_chunks",
+        "citations",
+        "retrieval_latency_ms",
+    )
+
+    def __init__(
+        self,
+        *,
+        empty: bool,
+        context_text: str,
+        retrieved_chunks: list[RetrievedChunkMetaSchema],
+        citations: list[CitationSchema] | None,
+        retrieval_latency_ms: int | None,
+    ) -> None:
+        self.empty = empty
+        self.context_text = context_text
+        self.retrieved_chunks = retrieved_chunks
+        self.citations = citations
+        self.retrieval_latency_ms = retrieval_latency_ms
+
+
 def _chunk_meta(chunk: ScoredChunk) -> RetrievedChunkMetaSchema:
     return RetrievedChunkMetaSchema(
         chunk_id=chunk.chunk_id,
         document_id=chunk.document_id,
         chunk_index=chunk.chunk_index,
         score=chunk.score,
+    )
+
+
+def _document_result_from_advanced(
+    result: RetrievalResult,
+) -> _DocumentRetrievalResult:
+    if not result.candidates:
+        return _DocumentRetrievalResult(
+            empty=True,
+            context_text="",
+            retrieved_chunks=[],
+            citations=[],
+            retrieval_latency_ms=result.retrieval_latency_ms,
+        )
+
+    by_id = {
+        candidate.chunk.chunk_id: candidate
+        for candidate in result.candidates
+        if candidate.chunk.chunk_id is not None
+    }
+    retrieved_chunks: list[RetrievedChunkMetaSchema] = []
+    for citation in result.citations:
+        candidate = by_id.get(citation.chunk_id)
+        retrieved_chunks.append(
+            RetrievedChunkMetaSchema(
+                chunk_id=citation.chunk_id,
+                document_id=citation.document_id,
+                chunk_index=(
+                    candidate.chunk.chunk_index if candidate is not None else None
+                ),
+                score=citation.score,
+            )
+        )
+    return _DocumentRetrievalResult(
+        empty=False,
+        context_text=result.context_text,
+        retrieved_chunks=retrieved_chunks,
+        citations=to_citation_schemas(list(result.citations)),
+        retrieval_latency_ms=result.retrieval_latency_ms,
     )

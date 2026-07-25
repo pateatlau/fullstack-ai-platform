@@ -1,15 +1,13 @@
-"""Advanced retrieval pipeline protocol and skeleton.
+"""Advanced retrieval pipeline protocol and default orchestrator.
 
-The skeleton delegates to the V1 dense :class:`~app.ai.rag.retriever.Retriever`
-until later phases fill hybrid → filter → parent stages.
-Phase 5 adds optional query rewrite (at most once per request).
-Phase 6 adds optional Protocol-backed rerank with timeout fallback.
-Phase 7 adds optional Protocol-backed context compression.
-Phase 8 builds post-compression citations aligned with ``[n]`` markers.
-Chat/RAG hot paths are not wired here (Phase 10).
+Flag-on stage graph (Part I): rewrite → hybrid → filter → parent expand →
+rerank → compress → cite. Chat/RAG hot paths branch to this pipeline when
+``ADVANCED_RAG_ENABLED`` (Phase 10). Flag-off callers keep V1 dense
+``Retriever`` → ``ContextBuilder``.
 
-Phase 3: metadata filters are pushed down through :class:`Retriever` and
-re-applied as Part I stage 3 over ``RetrievedCandidate``s.
+Query rewrite runs at most once when gated on. Rerank failures keep
+pre-rerank order / ``final_score``. Compress preserves original source text.
+Citations are assigned after compression with contiguous ``[1..n]``.
 """
 
 from __future__ import annotations
@@ -22,10 +20,12 @@ from app.ai.interfaces.query_rewriter import QueryRewriter
 from app.ai.interfaces.reranker import Reranker
 from app.ai.rag.citations import CitationBuilder
 from app.ai.rag.context_builder import BuiltContext
+from app.ai.rag.hybrid.retriever import HybridRetriever
 from app.ai.rag.metadata_filter import (
     apply_metadata_filter,
     is_unsatisfiable_filter,
 )
+from app.ai.rag.parent_expand import ParentContentFetcher, expand_parents
 from app.ai.rag.retriever import Retriever
 from app.ai.rag.schemas import (
     Citation,
@@ -46,38 +46,33 @@ class AdvancedRetrievalPipeline(Protocol):
 
 
 class DefaultAdvancedRetrievalPipeline:
-    """Skeleton pipeline that delegates dense retrieval to :class:`Retriever`.
+    """Advanced stage graph for flag-on retrieval.
 
-    Later phases replace this body with the full advanced stage graph while
-    keeping the :meth:`retrieve` contract stable.
-
-    Query rewrite (Phase 5) runs at most once when ``advanced_rag_enabled``,
-    ``query_rewrite_enabled``, and a :class:`QueryRewriter` are all set. The
-    rewritten string is never fed back into the rewriter.
-
-    Rerank (Phase 6) runs when ``advanced_rag_enabled`` and a :class:`Reranker`
-    are set. Adapter failures keep pre-rerank order / ``final_score``.
-
-    Compress (Phase 7) runs when ``advanced_rag_enabled`` and a
-    :class:`ContextCompressor` are set; populates ``context_text`` /
-    ``truncated`` from the compressor. Flag-off / missing compressor leave
-    context empty (V1 ``ContextBuilder`` remains on the chat/RAG path).
-
-    Cite (Phase 8) runs after compression when advanced RAG is on, assigning
-    contiguous ``[1..n]`` citations for included blocks only.
+    Prefer :class:`HybridRetriever` when provided (production DI). Dense
+    :class:`Retriever` remains as a test / fallback path when hybrid is absent.
+    Parent expansion runs when a :class:`ParentContentFetcher` is provided.
     """
 
     def __init__(
         self,
         *,
-        retriever: Retriever,
+        retriever: Retriever | None = None,
+        hybrid_retriever: HybridRetriever | None = None,
+        parent_content_fetcher: ParentContentFetcher | None = None,
         query_rewriter: QueryRewriter | None = None,
         reranker: Reranker | None = None,
         context_compressor: ContextCompressor | None = None,
         citation_builder: CitationBuilder | None = None,
         settings: Settings | None = None,
     ) -> None:
+        if hybrid_retriever is None and retriever is None:
+            raise ValueError(
+                "DefaultAdvancedRetrievalPipeline requires hybrid_retriever "
+                "or retriever."
+            )
         self._retriever = retriever
+        self._hybrid_retriever = hybrid_retriever
+        self._parent_content_fetcher = parent_content_fetcher
         self._query_rewriter = query_rewriter
         self._reranker = reranker
         self._context_compressor = context_compressor
@@ -99,14 +94,55 @@ class DefaultAdvancedRetrievalPipeline:
             )
 
         search_query = await self._resolve_search_query(request)
+        candidates = await self._retrieve_candidates(search_query, request)
+        # Part I stage 3 — filter candidates in place (AND with store push-down).
+        candidates = apply_metadata_filter(candidates, request.filters)
+        # Part I stage 4 — parent expand + dedupe (one block per parent_id).
+        candidates = await self._maybe_expand_parents(candidates)
+        # Part I stage 5 — cross-encoder rerank (Protocol); failures keep order.
+        candidates = await self._maybe_rerank(search_query, candidates, request)
+        # Part I stage 6 — faithful compress into context budget.
+        built = self._maybe_compress(candidates)
+        # Part I stage 7 — citations after compression, before prompt construction.
+        citations = self._maybe_cite(built, candidates)
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        _logger.info(
+            "Advanced retrieval completed",
+            advanced_rag_enabled=True,
+            retrieval_latency_ms=latency_ms,
+            candidate_count=len(candidates),
+            citation_count=len(citations),
+            truncated=built.truncated if built is not None else False,
+        )
+        return RetrievalResult(
+            candidates=candidates,
+            citations=citations,
+            context_text=built.text if built is not None else "",
+            truncated=built.truncated if built is not None else False,
+            retrieval_latency_ms=latency_ms,
+        )
 
+    async def _retrieve_candidates(
+        self,
+        search_query: str,
+        request: RetrievalRequest,
+    ) -> list[RetrievedCandidate]:
+        hybrid = self._hybrid_retriever
+        if hybrid is not None:
+            return await hybrid.retrieve(
+                question=search_query,
+                user_id=request.user_id,
+                filters=request.filters,
+            )
+
+        assert self._retriever is not None
         chunks = await self._retriever.retrieve(
             question=search_query,
             user_id=request.user_id,
             top_k=request.top_k,
             filters=request.filters,
         )
-        candidates = [
+        return [
             RetrievedCandidate(
                 chunk=chunk,
                 parent=None,
@@ -116,22 +152,21 @@ class DefaultAdvancedRetrievalPipeline:
             )
             for chunk in chunks
         ]
-        # Part I stage 3 — filter candidates in place (AND with store push-down).
-        candidates = apply_metadata_filter(candidates, request.filters)
-        # Part I stage 5 — cross-encoder rerank (Protocol); failures keep order.
-        candidates = await self._maybe_rerank(search_query, candidates, request)
-        # Part I stage 6 — faithful compress into context budget.
-        built = self._maybe_compress(candidates)
-        # Part I stage 7 — citations after compression, before prompt construction.
-        citations = self._maybe_cite(built, candidates)
-        latency_ms = int((time.perf_counter() - start) * 1000)
-        return RetrievalResult(
-            candidates=candidates,
-            citations=citations,
-            context_text=built.text if built is not None else "",
-            truncated=built.truncated if built is not None else False,
-            retrieval_latency_ms=latency_ms,
-        )
+
+    async def _maybe_expand_parents(
+        self,
+        candidates: list[RetrievedCandidate],
+    ) -> list[RetrievedCandidate]:
+        fetcher = self._parent_content_fetcher
+        settings = self._settings
+        if (
+            fetcher is None
+            or settings is None
+            or not settings.advanced_rag_enabled
+            or not candidates
+        ):
+            return candidates
+        return await expand_parents(candidates, fetch_parent_contents=fetcher)
 
     async def _resolve_search_query(self, request: RetrievalRequest) -> str:
         """Return the retrieval query; rewrite at most once when gated on."""

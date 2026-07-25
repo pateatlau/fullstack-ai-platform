@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -1114,3 +1115,204 @@ async def test_stream_use_documents_guest_denied(
     assert response.status_code == 200
     assert delta_content == _GUEST_TOOL_DENIED_MESSAGE
     assert fake_provider.tool_completion_calls == 0
+
+
+@pytest.mark.anyio
+async def test_unified_chat_flag_off_ignores_advanced_pipeline(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from app.ai.tools.executor import ToolExecutor
+    from app.ai.tools.registry import ToolRegistry
+    from app.schemas.chat import ChatMessageSchema, ChatRequestSchema
+    from app.services.chat_service import ChatService
+    from app.services.quota_service import QuotaService
+    from app.services.tool_chat_service import ToolChatService
+    from app.services.unified_chat_service import UnifiedChatService
+
+    provider = _CapturingLLMProvider()
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(provider),
+    )
+
+    class _FakeRetriever:
+        async def retrieve(
+            self, *, question: str, user_id: uuid.UUID, top_k: int | None
+        ):
+            del question, user_id, top_k
+            return [
+                ScoredChunk(
+                    chunk_id=uuid.uuid4(),
+                    document_id=uuid.uuid4(),
+                    chunk_index=0,
+                    content="flag-off chunk",
+                    metadata={"source": "sample.txt"},
+                    score=0.9,
+                )
+            ]
+
+    pipeline = AsyncMock()
+    pipeline.retrieve = AsyncMock(
+        side_effect=AssertionError("advanced pipeline must not run when flag off")
+    )
+    settings = Settings(
+        openai_api_key="test-key",
+        rag_enabled=True,
+        advanced_rag_enabled=False,
+    )
+    chat_service = ChatService(
+        settings,
+        chat_store=None,
+        usage_store=None,
+        quota_service=QuotaService(store=FakeGuestQuotaStore(), settings=settings),
+        prompt_manager=create_prompt_manager(),
+    )
+    tool_service = ToolChatService(
+        chat_service=chat_service,
+        tool_executor=ToolExecutor(registry=ToolRegistry(), settings=settings),
+        tool_registry=ToolRegistry(),
+        prompt_manager=create_prompt_manager(),
+        settings=settings,
+    )
+    unified = UnifiedChatService(
+        chat_service=chat_service,
+        tool_chat_service=tool_service,
+        retriever=cast(Retriever, _FakeRetriever()),
+        context_builder=ContextBuilder(settings),
+        prompt_manager=create_prompt_manager(),
+        settings=settings,
+        advanced_pipeline=pipeline,
+    )
+
+    response = await unified.execute(
+        ChatRequestSchema(
+            messages=[ChatMessageSchema(role="user", content="Docs?")],
+            use_documents=True,
+            provider="openai",
+            model="gpt-4o-mini",
+        ),
+        CallerContext.for_user(uuid.uuid4()),
+    )
+
+    assert response.citations is None
+    assert response.retrieved_chunks is not None
+    assert response.retrieved_chunks[0].score == 0.9
+    pipeline.retrieve.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_unified_chat_flag_on_uses_advanced_pipeline_and_citations(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from app.ai.rag.schemas import Citation, RetrievalResult, RetrievedCandidate
+    from app.ai.tools.executor import ToolExecutor
+    from app.ai.tools.registry import ToolRegistry
+    from app.schemas.chat import ChatMessageSchema, ChatRequestSchema
+    from app.services.chat_service import ChatService
+    from app.services.quota_service import QuotaService
+    from app.services.tool_chat_service import ToolChatService
+    from app.services.unified_chat_service import UnifiedChatService
+
+    provider = _CapturingLLMProvider()
+    _CapturingLLMProvider.captured_messages.clear()
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        _mock_provider_factory(provider),
+    )
+
+    chunk_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    chunk = ScoredChunk(
+        chunk_id=chunk_id,
+        document_id=document_id,
+        chunk_index=0,
+        content="child slice",
+        metadata={"source": "policy.pdf", "filename": "policy.pdf"},
+        score=0.4,
+    )
+    pipeline = AsyncMock()
+    pipeline.retrieve = AsyncMock(
+        return_value=RetrievalResult(
+            candidates=[
+                RetrievedCandidate(
+                    chunk=chunk,
+                    parent="PARENT policy text",
+                    metadata=dict(chunk.metadata),
+                    final_score=0.95,
+                    rerank_score=0.95,
+                )
+            ],
+            citations=[
+                Citation(
+                    index=1,
+                    chunk_id=chunk_id,
+                    document_id=document_id,
+                    snippet="PARENT policy",
+                    score=0.95,
+                    filename="policy.pdf",
+                    source="policy.pdf",
+                )
+            ],
+            context_text="[1] PARENT policy text",
+            truncated=False,
+            retrieval_latency_ms=9,
+        )
+    )
+    dense = AsyncMock()
+    dense.retrieve = AsyncMock(
+        side_effect=AssertionError("V1 retriever must not run when advanced on")
+    )
+    settings = Settings(
+        openai_api_key="test-key",
+        rag_enabled=True,
+        advanced_rag_enabled=True,
+    )
+    chat_service = ChatService(
+        settings,
+        chat_store=None,
+        usage_store=None,
+        quota_service=QuotaService(store=FakeGuestQuotaStore(), settings=settings),
+        prompt_manager=create_prompt_manager(),
+    )
+    tool_service = ToolChatService(
+        chat_service=chat_service,
+        tool_executor=ToolExecutor(registry=ToolRegistry(), settings=settings),
+        tool_registry=ToolRegistry(),
+        prompt_manager=create_prompt_manager(),
+        settings=settings,
+    )
+    unified = UnifiedChatService(
+        chat_service=chat_service,
+        tool_chat_service=tool_service,
+        retriever=dense,
+        context_builder=ContextBuilder(settings),
+        prompt_manager=create_prompt_manager(),
+        settings=settings,
+        advanced_pipeline=pipeline,
+    )
+
+    response = await unified.execute(
+        ChatRequestSchema(
+            messages=[ChatMessageSchema(role="user", content="Refund policy?")],
+            use_documents=True,
+            provider="openai",
+            model="gpt-4o-mini",
+        ),
+        CallerContext.for_user(uuid.uuid4()),
+    )
+
+    assert response.citations is not None
+    assert len(response.citations) == 1
+    assert response.citations[0].index == 1
+    assert response.citations[0].score == 0.95
+    assert response.retrieved_chunks is not None
+    assert response.retrieved_chunks[0].score == 0.95
+    pipeline.retrieve.assert_awaited_once()
+    dense.retrieve.assert_not_awaited()
+    assert any(
+        "[1] PARENT policy text" in (msg.content or "")
+        for batch in _CapturingLLMProvider.captured_messages
+        for msg in batch
+    )

@@ -5,7 +5,8 @@ share one parent into a single candidate (one parent context block). Orphan
 children (missing/invalid parent) keep ``parent=None`` so downstream stages
 use child content as the block.
 
-Not wired into :class:`AdvancedRetrievalPipeline` until Phase 10.
+Wired into :class:`DefaultAdvancedRetrievalPipeline` when a parent content
+fetcher is provided (Phase 10 DI).
 """
 
 from __future__ import annotations
