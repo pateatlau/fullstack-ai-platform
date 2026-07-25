@@ -31,6 +31,11 @@ def test_ai_settings_load_with_defaults(monkeypatch: pytest.MonkeyPatch) -> None
     assert settings.hybrid_dense_top_k == 20
     assert settings.hybrid_lexical_top_k == 20
     assert settings.rrf_k == 60
+    assert settings.query_rewrite_enabled is True
+    assert settings.cohere_api_key is None
+    assert settings.rerank_provider == "cohere"
+    assert settings.rerank_model == "rerank-v3.5"
+    assert settings.rerank_timeout_ms == 1500
     assert settings.rag_top_k == 5
     assert settings.rag_default_prompt_template == "rag/answer/v1"
     assert settings.rag_context_max_chars == 8000

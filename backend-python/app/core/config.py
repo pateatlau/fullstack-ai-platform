@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     rrf_k: int = Field(default=60, ge=1)
     # V2 Epic 2 (Phase 5): LLM query rewrite (honoured only when advanced flag on).
     query_rewrite_enabled: bool = True
+    # V2 Epic 2 (Phase 6): cross-encoder rerank (honoured only when advanced flag on).
+    cohere_api_key: str | None = None
+    rerank_provider: str = "cohere"
+    rerank_model: str = "rerank-v3.5"
+    rerank_timeout_ms: int = Field(default=1500, ge=1)
     rag_top_k: int = Field(default=5, ge=1)
     rag_default_prompt_template: str = "rag/answer/v1"
     rag_context_max_chars: int = Field(default=8000, ge=1)
