@@ -35,6 +35,13 @@ class DefaultAdvancedRetrievalPipeline:
         self._retriever = retriever
 
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
+        # Metadata filtering lands in Phase 3; refuse rather than silently drop filters.
+        if request.filters is not None:
+            raise ValueError(
+                "Metadata filters are not supported until advanced RAG "
+                "filtering is implemented."
+            )
+
         start = time.perf_counter()
         chunks = await self._retriever.retrieve(
             question=request.question,

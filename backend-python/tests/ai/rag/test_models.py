@@ -88,10 +88,52 @@ def test_retrieval_request_and_result_defaults() -> None:
     assert request.filters is None
 
     result = RetrievalResult(candidates=[])
-    assert result.citations == []
+    assert result.candidates == ()
+    assert result.citations == ()
     assert result.context_text == ""
     assert result.truncated is False
     assert result.retrieval_latency_ms is None
+
+
+def test_retrieved_candidate_metadata_is_deep_frozen() -> None:
+    mutable_meta: dict[str, object] = {"source": "doc.txt"}
+    candidate = RetrievedCandidate(
+        chunk=_scored_chunk(),
+        parent=None,
+        metadata=mutable_meta,
+        final_score=0.5,
+    )
+    mutable_meta["source"] = "mutated-after-construct"
+    assert candidate.metadata["source"] == "doc.txt"
+    with pytest.raises(TypeError):
+        candidate.metadata["source"] = "write"  # type: ignore[index]
+
+
+def test_retrieval_result_collections_reject_mutation() -> None:
+    chunk = _scored_chunk()
+    candidate = RetrievedCandidate(
+        chunk=chunk,
+        parent=None,
+        metadata={"source": "a.txt"},
+        final_score=0.5,
+    )
+    citation = Citation(
+        index=1,
+        chunk_id=chunk.chunk_id,
+        document_id=chunk.document_id,
+        snippet="snippet",
+        score=0.5,
+    )
+    result = RetrievalResult(candidates=[candidate], citations=[citation])
+
+    with pytest.raises(TypeError):
+        result.candidates[0] = candidate  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        result.candidates.append(candidate)  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        result.citations[0] = citation  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        result.citations.append(citation)  # type: ignore[attr-defined]
 
 
 def test_citation_fields_match_part_i() -> None:

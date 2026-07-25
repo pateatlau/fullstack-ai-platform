@@ -20,6 +20,7 @@ from app.ai.rag import (
     DefaultAdvancedRetrievalPipeline,
     IndexingJobState,
     IndexingJobStatus,
+    MetadataFilter,
     RetrievalRequest,
     RetrievalResult,
     RetrievedCandidate,
@@ -179,7 +180,22 @@ async def test_default_pipeline_delegates_to_retriever() -> None:
     assert result.candidates[0].final_score == 0.88
     assert result.candidates[0].dense_score == 0.88
     assert result.candidates[0].parent is None
-    assert result.citations == []
+    assert result.citations == ()
     assert result.context_text == ""
     assert result.retrieval_latency_ms is not None
     assert result.retrieval_latency_ms >= 0
+
+
+@pytest.mark.anyio
+async def test_default_pipeline_rejects_filters_until_phase_3() -> None:
+    pipeline = DefaultAdvancedRetrievalPipeline(
+        retriever=cast(Retriever, _StubRetriever([]))
+    )
+    with pytest.raises(ValueError, match="Metadata filters are not supported"):
+        await pipeline.retrieve(
+            RetrievalRequest(
+                question="hello",
+                user_id=uuid.uuid4(),
+                filters=MetadataFilter(source="notes.md"),
+            )
+        )

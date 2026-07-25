@@ -7,8 +7,10 @@ pipeline contract (stable after Epic 02 Phase 1). They are not HTTP DTOs.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 
 from app.ai.interfaces.vector_store import ScoredChunk
 
@@ -60,12 +62,16 @@ class RetrievedCandidate:
 
     chunk: ScoredChunk
     parent: str | None
-    metadata: dict[str, object]
+    metadata: Mapping[str, object]
     final_score: float
     dense_score: float | None = None
     lexical_score: float | None = None
     rrf_score: float | None = None
     rerank_score: float | None = None
+
+    def __post_init__(self) -> None:
+        # Defensive copy + freeze so callers cannot mutate shared dict inputs.
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
 
 @dataclass(frozen=True)
@@ -96,11 +102,16 @@ class RetrievalRequest:
 class RetrievalResult:
     """Output envelope from advanced retrieval (pre-prompt / pre-LLM)."""
 
-    candidates: list[RetrievedCandidate]
-    citations: list[Citation] = field(default_factory=list)
+    candidates: Sequence[RetrievedCandidate]
+    citations: Sequence[Citation] = ()
     context_text: str = ""
     truncated: bool = False
     retrieval_latency_ms: int | None = None
+
+    def __post_init__(self) -> None:
+        # Accept list/iterable inputs at construction; store immutable tuples.
+        object.__setattr__(self, "candidates", tuple(self.candidates))
+        object.__setattr__(self, "citations", tuple(self.citations))
 
 
 class IndexingJobState(str, Enum):
