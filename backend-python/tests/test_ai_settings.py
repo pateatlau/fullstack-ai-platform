@@ -43,6 +43,7 @@ def test_feature_flags_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
     # Isolate from process env so suite runs with AGENT_RUNTIME_ENABLED=true
     # (and other feature flags) still verify model defaults.
     monkeypatch.delenv("AGENT_RUNTIME_ENABLED", raising=False)
+    monkeypatch.delenv("ADVANCED_RAG_ENABLED", raising=False)
     monkeypatch.delenv("RAG_ENABLED", raising=False)
     monkeypatch.delenv("TOOLS_ENABLED", raising=False)
     monkeypatch.delenv("CHAT_STREAMING_ENABLED", raising=False)
@@ -59,6 +60,7 @@ def test_feature_flags_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.tools_enabled is False
     assert settings.chat_streaming_enabled is True
     assert settings.agent_runtime_enabled is False
+    assert settings.advanced_rag_enabled is False
 
 
 def test_rag_enabled_requires_embedding_provider_key() -> None:

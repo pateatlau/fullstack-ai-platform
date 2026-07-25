@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     # endpoints keep the V1.1 orchestration path unchanged.
     agent_runtime_enabled: bool = False
 
+    # V2 Epic 2 (Phase 1): reserved advanced RAG flag (no-op until Phase 10
+    # wires AdvancedRetrievalPipeline into chat/RAG). Default false; enabling
+    # it currently does not change runtime orchestration.
+    advanced_rag_enabled: bool = False
+
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, value: object) -> str:
