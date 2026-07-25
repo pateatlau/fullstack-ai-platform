@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     hybrid_dense_top_k: int = Field(default=20, ge=1)
     hybrid_lexical_top_k: int = Field(default=20, ge=1)
     rrf_k: int = Field(default=60, ge=1)
+    # V2 Epic 2 (Phase 5): LLM query rewrite (honoured only when advanced flag on).
+    query_rewrite_enabled: bool = True
     rag_top_k: int = Field(default=5, ge=1)
     rag_default_prompt_template: str = "rag/answer/v1"
     rag_context_max_chars: int = Field(default=8000, ge=1)

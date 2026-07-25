@@ -1,8 +1,9 @@
 """Advanced retrieval pipeline protocol and skeleton.
 
 The skeleton delegates to the V1 dense :class:`~app.ai.rag.retriever.Retriever`
-until later phases fill rewrite → hybrid → filter → parent → rerank → compress
-→ cite stages. Chat/RAG hot paths are not wired here (Phase 10).
+until later phases fill hybrid → filter → parent → rerank → compress → cite
+stages. Phase 5 adds optional query rewrite (at most once per request).
+Chat/RAG hot paths are not wired here (Phase 10).
 
 Phase 3: metadata filters are pushed down through :class:`Retriever` and
 re-applied as Part I stage 3 over ``RetrievedCandidate``s.
@@ -13,6 +14,7 @@ from __future__ import annotations
 import time
 from typing import Protocol
 
+from app.ai.interfaces.query_rewriter import QueryRewriter
 from app.ai.rag.metadata_filter import (
     apply_metadata_filter,
     is_unsatisfiable_filter,
@@ -23,6 +25,7 @@ from app.ai.rag.schemas import (
     RetrievalResult,
     RetrievedCandidate,
 )
+from app.core.config import Settings
 
 
 class AdvancedRetrievalPipeline(Protocol):
@@ -36,10 +39,22 @@ class DefaultAdvancedRetrievalPipeline:
 
     Later phases replace this body with the full advanced stage graph while
     keeping the :meth:`retrieve` contract stable.
+
+    Query rewrite (Phase 5) runs at most once when ``advanced_rag_enabled``,
+    ``query_rewrite_enabled``, and a :class:`QueryRewriter` are all set. The
+    rewritten string is never fed back into the rewriter.
     """
 
-    def __init__(self, *, retriever: Retriever) -> None:
+    def __init__(
+        self,
+        *,
+        retriever: Retriever,
+        query_rewriter: QueryRewriter | None = None,
+        settings: Settings | None = None,
+    ) -> None:
         self._retriever = retriever
+        self._query_rewriter = query_rewriter
+        self._settings = settings
 
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
         start = time.perf_counter()
@@ -55,8 +70,10 @@ class DefaultAdvancedRetrievalPipeline:
                 retrieval_latency_ms=latency_ms,
             )
 
+        search_query = await self._resolve_search_query(request)
+
         chunks = await self._retriever.retrieve(
-            question=request.question,
+            question=search_query,
             user_id=request.user_id,
             top_k=request.top_k,
             filters=request.filters,
@@ -80,4 +97,22 @@ class DefaultAdvancedRetrievalPipeline:
             context_text="",
             truncated=False,
             retrieval_latency_ms=latency_ms,
+        )
+
+    async def _resolve_search_query(self, request: RetrievalRequest) -> str:
+        """Return the retrieval query; rewrite at most once when gated on."""
+        settings = self._settings
+        rewriter = self._query_rewriter
+        if (
+            settings is None
+            or rewriter is None
+            or not settings.advanced_rag_enabled
+            or not settings.query_rewrite_enabled
+        ):
+            return request.question
+
+        # Single rewrite attempt — never pass the result back into rewrite().
+        return await rewriter.rewrite(
+            request.question,
+            user_id=request.user_id,
         )
