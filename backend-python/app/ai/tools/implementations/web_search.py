@@ -5,22 +5,33 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Protocol
 
 import httpx
 
 from app.ai.interfaces.tool_handler import ToolHandler
-from app.ai.prompts.time_context import current_utc_date_label
 from app.ai.tools.schemas import ToolDefinition, ToolExecutionContext, ToolResult
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.retry import retry_async
 
+# Full calendar dates only (YYYY-MM-DD). Bare years must not suppress grounding.
+_ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+
 _RELATIVE_TIME_QUERY_RE = re.compile(
-    r"\b(today|tonight|latest|current|now|recent|recently|"
-    r"this\s+(week|month|year)|breaking)\b",
+    r"\b(?P<term>today|tonight|yesterday|tomorrow|latest|current|now|recent|"
+    r"recently|this\s+(?:week|month|year)|breaking)\b",
     re.IGNORECASE,
 )
+
+# Day offsets from "today" for terms that map to a single calendar date.
+_RELATIVE_DAY_OFFSETS: dict[str, int] = {
+    "today": 0,
+    "tonight": 0,
+    "yesterday": -1,
+    "tomorrow": 1,
+}
 
 _logger = get_logger(__name__)
 
@@ -156,28 +167,56 @@ def normalize_web_search_arguments(
     return normalized
 
 
+def _reference_utc_date(
+    *,
+    today_label: str | None = None,
+    now: datetime | None = None,
+) -> date:
+    if today_label is not None:
+        iso_token = today_label.split(" ", 1)[0]
+        return date.fromisoformat(iso_token)
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    else:
+        moment = moment.astimezone(timezone.utc)
+    return moment.date()
+
+
+def _resolve_relative_term_date(term: str, *, today: date) -> date:
+    """Map a relative time word to the calendar day that should ground the query."""
+    normalized = " ".join(term.lower().split())
+    offset = _RELATIVE_DAY_OFFSETS.get(normalized, 0)
+    return today + timedelta(days=offset)
+
+
 def ground_web_search_query(
     query: str,
     *,
     today_label: str | None = None,
+    now: datetime | None = None,
 ) -> str:
     """Append an explicit calendar date when the query uses relative time words.
 
-    Models often omit the year; search engines then surface evergreen older pages
-    (for example 2024 election coverage) that get narrated as "today".
+    Full ISO dates (``YYYY-MM-DD``) count as already grounded. Bare years do not —
+    queries like ``India news today 2026`` still receive a concrete day. Relative
+    terms such as ``yesterday`` / ``tomorrow`` resolve to that day's ISO date.
     """
     cleaned = query.strip()
     if not cleaned:
         return cleaned
 
-    label = today_label or current_utc_date_label()
-    iso_date = label.split(" ", 1)[0]
-    year = iso_date[:4]
-    if iso_date in cleaned or year in cleaned:
+    # Already includes a full calendar day; bare years alone are not enough.
+    if _ISO_DATE_RE.search(cleaned):
         return cleaned
-    if not _RELATIVE_TIME_QUERY_RE.search(cleaned):
+
+    match = _RELATIVE_TIME_QUERY_RE.search(cleaned)
+    if match is None:
         return cleaned
-    return f"{cleaned} {iso_date}"
+
+    today = _reference_utc_date(today_label=today_label, now=now)
+    resolved = _resolve_relative_term_date(match.group("term"), today=today)
+    return f"{cleaned} {resolved.isoformat()}"
 
 
 class WebSearchToolHandler:

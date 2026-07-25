@@ -210,6 +210,29 @@ def test_ground_web_search_query_appends_date_for_relative_queries() -> None:
     )
     assert (
         ground_web_search_query(
+            "headlines yesterday",
+            today_label="2026-07-25 (Saturday)",
+        )
+        == "headlines yesterday 2026-07-24"
+    )
+    assert (
+        ground_web_search_query(
+            "forecasts for tomorrow",
+            today_label="2026-07-25 (Saturday)",
+        )
+        == "forecasts for tomorrow 2026-07-26"
+    )
+    # Bare year must not suppress grounding when a relative term is present.
+    assert (
+        ground_web_search_query(
+            "India news today 2026",
+            today_label="2026-07-25 (Saturday)",
+        )
+        == "India news today 2026 2026-07-25"
+    )
+    # Full ISO date already present — leave the query unchanged.
+    assert (
+        ground_web_search_query(
             "Lok Sabha results 2026-07-25",
             today_label="2026-07-25 (Saturday)",
         )
