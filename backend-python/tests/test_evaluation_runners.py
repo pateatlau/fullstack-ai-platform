@@ -25,6 +25,9 @@ DATASET = Path(__file__).resolve().parent / "data" / "evaluation" / "sample.yaml
 
 
 def _settings(**overrides: object) -> Settings:
+    # Eval harness remains V1/dense for this epic — isolate from process
+    # ADVANCED_RAG_ENABLED=true (Phase 12). Advanced retrieval is covered by
+    # tests/ai/rag/ parity suites with fakes.
     base = {
         "openai_api_key": "test-key",
         "llm_provider": "openai",
@@ -32,6 +35,7 @@ def _settings(**overrides: object) -> Settings:
         "default_temperature": 0.7,
         "rag_top_k": 5,
         "rag_context_max_chars": 8000,
+        "advanced_rag_enabled": False,
     }
     base.update(overrides)
     return Settings(**base)  # type: ignore[arg-type]

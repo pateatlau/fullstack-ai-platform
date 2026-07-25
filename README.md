@@ -115,7 +115,7 @@ V2 Epic 01 engineering is **complete**. A reusable, provider-agnostic agent runt
 
 Validation record: [docs/plans/post-mvp-v2-epic-01-agent-framework.md](docs/plans/post-mvp-v2-epic-01-agent-framework.md) (Phase 12 Completion Record).
 
-## Post-MVP V2 Epic 02 Advanced RAG — In Progress
+## Post-MVP V2 Epic 02 Advanced RAG — Released
 
 Advanced retrieval (hybrid search, query rewrite, parent-child, Cohere rerank, faithful compression, citations) extends the V1 RAG stack behind a default-off flag.
 
@@ -123,7 +123,9 @@ Advanced retrieval (hybrid search, query rewrite, parent-child, Cohere rerank, f
 
 - `ADVANCED_RAG_ENABLED=false` — dense `Retriever` → `ContextBuilder`; set `true` to use `AdvancedRetrievalPipeline` on document chat and `/api/rag/ask` (requires `RAG_ENABLED=true` for document grounding). Optional `COHERE_API_KEY` for rerank.
 
-See [docs/plans/post-mvp-v2-epic-02-advanced-rag.md](docs/plans/post-mvp-v2-epic-02-advanced-rag.md) and [backend-python/README.md](backend-python/README.md).
+**Release summary:** [docs/releases/post-mvp-v2-epic2-release-summary.md](docs/releases/post-mvp-v2-epic2-release-summary.md)
+
+Validation record: [docs/plans/post-mvp-v2-epic-02-advanced-rag.md](docs/plans/post-mvp-v2-epic-02-advanced-rag.md) (Phase 12 Completion Record).
 
 ## Current Capabilities
 

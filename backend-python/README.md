@@ -184,7 +184,7 @@ Return Response (+ optional retrieved_chunks, citations, tools_used)
 
 **Flags off:** when `RAG_ENABLED=false` or `TOOLS_ENABLED=false`, the corresponding toggle is ignored (no-op); plain chat proceeds.
 
-**Advanced RAG** (`ADVANCED_RAG_ENABLED`, default `false`): when on (and `RAG_ENABLED`), document chat and `/api/rag/ask` use `AdvancedRetrievalPipeline` instead of dense-only retrieve. Responses may include additive `citations`; SSE `retrieval_complete` includes `citation_count`. When off, V1 dense `Retriever` → `ContextBuilder` is unchanged. Optional `COHERE_API_KEY` powers Cohere `rerank-v3.5` (missing key keeps RRF order).
+**Advanced RAG** (`ADVANCED_RAG_ENABLED`, default `false`): when on (and `RAG_ENABLED`), document chat and `/api/rag/ask` use `AdvancedRetrievalPipeline` instead of dense-only retrieve. Responses may include additive `citations`; SSE `retrieval_complete` includes `citation_count`. When off, V1 dense `Retriever` → `ContextBuilder` is unchanged. Optional `COHERE_API_KEY` powers Cohere `rerank-v3.5` (missing key keeps RRF order). Release summary: [docs/releases/post-mvp-v2-epic2-release-summary.md](../docs/releases/post-mvp-v2-epic2-release-summary.md).
 
 **Health:** `GET /api/health` exposes `rag_enabled`, `tools_enabled`, and `capabilities.by_provider` for frontend toggle gating.
 

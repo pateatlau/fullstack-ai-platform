@@ -96,7 +96,10 @@ class _FakeSearchClient:
 
 
 @pytest.fixture(autouse=True)
-def _clear_settings_and_registry() -> Iterator[None]:
+def _clear_settings_and_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    # V1 document-path HTTP tests must not pick up process ADVANCED_RAG_ENABLED=true
+    # (Phase 12). Advanced parity uses explicit Settings(advanced_rag_enabled=True).
+    monkeypatch.setenv("ADVANCED_RAG_ENABLED", "false")
     get_settings.cache_clear()
     get_tool_registry.cache_clear()
     yield
@@ -135,7 +138,11 @@ def _mock_provider_factory(provider: FakeProvider):
 
 
 def _knowledge_service(session) -> KnowledgeService:
-    settings = Settings(openai_api_key="test-key", rag_enabled=True)
+    settings = Settings(
+        openai_api_key="test-key",
+        rag_enabled=True,
+        advanced_rag_enabled=False,
+    )
     pipeline = IngestionPipeline(settings, embedding_provider=_FakeEmbeddingProvider())
     vector_store = PgVectorStore(session, settings)
     return KnowledgeService(
@@ -147,7 +154,11 @@ def _knowledge_service(session) -> KnowledgeService:
 
 
 def _rag_service(session, llm_provider: FakeProvider) -> RAGService:
-    settings = Settings(openai_api_key="test-key", rag_enabled=True)
+    settings = Settings(
+        openai_api_key="test-key",
+        rag_enabled=True,
+        advanced_rag_enabled=False,
+    )
     retriever = Retriever(
         embedding_provider=_FakeEmbeddingProvider(),
         vector_store=PgVectorStore(session, settings),
@@ -205,7 +216,11 @@ def unified_api_dependencies(pgvector_session, monkeypatch: pytest.MonkeyPatch):
     app.dependency_overrides[get_rag_service] = _override_rag_service
 
     def _override_retriever() -> Retriever:
-        settings = Settings(openai_api_key="test-key", rag_enabled=True)
+        settings = Settings(
+            openai_api_key="test-key",
+            rag_enabled=True,
+            advanced_rag_enabled=False,
+        )
         return Retriever(
             embedding_provider=_FakeEmbeddingProvider(),
             vector_store=PgVectorStore(pgvector_session, settings),
@@ -723,6 +738,7 @@ async def test_unified_chat_persists_session_messages_with_documents(
         chat_persistence_enabled=True,
         openai_api_key="test-key",
         rag_enabled=True,
+        advanced_rag_enabled=False,
     )
     chat_store = FakeChatStore()
     chat_service = ChatService(
@@ -976,10 +992,15 @@ async def test_stream_use_documents_empty_corpus(
     from app.ai.rag.service import EMPTY_CORPUS_MESSAGE
 
     monkeypatch.setenv("RAG_ENABLED", "true")
+    monkeypatch.setenv("ADVANCED_RAG_ENABLED", "false")
     get_settings.cache_clear()
 
     def _override_retriever() -> Retriever:
-        settings = Settings(openai_api_key="test-key", rag_enabled=True)
+        settings = Settings(
+            openai_api_key="test-key",
+            rag_enabled=True,
+            advanced_rag_enabled=False,
+        )
         return Retriever(
             embedding_provider=_FakeEmbeddingProvider(),
             vector_store=PgVectorStore(pgvector_session, settings),
@@ -1032,6 +1053,7 @@ async def test_stream_use_documents_retrieval_failure(
     monkeypatch: MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RAG_ENABLED", "true")
+    monkeypatch.setenv("ADVANCED_RAG_ENABLED", "false")
     get_settings.cache_clear()
 
     class _FailingRetriever:
