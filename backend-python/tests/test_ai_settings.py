@@ -53,8 +53,8 @@ def test_ai_settings_load_with_defaults(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_feature_flags_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Isolate from process env so suite runs with AGENT_RUNTIME_ENABLED=true
-    # (and other feature flags) still verify model defaults.
+    # Isolate from process env so suite runs with AGENT_RUNTIME_ENABLED=true /
+    # ADVANCED_RAG_ENABLED=true (Phase 12 matrices) still verify model defaults.
     monkeypatch.delenv("AGENT_RUNTIME_ENABLED", raising=False)
     monkeypatch.delenv("ADVANCED_RAG_ENABLED", raising=False)
     monkeypatch.delenv("RAG_ENABLED", raising=False)

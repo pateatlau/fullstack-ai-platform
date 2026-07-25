@@ -55,7 +55,10 @@ async def _make_user(session) -> uuid.UUID:
 
 
 def _service(session) -> KnowledgeService:
-    settings = Settings(openai_api_key="test-key")
+    # V1 ingest path — isolate from process ADVANCED_RAG_ENABLED=true (Phase 12).
+    # Advanced parent/child embed rules are covered by
+    # test_knowledge_service_advanced_rag_embeds_children_only.
+    settings = Settings(openai_api_key="test-key", advanced_rag_enabled=False)
     pipeline = IngestionPipeline(settings, embedding_provider=_FakeEmbeddingProvider())
     vector_store = PgVectorStore(session, settings)
     return KnowledgeService(
@@ -150,7 +153,7 @@ async def test_knowledge_service_ingest_failure_sets_failed_and_cleans_up(
     pgvector_session,
 ) -> None:
     user_id = await _make_user(pgvector_session)
-    settings = Settings(openai_api_key="test-key")
+    settings = Settings(openai_api_key="test-key", advanced_rag_enabled=False)
     pipeline = AsyncMock(spec=IngestionPipeline)
     pipeline.parse = AsyncMock(
         return_value=type("Parsed", (), {"text": "x", "metadata": {}})()
