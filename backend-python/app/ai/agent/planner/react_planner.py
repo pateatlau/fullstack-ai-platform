@@ -19,6 +19,7 @@ from app.ai.agent.retry import llm_retry_policy_from_config, retry_operation
 from app.ai.agent.scratchpad.scratchpad import ScratchpadMessage
 from app.ai.agent.scratchpad.store import ScratchpadStore, get_scratchpad_store
 from app.ai.prompts.manager import PromptManager
+from app.ai.prompts.time_context import current_utc_date_label
 from app.ai.tools.registry import ToolRegistry
 from app.providers.base import ChatMessageInput, LLMProvider, ProviderToolCompletion
 
@@ -124,6 +125,7 @@ class ReActPlanner:
                 "tool_list": tool_list,
                 "iteration": iteration + 1,
                 "max_iterations": config.max_iterations,
+                "current_date": current_utc_date_label(),
             },
         )
         if request.system_prompt:

@@ -43,6 +43,7 @@ class FakeProvider:
         self._tool_completions = tool_completions or []
         self._tool_call_index = 0
         self.tool_completion_calls = 0
+        self.tool_call_messages: list[list[ChatMessageInput]] = []
         self.last_max_tokens: int | None = None
         self.last_stream_max_tokens: int | None = None
 
@@ -91,8 +92,9 @@ class FakeProvider:
         *,
         max_tokens: int | None = None,
     ) -> ProviderToolCompletion:
-        del messages, model, tools, temperature, max_tokens
+        del model, tools, temperature, max_tokens
         self.tool_completion_calls += 1
+        self.tool_call_messages.append(list(messages))
         if self._tool_completions:
             index = min(self._tool_call_index, len(self._tool_completions) - 1)
             completion = self._tool_completions[index]

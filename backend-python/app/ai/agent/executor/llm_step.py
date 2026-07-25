@@ -26,7 +26,10 @@ async def stream_final_answer(
     publisher: StreamPublisher,
 ) -> str:
     """Generate and stream the final answer via the provider."""
-    messages = _scratchpad_to_chat_messages(scratchpad)
+    messages = _scratchpad_to_chat_messages(
+        scratchpad,
+        system_prompt=request.system_prompt,
+    )
     config = request.config or AgentConfig()
     content_parts: list[str] = []
     stream = provider.stream_chat(
@@ -87,7 +90,10 @@ async def complete_llm_step(
     scratchpad: Scratchpad,
 ) -> ProviderCompletion:
     """Run a non-streaming LLM completion for an intermediate step."""
-    messages = _scratchpad_to_chat_messages(scratchpad)
+    messages = _scratchpad_to_chat_messages(
+        scratchpad,
+        system_prompt=request.system_prompt,
+    )
     config = request.config or AgentConfig()
 
     async def operation() -> ProviderCompletion:
@@ -138,9 +144,15 @@ async def _aclose_stream(stream: AsyncIterator[ProviderChunk]) -> None:
         await aclose()
 
 
-def _scratchpad_to_chat_messages(scratchpad: Scratchpad) -> list[ScratchpadMessage]:
+def _scratchpad_to_chat_messages(
+    scratchpad: Scratchpad,
+    *,
+    system_prompt: str | None = None,
+) -> list[ScratchpadMessage]:
     """Convert scratchpad entries for provider chat calls."""
     messages: list[ScratchpadMessage] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
     for message in scratchpad.to_message_context():
         if isinstance(message, AgentMessage):
             if message.role in ("system", "user", "assistant"):

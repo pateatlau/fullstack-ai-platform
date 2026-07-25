@@ -52,7 +52,21 @@ class ToolExecutor:
                 start=start,
             )
 
-        validation_error = self._validator.validate(tool, call.arguments)
+        handler = self._registry.get_handler(tool_name)
+        if handler is None:
+            return self._finalize(
+                call=call,
+                context=context,
+                result=ToolResult(
+                    success=False,
+                    error=f"Handler for tool '{tool_name}' is not registered",
+                    error_code="not_found",
+                ),
+                start=start,
+            )
+
+        arguments = _normalize_handler_arguments(handler, call.arguments)
+        validation_error = self._validator.validate(tool, arguments)
         if validation_error is not None:
             return self._finalize(
                 call=call,
@@ -78,22 +92,9 @@ class ToolExecutor:
                 start=start,
             )
 
-        handler = self._registry.get_handler(tool_name)
-        if handler is None:
-            return self._finalize(
-                call=call,
-                context=context,
-                result=ToolResult(
-                    success=False,
-                    error=f"Handler for tool '{tool_name}' is not registered",
-                    error_code="not_found",
-                ),
-                start=start,
-            )
-
         try:
             handler_result = await asyncio.wait_for(
-                handler.execute(call.arguments, context),
+                handler.execute(arguments, context),
                 timeout=self._settings.request_timeout_seconds,
             )
         except TimeoutError:
@@ -179,6 +180,20 @@ class ToolExecutor:
                 tool_calls_total=1,
                 tool_errors_total=1,
                 error_code=normalized.error_code,
+                error=normalized.error,
             )
 
         return normalized
+
+
+def _normalize_handler_arguments(
+    handler: object,
+    arguments: dict[str, object],
+) -> dict[str, object]:
+    normalize = getattr(handler, "normalize_arguments", None)
+    if not callable(normalize):
+        return arguments
+    normalized = normalize(arguments)
+    if isinstance(normalized, dict):
+        return normalized
+    return arguments

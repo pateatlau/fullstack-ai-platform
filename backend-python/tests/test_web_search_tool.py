@@ -8,12 +8,16 @@ import httpx
 import pytest
 from pytest import MonkeyPatch
 
+from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.implementations.web_search import (
     WEB_SEARCH_TOOL_DEFINITION,
     WebSearchResult,
     WebSearchToolHandler,
+    ground_web_search_query,
+    normalize_web_search_arguments,
 )
-from app.ai.tools.schemas import ToolExecutionContext
+from app.ai.tools.registry import ToolRegistry
+from app.ai.tools.schemas import ToolCall, ToolExecutionContext
 from app.core.caller import CallerContext
 from app.core.config import Settings
 from tests.provider_error_assertions import assert_no_provider_sdk_leakage
@@ -80,6 +84,8 @@ async def test_web_search_returns_normalized_results(
             }
         ]
     }
+    assert client.attempts
+    assert client.attempts[0].startswith("latest news ")
 
 
 async def test_search_retry_on_429(monkeypatch: MonkeyPatch) -> None:
@@ -180,3 +186,100 @@ async def test_search_latency_ms_emitted(
 def test_web_search_definition_schema() -> None:
     assert WEB_SEARCH_TOOL_DEFINITION.name == "web_search"
     assert "query" in WEB_SEARCH_TOOL_DEFINITION.parameters["properties"]
+    query_schema = WEB_SEARCH_TOOL_DEFINITION.parameters["properties"]["query"]
+    assert "concrete dates" in query_schema["description"]
+
+
+def test_normalize_web_search_arguments_accepts_queries_alias() -> None:
+    assert normalize_web_search_arguments({"queries": ["top news India today"]}) == {
+        "query": "top news India today"
+    }
+    assert normalize_web_search_arguments({"max_results": 3.0}) == {"max_results": 3}
+    assert normalize_web_search_arguments({"query": "already ok"}) == {
+        "query": "already ok"
+    }
+
+
+def test_ground_web_search_query_appends_date_for_relative_queries() -> None:
+    assert (
+        ground_web_search_query(
+            "top news in India today",
+            today_label="2026-07-25 (Saturday)",
+        )
+        == "top news in India today 2026-07-25"
+    )
+    assert (
+        ground_web_search_query(
+            "headlines yesterday",
+            today_label="2026-07-25 (Saturday)",
+        )
+        == "headlines yesterday 2026-07-24"
+    )
+    assert (
+        ground_web_search_query(
+            "forecasts for tomorrow",
+            today_label="2026-07-25 (Saturday)",
+        )
+        == "forecasts for tomorrow 2026-07-26"
+    )
+    # Bare year must not suppress grounding when a relative term is present.
+    assert (
+        ground_web_search_query(
+            "India news today 2026",
+            today_label="2026-07-25 (Saturday)",
+        )
+        == "India news today 2026 2026-07-25"
+    )
+    # Full ISO date already present — leave the query unchanged.
+    assert (
+        ground_web_search_query(
+            "Lok Sabha results 2026-07-25",
+            today_label="2026-07-25 (Saturday)",
+        )
+        == "Lok Sabha results 2026-07-25"
+    )
+    assert (
+        ground_web_search_query(
+            "history of the Taj Mahal",
+            today_label="2026-07-25 (Saturday)",
+        )
+        == "history of the Taj Mahal"
+    )
+
+
+async def test_executor_accepts_gemini_queries_alias(
+    user_context: ToolExecutionContext,
+) -> None:
+    client = FakeWebSearchClient(
+        results=[
+            WebSearchResult(
+                title="India News",
+                url="https://news.example",
+                snippet="Top story",
+            )
+        ]
+    )
+    registry = ToolRegistry()
+    registry.register(
+        WEB_SEARCH_TOOL_DEFINITION,
+        WebSearchToolHandler(
+            client=client,
+            settings=Settings(web_search_max_results=5),
+        ),
+    )
+    executor = ToolExecutor(
+        registry=registry,
+        settings=Settings(request_timeout_seconds=5, web_search_max_results=5),
+    )
+
+    result = await executor.execute(
+        ToolCall(
+            name="web_search",
+            arguments={"queries": ["top news story India today"]},
+        ),
+        user_context,
+    )
+
+    assert result.success is True
+    assert len(client.attempts) == 1
+    assert client.attempts[0].startswith("top news story India today")

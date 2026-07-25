@@ -80,4 +80,5 @@ def _provider_tool_call_to_tool_call(call: ProviderToolCall) -> ToolCall:
         name=call.name,
         arguments=dict(call.arguments),
         call_id=call.id,
+        thought_signature=call.thought_signature,
     )

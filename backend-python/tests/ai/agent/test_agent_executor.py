@@ -160,6 +160,60 @@ async def test_agent_executor_e2e_tool_round(
 
 
 @pytest.mark.anyio
+async def test_agent_executor_echoes_thought_signature_on_next_planner_turn(
+    tool_registry: ToolRegistry,
+    prompt_manager,
+    scratchpad_store: ScratchpadStore,
+    tool_context: ToolExecutionContext,
+) -> None:
+    """Gemini 3.x requires thought_signature on echoed functionCall parts."""
+    provider = FakeProvider(
+        tool_completions=[
+            ProviderToolCompletion(
+                content="Echoing now.",
+                tool_calls=[
+                    ProviderToolCall(
+                        id="call-echo",
+                        name="echo",
+                        arguments={"message": "hello"},
+                        thought_signature=b"gemini-thought-signature",
+                    )
+                ],
+            ),
+            ProviderToolCompletion(
+                content="The echo returned hello.",
+                tool_calls=[],
+                finish_reason="stop",
+            ),
+        ]
+    )
+    executor = _executor(
+        provider=provider,
+        tool_registry=tool_registry,
+        prompt_manager=prompt_manager,
+        scratchpad_store=scratchpad_store,
+    )
+
+    response = await executor.run(
+        _request(),
+        AgentContext(execution_id="exec-thought-sig"),
+        tool_context=tool_context,
+    )
+
+    assert response.content == "The echo returned hello."
+    assert len(provider.tool_call_messages) == 2
+    second_turn = provider.tool_call_messages[1]
+    assistant_tool_message = next(
+        message
+        for message in second_turn
+        if isinstance(message, dict) and message.get("tool_calls")
+    )
+    tool_calls = assistant_tool_message["tool_calls"]
+    assert isinstance(tool_calls, list) and tool_calls
+    assert tool_calls[0].get("thought_signature") == b"gemini-thought-signature"
+
+
+@pytest.mark.anyio
 async def test_agent_executor_multi_iteration_tool_loop(
     tool_registry: ToolRegistry,
     prompt_manager,

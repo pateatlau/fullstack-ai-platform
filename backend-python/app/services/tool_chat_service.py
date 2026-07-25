@@ -12,6 +12,7 @@ from typing import cast
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 
 from app.ai.prompts.manager import PromptManager
+from app.ai.prompts.time_context import current_utc_date_label
 from app.ai.tools.implementations.web_search import WEB_SEARCH_TOOL_NAME
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
@@ -372,7 +373,12 @@ class ToolChatService:
     def _build_loop_messages(
         self, request_messages: list[ChatMessageSchema]
     ) -> list[ChatMessageInput]:
-        tool_prompt = self._prompt_manager.render("tools", "tool_use_system", "1", {})
+        tool_prompt = self._prompt_manager.render(
+            "tools",
+            "tool_use_system",
+            "1",
+            {"current_date": current_utc_date_label()},
+        )
         return [
             ChatMessageSchema.model_construct(role="system", content=tool_prompt),
             *request_messages,

@@ -491,6 +491,11 @@ def _assistant_tool_call_message(
                     "name": call.name,
                     "arguments": json.dumps(call.arguments),
                 },
+                **(
+                    {"thought_signature": call.thought_signature}
+                    if call.thought_signature is not None
+                    else {}
+                ),
             }
             for call in tool_calls
         ],
