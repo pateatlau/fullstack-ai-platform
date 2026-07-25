@@ -4,15 +4,36 @@ import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPage } from './ChatPage'
+import * as authClient from '../api/authClient'
 import { storeSession } from '../auth/tokenStorage'
 import { renderWithProviders } from '../test/renderWithProviders'
 import { jsonHealthResponse } from '../test/chatFetchStubs'
 import type { AuthenticatedUser } from '../types/auth'
 
+// Drive Google login deterministically in auth-boundary tests without GIS.
+vi.mock('../components/LoginButton', () => ({
+  LoginButton: ({ onCredential }: { onCredential: (idToken: string) => void }) => (
+    <button
+      type="button"
+      data-testid="login-button-stub"
+      onClick={() => onCredential('fake-id-token')}
+    >
+      Login Button
+    </button>
+  ),
+}))
+
 const user: AuthenticatedUser = {
   id: 'user-1',
   email: 'person@example.com',
   display_name: 'Person',
+  picture_url: null,
+}
+
+const user2: AuthenticatedUser = {
+  id: 'user-2',
+  email: 'other@example.com',
+  display_name: 'Other Person',
   picture_url: null,
 }
 
@@ -1096,5 +1117,157 @@ describe('ChatPage session sidebar wiring', () => {
       expect(screen.getByText('First chat message')).not.toBeNull()
       expect(screen.queryByRole('button', { name: 'Delete Second chat' })).toBeNull()
     })
+  })
+
+  it('clears the active transcript on logout so guests do not see the prior user chat', async () => {
+    const fetchMock = createRoutedFetchMock((url, method) => {
+      if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+        return jsonResponse([
+          {
+            id: 's1',
+            title: 'Private planning',
+            last_message_at: '2026-01-01T00:00:00Z',
+            created_at: '2026-01-01T00:00:00Z',
+          },
+        ])
+      }
+      if (url.endsWith('/api/chat/sessions/s1') && method === 'GET') {
+        return jsonResponse({
+          id: 's1',
+          title: 'Private planning',
+          last_message_at: '2026-01-01T00:00:00Z',
+          messages: [
+            {
+              id: 'm1',
+              seq: 1,
+              role: 'user',
+              content: 'User 1 private message',
+              provider: null,
+              model: null,
+              status: 'complete',
+              finish_reason: null,
+              created_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+        })
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('User 1 private message')).not.toBeNull()
+    })
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Log out' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('User 1 private message')).toBeNull()
+      expect(screen.getByTestId('login-button-stub')).not.toBeNull()
+    })
+    expect(
+      screen.getByText('Guests get a single chat. Sign in above to start additional chats.'),
+    ).not.toBeNull()
+  })
+
+  it('after login as another user, loads that user session instead of the prior transcript', async () => {
+    let owner: 'user-1' | 'user-2' = 'user-1'
+    vi.spyOn(authClient, 'loginWithGoogle').mockImplementation(async () => {
+      owner = 'user-2'
+      return {
+        access_token: makeJwt(3600),
+        token_type: 'bearer',
+        expires_in: 3600,
+        user: user2,
+      }
+    })
+
+    const fetchMock = createRoutedFetchMock((url, method) => {
+      if (url.endsWith('/api/chat/sessions') && method === 'GET') {
+        if (owner === 'user-1') {
+          return jsonResponse([
+            {
+              id: 's1',
+              title: 'User 1 chat',
+              last_message_at: '2026-01-01T00:00:00Z',
+              created_at: '2026-01-01T00:00:00Z',
+            },
+          ])
+        }
+        return jsonResponse([
+          {
+            id: 's2',
+            title: 'User 2 chat',
+            last_message_at: '2026-01-02T00:00:00Z',
+            created_at: '2026-01-02T00:00:00Z',
+          },
+        ])
+      }
+      if (url.endsWith('/api/chat/sessions/s1') && method === 'GET') {
+        return jsonResponse({
+          id: 's1',
+          title: 'User 1 chat',
+          last_message_at: '2026-01-01T00:00:00Z',
+          messages: [
+            {
+              id: 'm1',
+              seq: 1,
+              role: 'user',
+              content: 'User 1 private message',
+              provider: null,
+              model: null,
+              status: 'complete',
+              finish_reason: null,
+              created_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+        })
+      }
+      if (url.endsWith('/api/chat/sessions/s2') && method === 'GET') {
+        return jsonResponse({
+          id: 's2',
+          title: 'User 2 chat',
+          last_message_at: '2026-01-02T00:00:00Z',
+          messages: [
+            {
+              id: 'm2',
+              seq: 1,
+              role: 'user',
+              content: 'User 2 own message',
+              provider: null,
+              model: null,
+              status: 'complete',
+              finish_reason: null,
+              created_at: '2026-01-02T00:00:00Z',
+            },
+          ],
+        })
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('User 1 private message')).not.toBeNull()
+    })
+
+    const interactions = userEvent.setup()
+    await interactions.click(screen.getByRole('button', { name: 'Log out' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('User 1 private message')).toBeNull()
+    })
+
+    await interactions.click(screen.getByTestId('login-button-stub'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Other Person')).not.toBeNull()
+      expect(screen.getByText('User 2 own message')).not.toBeNull()
+    })
+    expect(screen.queryByText('User 1 private message')).toBeNull()
   })
 })

@@ -1092,8 +1092,12 @@ function ChatPageContent() {
 }
 
 export function ChatPage() {
+  const { user } = useAuthContext()
+  // Remount chat state on auth identity changes so logout and account switches
+  // never leave another user's transcript on screen (P0/P1). Guest token
+  // continuity is unchanged — only the in-memory UI is reset.
   return (
-    <ChatProvider>
+    <ChatProvider key={user?.id ?? 'guest'}>
       <ChatPageContent />
     </ChatProvider>
   )
