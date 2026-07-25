@@ -842,3 +842,119 @@ async def test_rag_service_empty_corpus_uses_resolved_provider_metadata(
     assert response.provider == "groq"
     assert response.model == "openai/gpt-oss-20b"
     assert llm.complete_chat_calls == 0
+
+
+@pytest.mark.anyio
+async def test_rag_service_flag_off_ignores_advanced_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flag-off must keep V1 retrieve → ContextBuilder (pipeline unused)."""
+    user_id = uuid.uuid4()
+    chunks = [_chunk(index=0, content="v1 facts", score=0.91)]
+    embed = AsyncMock()
+    embed.embed_texts = AsyncMock(return_value=[[0.1]])
+    store = AsyncMock()
+    store.similarity_search = AsyncMock(return_value=chunks)
+    settings = _settings(advanced_rag_enabled=False)
+    retriever = Retriever(
+        embedding_provider=embed,
+        vector_store=store,
+        settings=settings,
+    )
+    pipeline = AsyncMock()
+    pipeline.retrieve = AsyncMock(
+        side_effect=AssertionError("advanced pipeline must not run when flag off")
+    )
+    llm = _CapturingLLMProvider(response="V1 answer")
+    _patch_provider_factory(monkeypatch, llm)
+    service = RAGService(
+        retriever=retriever,
+        context_builder=ContextBuilder(settings),
+        prompt_builder=PromptBuilder(
+            prompt_manager=create_prompt_manager(),
+            settings=settings,
+        ),
+        settings=settings,
+        advanced_pipeline=pipeline,
+    )
+
+    response = await service.ask(user_id=user_id, question="What is v1?")
+
+    assert response.answer == "V1 answer"
+    assert response.citations is None
+    assert len(response.retrieved_chunks) == 1
+    assert response.retrieved_chunks[0].score == 0.91
+    pipeline.retrieve.assert_not_awaited()
+    store.similarity_search.assert_awaited()
+
+
+@pytest.mark.anyio
+async def test_rag_service_flag_on_uses_advanced_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flag-on routes through AdvancedRetrievalPipeline and returns citations."""
+    from app.ai.rag.schemas import Citation, RetrievalResult, RetrievedCandidate
+
+    user_id = uuid.uuid4()
+    chunk = _chunk(index=0, content="advanced facts", score=0.5)
+    candidate = RetrievedCandidate(
+        chunk=chunk,
+        parent="PARENT advanced facts block",
+        metadata=dict(chunk.metadata),
+        final_score=0.88,
+        rrf_score=0.7,
+        rerank_score=0.88,
+    )
+    citation = Citation(
+        index=1,
+        chunk_id=chunk.chunk_id,  # type: ignore[arg-type]
+        document_id=chunk.document_id,  # type: ignore[arg-type]
+        snippet="PARENT advanced",
+        score=0.88,
+        filename="doc.txt",
+        source="fixture.txt",
+    )
+    pipeline = AsyncMock()
+    pipeline.retrieve = AsyncMock(
+        return_value=RetrievalResult(
+            candidates=[candidate],
+            citations=[citation],
+            context_text="[1] PARENT advanced facts block",
+            truncated=False,
+            retrieval_latency_ms=12,
+        )
+    )
+    settings = _settings(advanced_rag_enabled=True)
+    # Dense retriever must not be consulted on the advanced path.
+    dense = AsyncMock()
+    dense.retrieve = AsyncMock(
+        side_effect=AssertionError("V1 retriever must not run when advanced on")
+    )
+    llm = _CapturingLLMProvider(response="Advanced answer")
+    _patch_provider_factory(monkeypatch, llm)
+    service = RAGService(
+        retriever=dense,
+        context_builder=ContextBuilder(settings),
+        prompt_builder=PromptBuilder(
+            prompt_manager=create_prompt_manager(),
+            settings=settings,
+        ),
+        settings=settings,
+        advanced_pipeline=pipeline,
+    )
+
+    response = await service.ask(user_id=user_id, question="What is advanced?")
+
+    assert response.answer == "Advanced answer"
+    assert response.citations is not None
+    assert len(response.citations) == 1
+    assert response.citations[0].index == 1
+    assert response.citations[0].score == 0.88
+    assert response.retrieved_chunks[0].score == 0.88
+    assert response.retrieval_latency_ms == 12
+    pipeline.retrieve.assert_awaited_once()
+    dense.retrieve.assert_not_awaited()
+    # Prompt must include advanced context_text.
+    assert any(
+        "[1] PARENT advanced facts block" in (m.content or "") for m in llm.messages
+    )

@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.deps import (
+    get_advanced_retrieval_pipeline,
     get_agent_runtime,
     get_context_builder,
     get_prompt_manager,
@@ -29,6 +30,7 @@ from app.ai.deps import (
 from app.ai.agent.runtime.default_agent import DefaultAgent
 from app.ai.prompts.manager import PromptManager
 from app.ai.rag.context_builder import ContextBuilder
+from app.ai.rag.pipeline import AdvancedRetrievalPipeline
 from app.ai.rag.retriever import Retriever
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
@@ -199,6 +201,9 @@ def get_unified_chat_service(
     context_builder: ContextBuilder = Depends(get_context_builder),
     prompt_manager: PromptManager = Depends(get_prompt_manager),
     agent: DefaultAgent = Depends(get_agent_runtime),
+    advanced_pipeline: AdvancedRetrievalPipeline = Depends(
+        get_advanced_retrieval_pipeline
+    ),
 ) -> UnifiedChatService:
     return UnifiedChatService(
         chat_service=chat_service,
@@ -208,6 +213,7 @@ def get_unified_chat_service(
         prompt_manager=prompt_manager,
         settings=settings,
         agent=agent,
+        advanced_pipeline=advanced_pipeline,
     )
 
 
