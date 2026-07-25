@@ -246,6 +246,8 @@ async def test_rag_service_ask_happy_path(monkeypatch: pytest.MonkeyPatch) -> No
     assert response.provider == "openai"
     assert response.model == "gpt-4o-mini"
     assert llm.complete_chat_calls == 1
+    # V1 path leaves citations unset (Phase 8 additive field).
+    assert response.citations is None
 
 
 @pytest.mark.anyio

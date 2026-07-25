@@ -46,6 +46,8 @@ def test_prompt_builder_default_template_snapshot() -> None:
 
     assert result.user_prompt == (
         "Use the following context to answer the question. "
+        "When you rely on the context, cite sources using the [n] markers "
+        "shown on each block. "
         "If the context does not contain enough information, say so clearly.\n\n"
         "Context:\n"
         f"{context}\n\n"

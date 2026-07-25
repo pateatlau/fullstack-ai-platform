@@ -249,6 +249,8 @@ async def test_pipeline_compresses_when_advanced_flag_on() -> None:
     assert compressor.calls == [(2, 1234)]
     assert result.context_text == "compressed"
     assert result.truncated is False
+    # Capturing compressor includes both chunks → two contiguous citations.
+    assert [c.index for c in result.citations] == [1, 2]
 
 
 @pytest.mark.anyio
@@ -305,3 +307,6 @@ async def test_pipeline_uses_faithful_compressor_end_to_end() -> None:
     assert "drop-low" not in result.context_text
     # Candidates remain post-retrieve list; compression only fills context.
     assert len(result.candidates) == 2
+    assert len(result.citations) == 1
+    assert result.citations[0].index == 1
+    assert result.citations[0].snippet == "keep-high"

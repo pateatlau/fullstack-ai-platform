@@ -113,6 +113,8 @@ class Settings(BaseSettings):
     rag_top_k: int = Field(default=5, ge=1)
     rag_default_prompt_template: str = "rag/answer/v1"
     rag_context_max_chars: int = Field(default=8000, ge=1)
+    # V2 Epic 2 (Phase 8): bounded original-text excerpt on Citation.snippet.
+    citation_snippet_max_chars: int = Field(default=240, ge=1)
     rag_enabled: bool = False
     tools_enabled: bool = False
     # When false, ``POST /api/chat/stream`` returns 503 ``feature_disabled`` and

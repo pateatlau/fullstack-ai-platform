@@ -201,6 +201,8 @@ async def test_rag_api_ask_after_ingest(
     assert "content" not in body["retrieved_chunks"][0]
     assert body["provider"] == "openai"
     assert body["model"] == "gpt-4o-mini"
+    # V1 path (Phase 8): citations absent until advanced pipeline wiring (Phase 10).
+    assert body["citations"] is None
 
 
 @pytest.mark.anyio
@@ -262,6 +264,7 @@ async def test_rag_api_empty_corpus_returns_graceful_answer(
     body = response.json()
     assert body["answer"] == EMPTY_CORPUS_MESSAGE
     assert body["retrieved_chunks"] == []
+    assert body["citations"] is None
 
 
 @pytest.mark.anyio

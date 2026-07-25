@@ -846,6 +846,13 @@ async def test_stream_with_use_documents_returns_grounded_answer(
     assert response.status_code == 200
     assert "retrieval_complete" in events
     assert events.index("retrieval_complete") < events.index("start")
+    retrieval_frames = [
+        frame for event, frame in frames if event == "retrieval_complete"
+    ]
+    assert retrieval_frames
+    assert "chunk_count" in retrieval_frames[0]
+    # Additive Phase 8 field; V1 path keeps citation_count at 0 until Phase 10.
+    assert retrieval_frames[0].get("citation_count", 0) == 0
     assert "delta" in events
     delta_content = "".join(
         str(frame["content"]) for event, frame in frames if event == "delta"

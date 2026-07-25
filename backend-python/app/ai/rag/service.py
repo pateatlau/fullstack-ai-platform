@@ -90,6 +90,9 @@ class RAGService:
                 provider=provider_name,
                 retrieval_latency_ms=retrieval_latency_ms,
                 llm_latency_ms=0,
+                # V1 path: citations absent until AdvancedRetrievalPipeline
+                # wiring in Phase 10.
+                citations=None,
             )
 
         built_context = self._context_builder.build(chunks)
@@ -132,6 +135,9 @@ class RAGService:
             provider=provider_name,
             retrieval_latency_ms=retrieval_latency_ms,
             llm_latency_ms=llm_latency_ms,
+            # V1 path: citations absent until AdvancedRetrievalPipeline
+            # wiring in Phase 10.
+            citations=None,
         )
 
     def _resolve_provider(

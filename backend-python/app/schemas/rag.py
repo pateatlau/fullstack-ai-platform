@@ -7,7 +7,7 @@ import uuid
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.config import Settings
-from app.schemas.chat import ProviderName, _allowed_provider_models
+from app.schemas.chat import CitationSchema, ProviderName, _allowed_provider_models
 
 
 def _max_message_length() -> int:
@@ -80,3 +80,6 @@ class RAGAskResponse(BaseModel):
     provider: ProviderName
     retrieval_latency_ms: int | None = None
     llm_latency_ms: int | None = None
+    # Additive (Epic 02 Phase 8). ``None`` on V1 / flag-off; list when advanced
+    # retrieval produced citations (may be empty).
+    citations: list[CitationSchema] | None = None
