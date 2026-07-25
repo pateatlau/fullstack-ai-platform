@@ -1,9 +1,10 @@
 """Advanced retrieval pipeline protocol and skeleton.
 
 The skeleton delegates to the V1 dense :class:`~app.ai.rag.retriever.Retriever`
-until later phases fill hybrid → filter → parent → compress → cite stages.
+until later phases fill hybrid → filter → parent → cite stages.
 Phase 5 adds optional query rewrite (at most once per request).
 Phase 6 adds optional Protocol-backed rerank with timeout fallback.
+Phase 7 adds optional Protocol-backed context compression.
 Chat/RAG hot paths are not wired here (Phase 10).
 
 Phase 3: metadata filters are pushed down through :class:`Retriever` and
@@ -15,6 +16,7 @@ from __future__ import annotations
 import time
 from typing import Protocol
 
+from app.ai.interfaces.context_compressor import ContextCompressor
 from app.ai.interfaces.query_rewriter import QueryRewriter
 from app.ai.interfaces.reranker import Reranker
 from app.ai.rag.metadata_filter import (
@@ -51,6 +53,11 @@ class DefaultAdvancedRetrievalPipeline:
 
     Rerank (Phase 6) runs when ``advanced_rag_enabled`` and a :class:`Reranker`
     are set. Adapter failures keep pre-rerank order / ``final_score``.
+
+    Compress (Phase 7) runs when ``advanced_rag_enabled`` and a
+    :class:`ContextCompressor` are set; populates ``context_text`` /
+    ``truncated`` from the compressor. Flag-off / missing compressor leave
+    context empty (V1 ``ContextBuilder`` remains on the chat/RAG path).
     """
 
     def __init__(
@@ -59,11 +66,13 @@ class DefaultAdvancedRetrievalPipeline:
         retriever: Retriever,
         query_rewriter: QueryRewriter | None = None,
         reranker: Reranker | None = None,
+        context_compressor: ContextCompressor | None = None,
         settings: Settings | None = None,
     ) -> None:
         self._retriever = retriever
         self._query_rewriter = query_rewriter
         self._reranker = reranker
+        self._context_compressor = context_compressor
         self._settings = settings
 
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
@@ -102,12 +111,14 @@ class DefaultAdvancedRetrievalPipeline:
         candidates = apply_metadata_filter(candidates, request.filters)
         # Part I stage 5 — cross-encoder rerank (Protocol); failures keep order.
         candidates = await self._maybe_rerank(search_query, candidates, request)
+        # Part I stage 6 — faithful compress into context budget.
+        context_text, truncated = self._maybe_compress(candidates)
         latency_ms = int((time.perf_counter() - start) * 1000)
         return RetrievalResult(
             candidates=candidates,
             citations=[],
-            context_text="",
-            truncated=False,
+            context_text=context_text,
+            truncated=truncated,
             retrieval_latency_ms=latency_ms,
         )
 
@@ -160,6 +171,21 @@ class DefaultAdvancedRetrievalPipeline:
                 rerank_failure_reason="exception",
             )
             return candidates
+
+    def _maybe_compress(
+        self,
+        candidates: list[RetrievedCandidate],
+    ) -> tuple[str, bool]:
+        settings = self._settings
+        compressor = self._context_compressor
+        if settings is None or compressor is None or not settings.advanced_rag_enabled:
+            return "", False
+
+        built = compressor.compress(
+            candidates,
+            max_chars=settings.rag_context_max_chars,
+        )
+        return built.text, built.truncated
 
     @staticmethod
     def _rerank_top_n(request: RetrievalRequest, settings: Settings) -> int:
