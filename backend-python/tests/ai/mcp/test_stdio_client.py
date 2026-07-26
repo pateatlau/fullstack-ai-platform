@@ -581,7 +581,6 @@ class TestStdioMcpClient:
         }
         response_bytes = (json.dumps(init_response) + "\n").encode("utf-8")
         mock_process.stdout.readline.return_value = response_bytes
-        mock_process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             client = StdioMcpClient(mock_config)
@@ -591,5 +590,6 @@ class TestStdioMcpClient:
             await client.connect()
             assert client.is_connected is True
 
+            mock_process.returncode = 0
             await client.disconnect()
             assert client.is_connected is False
