@@ -1,0 +1,37 @@
+"""MCP integration package — client, registry, discovery, execution.
+
+Public API (stable after Phase 1):
+    - McpClient Protocol
+    - McpConnectionConfig, McpServerCredentials models
+    - McpConnectionError, McpToolExecutionError, McpDiscoveryError,
+      McpAuthenticationError, McpPermissionDeniedError exceptions
+
+Internal (may evolve in later phases):
+    - McpServerRegistry, McpToolDiscovery, McpToolExecutionAdapter,
+      McpPermissionPolicy implementations
+    - StdioMcpClient, StdioTransport
+"""
+
+from __future__ import annotations
+
+from app.ai.mcp.auth import McpServerCredentials
+from app.ai.mcp.client import McpClient
+from app.ai.mcp.config import McpConnectionConfig
+from app.ai.mcp.exceptions import (
+    McpAuthenticationError,
+    McpConnectionError,
+    McpDiscoveryError,
+    McpPermissionDeniedError,
+    McpToolExecutionError,
+)
+
+__all__ = [
+    "McpClient",
+    "McpConnectionConfig",
+    "McpServerCredentials",
+    "McpConnectionError",
+    "McpToolExecutionError",
+    "McpDiscoveryError",
+    "McpAuthenticationError",
+    "McpPermissionDeniedError",
+]
