@@ -73,6 +73,12 @@ class McpServerRegistry:
         if server_name in self._clients:
             raise ValueError(f"MCP server '{server_name}' already registered")
 
+        current_status = self._statuses.get(server_name)
+        if current_status == ServerStatus.CONNECTING:
+            raise ValueError(
+                f"MCP server '{server_name}' registration already in progress"
+            )
+
         if config.name != server_name:
             raise ValueError(
                 f"Server name mismatch: registry key '{server_name}' != config.name '{config.name}'"

@@ -93,6 +93,41 @@ class TestRegistryLifecycle:
         with pytest.raises(ValueError, match="already registered"):
             await registry.register("test-server", sample_config)
 
+    async def test_register_blocks_concurrent_registrations(
+        self,
+        registry: McpServerRegistry,
+        sample_config: McpConnectionConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that concurrent registration attempts are blocked during CONNECTING."""
+        # Manually set CONNECTING status to simulate in-flight registration
+        registry._statuses["test-server"] = ServerStatus.CONNECTING
+
+        with pytest.raises(ValueError, match="registration already in progress"):
+            await registry.register("test-server", sample_config)
+
+    async def test_register_allows_retry_after_failed(
+        self,
+        registry: McpServerRegistry,
+        sample_config: McpConnectionConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that re-registration is allowed after FAILED status (retry scenario)."""
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+
+        monkeypatch.setattr(
+            "app.ai.mcp.registry.StdioMcpClient", lambda *args, **kwargs: mock_client
+        )
+
+        # Simulate a previous failed registration
+        registry._statuses["test-server"] = ServerStatus.FAILED
+
+        # Should succeed (allow retry)
+        await registry.register("test-server", sample_config)
+
+        assert registry.get_status("test-server") == ServerStatus.CONNECTED
+
     async def test_register_config_name_mismatch_raises(
         self,
         registry: McpServerRegistry,
