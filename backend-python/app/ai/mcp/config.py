@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Literal, Sequence
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class McpConnectionConfig(BaseModel):
@@ -12,19 +13,42 @@ class McpConnectionConfig(BaseModel):
 
     Specifies the command, arguments, environment variables, and transport
     type needed to spawn and connect to an MCP server subprocess.
+
+    Deep immutability: All nested containers (args, env) are converted to
+    immutable types (tuple, MappingProxyType) to prevent mutation after
+    model creation. Input compatibility preserved (accepts list/dict).
     """
 
     name: str = Field(..., description="Server identifier (must be unique)")
     command: str = Field(..., description="Executable command to spawn server")
-    args: list[str] = Field(default_factory=list, description="Command arguments")
-    env: dict[str, str] = Field(
-        default_factory=dict, description="Additional environment variables"
+    args: Sequence[str] = Field(
+        default_factory=tuple,
+        description="Command arguments (converted to immutable tuple)",
     )
-    transport: str = Field(
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional environment variables (immutable after validation)",
+    )
+    transport: Literal["stdio"] = Field(
         default="stdio", description="Transport type (stdio only in Phase 1)"
     )
 
     model_config = {"frozen": True}
+
+    @field_validator("args", mode="before")
+    @classmethod
+    def _convert_args_to_tuple(cls, value: Any) -> tuple[str, ...]:
+        """Convert list input to immutable tuple."""
+        if isinstance(value, (list, tuple)):
+            return tuple(value)
+        return value
+
+    @model_validator(mode="after")
+    def _freeze_env_dict(self) -> "McpConnectionConfig":
+        """Convert env dict to immutable MappingProxyType after validation."""
+        if isinstance(self.env, dict):
+            object.__setattr__(self, "env", MappingProxyType(self.env))
+        return self
 
 
 class McpToolCall(BaseModel):
