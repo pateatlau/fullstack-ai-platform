@@ -1,12 +1,10 @@
 """MCP transport implementations (stdio primary; SSE deferred).
 
-Phase 2 will implement stdio.py for subprocess-based JSON-RPC transport.
+Stdio transport for subprocess-based JSON-RPC communication (MCP spec 2024-11-05).
 """
 
 from __future__ import annotations
 
-# TODO(phase-2): Implement StdioTransport in transport/stdio.py
-# - Subprocess spawn via command + args
-# - JSON-RPC stdin/stdout protocol wrapper
-# - Timeout enforcement for connect/list/call operations
-# - Graceful shutdown with SIGTERM/SIGKILL fallback
+from app.ai.mcp.transport.stdio import StdioMcpClient, StdioTransport
+
+__all__ = ["StdioTransport", "StdioMcpClient"]
