@@ -136,6 +136,11 @@ class Settings(BaseSettings):
     # Flag-off keeps V1 RecursiveChunker + dense Retriever path.
     advanced_rag_enabled: bool = False
 
+    # V2 Epic 3: MCP integration flag (default false). When true: connect to
+    # configured MCP servers; discover and register remote tools; execute MCP
+    # tool calls via stdio transport. Flag-off keeps V1 local tools unchanged.
+    mcp_enabled: bool = False
+
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, value: object) -> str:
