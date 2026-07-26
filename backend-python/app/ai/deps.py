@@ -11,9 +11,13 @@ request-scoped dependencies follow the same pattern as ``app/db/deps.py``.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from app.ai.mcp.registry import McpServerRegistry
 
 from app.ai.agent.runtime.default_agent import DefaultAgent
 from app.ai.agent.runtime.factory import create_default_agent
@@ -273,4 +277,28 @@ def get_rag_service(
         prompt_builder=prompt_builder,
         settings=settings,
         advanced_pipeline=advanced_pipeline,
+    )
+
+
+# ============================================================================
+# MCP Integration (Epic 03)
+# ============================================================================
+
+
+@lru_cache
+def get_mcp_server_registry() -> McpServerRegistry:
+    """Return app-scoped MCP server registry singleton.
+
+    Process-wide registry for MCP server connections. Initialized once per
+    app lifecycle with default timeout settings (10s connection, 30s tool).
+
+    Phase 3: Server Registry DI factory (timeout settings from config deferred
+    to Phase 8).
+    """
+    from app.ai.mcp.registry import McpServerRegistry as _McpServerRegistry
+
+    # TODO(phase-8): Read timeout settings from Settings when added to config
+    return _McpServerRegistry(
+        connection_timeout=10.0,
+        tool_timeout=30.0,
     )
