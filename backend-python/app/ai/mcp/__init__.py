@@ -7,6 +7,7 @@ Public API (stable after Phase 1):
     - McpConnectionError, McpToolExecutionError, McpDiscoveryError,
       McpAuthenticationError, McpPermissionDeniedError exceptions
     - McpPermissionPolicy (Phase 7)
+    - MCP_SPEC_VERSION constant (Phase 8)
 
 Internal (may evolve in later phases):
     - McpServerRegistry, McpToolDiscovery, McpToolExecutionAdapter implementations
@@ -27,6 +28,9 @@ from app.ai.mcp.exceptions import (
 )
 from app.ai.mcp.permissions import McpPermissionPolicy
 
+# MCP specification version target (Phase 8)
+MCP_SPEC_VERSION = "2024-11-05"
+
 __all__ = [
     "McpClient",
     "McpConnectionConfig",
@@ -38,4 +42,5 @@ __all__ = [
     "McpAuthenticationError",
     "McpPermissionDeniedError",
     "McpPermissionPolicy",
+    "MCP_SPEC_VERSION",
 ]
