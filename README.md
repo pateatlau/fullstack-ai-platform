@@ -127,6 +127,31 @@ Advanced retrieval (hybrid search, query rewrite, parent-child, Cohere rerank, f
 
 Validation record: [docs/plans/post-mvp-v2-epic-02-advanced-rag.md](docs/plans/post-mvp-v2-epic-02-advanced-rag.md) (Phase 12 Completion Record).
 
+## Post-MVP V2 Epic 03 MCP Integration — In Progress
+
+Model Context Protocol (MCP) client integration enables dynamic tool discovery and execution from remote MCP servers. Ships behind `MCP_ENABLED=false` (default off).
+
+**Feature flag** (default off — V1 local tools unchanged when disabled):
+
+- `MCP_ENABLED=false` — local tool path via `ToolRegistry` → `ToolExecutor` unchanged; set `true` to register MCP servers, discover remote tools, and execute via stdio transport (MCP spec 2024-11-05)
+
+**Phase 9 (Integration & DI Wiring) — Complete:**
+
+- DI wiring in `app/ai/deps.py` (`get_mcp_server_registry`, `get_mcp_permission_policy`)
+- Startup/shutdown hooks in `main.py` (register MCP tools when flag on; graceful disconnect on shutdown)
+- `ToolExecutor` composes `McpPermissionPolicy` with `ToolAuthorizer` (authenticated-only inherited; both must pass)
+- End-to-end integration tests (`tests/ai/mcp/test_integration.py`)
+- Documentation in `backend-python/README.md` and `.env.example` (MCP configuration, tool naming convention `{server_name}.{tool_name}`, permission model)
+
+**Remaining Phase 10 (Validation & Release):**
+
+- Full suite with `MCP_ENABLED=false` and `true` (fake MCP servers; no real external dependencies for CI)
+- Flag-off parity verification; agent/RAG regression tests
+- Coverage ≥80% on `app/` and `app/ai/mcp/`
+- Release summary
+
+**Plan:** [docs/plans/post-mvp-v2-epic-03-mcp-integration.md](docs/plans/post-mvp-v2-epic-03-mcp-integration.md)
+
 ## Current Capabilities
 
 - Responsive ChatGPT-like UI with sidebar, streaming, stop, and retry

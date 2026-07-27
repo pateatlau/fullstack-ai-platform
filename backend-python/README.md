@@ -67,6 +67,7 @@ Routers → Services → AI Framework (`app/ai/`) → Providers → External API
 | `app/ai/rag/` | Generic RAG framework (retriever, context builder, orchestration) |
 | `app/ai/evaluation/` | Prompt, retrieval, and end-to-end evaluation helpers |
 | `app/ai/agent/` | Reusable agent runtime (planner, executor, streaming, adapters) |
+| `app/ai/mcp/` | MCP (Model Context Protocol) client integration for remote tools (V2 Epic 03) |
 | `app/ai/interfaces/` | Protocols added incrementally per phase |
 | `app/ai/deps.py` | FastAPI dependency wiring for AI components |
 
@@ -120,6 +121,115 @@ from app.routers.chat import get_tool_chat_service
 - **Metrics** — `tool_calls_total`, `tool_errors_total` (Phase 3); `search_latency_ms` on each web search; `stream_tool_rounds` on unified streaming tool path (Phase 4); `retrieval_latency_ms` and `time_to_first_delta_ms` on unified streaming document path (Phase 5).
 
 Unit tests register the stub **`echo`** tool in fixtures only (`tests/test_tool_platform.py`). Tool arguments and search queries are never logged.
+
+### MCP Integration (V2 Epic 03)
+
+**MCP (Model Context Protocol)** client integration enables dynamic tool discovery and execution from remote MCP servers. Ships behind `MCP_ENABLED=false` (default off). When disabled, the existing V1 local tool path via `ToolRegistry` → `ToolExecutor` is unchanged.
+
+**Architecture:**
+
+```text
+Startup → register_mcp_servers(config) → McpServerRegistry
+Runtime → discover → McpToolDiscovery → register as ToolHandler
+Request → ToolRegistry.get_handler → McpToolExecutionAdapter → McpClient.call_tool
+                                    ↓
+                            ToolExecutor (existing validation/auth/streaming)
+                                    ↓
+                            Agent ToolRunner (unchanged)
+```
+
+**Components:**
+
+| Component | Responsibility |
+| --------- | -------------- |
+| `McpClient` | Protocol for MCP RPC operations (connect, disconnect, list_tools, call_tool) |
+| `StdioMcpClient` | Concrete stdio transport client; subprocess lifecycle + JSON-RPC over stdin/stdout |
+| `McpServerRegistry` | Process-wide registry for MCP server connections; register/unregister/get by server name |
+| `McpToolDiscovery` | Map MCP `tools/list` response → `ToolDefinition`; prefix tool names with `{server_name}.{tool_name}` |
+| `McpToolExecutionAdapter` | Adapter implementing `ToolHandler` Protocol; delegates to `McpClient.call_tool` |
+| `McpPermissionPolicy` | Per-server/per-tool allowlist; composes with `ToolAuthorizer` (authenticated-only by default) |
+
+**Configuration:**
+
+MCP servers are configured via `MCP_SERVERS` environment variable (JSON array):
+
+```json
+MCP_SERVERS='[
+  {
+    "name": "filesystem",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/mcp-workspace"],
+    "env": {},
+    "transport": "stdio"
+  },
+  {
+    "name": "github",
+    "command": "uvx",
+    "args": ["mcp-server-github"],
+    "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}" },
+    "transport": "stdio"
+  }
+]'
+```
+
+**Permission model** (per-server / per-tool allowlists):
+
+```json
+MCP_PERMISSION_POLICY='{
+  "allowed_servers": ["filesystem", "github"],
+  "allowed_tools": {
+    "filesystem": ["read_file", "list_directory"],
+    "github": ["*"]
+  }
+}'
+```
+
+**Rules:**
+
+- `allowed_servers` empty or absent → all configured servers allowed
+- `allowed_tools` absent → all tools from allowed servers allowed
+- `allowed_tools[server_name] = ["*"]` → all tools from server allowed
+- `allowed_tools[server_name] = ["tool1", "tool2"]` → only listed tools allowed
+- `ToolAuthorizer` inherited: authenticated users only (guest denial)
+- Compose: both `ToolAuthorizer` and `McpPermissionPolicy` must pass
+
+**Tool naming convention:** MCP tools are prefixed with server name to prevent collisions across multiple servers: `{server_name}.{tool_name}` (e.g. `filesystem.read_file`, `github.create_issue`).
+
+**Lifecycle:**
+
+1. **Startup** (when `MCP_ENABLED=true`): Load MCP server configs → connect → validate capabilities (`tools/list`, `tools/call`) → discover tools → register handlers with prefixed names → cache results
+2. **Runtime**: Tool invocation flows through existing `ToolExecutor` path (validation → auth → MCP permission check → execution)
+3. **Shutdown**: Disconnect all servers → wait for graceful shutdown → force terminate remaining subprocesses after timeout
+
+**Settings:**
+
+| Setting | Env var | Default |
+| ------- | ------- | ------- |
+| MCP feature flag | `MCP_ENABLED` | `false` |
+| MCP servers config | `MCP_SERVERS` | `[]` (empty list) |
+| MCP permission policy | `MCP_PERMISSION_POLICY` | `{}` (empty dict → all configured servers/tools allowed) |
+| MCP connection timeout | `MCP_CONNECTION_TIMEOUT_SECONDS` | `10` |
+| MCP tool timeout | `MCP_TOOL_TIMEOUT_SECONDS` | `30` |
+
+**MCP spec version:** Targets MCP specification 2024-11-05 (current stable). Version mismatches are logged as warnings but are non-blocking.
+
+**Transport:** Primary transport is **stdio** (subprocess + JSON-RPC stdin/stdout). SSE transport is deferred to a future epic.
+
+**Error handling:**
+
+- Connection/transport errors → graceful `ToolResult` failure; no crash on MCP server unavailable
+- Servers missing required capabilities → gracefully skipped with warning; no partial registration
+- MCP server errors → preserve error in `ToolResult` with `error_code="mcp_error"`
+
+**Observability:** Structured log fields include `mcp_enabled`, `mcp_spec_version`, `server_name`, `server_status`, `tool_name`, `tool_source`, `mcp_connection_latency_ms`, `mcp_discovery_tool_count`, `mcp_permission_denied`. Never logs raw tool arguments/responses or credentials.
+
+**Documentation:** See `docs/plans/post-mvp-v2-epic-03-mcp-integration.md` for full architecture and design decisions.
+
+Wire via DI:
+
+```python
+from app.ai.deps import get_mcp_server_registry, get_mcp_permission_policy
+```
 
 #### Multi-provider tool calling (V1.1a)
 

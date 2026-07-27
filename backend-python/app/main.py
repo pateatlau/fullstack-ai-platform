@@ -7,8 +7,8 @@ from fastapi.responses import Response
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import Message
 
-from app.ai.deps import get_tool_registry
-from app.ai.tools.registration import register_production_tools
+from app.ai.deps import get_mcp_server_registry, get_tool_registry
+from app.ai.tools.registration import register_mcp_tools, register_production_tools
 from app.core.config import get_settings
 from app.core.cors import CORS_EXPOSE_HEADER_NAMES, DEV_ORIGIN_REGEX
 from app.core.errors import error_response, register_exception_handlers
@@ -24,11 +24,45 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    """App lifespan: register tools, MCP servers (if enabled), then cleanup."""
     setup_logging(settings)
     settings.log_development_warnings(logger)
+
+    # Register V1 production tools
     if settings.tools_enabled:
         register_production_tools(get_tool_registry(), settings)
+
+    # Phase 9: Register MCP tools when flag on
+    if settings.mcp_enabled:
+        logger.info("MCP enabled; registering MCP tools")
+        try:
+            await register_mcp_tools(
+                registry=get_tool_registry(),
+                mcp_registry=get_mcp_server_registry(),
+                settings=settings,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to register MCP tools; continuing with V1 tools only",
+                error=str(exc),
+                exc_info=True,
+            )
+
     yield
+
+    # Phase 9: Disconnect all MCP servers on shutdown
+    if settings.mcp_enabled:
+        logger.info("Disconnecting all MCP servers")
+        try:
+            await get_mcp_server_registry().disconnect_all()
+            logger.info("MCP server shutdown complete")
+        except Exception as exc:
+            logger.warning(
+                "Error during MCP server shutdown",
+                error=str(exc),
+                exc_info=True,
+            )
+
     await get_engine().dispose()
 
 
