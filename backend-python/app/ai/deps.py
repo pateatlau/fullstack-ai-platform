@@ -82,8 +82,23 @@ def get_tool_executor(
     registry: ToolRegistry = Depends(get_tool_registry),
     settings: Settings = Depends(get_settings),
 ) -> ToolExecutor:
-    """Build a ``ToolExecutor`` wired to the app-scoped registry and settings."""
-    return ToolExecutor(registry=registry, settings=settings)
+    """Build a ``ToolExecutor`` wired to the app-scoped registry and settings.
+
+    Phase 9: Includes MCP permission policy when MCP is enabled.
+    """
+    mcp_permission_policy = None
+    if settings.mcp_enabled:
+        from app.ai.mcp.permissions import McpPermissionPolicy
+
+        mcp_permission_policy = McpPermissionPolicy(
+            config=settings.mcp_permission_policy
+        )
+
+    return ToolExecutor(
+        registry=registry,
+        settings=settings,
+        mcp_permission_policy=mcp_permission_policy,
+    )
 
 
 def get_agent_runtime(
@@ -290,15 +305,29 @@ def get_mcp_server_registry() -> McpServerRegistry:
     """Return app-scoped MCP server registry singleton.
 
     Process-wide registry for MCP server connections. Initialized once per
-    app lifecycle with default timeout settings (10s connection, 30s tool).
+    app lifecycle with timeout settings from config.
 
-    Phase 3: Server Registry DI factory (timeout settings from config deferred
-    to Phase 8).
+    Phase 9: Updated to read timeout settings from Settings.
     """
     from app.ai.mcp.registry import McpServerRegistry as _McpServerRegistry
 
-    # TODO(phase-8): Read timeout settings from Settings when added to config
+    settings = get_settings()
     return _McpServerRegistry(
-        connection_timeout=10.0,
-        tool_timeout=30.0,
+        connection_timeout=float(settings.mcp_connection_timeout_seconds),
+        tool_timeout=float(settings.mcp_tool_timeout_seconds),
     )
+
+
+def get_mcp_permission_policy(
+    settings: Settings = Depends(get_settings),
+):
+    """Return MCP permission policy for per-server/per-tool authorization.
+
+    Composes with ToolAuthorizer (authenticated-only inherited). Both must pass
+    for MCP tool execution.
+
+    Phase 9: DI factory for MCP permission policy.
+    """
+    from app.ai.mcp.permissions import McpPermissionPolicy
+
+    return McpPermissionPolicy(config=settings.mcp_permission_policy)
