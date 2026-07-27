@@ -127,7 +127,7 @@ Advanced retrieval (hybrid search, query rewrite, parent-child, Cohere rerank, f
 
 Validation record: [docs/plans/post-mvp-v2-epic-02-advanced-rag.md](docs/plans/post-mvp-v2-epic-02-advanced-rag.md) (Phase 12 Completion Record).
 
-## Post-MVP V2 Epic 03 MCP Integration — In Progress
+## Post-MVP V2 Epic 03 MCP Integration — Complete
 
 Model Context Protocol (MCP) client integration enables dynamic tool discovery and execution from remote MCP servers. Ships behind `MCP_ENABLED=false` (default off).
 
@@ -135,22 +135,29 @@ Model Context Protocol (MCP) client integration enables dynamic tool discovery a
 
 - `MCP_ENABLED=false` — local tool path via `ToolRegistry` → `ToolExecutor` unchanged; set `true` to register MCP servers, discover remote tools, and execute via stdio transport (MCP spec 2024-11-05)
 
-**Phase 9 (Integration & DI Wiring) — Complete:**
+**Capabilities:**
 
-- DI wiring in `app/ai/deps.py` (`get_mcp_server_registry`, `get_mcp_permission_policy`)
-- Startup/shutdown hooks in `main.py` (register MCP tools when flag on; graceful disconnect on shutdown)
-- `ToolExecutor` composes `McpPermissionPolicy` with `ToolAuthorizer` (authenticated-only inherited; both must pass)
-- End-to-end integration tests (`tests/ai/mcp/test_integration.py`)
-- Documentation in `backend-python/README.md` and `.env.example` (MCP configuration, tool naming convention `{server_name}.{tool_name}`, permission model)
+| Component | Status |
+| --------- | ------ |
+| MCP client (stdio transport, JSON-RPC, subprocess lifecycle) | Done |
+| Server registry with health tracking (CONNECTING/CONNECTED/FAILED/DISCONNECTED) | Done |
+| Tool discovery with collision prevention (`{server_name}.{tool_name}` naming) | Done |
+| Permission model (per-server/per-tool allowlists composing with `ToolAuthorizer`) | Done |
+| DI wiring, startup registration, graceful shutdown | Done |
+| Coverage ≥80% on `app/` and `app/ai/mcp/`; `make eval` | Verified |
 
-**Remaining Phase 10 (Validation & Release):**
+**Test Results:**
 
-- Full suite with `MCP_ENABLED=false` and `true` (fake MCP servers; no real external dependencies for CI)
-- Flag-off parity verification; agent/RAG regression tests
-- Coverage ≥80% on `app/` and `app/ai/mcp/`
-- Release summary
+- MCP package: 190 tests, 96% coverage
+- Flag-off (`MCP_ENABLED=false`): 923 passed, 89.02% coverage
+- Flag-on (`MCP_ENABLED=true`): 923 passed, 89.04% coverage
+- Agent/RAG regressions: verified clean
+
+**Release summary:** [docs/releases/post-mvp-v2-epic3-release-summary.md](docs/releases/post-mvp-v2-epic3-release-summary.md)
 
 **Plan:** [docs/plans/post-mvp-v2-epic-03-mcp-integration.md](docs/plans/post-mvp-v2-epic-03-mcp-integration.md)
+
+Validation record: [docs/plans/post-mvp-v2-epic-03-mcp-integration.md](docs/plans/post-mvp-v2-epic-03-mcp-integration.md) (Phase 10 Completion Record).
 
 ## Current Capabilities
 
