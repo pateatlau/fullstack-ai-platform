@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any
 
+from app.ai.mcp.auth import resolve_credential_env_vars
 from app.ai.mcp.config import McpConnectionConfig
 from app.ai.mcp.exceptions import McpConnectionError, McpToolExecutionError
 
@@ -50,7 +52,33 @@ class StdioTransport:
             raise McpConnectionError("Transport already connected")
 
         cmd = [self.config.command, *self.config.args]
-        env_vars = dict(self.config.env) if self.config.env else None
+
+        # Start with parent process env
+        env_vars = dict(os.environ)
+
+        # Merge config env vars (may contain placeholders)
+        if self.config.env:
+            resolved_config_env = resolve_credential_env_vars(
+                dict(self.config.env), allow_missing=False
+            )
+            env_vars.update(resolved_config_env)
+
+        # Merge credentials if provided
+        if self.config.credentials:
+            # Resolve credential env vars (interpolate ${VAR_NAME})
+            if self.config.credentials.env_vars:
+                resolved_cred_env = resolve_credential_env_vars(
+                    dict(self.config.credentials.env_vars), allow_missing=False
+                )
+                env_vars.update(resolved_cred_env)
+
+            # Merge api_keys into env (if needed by server)
+            if self.config.credentials.api_keys:
+                env_vars.update(dict(self.config.credentials.api_keys))
+
+            # Append credential command args to command
+            if self.config.credentials.command_args:
+                cmd.extend(self.config.credentials.command_args)
 
         try:
             logger.info(
@@ -59,6 +87,7 @@ class StdioTransport:
                     "server_name": self.config.name,
                     "command": self.config.command,
                     "transport": self.config.transport,
+                    "has_credentials": self.config.credentials is not None,
                 },
             )
 

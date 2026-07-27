@@ -7,6 +7,8 @@ from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.ai.mcp.auth import McpServerCredentials
+
 
 class McpConnectionConfig(BaseModel):
     """MCP server connection configuration (immutable after startup).
@@ -31,6 +33,10 @@ class McpConnectionConfig(BaseModel):
     )
     transport: Literal["stdio"] = Field(
         default="stdio", description="Transport type (stdio only in Phase 1)"
+    )
+    credentials: McpServerCredentials | None = Field(
+        default=None,
+        description="Optional server credentials (env vars, API keys, auth args)",
     )
 
     model_config = {"frozen": True}

@@ -3,6 +3,7 @@
 Public API (stable after Phase 1):
     - McpClient Protocol
     - McpConnectionConfig, McpServerCredentials models
+    - resolve_credential_env_vars function
     - McpConnectionError, McpToolExecutionError, McpDiscoveryError,
       McpAuthenticationError, McpPermissionDeniedError exceptions
 
@@ -14,7 +15,7 @@ Internal (may evolve in later phases):
 
 from __future__ import annotations
 
-from app.ai.mcp.auth import McpServerCredentials
+from app.ai.mcp.auth import McpServerCredentials, resolve_credential_env_vars
 from app.ai.mcp.client import McpClient
 from app.ai.mcp.config import McpConnectionConfig
 from app.ai.mcp.exceptions import (
@@ -29,6 +30,7 @@ __all__ = [
     "McpClient",
     "McpConnectionConfig",
     "McpServerCredentials",
+    "resolve_credential_env_vars",
     "McpConnectionError",
     "McpToolExecutionError",
     "McpDiscoveryError",
