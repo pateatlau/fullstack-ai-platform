@@ -213,7 +213,7 @@ def test_mcp_permission_policy_multiple_servers_independent():
 # --- Integration tests with ToolExecutor ---
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_tool_executor_mcp_permission_policy_allows_mcp_tool():
     """MCP tool passes both ToolAuthorizer and McpPermissionPolicy."""
     registry = ToolRegistry()
@@ -250,7 +250,7 @@ async def test_tool_executor_mcp_permission_policy_allows_mcp_tool():
     assert result.success is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_tool_executor_mcp_permission_policy_denies_mcp_tool():
     """MCP tool denied by McpPermissionPolicy even if ToolAuthorizer allows."""
     registry = ToolRegistry()
@@ -292,7 +292,7 @@ async def test_tool_executor_mcp_permission_policy_denies_mcp_tool():
     assert result.error is not None and "not in the allowed tools list" in result.error
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_tool_executor_mcp_permission_policy_denies_server():
     """MCP tool denied if server not in allowed_servers."""
     registry = ToolRegistry()
@@ -333,7 +333,7 @@ async def test_tool_executor_mcp_permission_policy_denies_server():
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_tool_executor_guest_denial_inherited():
     """Guest caller denied by ToolAuthorizer even if MCP policy allows."""
     registry = ToolRegistry()
@@ -372,7 +372,7 @@ async def test_tool_executor_guest_denial_inherited():
     assert result.error is not None and "authenticated user" in result.error
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_tool_executor_local_tool_bypasses_mcp_policy():
     """Local (non-MCP) tools are not affected by McpPermissionPolicy."""
     registry = ToolRegistry()
@@ -409,7 +409,7 @@ async def test_tool_executor_local_tool_bypasses_mcp_policy():
     assert result.data == "local result"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_tool_executor_no_mcp_policy_allows_mcp_tool():
     """MCP tools allowed if no McpPermissionPolicy configured (backward compat)."""
     registry = ToolRegistry()
@@ -440,7 +440,7 @@ async def test_tool_executor_no_mcp_policy_allows_mcp_tool():
     assert result.success is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_tool_executor_mcp_policy_wildcard_allows_all_tools():
     """McpPermissionPolicy with wildcard allows all tools from server."""
     registry = ToolRegistry()
@@ -479,7 +479,7 @@ async def test_tool_executor_mcp_policy_wildcard_allows_all_tools():
         assert result.success is True, f"Tool {tool_name} should succeed with wildcard"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_tool_executor_both_policies_must_pass():
     """Both ToolAuthorizer and McpPermissionPolicy must pass for execution."""
     registry = ToolRegistry()
