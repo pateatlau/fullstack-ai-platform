@@ -12,6 +12,7 @@ Tests:
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -157,6 +158,36 @@ async def test_register_mcp_tools_no_servers(
     assert len(mock_registry.list_tools()) == 0
 
 
+async def test_register_mcp_tools_disabled_flag(
+    mock_registry: ToolRegistry,
+    mock_mcp_registry: McpServerRegistry,
+) -> None:
+    """Test registration when MCP_ENABLED is false."""
+    settings = Settings(
+        openai_api_key="test-key",
+        mcp_enabled=False,  # MCP disabled
+        mcp_servers=[
+            {
+                "name": "test_server",
+                "command": "test-command",
+                "args": [],
+                "env": {},
+                "transport": "stdio",
+            }
+        ],
+    )
+
+    # Should return early without attempting registration
+    await register_mcp_tools(
+        registry=mock_registry,
+        mcp_registry=mock_mcp_registry,
+        settings=settings,
+    )
+
+    # No tools should be registered (early return)
+    assert len(mock_registry.list_tools()) == 0
+
+
 async def test_register_mcp_tools_connection_failure(
     mock_settings: Settings,
     mock_registry: ToolRegistry,
@@ -190,9 +221,17 @@ async def test_register_mcp_tools_discovery_failure(
     mock_mcp_registry: McpServerRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test graceful handling of discovery failures."""
+    """Test graceful handling of discovery failures with cleanup."""
     # Create fake client that fails during discovery
     fake_client = FakeMcpClient(should_fail_list=True)
+
+    # Track unregister calls
+    unregister_calls = []
+    original_unregister = mock_mcp_registry.unregister
+
+    async def tracked_unregister(server_name: str) -> None:
+        unregister_calls.append(server_name)
+        await original_unregister(server_name)
 
     # Mock registry to return fake client
     async def fake_register(
@@ -202,6 +241,7 @@ async def test_register_mcp_tools_discovery_failure(
         self._statuses[server_name] = ServerStatus.CONNECTED
 
     monkeypatch.setattr(McpServerRegistry, "register", fake_register)
+    monkeypatch.setattr(mock_mcp_registry, "unregister", tracked_unregister)
 
     # Should not raise; discovery failures are logged and skipped
     await register_mcp_tools(
@@ -212,6 +252,51 @@ async def test_register_mcp_tools_discovery_failure(
 
     # No tools should be registered due to discovery failure
     assert len(mock_registry.list_tools()) == 0
+
+    # Verify cleanup: unregister should have been called
+    assert len(unregister_calls) == 1
+    assert unregister_calls[0] == "test_server"
+
+
+async def test_register_mcp_tools_client_unavailable_cleanup(
+    mock_settings: Settings,
+    mock_registry: ToolRegistry,
+    mock_mcp_registry: McpServerRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test cleanup when client is not available after registration."""
+    # Track unregister calls
+    unregister_calls = []
+    original_unregister = mock_mcp_registry.unregister
+
+    async def tracked_unregister(server_name: str) -> None:
+        unregister_calls.append(server_name)
+        await original_unregister(server_name)
+
+    # Mock registry.register to succeed but registry.get to return None
+    async def fake_register(
+        self: McpServerRegistry, server_name: str, config: McpConnectionConfig
+    ) -> None:
+        # Registration "succeeds" but client won't be available
+        self._statuses[server_name] = ServerStatus.CONNECTED
+        # Don't add to _clients to simulate client not available
+
+    monkeypatch.setattr(McpServerRegistry, "register", fake_register)
+    monkeypatch.setattr(mock_mcp_registry, "unregister", tracked_unregister)
+
+    # Should not raise; client unavailable is logged and skipped
+    await register_mcp_tools(
+        registry=mock_registry,
+        mcp_registry=mock_mcp_registry,
+        settings=mock_settings,
+    )
+
+    # No tools should be registered
+    assert len(mock_registry.list_tools()) == 0
+
+    # Verify cleanup: unregister should have been called
+    assert len(unregister_calls) == 1
+    assert unregister_calls[0] == "test_server"
 
 
 async def test_register_mcp_tools_permission_denied_server(
@@ -472,6 +557,45 @@ async def test_register_mcp_tools_invalid_config(
     assert len(mock_registry.list_tools()) == 0
 
 
+async def test_register_mcp_tools_config_sanitizes_secrets(
+    mock_registry: ToolRegistry,
+    mock_mcp_registry: McpServerRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that config validation errors don't expose sensitive data."""
+    # Settings with invalid config that includes sensitive data
+    settings = Settings(
+        openai_api_key="test-key",
+        mcp_enabled=True,
+        mcp_servers=[
+            {
+                "name": "secret_server",
+                # Missing required 'command' field, but has sensitive env data
+                "args": [],
+                "env": {"SECRET_API_KEY": "super-secret-value-12345"},
+                "transport": "stdio",
+            }
+        ],
+    )
+
+    # Should not raise; invalid config is logged and skipped
+    await register_mcp_tools(
+        registry=mock_registry,
+        mcp_registry=mock_mcp_registry,
+        settings=settings,
+    )
+
+    # No tools should be registered
+    assert len(mock_registry.list_tools()) == 0
+
+    # Verify error message does not contain the secret value
+    log_text = caplog.text
+    assert "super-secret-value-12345" not in log_text
+    assert "SECRET_API_KEY" not in log_text  # Value keys also shouldn't appear
+    # Should mention the field that failed validation
+    assert "command" in log_text.lower() or "validation failed" in log_text.lower()
+
+
 async def test_register_mcp_tools_spec_version_logged(
     mock_settings: Settings,
     mock_registry: ToolRegistry,
@@ -492,16 +616,34 @@ async def test_register_mcp_tools_spec_version_logged(
 
     monkeypatch.setattr(McpServerRegistry, "register", fake_register)
 
-    # Register MCP tools
-    await register_mcp_tools(
-        registry=mock_registry,
-        mcp_registry=mock_mcp_registry,
-        settings=mock_settings,
-    )
+    # Capture logs at INFO level to see registration message
+    with caplog.at_level(logging.INFO):
+        # Register MCP tools
+        await register_mcp_tools(
+            registry=mock_registry,
+            mcp_registry=mock_mcp_registry,
+            settings=mock_settings,
+        )
 
-    # Verify MCP spec version is mentioned in logs
-    # Note: This test verifies the constant is available and used
-    assert MCP_SPEC_VERSION == "2024-11-05"
+    # Verify MCP spec version appears in log records
+    # Check both log message text and structured extra fields
+    found_in_message = False
+    found_in_extra = False
+
+    for record in caplog.records:
+        # Check if version appears in message text
+        if MCP_SPEC_VERSION in record.getMessage():
+            found_in_message = True
+
+        # Check if version appears in structured fields (dynamic attribute)
+        mcp_spec_version = getattr(record, "mcp_spec_version", None)
+        if mcp_spec_version == MCP_SPEC_VERSION:
+            found_in_extra = True
+
+    # At least one method should have captured the spec version
+    assert found_in_message or found_in_extra, (
+        f"MCP spec version '{MCP_SPEC_VERSION}' not found in log records"
+    )
 
 
 async def test_register_mcp_tools_tool_metadata_preserved(

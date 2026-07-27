@@ -66,7 +66,12 @@ async def register_mcp_tools(
 
     # Create permission policy if not provided
     if permission_policy is None:
-        permission_policy = McpPermissionPolicy(settings.mcp_permission_policy)
+        permission_policy = McpPermissionPolicy(config=settings.mcp_permission_policy)
+
+    # Early return if MCP is disabled
+    if not settings.mcp_enabled:
+        logger.debug("MCP integration disabled; skipping MCP tool registration")
+        return
 
     if not settings.mcp_servers:
         logger.info("No MCP servers configured; skipping MCP tool registration")
@@ -129,6 +134,8 @@ async def register_mcp_tools(
                     "MCP server not available after registration; skipping",
                     extra={"server_name": server_name},
                 )
+                # Cleanup: unregister server to avoid resource leak
+                await mcp_registry.unregister(server_name)
                 failed_server_count += 1
                 continue
 
@@ -154,6 +161,8 @@ async def register_mcp_tools(
                         "mcp_capability_missing": True,
                     },
                 )
+                # Cleanup: unregister server to disconnect and release resources
+                await mcp_registry.unregister(server_name)
                 failed_server_count += 1
                 continue
 
@@ -180,18 +189,31 @@ async def register_mcp_tools(
                     skipped_tool_count += 1
                     continue
 
-                # Register tool in ToolRegistry
-                registry.register(tool_def, adapter)
-                registered_tool_count += 1
-                logger.debug(
-                    "Registered MCP tool",
-                    extra={
-                        "server_name": server_name,
-                        "tool_name": original_name,
-                        "prefixed_name": tool_def.name,
-                        "tool_source": "mcp",
-                    },
-                )
+                # Register tool in ToolRegistry with error handling
+                try:
+                    registry.register(tool_def, adapter)
+                    registered_tool_count += 1
+                    logger.debug(
+                        "Registered MCP tool",
+                        extra={
+                            "server_name": server_name,
+                            "tool_name": original_name,
+                            "prefixed_name": tool_def.name,
+                            "tool_source": "mcp",
+                        },
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to register MCP tool; skipping",
+                        extra={
+                            "server_name": server_name,
+                            "tool_name": original_name,
+                            "prefixed_name": tool_def.name,
+                            "error": str(exc),
+                        },
+                    )
+                    skipped_tool_count += 1
+                    continue
 
         except Exception as exc:
             # Catch-all for unexpected errors during server processing
@@ -230,12 +252,25 @@ def _parse_server_config(config_dict: dict[str, Any]) -> "McpConnectionConfig":
     Raises:
         ValueError: If config is invalid or missing required fields.
     """
+    from pydantic import ValidationError
+
     from app.ai.mcp.config import McpConnectionConfig
+
+    server_name = config_dict.get("name", "<unknown>")
 
     try:
         return McpConnectionConfig(**config_dict)
-    except Exception as exc:
-        server_name = config_dict.get("name", "<unknown>")
+    except ValidationError as exc:
+        # Sanitize error: extract field locations without exposing values
+        error_fields = [
+            err["loc"][0] if err.get("loc") else "unknown" for err in exc.errors()
+        ]
+        error_summary = ", ".join(set(str(field) for field in error_fields))
         raise ValueError(
-            f"Invalid MCP server config for '{server_name}': {exc}"
+            f"Invalid MCP server config for '{server_name}': validation failed for fields: {error_summary}"
+        ) from exc
+    except Exception as exc:
+        # Generic error case (non-validation errors)
+        raise ValueError(
+            f"Invalid MCP server config for '{server_name}': {type(exc).__name__}"
         ) from exc
