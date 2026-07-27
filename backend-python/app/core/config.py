@@ -146,6 +146,12 @@ class Settings(BaseSettings):
     # Example: {"allowed_servers": ["filesystem"], "allowed_tools": {"filesystem": ["*"]}}
     mcp_permission_policy: dict[str, Any] = Field(default_factory=dict)
 
+    # V2 Epic 3 Phase 8: MCP server configurations and timeouts.
+    # List of MCP server connection configs (name, command, args, env, transport).
+    mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
+    mcp_connection_timeout_seconds: int = Field(default=10, ge=1)
+    mcp_tool_timeout_seconds: int = Field(default=30, ge=1)
+
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, value: object) -> str:
