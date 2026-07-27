@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import TYPE_CHECKING
 
 from app.ai.tools.authorizer import ToolAuthorizer
 from app.ai.tools.registry import ToolRegistry
@@ -11,6 +12,9 @@ from app.ai.tools.schemas import ToolCall, ToolExecutionContext, ToolResult
 from app.ai.tools.validator import ToolValidator
 from app.core.config import Settings
 from app.core.logging import get_logger
+
+if TYPE_CHECKING:
+    from app.ai.mcp.permissions import McpPermissionPolicy
 
 _logger = get_logger(__name__)
 
@@ -25,11 +29,13 @@ class ToolExecutor:
         settings: Settings,
         validator: ToolValidator | None = None,
         authorizer: ToolAuthorizer | None = None,
+        mcp_permission_policy: McpPermissionPolicy | None = None,
     ) -> None:
         self._registry = registry
         self._settings = settings
         self._validator = validator or ToolValidator()
         self._authorizer = authorizer or ToolAuthorizer()
+        self._mcp_permission_policy = mcp_permission_policy
 
     async def execute(
         self,
@@ -91,6 +97,21 @@ class ToolExecutor:
                 ),
                 start=start,
             )
+
+        # Phase 7: MCP permission check (after ToolAuthorizer; both must pass)
+        if self._mcp_permission_policy is not None:
+            mcp_permission_error = self._check_mcp_permissions(handler)
+            if mcp_permission_error is not None:
+                return self._finalize(
+                    call=call,
+                    context=context,
+                    result=ToolResult(
+                        success=False,
+                        error=mcp_permission_error,
+                        error_code="forbidden",
+                    ),
+                    start=start,
+                )
 
         try:
             handler_result = await asyncio.wait_for(
@@ -184,6 +205,33 @@ class ToolExecutor:
             )
 
         return normalized
+
+    def _check_mcp_permissions(self, handler: object) -> str | None:
+        """Check MCP permission policy if handler is an MCP tool.
+
+        Args:
+            handler: Tool handler instance.
+
+        Returns:
+            Error message if permission denied, None if allowed or not MCP tool.
+        """
+        # Check if handler is an MCP tool adapter
+        # We avoid direct isinstance check to prevent circular import
+        # Instead check for MCP adapter attributes
+        if not hasattr(handler, "server_name") or not hasattr(handler, "tool_name"):
+            # Not an MCP tool, no MCP permission check needed
+            return None
+
+        server_name = getattr(handler, "server_name", None)
+        tool_name = getattr(handler, "tool_name", None)
+
+        if server_name is None or tool_name is None:
+            # Invalid MCP handler, skip permission check
+            return None
+
+        # Apply MCP permission policy
+        assert self._mcp_permission_policy is not None
+        return self._mcp_permission_policy.authorize_tool(server_name, tool_name)
 
 
 def _normalize_handler_arguments(

@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -140,6 +140,11 @@ class Settings(BaseSettings):
     # configured MCP servers; discover and register remote tools; execute MCP
     # tool calls via stdio transport. Flag-off keeps V1 local tools unchanged.
     mcp_enabled: bool = False
+
+    # V2 Epic 3 Phase 7: MCP permission policy (per-server/per-tool allowlists).
+    # Empty dict → all configured servers/tools allowed.
+    # Example: {"allowed_servers": ["filesystem"], "allowed_tools": {"filesystem": ["*"]}}
+    mcp_permission_policy: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("log_level", mode="before")
     @classmethod
