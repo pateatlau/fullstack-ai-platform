@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 from types import MappingProxyType
 from typing import Any, Sequence
 
@@ -12,6 +14,8 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+
+from app.ai.mcp.exceptions import McpAuthenticationError
 
 
 class McpServerCredentials(BaseModel):
@@ -76,3 +80,81 @@ class McpServerCredentials(BaseModel):
             "api_keys": {k: "***REDACTED***" for k in self.api_keys},
             "command_args": tuple("***REDACTED***" for _ in self.command_args),
         }
+
+
+def resolve_credential_env_vars(
+    env_vars: dict[str, str], allow_missing: bool = False
+) -> dict[str, str]:
+    """Resolve environment variable placeholders in credential values.
+
+    Interpolates ${VAR_NAME} placeholders with actual environment variable values
+    at startup. Supports nested placeholders and validates all required vars exist.
+
+    Args:
+        env_vars: Dict with values potentially containing ${VAR_NAME} placeholders.
+        allow_missing: If False (default), raise error on missing env vars;
+                      if True, preserve placeholder for missing vars.
+
+    Returns:
+        Dict with all placeholders replaced by actual env var values.
+
+    Raises:
+        McpAuthenticationError: If required environment variable is missing
+                               and allow_missing=False.
+
+    Examples:
+        >>> os.environ["GITHUB_TOKEN"] = "ghp_abc123"
+        >>> resolve_credential_env_vars({"TOKEN": "${GITHUB_TOKEN}"})
+        {'TOKEN': 'ghp_abc123'}
+
+        >>> resolve_credential_env_vars(
+        ...     {"PATH": "/home/${USER}/bin"},
+        ...     allow_missing=False
+        ... )
+        {'PATH': '/home/john/bin'}  # If USER=john in env
+
+        >>> resolve_credential_env_vars(
+        ...     {"KEY": "${MISSING_VAR}"},
+        ...     allow_missing=True
+        ... )
+        {'KEY': '${MISSING_VAR}'}  # Placeholder preserved
+    """
+    # Pattern to match ${VAR_NAME} placeholders
+    env_var_pattern = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+    resolved: dict[str, str] = {}
+
+    for key, value in env_vars.items():
+        if not isinstance(value, str):
+            resolved[key] = value
+            continue
+
+        # Find all placeholders in this value
+        matches = env_var_pattern.findall(value)
+
+        if not matches:
+            # No placeholders, use value as-is
+            resolved[key] = value
+            continue
+
+        # Replace each placeholder
+        resolved_value = value
+        for env_var_name in matches:
+            placeholder = f"${{{env_var_name}}}"
+            env_value = os.environ.get(env_var_name)
+
+            if env_value is None:
+                if allow_missing:
+                    # Preserve placeholder for missing vars
+                    continue
+                else:
+                    raise McpAuthenticationError(
+                        f"Missing required environment variable '{env_var_name}' "
+                        f"referenced in credential field '{key}'"
+                    )
+
+            resolved_value = resolved_value.replace(placeholder, env_value)
+
+        resolved[key] = resolved_value
+
+    return resolved
