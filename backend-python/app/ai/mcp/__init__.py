@@ -6,10 +6,10 @@ Public API (stable after Phase 1):
     - resolve_credential_env_vars function
     - McpConnectionError, McpToolExecutionError, McpDiscoveryError,
       McpAuthenticationError, McpPermissionDeniedError exceptions
+    - McpPermissionPolicy (Phase 7)
 
 Internal (may evolve in later phases):
-    - McpServerRegistry, McpToolDiscovery, McpToolExecutionAdapter,
-      McpPermissionPolicy implementations
+    - McpServerRegistry, McpToolDiscovery, McpToolExecutionAdapter implementations
     - StdioMcpClient, StdioTransport
 """
 
@@ -25,6 +25,7 @@ from app.ai.mcp.exceptions import (
     McpPermissionDeniedError,
     McpToolExecutionError,
 )
+from app.ai.mcp.permissions import McpPermissionPolicy
 
 __all__ = [
     "McpClient",
@@ -36,4 +37,5 @@ __all__ = [
     "McpDiscoveryError",
     "McpAuthenticationError",
     "McpPermissionDeniedError",
+    "McpPermissionPolicy",
 ]
