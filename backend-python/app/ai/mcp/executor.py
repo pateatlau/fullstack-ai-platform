@@ -1,23 +1,33 @@
 """MCP tool execution adapter — implements ToolHandler for remote MCP tools.
 
-Phase 4: Minimal stub for McpToolExecutionAdapter (full implementation in Phase 5).
 Phase 5: Full Tool Execution Adapter implementation.
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from typing import TYPE_CHECKING, Any
+
+from app.ai.mcp.exceptions import (
+    McpConnectionError,
+    McpToolExecutionError,
+)
+from app.ai.tools.schemas import ToolResult
 
 if TYPE_CHECKING:
     from app.ai.mcp.client import McpClient
-    from app.ai.tools.schemas import ToolExecutionContext, ToolResult
+    from app.ai.tools.schemas import ToolExecutionContext
+
+logger = logging.getLogger(__name__)
 
 
 class McpToolExecutionAdapter:
     """Adapter implementing ToolHandler Protocol for remote MCP tool execution.
 
-    Phase 4: Minimal constructor stub to support discovery.py instantiation.
-    Phase 5: Full execute() implementation with MCP client.call_tool() delegation.
+    Delegates to McpClient.call_tool() and maps MCP results to ToolResult envelope.
+    Handles connection errors, timeouts, and remote execution failures gracefully.
     """
 
     def __init__(
@@ -47,13 +57,14 @@ class McpToolExecutionAdapter:
     ) -> ToolResult:
         """Execute remote MCP tool call.
 
-        Phase 5 TODO: Full implementation.
-        - Call client.call_tool(tool_name, arguments)
-        - Map MCP result → ToolResult(success=True, data=...)
-        - Map MCP error → ToolResult(success=False, error=..., error_code="mcp_error")
+        Calls client.call_tool() and maps MCP results to ToolResult:
+        - MCP success → ToolResult(success=True, data=...)
+        - MCP error → ToolResult(success=False, error=..., error_code="mcp_error")
         - Connection/transport errors → error_code="mcp_connection_error"
         - Timeout → error_code="timeout"
-        - Structured log: server_name, tool_name, latency_ms, success (no raw data)
+
+        Structured logging includes: server_name, tool_name, latency_ms, success.
+        Raw arguments and responses are NOT logged.
 
         Args:
             args: Tool arguments dict.
@@ -62,8 +73,149 @@ class McpToolExecutionAdapter:
         Returns:
             ToolResult envelope.
         """
-        # Phase 4: Stub raises NotImplementedError
-        # Phase 5: Replace with full implementation
-        raise NotImplementedError(
-            "McpToolExecutionAdapter.execute() will be implemented in Phase 5"
-        )
+        start_time = time.perf_counter()
+        success = False
+        error_code: str | None = None
+
+        try:
+            mcp_result = await self.client.call_tool(self.tool_name, args)
+
+            success = True
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+            logger.info(
+                "MCP tool execution succeeded",
+                extra={
+                    "server_name": self.server_name,
+                    "tool_name": self.tool_name,
+                    "tool_source": "mcp",
+                    "latency_ms": latency_ms,
+                    "success": success,
+                    "request_id": context.request_id,
+                },
+            )
+
+            return ToolResult(
+                success=True,
+                data=mcp_result,
+                metadata={
+                    "server_name": self.server_name,
+                    "tool_name": self.tool_name,
+                    "source": "mcp",
+                },
+            )
+
+        except asyncio.TimeoutError as exc:
+            error_code = "timeout"
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+            logger.warning(
+                "MCP tool execution timeout",
+                extra={
+                    "server_name": self.server_name,
+                    "tool_name": self.tool_name,
+                    "tool_source": "mcp",
+                    "latency_ms": latency_ms,
+                    "success": success,
+                    "error_code": error_code,
+                    "request_id": context.request_id,
+                },
+            )
+
+            return ToolResult(
+                success=False,
+                error=f"MCP tool call timed out: {exc}",
+                error_code=error_code,
+                metadata={
+                    "server_name": self.server_name,
+                    "tool_name": self.tool_name,
+                    "source": "mcp",
+                },
+            )
+
+        except McpConnectionError as exc:
+            error_code = "mcp_connection_error"
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+            logger.error(
+                "MCP tool execution failed: connection error",
+                extra={
+                    "server_name": self.server_name,
+                    "tool_name": self.tool_name,
+                    "tool_source": "mcp",
+                    "latency_ms": latency_ms,
+                    "success": success,
+                    "error_code": error_code,
+                    "request_id": context.request_id,
+                },
+                exc_info=True,
+            )
+
+            return ToolResult(
+                success=False,
+                error=f"MCP connection error: {exc}",
+                error_code=error_code,
+                metadata={
+                    "server_name": self.server_name,
+                    "tool_name": self.tool_name,
+                    "source": "mcp",
+                },
+            )
+
+        except McpToolExecutionError as exc:
+            error_code = "mcp_error"
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+            logger.error(
+                "MCP tool execution failed: remote error",
+                extra={
+                    "server_name": self.server_name,
+                    "tool_name": self.tool_name,
+                    "tool_source": "mcp",
+                    "latency_ms": latency_ms,
+                    "success": success,
+                    "error_code": error_code,
+                    "request_id": context.request_id,
+                },
+                exc_info=True,
+            )
+
+            return ToolResult(
+                success=False,
+                error=f"MCP tool execution error: {exc}",
+                error_code=error_code,
+                metadata={
+                    "server_name": self.server_name,
+                    "tool_name": self.tool_name,
+                    "source": "mcp",
+                },
+            )
+
+        except Exception as exc:
+            error_code = "unknown_error"
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+            logger.error(
+                "MCP tool execution failed: unexpected error",
+                extra={
+                    "server_name": self.server_name,
+                    "tool_name": self.tool_name,
+                    "tool_source": "mcp",
+                    "latency_ms": latency_ms,
+                    "success": success,
+                    "error_code": error_code,
+                    "request_id": context.request_id,
+                },
+                exc_info=True,
+            )
+
+            return ToolResult(
+                success=False,
+                error=f"Unexpected error during MCP tool execution: {exc}",
+                error_code=error_code,
+                metadata={
+                    "server_name": self.server_name,
+                    "tool_name": self.tool_name,
+                    "source": "mcp",
+                },
+            )
