@@ -183,6 +183,40 @@ describe('useVoiceSession', () => {
     expect(result.current.isSpeaking).toBe(false)
   })
 
+  it('plays audio for the next turn after interrupt once a new utterance is finalized', async () => {
+    const playChunk = vi.spyOn(Pcm16AudioPlayer.prototype, 'playChunk').mockResolvedValue()
+
+    const { result } = renderHook(() =>
+      useVoiceSession({
+        sessionId: 'chat-1',
+        accessToken: 'jwt',
+        webSocketFactory: (url) => new MockWebSocket(url) as unknown as WebSocket,
+      }),
+    )
+
+    await result.current.connect()
+    const socket = MockWebSocket.instances[0]
+    const audioFrame = JSON.stringify({ type: 'audio_out', seq: 0, payload_b64: 'AAA=' })
+
+    socket?.emitMessage(JSON.stringify({ type: 'assistant_text_delta', text: 'Hi' }))
+    socket?.emitMessage(audioFrame)
+    expect(playChunk).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      result.current.interrupt()
+    })
+
+    socket?.emitMessage(audioFrame)
+    expect(playChunk).toHaveBeenCalledTimes(1)
+
+    socket?.emitMessage(JSON.stringify({ type: 'transcript_final', text: 'Follow up' }))
+    socket?.emitMessage(audioFrame)
+
+    await waitFor(() => {
+      expect(playChunk).toHaveBeenCalledTimes(2)
+    })
+  })
+
   it('keeps isSpeaking set until queued audio finishes after turn_complete', async () => {
     vi.spyOn(Pcm16AudioPlayer.prototype, 'playChunk').mockResolvedValue()
     vi.spyOn(Pcm16AudioPlayer.prototype, 'remainingPlaybackMs', 'get').mockReturnValue(500)
@@ -209,5 +243,31 @@ describe('useVoiceSession', () => {
     socket?.emitMessage(JSON.stringify({ type: 'turn_complete' }))
     await Promise.resolve()
     expect(result.current.isSpeaking).toBe(true)
+  })
+
+  it('clears isSpeaking when audio playback fails after turn_complete', async () => {
+    vi.spyOn(Pcm16AudioPlayer.prototype, 'playChunk').mockRejectedValue(
+      new Error('AudioContext failed'),
+    )
+    vi.spyOn(Pcm16AudioPlayer.prototype, 'remainingPlaybackMs', 'get').mockReturnValue(0)
+
+    const { result } = renderHook(() =>
+      useVoiceSession({
+        sessionId: 'chat-1',
+        accessToken: 'jwt',
+        webSocketFactory: (url) => new MockWebSocket(url) as unknown as WebSocket,
+      }),
+    )
+
+    await result.current.connect()
+    const socket = MockWebSocket.instances[0]
+
+    socket?.emitMessage(JSON.stringify({ type: 'assistant_text_delta', text: 'Hello' }))
+    socket?.emitMessage(JSON.stringify({ type: 'turn_complete' }))
+    socket?.emitMessage(JSON.stringify({ type: 'audio_out', seq: 0, payload_b64: 'AAA=' }))
+
+    await waitFor(() => {
+      expect(result.current.isSpeaking).toBe(false)
+    })
   })
 })

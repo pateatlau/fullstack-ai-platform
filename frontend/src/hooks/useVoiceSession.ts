@@ -103,6 +103,9 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
           break
         case 'transcript_final':
           turnStartedRef.current = false
+          // A committed user utterance ends the interrupted turn window; without
+          // this, TTS-only or reordered audio_out for the next reply stays muted.
+          audioSuppressedRef.current = false
           callbacks.onTranscriptFinal?.(message.text)
           break
         case 'assistant_text_delta':
@@ -122,7 +125,9 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
           // Audio outlives `turn_complete`, so playback re-asserts the speaking
           // state rather than relying on the text stream still being open.
           setIsSpeaking(true)
-          void player.playChunk(base64ToBytes(message.payload_b64)).then(scheduleSpeakingEnd)
+          void player
+            .playChunk(base64ToBytes(message.payload_b64))
+            .then(scheduleSpeakingEnd, scheduleSpeakingEnd)
           break
         }
         case 'tool_start':

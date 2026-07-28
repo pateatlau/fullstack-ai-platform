@@ -72,6 +72,49 @@ describe('VoiceModeControls', () => {
     expect(onMicPressEnd).toHaveBeenCalledTimes(1)
   })
 
+  it('fires mic press start and end on keyboard interaction', () => {
+    const onMicPressStart = vi.fn()
+    const onMicPressEnd = vi.fn()
+    render(
+      <VoiceModeControls
+        {...defaultProps}
+        voiceModeEnabled
+        onMicPressStart={onMicPressStart}
+        onMicPressEnd={onMicPressEnd}
+      />,
+    )
+
+    const micButton = screen.getByRole('button', { name: 'Hold to speak' })
+    fireEvent.keyDown(micButton, { key: ' ', code: 'Space' })
+    expect(onMicPressStart).toHaveBeenCalledTimes(1)
+
+    fireEvent.keyDown(micButton, { key: ' ', code: 'Space', repeat: true })
+    expect(onMicPressStart).toHaveBeenCalledTimes(1)
+
+    fireEvent.keyUp(micButton, { key: ' ', code: 'Space' })
+    expect(onMicPressEnd).toHaveBeenCalledTimes(1)
+  })
+
+  it('ends recording when the mic button loses focus', () => {
+    const onMicPressStart = vi.fn()
+    const onMicPressEnd = vi.fn()
+    render(
+      <VoiceModeControls
+        {...defaultProps}
+        voiceModeEnabled
+        onMicPressStart={onMicPressStart}
+        onMicPressEnd={onMicPressEnd}
+      />,
+    )
+
+    const micButton = screen.getByRole('button', { name: 'Hold to speak' })
+    fireEvent.keyDown(micButton, { key: 'Enter', code: 'Enter' })
+    expect(onMicPressStart).toHaveBeenCalledTimes(1)
+
+    fireEvent.blur(micButton)
+    expect(onMicPressEnd).toHaveBeenCalledTimes(1)
+  })
+
   it('shows interrupt control while assistant is speaking', async () => {
     const onInterrupt = vi.fn()
     render(

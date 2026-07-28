@@ -1,4 +1,9 @@
-import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useCallback,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { MicIcon, StopCircleIcon } from './icons/ShellIcons'
 
 export interface VoiceModeControlsProps {
@@ -53,33 +58,67 @@ export function VoiceModeControls({
   const showMic = voiceModeEnabled
   const showInterrupt = voiceModeEnabled && isSpeaking
 
+  const beginMicPress = useCallback(() => {
+    if (micDisabled || micHeldRef.current) return
+    micHeldRef.current = true
+    onMicPressStart()
+  }, [micDisabled, onMicPressStart])
+
+  const endMicPress = useCallback(() => {
+    if (!micHeldRef.current) return
+    micHeldRef.current = false
+    onMicPressEnd()
+  }, [onMicPressEnd])
+
   const handleMicPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
-      if (micDisabled) return
+      if (micDisabled || micHeldRef.current) return
       event.preventDefault()
-      micHeldRef.current = true
       if (typeof event.currentTarget.setPointerCapture === 'function') {
         event.currentTarget.setPointerCapture(event.pointerId)
       }
-      onMicPressStart()
+      beginMicPress()
     },
-    [micDisabled, onMicPressStart],
+    [micDisabled, beginMicPress],
   )
 
   const handleMicPointerUp = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
       if (!micHeldRef.current) return
-      micHeldRef.current = false
       if (
         typeof event.currentTarget.hasPointerCapture === 'function' &&
         event.currentTarget.hasPointerCapture(event.pointerId)
       ) {
         event.currentTarget.releasePointerCapture(event.pointerId)
       }
-      onMicPressEnd()
+      endMicPress()
     },
-    [onMicPressEnd],
+    [endMicPress],
   )
+
+  const handleMicKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if (micDisabled) return
+      if (event.key !== ' ' && event.key !== 'Enter') return
+      if (event.repeat) return
+      event.preventDefault()
+      beginMicPress()
+    },
+    [micDisabled, beginMicPress],
+  )
+
+  const handleMicKeyUp = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if (event.key !== ' ' && event.key !== 'Enter') return
+      event.preventDefault()
+      endMicPress()
+    },
+    [endMicPress],
+  )
+
+  const handleMicBlur = useCallback(() => {
+    endMicPress()
+  }, [endMicPress])
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -123,6 +162,9 @@ export function VoiceModeControls({
           onPointerUp={handleMicPointerUp}
           onPointerCancel={handleMicPointerUp}
           onLostPointerCapture={handleMicPointerUp}
+          onKeyDown={handleMicKeyDown}
+          onKeyUp={handleMicKeyUp}
+          onBlur={handleMicBlur}
         >
           <MicIcon className="h-5 w-5" />
         </button>

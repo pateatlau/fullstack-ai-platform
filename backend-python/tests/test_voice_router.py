@@ -29,14 +29,26 @@ pytestmark = pytest.mark.anyio
 class FakeSttProvider:
     """Deterministic STT fake for router tests."""
 
-    def __init__(self, transcript: str = "hello world") -> None:
+    def __init__(
+        self,
+        transcript: str = "hello world",
+        *,
+        transcripts: list[str] | None = None,
+    ) -> None:
         self._transcript = transcript
+        self._transcripts = transcripts
+        self._call_count = 0
 
     async def transcribe_stream(
         self, audio_chunks: AsyncIterable[bytes]
     ) -> AsyncIterator[str]:
         async for _chunk in audio_chunks:
             pass
+        if self._transcripts is not None:
+            index = min(self._call_count, len(self._transcripts) - 1)
+            self._call_count += 1
+            yield self._transcripts[index]
+            return
         yield self._transcript
 
 
@@ -261,6 +273,143 @@ async def test_interrupt_is_handled_while_the_assistant_is_replying(
 
                 assert "interrupted" in seen_types
                 assert "turn_complete" not in seen_types
+    finally:
+        get_settings.cache_clear()
+
+
+def _send_final_audio(ws: object, *, seq: int) -> None:
+    first = base64.b64encode(b"\x00" * 4096).decode("ascii")
+    second = base64.b64encode(b"\x00" * 704).decode("ascii")
+    ws.send_text(  # type: ignore[attr-defined]
+        json.dumps(
+            {
+                "type": "audio_in",
+                "seq": seq,
+                "payload_b64": first,
+                "final": False,
+            }
+        )
+    )
+    ws.send_text(  # type: ignore[attr-defined]
+        json.dumps(
+            {
+                "type": "audio_in",
+                "seq": seq + 1,
+                "payload_b64": second,
+                "final": True,
+            }
+        )
+    )
+
+
+async def test_invalid_audio_payload_returns_invalid_message_without_closing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VOICE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    user_id = uuid.uuid4()
+    chat_store = FakeChatStore()
+    chat_session = await chat_store.create_session(user_id=user_id, title="Voice")
+    test_app = _build_voice_test_app(chat_store)
+
+    try:
+        with TestClient(test_app) as client:
+            with client.websocket_connect(
+                f"/api/voice/ws?session_id={chat_session.id}",
+                headers=_auth_header(user_id),
+            ) as ws:
+                assert json.loads(ws.receive_text())["type"] == "session_started"
+
+                ws.send_text(
+                    json.dumps(
+                        {
+                            "type": "audio_in",
+                            "seq": 0,
+                            "payload_b64": "not!!!base64",
+                            "final": True,
+                        }
+                    )
+                )
+
+                error = json.loads(ws.receive_text())
+                assert error["type"] == "error"
+                assert error["code"] == "invalid_message"
+                assert "Invalid base64" in error["message"]
+
+                ws.send_text(json.dumps({"type": "session_end"}))
+                closed = json.loads(ws.receive_text())
+                assert closed["type"] == "session_closed"
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_new_final_utterance_cancels_an_in_flight_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VOICE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    user_id = uuid.uuid4()
+    chat_store = FakeChatStore()
+    chat_session = await chat_store.create_session(user_id=user_id, title="Voice")
+    test_app = _build_voice_test_app(
+        chat_store,
+        stt=FakeSttProvider(transcripts=["first utterance", "second utterance"]),
+        unified=FakeUnifiedChatService(delta_delay_seconds=0.3),
+    )
+
+    try:
+        with TestClient(test_app) as client:
+            with client.websocket_connect(
+                f"/api/voice/ws?session_id={chat_session.id}",
+                headers=_auth_header(user_id),
+            ) as ws:
+                assert json.loads(ws.receive_text())["type"] == "session_started"
+
+                _send_final_audio(ws, seq=0)
+                first_transcript = json.loads(ws.receive_text())
+                assert first_transcript == {
+                    "type": "transcript_final",
+                    "text": "first utterance",
+                }
+                assert json.loads(ws.receive_text())["type"] == "assistant_text_delta"
+
+                _send_final_audio(ws, seq=2)
+
+                post_barge_messages: list[dict[str, object]] = []
+                for _ in range(12):
+                    message = json.loads(ws.receive_text())
+                    post_barge_messages.append(message)
+                    if (
+                        message.get("type") == "transcript_final"
+                        and message.get("text") == "second utterance"
+                    ):
+                        break
+
+                assert any(
+                    message.get("type") == "interrupted"
+                    for message in post_barge_messages
+                )
+                assert post_barge_messages[-1] == {
+                    "type": "transcript_final",
+                    "text": "second utterance",
+                }
+
+                seen_types: list[str] = []
+                turn_complete_count = 0
+                for message in post_barge_messages:
+                    seen_types.append(str(message["type"]))
+                for _ in range(10):
+                    message = json.loads(ws.receive_text())
+                    seen_types.append(message["type"])
+                    if message["type"] == "turn_complete":
+                        turn_complete_count += 1
+                    if turn_complete_count >= 1 and "audio_out" in seen_types:
+                        break
+
+                assert turn_complete_count == 1
+                assert "turn_complete" in seen_types
     finally:
         get_settings.cache_clear()
 

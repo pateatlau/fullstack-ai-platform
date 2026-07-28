@@ -328,11 +328,6 @@ export function Composer({
               className="inline-flex min-h-11 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-danger-600 px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-danger-600/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger-600 sm:min-w-20"
               onMouseDown={(event) => {
                 event.preventDefault()
-                if (isVoiceInputActive) {
-                  onVoiceInterrupt?.()
-                } else {
-                  onStop()
-                }
               }}
               onClick={() => {
                 if (isVoiceInputActive) {
@@ -366,7 +361,7 @@ export function Composer({
             onMicPressEnd={() => onVoiceMicPressEnd?.()}
             onInterrupt={() => onVoiceInterrupt?.()}
             transcriptPartial={transcriptPartial}
-            disabled={disabled || isStreaming}
+            disabled={disabled || (isStreaming && !isVoiceInputActive)}
             micError={voiceMicError}
             hasActiveSession={hasActiveSession}
           />

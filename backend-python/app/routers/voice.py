@@ -248,7 +248,7 @@ class VoiceWebSocketHandler:
                     continue
 
                 if isinstance(message, AudioInMessage):
-                    self._handle_audio_in(message, voice_session_id)
+                    await self._handle_audio_in(message, voice_session_id)
         finally:
             await self._cancel_pending_turn()
             expire_task.cancel()
@@ -274,20 +274,35 @@ class VoiceWebSocketHandler:
                     await self._websocket.close(code=1000, reason=reason)
                     return
 
-    def _handle_audio_in(
+    async def _handle_audio_in(
         self,
         message: AudioInMessage,
         voice_session_id: str,
     ) -> None:
         """Buffer an inbound audio chunk, starting the turn on the final one."""
         self._session_manager.record_activity(voice_session_id)
-        audio_bytes = self._stream_bridge.decode_audio_payload(message.payload_b64)
+        try:
+            audio_bytes = self._stream_bridge.decode_audio_payload(message.payload_b64)
+        except VoiceSessionError as exc:
+            await self._send_json(
+                self._stream_bridge.encode_message(
+                    ErrorMessage(
+                        code="invalid_message",
+                        message=str(exc),
+                    )
+                )
+            )
+            return
+
         self._utterance.chunks.append(audio_bytes)
         if not message.final:
             return
 
         utterance = self._utterance
         self._utterance = _UtteranceState()
+        # A new final chunk supersedes any in-flight turn so STT/chat/TTS cannot
+        # overlap with the utterance the client just committed.
+        await self._cancel_pending_turn()
         # Run the turn off the receive loop; otherwise the loop stays blocked
         # for the whole reply and a barge-in `interrupt` is only read once the
         # assistant has already finished speaking.
