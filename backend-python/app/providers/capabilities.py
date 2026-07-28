@@ -70,7 +70,27 @@ def get_capabilities(provider: ProviderName) -> ProviderCapabilities:
     return _CAPABILITIES[provider]
 
 
-def capabilities_by_provider() -> dict[str, dict[str, bool]]:
+def _supports_audio_for_provider(
+    provider: ProviderName,
+    *,
+    voice_enabled: bool,
+    voice_provider: str,
+) -> bool:
+    """Return whether a provider supports voice I/O.
+
+    OpenAI ``supports_audio`` flips to ``True`` when ``VOICE_ENABLED`` is on and
+    ``voice_provider=openai`` (OpenAI Whisper + TTS adapter registered).
+    """
+    if voice_enabled and voice_provider == "openai" and provider == "openai":
+        return True
+    return _CAPABILITIES[provider].supports_audio
+
+
+def capabilities_by_provider(
+    *,
+    voice_enabled: bool = False,
+    voice_provider: str = "openai",
+) -> dict[str, dict[str, bool]]:
     """Serialize all provider capabilities for health/config responses."""
     return {
         name: {
@@ -80,7 +100,11 @@ def capabilities_by_provider() -> dict[str, dict[str, bool]]:
             "supports_reasoning": caps.supports_reasoning,
             "supports_image_input": caps.supports_image_input,
             "supports_image_output": caps.supports_image_output,
-            "supports_audio": caps.supports_audio,
+            "supports_audio": _supports_audio_for_provider(
+                name,
+                voice_enabled=voice_enabled,
+                voice_provider=voice_provider,
+            ),
             "supports_embeddings": caps.supports_embeddings,
         }
         for name, caps in _CAPABILITIES.items()
