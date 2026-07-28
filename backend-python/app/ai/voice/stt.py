@@ -1,29 +1,99 @@
 """STT pipeline — streaming transcription orchestration."""
 
-from collections.abc import AsyncIterable
+import time
+from collections.abc import AsyncIterable, AsyncIterator
+
+from app.ai.voice.config import VoiceConfig
+from app.ai.voice.exceptions import SttError
+from app.ai.voice.interfaces import SttProvider
+from app.schemas.voice import TranscriptEvent
 
 
 class SttPipeline:
-    """Buffer/chunk audio → invoke STT → emit transcript events.
+    """Buffer/chunk audio → invoke STT → emit transcript events."""
 
-    Placeholder stub for Phase 2 implementation.
-    """
+    def __init__(self, provider: SttProvider, config: VoiceConfig) -> None:
+        """Initialize STT pipeline.
 
-    def __init__(self) -> None:
-        """Initialize STT pipeline (stub)."""
-        pass
+        Args:
+            provider: STT provider implementing the SttProvider protocol.
+            config: Voice configuration.
+        """
+        self._provider = provider
+        self._config = config
+        self._sample_rate = config.sample_rate_hz
+        self._max_utterance_seconds = config.max_utterance_seconds
 
-    async def process(self, audio_chunks: AsyncIterable[bytes]) -> AsyncIterable[str]:
+    def _calculate_audio_duration_ms(self, audio_bytes: int) -> float:
+        """Calculate audio duration in milliseconds from byte count.
+
+        Assumes PCM16 mono format: 2 bytes per sample.
+
+        Args:
+            audio_bytes: Number of audio bytes.
+
+        Returns:
+            Duration in milliseconds.
+        """
+        bytes_per_sample = 2  # PCM16
+        samples = audio_bytes / bytes_per_sample
+        duration_seconds = samples / self._sample_rate
+        return duration_seconds * 1000
+
+    async def process(
+        self, audio_chunks: AsyncIterable[bytes], final: bool = False
+    ) -> AsyncIterator[TranscriptEvent]:
         """Process streaming audio and emit transcript events.
 
         Args:
-            audio_chunks: Async iterable of raw audio byte chunks.
+            audio_chunks: Async iterable of raw audio byte chunks (PCM16 24kHz mono).
+            final: Whether this is the final chunk (utterance complete).
 
         Yields:
-            Partial or final transcript strings.
+            TranscriptEvent with partial or final transcripts.
 
         Raises:
-            NotImplementedError: Phase 1 stub.
+            SttError: On transcription failure or policy violations.
         """
-        raise NotImplementedError("SttPipeline.process() — Phase 2 implementation")
-        yield  # Make this an async generator
+        buffer = bytearray()
+        start_time = time.time()
+
+        try:
+            async for chunk in audio_chunks:
+                buffer.extend(chunk)
+
+                elapsed = time.time() - start_time
+                if elapsed > self._max_utterance_seconds:
+                    raise SttError(
+                        f"Utterance exceeds max duration of {self._max_utterance_seconds}s"
+                    )
+
+            audio_duration_ms = self._calculate_audio_duration_ms(len(buffer))
+
+            if audio_duration_ms < 100:
+                raise SttError(
+                    f"Audio duration ({audio_duration_ms:.1f}ms) below minimum 100ms"
+                )
+
+            async def _chunk_generator() -> AsyncIterator[bytes]:
+                yield bytes(buffer)
+
+            transcript_generator = self._provider.transcribe_stream(_chunk_generator())
+
+            has_transcript = False
+            async for transcript_text in transcript_generator:
+                if transcript_text and transcript_text.strip():
+                    has_transcript = True
+                    yield TranscriptEvent(
+                        type="transcript_final", text=transcript_text.strip()
+                    )
+
+            if not has_transcript:
+                raise SttError(
+                    "Empty transcript from STT provider", code="empty_transcript"
+                )
+
+        except SttError:
+            raise
+        except Exception as exc:
+            raise SttError(f"STT pipeline processing failed: {exc}") from exc
