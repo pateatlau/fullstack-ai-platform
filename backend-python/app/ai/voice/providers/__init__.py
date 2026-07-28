@@ -1,3 +1,5 @@
 """Voice providers package — concrete STT/TTS adapters."""
 
-__all__ = []
+from app.ai.voice.providers.openai_voice import OpenAiVoiceAdapter
+
+__all__ = ["OpenAiVoiceAdapter"]

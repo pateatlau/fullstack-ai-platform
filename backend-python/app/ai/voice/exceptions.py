@@ -10,7 +10,15 @@ class VoiceSessionError(Exception):
 class SttError(Exception):
     """Speech-to-text provider error."""
 
-    pass
+    def __init__(self, message: str, code: str | None = None) -> None:
+        """Initialize STT error.
+
+        Args:
+            message: Error message.
+            code: Optional error code for client classification.
+        """
+        super().__init__(message)
+        self.code = code
 
 
 class TtsError(Exception):
