@@ -398,6 +398,17 @@ class VoiceWebSocketHandler:
             await self._websocket.send_text(payload)
 
 
+def _resolve_voice_bearer_token(websocket: WebSocket) -> str | None:
+    """Resolve JWT from Authorization header, or ``access_token`` query param for browsers."""
+    bearer = extract_bearer_token(websocket.headers.get("authorization"))
+    if bearer is not None:
+        return bearer
+    query_token = websocket.query_params.get("access_token")
+    if query_token:
+        return query_token
+    return None
+
+
 def create_voice_router(
     _settings: Settings,
     *,
@@ -432,7 +443,7 @@ def create_voice_router(
         voice_config = VoiceConfig.from_settings(settings)
         bridge = VoiceStreamBridge(voice_config, interrupt_controller=interrupt)
 
-        bearer = extract_bearer_token(websocket.headers.get("authorization"))
+        bearer = _resolve_voice_bearer_token(websocket)
         if bearer is None:
             await _send_error_and_close(
                 websocket,

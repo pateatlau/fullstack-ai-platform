@@ -19,6 +19,7 @@ describe('useChatStreamingEnabled', () => {
           chat_streaming_enabled: false,
           tools_enabled: true,
           rag_enabled: true,
+          voice_enabled: true,
           capabilities: {
             by_provider: {
               openai: { supports_streaming: true, supports_tool_calling: true },
@@ -36,6 +37,7 @@ describe('useChatStreamingEnabled', () => {
       expect(result.current.chatStreamingEnabled).toBe(false)
       expect(result.current.toolsEnabled).toBe(true)
       expect(result.current.ragEnabled).toBe(true)
+      expect(result.current.voiceEnabled).toBe(true)
     })
   })
 })
