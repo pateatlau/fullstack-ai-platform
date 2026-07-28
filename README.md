@@ -6,7 +6,7 @@ Production-grade full-stack AI chat platform with RAG, tools, agents, MCP, and v
 [![PR Quality Checks](https://github.com/pateatlau/basic-chatbot-react-python/actions/workflows/pr-quality.yml/badge.svg)](https://github.com/pateatlau/basic-chatbot-react-python/actions/workflows/pr-quality.yml)
 [![Live Demo](https://img.shields.io/badge/demo-live-blue)](https://fullstack-ai-platform-umber.vercel.app/)
 
-![Chat desktop screenshot](./docs/assets/screenshots/chat-desktop.png)
+![Chat desktop view with sessions sidebar and empty conversation state](./docs/assets/screenshots/chat-desktop.png)
 
 ## Features
 
@@ -26,6 +26,16 @@ Production-grade full-stack AI chat platform with RAG, tools, agents, MCP, and v
 **Stack:** React + TypeScript + Vite + Tailwind CSS v4 · FastAPI (Python) · PostgreSQL + pgvector · optional Node.js reference backend (paused)
 
 **Platform status:** MVP through Post-MVP V1.1.1 and V2 Epics 01–04 are complete. Flag-guarded epics default off so core chat works without extra configuration. See [CHANGELOG.md](CHANGELOG.md) and [docs/releases/](docs/releases/) for release history.
+
+## Screenshots
+
+| Chat (desktop) | Documents |
+| --- | --- |
+| ![Chat desktop view with sessions sidebar and streaming-ready composer](./docs/assets/screenshots/chat-desktop.png) | ![Documents page with upload form and sample file list](./docs/assets/screenshots/documents-page.png) |
+
+| Mobile chat | Voice mode |
+| --- | --- |
+| ![Mobile chat layout with collapsed sidebar drawer](./docs/assets/screenshots/chat-mobile.png) | ![Voice mode controls with mic button and tool toggles](./docs/assets/screenshots/voice-mode.png) |
 
 ## Architecture
 
