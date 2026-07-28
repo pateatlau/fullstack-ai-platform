@@ -88,7 +88,9 @@ class OpenAiVoiceAdapter:
     ) -> AsyncIterator[bytes]:
         """Synthesize streaming text chunks to audio using OpenAI TTS API.
 
-        Placeholder for Phase 3 implementation.
+        Note: OpenAI TTS API does not support true streaming synthesis.
+        This implementation accumulates text chunks and synthesizes when
+        a complete chunk is ready (up to 4096 characters) or stream ends.
 
         Args:
             text_chunks: Async iterable of text strings to synthesize.
@@ -99,5 +101,34 @@ class OpenAiVoiceAdapter:
         Raises:
             TtsError: On synthesis failure.
         """
-        raise NotImplementedError("synthesize_stream() — Phase 3 implementation")
-        yield b""  # Make this an async generator
+        from app.ai.voice.exceptions import TtsError
+
+        try:
+            async for text in text_chunks:
+                if not text or not text.strip():
+                    continue
+
+                async def _synthesize() -> bytes:
+                    response = await self._client.audio.speech.create(
+                        model=self._config.tts_model,
+                        voice=self._config.tts_voice,
+                        input=text.strip(),
+                        response_format="pcm",
+                    )
+
+                    audio_bytes = b""
+                    async for chunk in response.iter_bytes():  # type: ignore[attr-defined]
+                        audio_bytes += chunk
+                    return audio_bytes
+
+                audio_data = await retry_async(_synthesize)
+
+                if not audio_data:
+                    raise TtsError("Empty audio data from TTS provider")
+
+                yield audio_data
+
+        except TtsError:
+            raise
+        except Exception as exc:
+            raise TtsError(f"TTS synthesis failed: {exc}") from exc

@@ -243,17 +243,3 @@ async def test_transcribe_stream_with_retry(
         assert len(transcripts) == 1
         assert transcripts[0] == "success after retry"
         assert call_count == 3
-
-
-async def test_synthesize_stream_not_implemented(
-    api_key: str, voice_config: VoiceConfig
-) -> None:
-    """Test that TTS is not yet implemented."""
-    adapter = OpenAiVoiceAdapter(api_key, voice_config)
-
-    async def _text_generator() -> AsyncIterator[str]:
-        yield "hello"
-
-    with pytest.raises(NotImplementedError, match="Phase 3"):
-        async for _ in adapter.synthesize_stream(_text_generator()):
-            pass
