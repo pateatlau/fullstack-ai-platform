@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING
 
 from app.schemas.chat import ProviderName
+
+if TYPE_CHECKING:
+    from app.core.config import Settings
 
 ALL_PROVIDERS: tuple[ProviderName, ...] = ("openai", "gemini", "groq", "anthropic")
 
@@ -65,31 +69,24 @@ _CAPABILITIES: dict[ProviderName, ProviderCapabilities] = {
 }
 
 
-def get_capabilities(provider: ProviderName) -> ProviderCapabilities:
-    """Return capability flags for a supported LLM provider."""
-    return _CAPABILITIES[provider]
-
-
-def _supports_audio_for_provider(
+def get_capabilities(
     provider: ProviderName,
-    *,
-    voice_enabled: bool,
-    voice_provider: str,
-) -> bool:
-    """Return whether a provider supports voice I/O.
-
-    OpenAI ``supports_audio`` flips to ``True`` when ``VOICE_ENABLED`` is on and
-    ``voice_provider=openai`` (OpenAI Whisper + TTS adapter registered).
-    """
-    if voice_enabled and voice_provider == "openai" and provider == "openai":
-        return True
-    return _CAPABILITIES[provider].supports_audio
+    settings: Settings | None = None,
+) -> ProviderCapabilities:
+    """Return capability flags for a supported LLM provider."""
+    caps = _CAPABILITIES[provider]
+    if (
+        settings is not None
+        and settings.voice_enabled
+        and settings.voice_provider == "openai"
+        and provider == "openai"
+    ):
+        return replace(caps, supports_audio=True)
+    return caps
 
 
 def capabilities_by_provider(
-    *,
-    voice_enabled: bool = False,
-    voice_provider: str = "openai",
+    settings: Settings | None = None,
 ) -> dict[str, dict[str, bool]]:
     """Serialize all provider capabilities for health/config responses."""
     return {
@@ -100,11 +97,7 @@ def capabilities_by_provider(
             "supports_reasoning": caps.supports_reasoning,
             "supports_image_input": caps.supports_image_input,
             "supports_image_output": caps.supports_image_output,
-            "supports_audio": _supports_audio_for_provider(
-                name,
-                voice_enabled=voice_enabled,
-                voice_provider=voice_provider,
-            ),
+            "supports_audio": get_capabilities(name, settings).supports_audio,
             "supports_embeddings": caps.supports_embeddings,
         }
         for name, caps in _CAPABILITIES.items()

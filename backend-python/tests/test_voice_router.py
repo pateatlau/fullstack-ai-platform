@@ -1,4 +1,4 @@
-"""Voice WebSocket router tests (Epic 04 Phase 7)."""
+"""Voice WebSocket router tests (Epic 04 Phase 7–8)."""
 
 from __future__ import annotations
 
@@ -13,12 +13,14 @@ from httpx import ASGITransport, AsyncClient
 from starlette.testclient import TestClient
 
 from app.ai.voice.config import VoiceConfig
+from app.ai.voice.interrupt import InterruptController
 from app.ai.voice.session import VoiceSessionManager
 from app.core.config import Settings, get_settings
 from app.core.security import create_access_token
 from app.main import app as main_app
 from app.providers.capabilities import capabilities_by_provider
 from app.routers.voice import VoiceConnectionServices, create_voice_router
+from tests.ai.voice.test_integration import FakeUnifiedChatService, NoopChatService
 from tests.fakes import FakeChatStore
 
 pytestmark = pytest.mark.anyio
@@ -70,6 +72,9 @@ def _build_voice_test_app(
             session_manager=VoiceSessionManager(config, chat_store),
             stt_provider=stt_provider,
             tts_provider=tts_provider,
+            interrupt=InterruptController(),
+            unified_service=FakeUnifiedChatService(),  # type: ignore[arg-type]
+            chat_service=NoopChatService(),  # type: ignore[arg-type]
         )
 
     test_app = FastAPI()
@@ -127,7 +132,7 @@ async def test_guest_receives_voice_auth_required(
     }
 
 
-async def test_handshake_and_stub_turn_with_fakes(
+async def test_handshake_and_chat_turn_with_fakes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("VOICE_ENABLED", "true")
@@ -179,21 +184,20 @@ async def test_handshake_and_stub_turn_with_fakes(
                     "text": "hello world",
                 }
 
-                assistant_delta = json.loads(ws.receive_text())
-                assert assistant_delta == {
-                    "type": "assistant_text_delta",
-                    "text": "You said: hello world",
-                }
+                seen_types: list[str] = []
+                assistant_text = ""
+                for _ in range(8):
+                    message = json.loads(ws.receive_text())
+                    seen_types.append(message["type"])
+                    if message["type"] == "assistant_text_delta":
+                        assistant_text += message["text"]
+                    if message["type"] == "turn_complete":
+                        break
 
-                audio_out = json.loads(ws.receive_text())
-                assert audio_out["type"] == "audio_out"
-                assert audio_out["seq"] == 1
-                assert audio_out["payload_b64"] == base64.b64encode(
-                    b"fake_audio_chunk"
-                ).decode("ascii")
-
-                turn_complete = json.loads(ws.receive_text())
-                assert turn_complete["type"] == "turn_complete"
+                assert "assistant_text_delta" in seen_types
+                assert "audio_out" in seen_types
+                assert "turn_complete" in seen_types
+                assert assistant_text == "Hello world."
 
                 ws.send_text(json.dumps({"type": "session_end"}))
                 closed = json.loads(ws.receive_text())
@@ -253,6 +257,6 @@ async def test_health_includes_voice_enabled_and_audio_capability(
 
 
 async def test_capabilities_audio_off_when_voice_disabled() -> None:
-    payload = capabilities_by_provider(voice_enabled=False)
+    payload = capabilities_by_provider(None)
     for provider in ("openai", "gemini", "groq", "anthropic"):
         assert payload[provider]["supports_audio"] is False
