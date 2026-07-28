@@ -145,6 +145,7 @@ class VoiceWebSocketHandler:
         self._managed: ManagedVoiceSession | None = None
         self._running = True
         self._turn_task: asyncio.Task[None] | None = None
+        self._send_lock = asyncio.Lock()
 
     async def run(self) -> None:
         await self._websocket.accept()
@@ -441,14 +442,15 @@ class VoiceWebSocketHandler:
             )
 
     async def _send_json(self, payload: str) -> None:
-        if self._websocket.client_state != WebSocketState.CONNECTED:
-            return
-        try:
-            await self._websocket.send_text(payload)
-        except RuntimeError:
-            # The peer closed between the state check and the send; a turn task
-            # running off the receive loop can still be mid-flight here.
-            self._running = False
+        async with self._send_lock:
+            if self._websocket.client_state != WebSocketState.CONNECTED:
+                return
+            try:
+                await self._websocket.send_text(payload)
+            except RuntimeError:
+                # The peer closed between the state check and the send; a turn task
+                # running off the receive loop can still be mid-flight here.
+                self._running = False
 
 
 def _resolve_voice_bearer_token(websocket: WebSocket) -> str | None:
