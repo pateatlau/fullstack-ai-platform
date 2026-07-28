@@ -479,7 +479,7 @@ npx markdown-link-check README.md CONTRIBUTING.md CHANGELOG.md
 - [x] Re-run secrets scan from Phase 0.
 - [x] Confirm CI passes on `main`.
 - [ ] Smoke test Quick Start from README on a clean machine or fresh clone.
-- [x] Set repository to public (user action) — already public as of 2026-07-29.
+- [x] Set repository to public (user action) — already public as of 2026-07-28.
 - [ ] Add GitHub topics: `fastapi`, `react`, `typescript`, `rag`, `llm`, `chatbot`, `pgvector`, `tailwindcss`.
 - [x] Write completion audit with sign-off.
 - [ ] Phase 7 complete — user confirmed.
