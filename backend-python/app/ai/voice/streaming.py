@@ -76,6 +76,11 @@ class VoiceStreamBridge:
         self._config = config
         self._interrupt = interrupt_controller
 
+    @property
+    def max_chunk_bytes(self) -> int:
+        """Maximum raw audio bytes per inbound/outbound WS chunk."""
+        return self._config.max_chunk_bytes
+
     def bind_interrupt_controller(
         self, interrupt_controller: InterruptController
     ) -> None:

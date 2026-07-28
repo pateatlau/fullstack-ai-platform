@@ -1,55 +1,51 @@
-"""Voice WebSocket router — bidirectional voice transport (Epic 04 Phase 7).
-
-Phase 7 wires session management, STT/TTS pipelines, and stream framing.
-``transcript_final`` triggers a stub chat turn; full ``UnifiedChatService``
-integration lands in Phase 8.
-"""
+"""Voice WebSocket endpoint (flag-guarded when mounted from ``app.main``)."""
 
 from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterable, AsyncIterator, Callable
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass, field
 
-from typing import cast
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
-from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.requests import Request
-
-from app.ai.voice.config import VoiceConfig
-from app.ai.voice.exceptions import (
-    SttError,
-    VoiceAuthError,
-    VoiceSessionError,
+from app.ai.deps import (
+    get_interrupt_controller,
+    get_stt_provider,
+    get_tts_provider,
+    get_voice_session_manager,
 )
+from app.ai.voice.config import VoiceConfig
+from app.ai.voice.chat_bridge import VoiceChatBridge
+from app.ai.voice.exceptions import SttError, VoiceAuthError, VoiceSessionError
 from app.ai.voice.interrupt import InterruptController
 from app.ai.voice.interfaces import SttProvider, TtsProvider
-from app.ai.voice.providers.openai_voice import OpenAiVoiceAdapter
-from app.ai.voice.session import VoiceSessionManager
-from app.ai.voice.streaming import ServerMessage, VoiceStreamBridge
+from app.ai.voice.session import ManagedVoiceSession, VoiceSessionManager
 from app.ai.voice.stt import SttPipeline
+from app.ai.voice.streaming import VoiceStreamBridge
 from app.ai.voice.tts import TtsPipeline
-from app.core.caller import CallerContext, resolve_guest_caller
+from app.core.caller import CallerContext, extract_bearer_token
 from app.core.config import Settings, get_settings
-from app.core.logging import get_logger
+from app.core.logging import bind_context, get_logger
 from app.core.security import InvalidAccessTokenError, decode_access_token
-from app.db.chat import SqlChatStore
-from app.db.identity import SqlGuestStore
 from app.db.session import get_db_session
+from app.routers.chat import get_chat_service, get_unified_chat_service
+from app.schemas.chat import ChatMessageSchema, ChatRequestSchema, ProviderName
 from app.schemas.voice import (
-    AssistantTextDeltaMessage,
     AudioInMessage,
-    AudioOutMessage,
     ErrorMessage,
     HeartbeatMessage,
+    InterruptMessage,
     SessionClosedMessage,
     SessionEndMessage,
     SessionStartedMessage,
     TranscriptFinalMessage,
-    TurnCompleteMessage,
+    TranscriptPartialMessage,
 )
+from app.services.chat_service import ChatService, ChatServiceError
+from app.services.unified_chat_service import UnifiedChatService
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
@@ -62,334 +58,344 @@ class VoiceConnectionServices:
     session_manager: VoiceSessionManager
     stt_provider: SttProvider
     tts_provider: TtsProvider
+    interrupt: InterruptController
+    unified_service: UnifiedChatService
+    chat_service: ChatService
 
 
-def _create_voice_provider(
-    settings: Settings, config: VoiceConfig
-) -> OpenAiVoiceAdapter:
-    if settings.voice_provider != "openai":
-        raise VoiceSessionError(
-            f"Unsupported voice provider: {settings.voice_provider}",
-            code="unsupported_voice_provider",
-        )
-    if not settings.openai_api_key:
-        raise VoiceSessionError(
-            "OpenAI API key is required for voice",
-            code="voice_provider_not_configured",
-        )
-    return OpenAiVoiceAdapter(settings.openai_api_key, config)
-
-
-def build_voice_connection_services(
-    settings: Settings,
-    session: AsyncSession,
-) -> VoiceConnectionServices:
-    """Construct default voice services for a WebSocket connection."""
-    config = VoiceConfig.from_settings(settings)
-    provider = _create_voice_provider(settings, config)
-    chat_store = SqlChatStore(session)
-    return VoiceConnectionServices(
-        config=config,
-        session_manager=VoiceSessionManager(config, chat_store),
-        stt_provider=provider,
-        tts_provider=provider,
-    )
-
-
-def _extract_bearer_token(authorization: str | None) -> str | None:
-    if not authorization:
-        return None
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
-        return None
-    return token.strip()
-
-
-class _WebSocketHeaderAdapter:
-    """Expose WebSocket headers/client for guest caller resolution."""
+class _WebSocketDisconnectProxy:
+    """Minimal ``Request`` stand-in for ``is_disconnected()`` checks in chat streams."""
 
     def __init__(self, websocket: WebSocket) -> None:
-        self.headers = websocket.headers
-        self.client = websocket.client
+        self._websocket = websocket
+
+    async def is_disconnected(self) -> bool:
+        return self._websocket.client_state != WebSocketState.CONNECTED
 
 
-async def resolve_websocket_caller(
+@dataclass
+class VoiceTurnOptions:
+    """Per-connection chat toggles forwarded into ``UnifiedChatService``."""
+
+    use_web_search: bool = False
+    use_documents: bool = False
+    provider: ProviderName | None = None
+    model: str | None = None
+
+
+@dataclass
+class _UtteranceState:
+    """Buffered inbound audio for one user utterance."""
+
+    chunks: list[bytes] = field(default_factory=list)
+    final_received: bool = False
+
+
+async def _send_error_and_close(
     websocket: WebSocket,
-    settings: Settings,
-    session: AsyncSession,
-) -> CallerContext:
-    """Resolve authenticated user or guest from WebSocket headers."""
-    token = _extract_bearer_token(websocket.headers.get("authorization"))
-    if token is not None:
-        try:
-            user_id = decode_access_token(token, settings=settings)
-            return CallerContext.for_user(user_id)
-        except InvalidAccessTokenError:
-            pass
-
-    return await resolve_guest_caller(
-        cast(Request, _WebSocketHeaderAdapter(websocket)),
-        SqlGuestStore(session),
-    )
-
-
-async def _send_message(
-    websocket: WebSocket,
-    bridge: VoiceStreamBridge,
-    message: ServerMessage,
-) -> None:
-    await websocket.send_text(bridge.encode_message(message))
-
-
-async def _run_stub_chat_turn(
     *,
-    websocket: WebSocket,
     bridge: VoiceStreamBridge,
-    services: VoiceConnectionServices,
-    interrupt: InterruptController,
-    voice_session_id: str,
-    transcript: str,
+    code: str,
+    message: str,
+    close_code: int = 1008,
 ) -> None:
-    """Phase 7 stub: echo transcript as assistant text + TTS audio.
-
-    Full ``UnifiedChatService.stream_execute()`` wiring replaces this in Phase 8.
-    """
-    stub_text = f"You said: {transcript}"
-    interrupt.set_turn_active(voice_session_id, True)
-    tts_pipeline = TtsPipeline(services.tts_provider, services.config)
-    interrupt.register_tts_pipeline(voice_session_id, tts_pipeline)
-
-    async def turn_worker() -> None:
-        await _send_message(
-            websocket,
-            bridge,
-            AssistantTextDeltaMessage(text=stub_text),
+    if websocket.client_state == WebSocketState.CONNECTING:
+        await websocket.accept()
+    if websocket.client_state == WebSocketState.CONNECTED:
+        await websocket.send_text(
+            bridge.encode_message(ErrorMessage(code=code, message=message))
         )
+        await websocket.close(code=close_code, reason=code)
 
-        seq = 0
 
-        async def text_chunks() -> AsyncIterator[str]:
-            yield stub_text
+class VoiceWebSocketHandler:
+    """Orchestrates one bidirectional voice WebSocket connection."""
 
-        async for audio_chunk in tts_pipeline.process(text_chunks()):
-            seq += 1
-            await _send_message(
-                websocket,
-                bridge,
-                AudioOutMessage(
-                    seq=seq,
-                    payload_b64=bridge.encode_audio_payload(audio_chunk),
-                ),
+    def __init__(
+        self,
+        *,
+        websocket: WebSocket,
+        settings: Settings,
+        session_manager: VoiceSessionManager,
+        stt_provider: SttProvider,
+        tts_provider: TtsProvider,
+        interrupt: InterruptController,
+        unified_service: UnifiedChatService,
+        chat_service: ChatService,
+        caller: CallerContext,
+        chat_session_id: uuid.UUID,
+        turn_options: VoiceTurnOptions,
+    ) -> None:
+        self._websocket = websocket
+        self._settings = settings
+        self._session_manager = session_manager
+        self._stt_provider = stt_provider
+        self._tts_provider = tts_provider
+        self._interrupt = interrupt
+        self._unified_service = unified_service
+        self._chat_service = chat_service
+        self._caller = caller
+        self._chat_session_id = chat_session_id
+        self._turn_options = turn_options
+
+        voice_config = VoiceConfig.from_settings(settings)
+        self._stream_bridge = VoiceStreamBridge(
+            voice_config, interrupt_controller=interrupt
+        )
+        self._utterance = _UtteranceState()
+        self._managed: ManagedVoiceSession | None = None
+        self._running = True
+
+    async def run(self) -> None:
+        await self._websocket.accept()
+        try:
+            self._managed = await self._session_manager.create(
+                self._chat_session_id, self._caller
             )
-
-        await _send_message(websocket, bridge, TurnCompleteMessage())
-
-    turn_task = asyncio.create_task(turn_worker())
-    interrupt.register_llm_task(voice_session_id, turn_task)
-    services.session_manager.register_task(voice_session_id, turn_task)
-
-    try:
-        await turn_task
-    except asyncio.CancelledError:
-        pass
-    finally:
-        interrupt.set_turn_active(voice_session_id, False)
-
-
-async def _process_stt_utterance(
-    *,
-    websocket: WebSocket,
-    bridge: VoiceStreamBridge,
-    services: VoiceConnectionServices,
-    interrupt: InterruptController,
-    voice_session_id: str,
-    audio_buffer: bytes,
-) -> None:
-    """Run STT on a completed utterance and trigger the stub chat turn."""
-    stt_pipeline = SttPipeline(services.stt_provider, services.config)
-    interrupt.register_stt_pipeline(voice_session_id, stt_pipeline)
-
-    async def audio_chunks() -> AsyncIterable[bytes]:
-        yield audio_buffer
-
-    transcript_text: str | None = None
-    async for event in stt_pipeline.process(audio_chunks(), final=True):
-        if event.type == "transcript_final":
-            transcript_text = event.text
-            await _send_message(
-                websocket,
-                bridge,
-                TranscriptFinalMessage(text=event.text),
-            )
-
-    if transcript_text is None:
-        return
-
-    await _run_stub_chat_turn(
-        websocket=websocket,
-        bridge=bridge,
-        services=services,
-        interrupt=interrupt,
-        voice_session_id=voice_session_id,
-        transcript=transcript_text,
-    )
-
-
-async def _handle_voice_session(
-    websocket: WebSocket,
-    *,
-    session_id: str,
-    caller: CallerContext,
-    services: VoiceConnectionServices,
-) -> None:
-    bridge = VoiceStreamBridge(services.config)
-    interrupt = InterruptController()
-    bridge.bind_interrupt_controller(interrupt)
-
-    try:
-        voice_session = await services.session_manager.create(session_id, caller)
-    except VoiceAuthError:
-        await _send_message(
-            websocket,
-            bridge,
-            ErrorMessage(
+        except VoiceAuthError:
+            await _send_error_and_close(
+                self._websocket,
+                bridge=self._stream_bridge,
                 code="voice_auth_required",
                 message="Voice sessions require an authenticated user",
-            ),
-        )
-        return
-    except VoiceSessionError as exc:
-        await _send_message(
-            websocket,
-            bridge,
-            ErrorMessage(
+            )
+            return
+        except VoiceSessionError as exc:
+            await _send_error_and_close(
+                self._websocket,
+                bridge=self._stream_bridge,
                 code=exc.code or "voice_session_error",
                 message=str(exc),
-            ),
-        )
-        return
+            )
+            return
 
-    voice_session_id = voice_session.voice_session_id
-    logger.info(
-        "Voice session started",
-        voice_session_id=voice_session_id,
-        chat_session_id=str(voice_session.session_id),
-        voice_event_type="session_started",
-    )
-
-    await _send_message(
-        websocket,
-        bridge,
-        SessionStartedMessage(
+        voice_session_id = self._managed.voice_session_id
+        bind_context(
             voice_session_id=voice_session_id,
-            audio_format="pcm16_24k_mono",
-        ),
-    )
+            chat_session_id=str(self._chat_session_id),
+        )
+        logger.info(
+            "Voice session started",
+            voice_session_id=voice_session_id,
+            chat_session_id=str(self._chat_session_id),
+        )
 
-    audio_buffer = bytearray()
-
-    async def cleanup() -> None:
-        interrupt.clear_session(voice_session_id)
-
-    services.session_manager.register_cleanup(voice_session_id, cleanup)
-
-    try:
-        while True:
-            raw = await websocket.receive_text()
-            try:
-                message, interrupted = await bridge.decode_and_handle_barge_in(
-                    raw,
+        await self._send_json(
+            self._stream_bridge.encode_message(
+                SessionStartedMessage(
                     voice_session_id=voice_session_id,
+                    audio_format="pcm16_24k_mono",
                 )
-            except VoiceSessionError as exc:
-                await _send_message(
-                    websocket,
-                    bridge,
-                    ErrorMessage(
-                        code="invalid_message",
-                        message=str(exc),
-                    ),
-                )
-                continue
+            )
+        )
 
-            if interrupted is not None:
-                logger.info(
-                    "Voice turn interrupted",
-                    voice_session_id=voice_session_id,
-                    voice_interrupted=True,
-                    voice_event_type="interrupted",
-                )
-                await _send_message(websocket, bridge, interrupted)
-                audio_buffer.clear()
-                continue
+        expire_task = asyncio.create_task(self._expire_loop(voice_session_id))
+        self._session_manager.register_task(voice_session_id, expire_task)
 
-            if isinstance(message, HeartbeatMessage):
-                services.session_manager.record_heartbeat(voice_session_id)
-                await _send_message(websocket, bridge, message)
-                continue
-
-            if isinstance(message, SessionEndMessage):
-                break
-
-            if isinstance(message, AudioInMessage):
-                services.session_manager.record_activity(voice_session_id)
-                chunk = bridge.decode_audio_payload(message.payload_b64)
-                audio_buffer.extend(chunk)
-
-                if not message.final:
-                    continue
-
-                buffer_snapshot = bytes(audio_buffer)
-                audio_buffer.clear()
+        try:
+            while self._running and self._managed.is_active:
+                try:
+                    data = await self._websocket.receive_text()
+                except WebSocketDisconnect:
+                    break
 
                 try:
-                    await _process_stt_utterance(
-                        websocket=websocket,
-                        bridge=bridge,
-                        services=services,
-                        interrupt=interrupt,
+                    (
+                        message,
+                        interrupted,
+                    ) = await self._stream_bridge.decode_and_handle_barge_in(
+                        data,
                         voice_session_id=voice_session_id,
-                        audio_buffer=buffer_snapshot,
                     )
-                except SttError as exc:
-                    code = exc.code or "stt_error"
-                    logger.warning(
-                        "STT processing failed",
-                        voice_session_id=voice_session_id,
-                        voice_error_code=code,
-                        voice_event_type="error",
+                except VoiceSessionError as exc:
+                    await self._send_json(
+                        self._stream_bridge.encode_message(
+                            ErrorMessage(
+                                code="invalid_message",
+                                message=str(exc),
+                            )
+                        )
                     )
-                    await _send_message(
-                        websocket,
-                        bridge,
-                        ErrorMessage(code=code, message=str(exc)),
-                    )
-                continue
+                    continue
 
-    except WebSocketDisconnect:
-        logger.info(
-            "Voice WebSocket disconnected",
+                if interrupted is not None:
+                    await self._send_json(
+                        self._stream_bridge.encode_message(interrupted)
+                    )
+                    self._utterance = _UtteranceState()
+
+                if isinstance(message, SessionEndMessage):
+                    await self._session_manager.teardown(
+                        voice_session_id, reason="client_end"
+                    )
+                    await self._send_json(
+                        self._stream_bridge.encode_message(
+                            SessionClosedMessage(reason="client_end")
+                        )
+                    )
+                    break
+
+                if isinstance(message, HeartbeatMessage):
+                    self._session_manager.record_heartbeat(voice_session_id)
+                    await self._send_json(
+                        self._stream_bridge.encode_message(
+                            HeartbeatMessage(ts=message.ts)
+                        )
+                    )
+                    continue
+
+                if isinstance(message, InterruptMessage):
+                    continue
+
+                if isinstance(message, AudioInMessage):
+                    await self._handle_audio_in(message, voice_session_id)
+        finally:
+            expire_task.cancel()
+            await asyncio.gather(expire_task, return_exceptions=True)
+            if self._managed is not None and self._managed.is_active:
+                await self._session_manager.teardown(
+                    self._managed.voice_session_id, reason="disconnect"
+                )
+            self._interrupt.clear_session(voice_session_id)
+
+    async def _expire_loop(self, voice_session_id: str) -> None:
+        while self._running:
+            await asyncio.sleep(5)
+            expired = await self._session_manager.expire_stale_sessions()
+            for expired_id, reason in expired:
+                if expired_id == voice_session_id:
+                    await self._send_json(
+                        self._stream_bridge.encode_message(
+                            SessionClosedMessage(reason=reason)
+                        )
+                    )
+                    self._running = False
+                    await self._websocket.close(code=1000, reason=reason)
+                    return
+
+    async def _handle_audio_in(
+        self,
+        message: AudioInMessage,
+        voice_session_id: str,
+    ) -> None:
+        self._session_manager.record_activity(voice_session_id)
+        audio_bytes = self._stream_bridge.decode_audio_payload(message.payload_b64)
+        self._utterance.chunks.append(audio_bytes)
+        if message.final:
+            self._utterance.final_received = True
+
+        if not self._utterance.final_received:
+            return
+
+        voice_config = VoiceConfig.from_settings(self._settings)
+        stt_pipeline = SttPipeline(self._stt_provider, voice_config)
+        self._interrupt.register_stt_pipeline(voice_session_id, stt_pipeline)
+
+        async def audio_iter() -> AsyncIterator[bytes]:
+            for chunk in self._utterance.chunks:
+                yield chunk
+
+        try:
+            stt_task = asyncio.create_task(self._run_stt(stt_pipeline, audio_iter()))
+            self._interrupt.register_stt_task(voice_session_id, stt_task)
+            transcript_text = await stt_task
+        except SttError as exc:
+            error_code = exc.code or "stt_error"
+            await self._send_json(
+                self._stream_bridge.encode_message(
+                    ErrorMessage(code=error_code, message=str(exc))
+                )
+            )
+            self._utterance = _UtteranceState()
+            return
+        except asyncio.CancelledError:
+            self._utterance = _UtteranceState()
+            return
+
+        self._utterance = _UtteranceState()
+        if not transcript_text:
+            return
+
+        await self._send_json(
+            self._stream_bridge.encode_message(
+                TranscriptFinalMessage(text=transcript_text)
+            )
+        )
+        await self._run_chat_turn(transcript_text, voice_session_id)
+
+    async def _run_stt(
+        self,
+        stt_pipeline: SttPipeline,
+        audio_iter: AsyncIterator[bytes],
+    ) -> str:
+        transcript_text = ""
+        async for event in stt_pipeline.process(audio_iter, final=True):
+            if event.type == "transcript_partial":
+                await self._send_json(
+                    self._stream_bridge.encode_message(
+                        TranscriptPartialMessage(
+                            text=event.text,
+                            stability=event.stability,
+                        )
+                    )
+                )
+            elif event.type == "transcript_final":
+                transcript_text = event.text
+        return transcript_text
+
+    async def _run_chat_turn(self, transcript_text: str, voice_session_id: str) -> None:
+        request = ChatRequestSchema(
+            messages=[ChatMessageSchema(role="user", content=transcript_text)],
+            session_id=self._chat_session_id,
+            use_web_search=self._turn_options.use_web_search,
+            use_documents=self._turn_options.use_documents,
+            provider=self._turn_options.provider,
+            model=self._turn_options.model,
+        )
+
+        try:
+            prep = await self._chat_service.prepare_stream(request, self._caller)
+        except ChatServiceError as exc:
+            await self._send_json(
+                self._stream_bridge.encode_message(
+                    ErrorMessage(code=exc.code, message=exc.message)
+                )
+            )
+            return
+
+        http_request = _WebSocketDisconnectProxy(self._websocket)
+        tts_pipeline = TtsPipeline(
+            self._tts_provider,
+            VoiceConfig.from_settings(self._settings),
+        )
+        chat_bridge = VoiceChatBridge(
+            stream_bridge=self._stream_bridge,
+            tts_pipeline=tts_pipeline,
+            interrupt=self._interrupt,
             voice_session_id=voice_session_id,
-            voice_event_type="disconnect",
+            send_json=self._send_json,
         )
-    finally:
-        closed = await services.session_manager.teardown(
-            voice_session_id,
-            reason="client_end",
+
+        turn_task = asyncio.create_task(
+            chat_bridge.run_turn(
+                unified_service=self._unified_service,
+                chat_service=self._chat_service,
+                request=request,
+                http_request=http_request,
+                caller=self._caller,
+                prep=prep,
+            )
         )
-        if closed:
-            reason = voice_session.close_reason or "client_end"
-            logger.info(
-                "Voice session closed",
-                voice_session_id=voice_session_id,
-                voice_session_closed_reason=reason,
-                voice_event_type="session_closed",
-            )
-            await _send_message(
-                websocket,
-                bridge,
-                SessionClosedMessage(reason=reason),
-            )
+        self._interrupt.register_llm_task(voice_session_id, turn_task)
+
+        try:
+            await turn_task
+        except asyncio.CancelledError:
+            pass
+
+    async def _send_json(self, payload: str) -> None:
+        if self._websocket.client_state == WebSocketState.CONNECTED:
+            await self._websocket.send_text(payload)
 
 
 def create_voice_router(
@@ -404,67 +410,82 @@ def create_voice_router(
     @router.websocket("/api/voice/ws")
     async def voice_websocket(
         websocket: WebSocket,
-        session_id: str,
-        app_settings: Settings = Depends(get_settings),
+        session_id: uuid.UUID = Query(..., description="Chat session id to attach"),
+        use_web_search: bool = Query(default=False),
+        use_documents: bool = Query(default=False),
+        provider: ProviderName | None = Query(default=None),
+        model: str | None = Query(default=None),
+        settings: Settings = Depends(get_settings),
         db_session: AsyncSession = Depends(get_db_session),
+        session_manager: VoiceSessionManager = Depends(get_voice_session_manager),
+        stt_provider: SttProvider = Depends(get_stt_provider),
+        tts_provider: TtsProvider = Depends(get_tts_provider),
+        interrupt: InterruptController = Depends(get_interrupt_controller),
+        unified_service: UnifiedChatService = Depends(get_unified_chat_service),
+        chat_service: ChatService = Depends(get_chat_service),
     ) -> None:
-        if not app_settings.voice_enabled:
-            await websocket.close(code=1008, reason="Voice is disabled")
+        """Bidirectional voice channel for authenticated users."""
+        if not settings.voice_enabled:
+            await websocket.close(code=1008, reason="voice_disabled")
             return
 
-        await websocket.accept()
+        voice_config = VoiceConfig.from_settings(settings)
+        bridge = VoiceStreamBridge(voice_config, interrupt_controller=interrupt)
 
-        bridge = VoiceStreamBridge(VoiceConfig.from_settings(app_settings))
-
-        if not session_id.strip():
-            await _send_message(
+        bearer = extract_bearer_token(websocket.headers.get("authorization"))
+        if bearer is None:
+            await _send_error_and_close(
                 websocket,
-                bridge,
-                ErrorMessage(
-                    code="invalid_session_id",
-                    message="session_id query parameter is required",
-                ),
+                bridge=bridge,
+                code="voice_auth_required",
+                message="Voice sessions require an authenticated user",
             )
-            await websocket.close()
             return
 
         try:
-            uuid.UUID(session_id)
-        except ValueError:
-            await _send_message(
+            user_id = decode_access_token(bearer, settings=settings)
+        except InvalidAccessTokenError:
+            await _send_error_and_close(
                 websocket,
-                bridge,
-                ErrorMessage(
-                    code="invalid_session_id",
-                    message="session_id must be a valid UUID",
-                ),
+                bridge=bridge,
+                code="voice_auth_required",
+                message="Voice sessions require an authenticated user",
             )
-            await websocket.close()
             return
 
-        caller = await resolve_websocket_caller(websocket, app_settings, db_session)
-        if not caller.is_authenticated:
-            await _send_message(
-                websocket,
-                bridge,
-                ErrorMessage(
-                    code="voice_auth_required",
-                    message="Voice sessions require an authenticated user",
-                ),
-            )
-            await websocket.close()
-            return
+        caller = CallerContext.for_user(user_id)
 
         if services_builder is not None:
-            services = services_builder(app_settings, db_session)
+            services = services_builder(settings, db_session)
         else:
-            services = build_voice_connection_services(app_settings, db_session)
+            services = VoiceConnectionServices(
+                config=voice_config,
+                session_manager=session_manager,
+                stt_provider=stt_provider,
+                tts_provider=tts_provider,
+                interrupt=interrupt,
+                unified_service=unified_service,
+                chat_service=chat_service,
+            )
 
-        await _handle_voice_session(
-            websocket,
-            session_id=session_id,
+        handler = VoiceWebSocketHandler(
+            websocket=websocket,
+            settings=settings,
+            session_manager=services.session_manager,
+            stt_provider=services.stt_provider,
+            tts_provider=services.tts_provider,
+            interrupt=services.interrupt,
+            unified_service=services.unified_service,
+            chat_service=services.chat_service,
             caller=caller,
-            services=services,
+            chat_session_id=session_id,
+            turn_options=VoiceTurnOptions(
+                use_web_search=use_web_search,
+                use_documents=use_documents,
+                provider=provider,
+                model=model,
+            ),
         )
+        await handler.run()
 
     return router

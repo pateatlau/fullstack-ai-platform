@@ -21,10 +21,7 @@ async def health(settings: Settings = Depends(get_settings)) -> dict[str, object
         "rag_enabled": settings.rag_enabled,
         "voice_enabled": settings.voice_enabled,
         "capabilities": {
-            "by_provider": capabilities_by_provider(
-                voice_enabled=settings.voice_enabled,
-                voice_provider=settings.voice_provider,
-            ),
+            "by_provider": capabilities_by_provider(settings),
         },
     }
 

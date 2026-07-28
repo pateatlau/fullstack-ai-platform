@@ -81,14 +81,22 @@ class GuestStore(Protocol):
     async def touch(self, guest_id: uuid.UUID) -> None: ...
 
 
-def _extract_bearer_token(request: Request) -> str | None:
-    header = request.headers.get("Authorization")
-    if not header:
+def _extract_bearer_token_from_header(authorization: str | None) -> str | None:
+    if not authorization:
         return None
-    scheme, _, token = header.partition(" ")
+    scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
         return None
     return token.strip()
+
+
+def extract_bearer_token(authorization: str | None) -> str | None:
+    """Parse a Bearer token from an Authorization header value."""
+    return _extract_bearer_token_from_header(authorization)
+
+
+def _extract_bearer_token(request: Request) -> str | None:
+    return _extract_bearer_token_from_header(request.headers.get("Authorization"))
 
 
 def _client_ip_hash(request: Request) -> str | None:

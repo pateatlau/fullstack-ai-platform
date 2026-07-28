@@ -18,6 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
     from app.ai.mcp.registry import McpServerRegistry
+    from app.ai.voice.config import VoiceConfig
+    from app.ai.voice.interfaces import SttProvider, TtsProvider
+    from app.ai.voice.interrupt import InterruptController
+    from app.ai.voice.providers.openai_voice import OpenAiVoiceAdapter
+    from app.ai.voice.session import VoiceSessionManager
 
 from app.ai.agent.runtime.default_agent import DefaultAgent
 from app.ai.agent.runtime.factory import create_default_agent
@@ -331,3 +336,60 @@ def get_mcp_permission_policy(
     from app.ai.mcp.permissions import McpPermissionPolicy
 
     return McpPermissionPolicy(config=settings.mcp_permission_policy)
+
+
+# ============================================================================
+# Voice Interfaces (Epic 04)
+# ============================================================================
+
+
+def voice_config_from_settings(settings: Settings) -> "VoiceConfig":
+    """Build a frozen :class:`VoiceConfig` from application settings."""
+    from app.ai.voice.config import VoiceConfig
+
+    return VoiceConfig.from_settings(settings)
+
+
+@lru_cache
+def get_interrupt_controller() -> "InterruptController":
+    """Return the process-wide voice interrupt controller singleton."""
+    from app.ai.voice.interrupt import InterruptController
+
+    return InterruptController()
+
+
+def _create_voice_adapter(settings: Settings) -> "OpenAiVoiceAdapter":
+    from app.ai.voice.providers.openai_voice import OpenAiVoiceAdapter
+
+    return OpenAiVoiceAdapter(
+        api_key=settings.openai_api_key or "",
+        config=voice_config_from_settings(settings),
+    )
+
+
+def get_stt_provider(settings: Settings = Depends(get_settings)) -> "SttProvider":
+    """Return the configured STT provider (OpenAI Whisper when ``voice_provider=openai``)."""
+    if settings.voice_provider != "openai":
+        raise ValueError(f"Unsupported voice provider: {settings.voice_provider}")
+    return _create_voice_adapter(settings)
+
+
+def get_tts_provider(settings: Settings = Depends(get_settings)) -> "TtsProvider":
+    """Return the configured TTS provider (OpenAI speech API when ``voice_provider=openai``)."""
+    if settings.voice_provider != "openai":
+        raise ValueError(f"Unsupported voice provider: {settings.voice_provider}")
+    return _create_voice_adapter(settings)
+
+
+def get_voice_session_manager(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> "VoiceSessionManager":
+    """Return a request-scoped voice session manager wired to chat ownership checks."""
+    from app.ai.voice.session import VoiceSessionManager
+    from app.db.chat import SqlChatStore
+
+    return VoiceSessionManager(
+        voice_config_from_settings(settings),
+        SqlChatStore(session),
+    )
