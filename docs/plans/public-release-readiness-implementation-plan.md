@@ -16,16 +16,16 @@ This is a **documentation and asset track**, not a feature epic. No new platform
 
 ## Phase Status
 
-| Phase | Name | Effort | Status |
-| ----- | ---- | ------ | ------ |
-| 0 | Baseline Audit & Decisions | XS | Not Started |
-| 1 | LICENSE | XS | Not Started |
-| 2 | CHANGELOG | S | Not Started |
-| 3 | CONTRIBUTING | S | Not Started |
-| 4 | Architecture Diagram | M | Not Started |
-| 5 | README Restructure | M | Not Started |
-| 6 | Screenshots & GIFs | M | Not Started |
-| 7 | Final Validation & Release Checklist | S | Not Started |
+| Phase | Name                                 | Effort | Status      |
+| ----- | ------------------------------------ | ------ | ----------- |
+| 0     | Baseline Audit & Decisions           | XS     | Completed   |
+| 1     | LICENSE                              | XS     | Not Started |
+| 2     | CHANGELOG                            | S      | Not Started |
+| 3     | CONTRIBUTING                         | S      | Not Started |
+| 4     | Architecture Diagram                 | M      | Not Started |
+| 5     | README Restructure                   | M      | Not Started |
+| 6     | Screenshots & GIFs                   | M      | Not Started |
+| 7     | Final Validation & Release Checklist | S      | Not Started |
 
 ## Scope
 
@@ -49,29 +49,29 @@ This is a **documentation and asset track**, not a feature epic. No new platform
 
 ## Current Baseline (as of plan creation — 2026-07-29)
 
-| Artifact | Location | State | Gap |
-| -------- | -------- | ----- | --- |
-| README | `README.md` | Exists (~776 lines) | Engineering changelog style; outdated system diagram (no RAG, agent, MCP, voice); no hero screenshot; dense for first-time visitors |
-| CHANGELOG | `CHANGELOG.md` | Partial | Only V2 Epic 2 entries; missing MVP → V2 Epic 4 history |
-| LICENSE | — | **Missing** | Required before public release |
-| CONTRIBUTING | — | **Missing** | Required even if contributions are not yet expected |
-| Architecture diagram | `README.md` (Mermaid) | Stale | Chat-only flow; omits knowledge platform, agent runtime, MCP, voice |
-| Screenshots / GIFs | — | **Missing** | Only `frontend/public/icons.svg` exists |
-| Release summaries | `docs/releases/` | 6 files | Authoritative source for CHANGELOG backfill (V1, V1.1, V1.1.1, V2 Epic 01, 02, 04) |
-| Implementation plans | `docs/plans/` | Rich | Keep as internal/historical reference; link selectively from README |
-| Version tags | Git | `v0.0.1` only | Align CHANGELOG sections with semver or documented release naming |
-| Package versions | `pyproject.toml`, `package.json` | `0.1.0` / `0.0.0` | Decide public version story (`0.1.0` platform vs `1.0.0` at open-source launch) |
+| Artifact             | Location                         | State               | Gap                                                                                                                                 |
+| -------------------- | -------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| README               | `README.md`                      | Exists (~776 lines) | Engineering changelog style; outdated system diagram (no RAG, agent, MCP, voice); no hero screenshot; dense for first-time visitors |
+| CHANGELOG            | `CHANGELOG.md`                   | Partial             | Only V2 Epic 2 entries; missing MVP → V2 Epic 4 history                                                                             |
+| LICENSE              | —                                | **Missing**         | Required before public release                                                                                                      |
+| CONTRIBUTING         | —                                | **Missing**         | Required even if contributions are not yet expected                                                                                 |
+| Architecture diagram | `README.md` (Mermaid)            | Stale               | Chat-only flow; omits knowledge platform, agent runtime, MCP, voice                                                                 |
+| Screenshots / GIFs   | —                                | **Missing**         | Only `frontend/public/icons.svg` exists                                                                                             |
+| Release summaries    | `docs/releases/`                 | 6 files             | Authoritative source for CHANGELOG backfill (V1, V1.1, V1.1.1, V2 Epic 01, 02, 04)                                                  |
+| Implementation plans | `docs/plans/`                    | Rich                | Keep as internal/historical reference; link selectively from README                                                                 |
+| Version tags         | Git                              | `v0.0.1` only       | Align CHANGELOG sections with semver or documented release naming                                                                   |
+| Package versions     | `pyproject.toml`, `package.json` | `0.1.0` / `0.0.0`   | Decide public version story (`0.1.0` platform vs `1.0.0` at open-source launch)                                                     |
 
 ## Locked Decisions (resolve in Phase 0)
 
-| Topic | Options | Recommendation | Owner |
-| ----- | ------- | -------------- | ----- |
-| License | MIT · Apache-2.0 · Proprietary with source available | **MIT** — common for portfolio/educational repos; simple | User |
-| Public version label | Keep `0.1.0` · Tag `v1.0.0-public` at launch | Tag **`v1.0.0-public`** when docs complete; keep app semver at `0.1.0` until a formal API freeze | User |
-| Live demo link | Production Railway URL · Staging · None | Link production demo with `DEMO_MODE_STRICT` called out | User |
-| README audience | Recruiter/hiring · OSS contributors · Both | **Both** — lead with product value, link to contributor docs | User |
-| Internal docs visibility | Keep all `docs/plans/` public · Add `docs/README.md` index | Keep public; add **`docs/README.md`** navigation index | User |
-| Architecture format | Mermaid in README · SVG in `docs/architecture/` · Both | **Both** — Mermaid for GitHub rendering; export SVG/PNG for README hero and social preview | User |
+| Topic                    | Options                                                    | Recommendation                                                                                   | Owner |
+| ------------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----- |
+| License                  | MIT · Apache-2.0 · Proprietary with source available       | **MIT** — common for portfolio/educational repos; simple                                         | User  |
+| Public version label     | Keep `0.1.0` · Tag `v1.0.0-public` at launch               | Tag **`v1.0.0-public`** when docs complete; keep app semver at `0.1.0` until a formal API freeze | User  |
+| Live demo link           | Production Railway URL · Staging · None                    | Link production demo with `DEMO_MODE_STRICT` called out                                          | User  |
+| README audience          | Recruiter/hiring · OSS contributors · Both                 | **Both** — lead with product value, link to contributor docs                                     | User  |
+| Internal docs visibility | Keep all `docs/plans/` public · Add `docs/README.md` index | Keep public; add **`docs/README.md`** navigation index                                           | User  |
+| Architecture format      | Mermaid in README · SVG in `docs/architecture/` · Both     | **Both** — Mermaid for GitHub rendering; export SVG/PNG for README hero and social preview       | User  |
 
 ---
 
@@ -83,13 +83,13 @@ This is a **documentation and asset track**, not a feature epic. No new platform
 
 **Steps:**
 
-- [ ] Confirm user decisions in [Locked Decisions](#locked-decisions-resolve-in-phase-0) (license, version tag, demo URL, doc visibility).
-- [ ] Inventory all root-level and `docs/` markdown files; classify as **public-facing**, **developer-internal**, or **historical**.
-- [ ] Run secrets scan:
+- [x] Confirm user decisions in [Locked Decisions](#locked-decisions-resolve-in-phase-0) (license, version tag, demo URL, doc visibility).
+- [x] Inventory all root-level and `docs/` markdown files; classify as **public-facing**, **developer-internal**, or **historical**.
+- [x] Run secrets scan:
   - `git grep -iE '(api_key|secret|password|token)\s*=' -- ':!*.example' ':!.env*'`
   - Verify `.env`, `.env.local`, and credential files are in `.gitignore`.
   - Confirm no keys in screenshots plan (use placeholder UI or local mock data).
-- [ ] List release summaries to backfill CHANGELOG:
+- [x] List release summaries to backfill CHANGELOG:
   - `docs/releases/post-mvp-v1-release-summary.md`
   - `docs/releases/post-mvp-v1.1-release-summary.md`
   - `docs/releases/post-mvp-v1.1.1-release-summary.md`
@@ -97,9 +97,9 @@ This is a **documentation and asset track**, not a feature epic. No new platform
   - `docs/releases/post-mvp-v2-epic2-release-summary.md`
   - `docs/releases/post-mvp-v2-epic4-release-summary.md`
   - Note: V2 Epic 03 (MCP) — confirm completion status and whether Epic 03 release summary is needed before public launch.
-- [ ] Capture current test/coverage baselines for README badge or stats section.
-- [ ] Write audit doc; record metrics and open questions.
-- [ ] Phase 0 complete — user confirmed.
+- [x] Capture current test/coverage baselines for README badge or stats section.
+- [x] Write audit doc; record metrics and open questions.
+- [x] Phase 0 complete — user confirmed.
 
 **Verify:** Manual review only; no code changes.
 
@@ -124,7 +124,7 @@ This is a **documentation and asset track**, not a feature epic. No new platform
 **Steps:**
 
 - [ ] Add `LICENSE` using the chosen template (MIT recommended).
-- [ ] Set copyright holder and year (e.g. `Copyright (c) 2026 {Your Name}`).
+- [ ] Set copyright holder and year (e.g. `Copyright (c) 2026 Laldingliana Tlau Vantawl`).
 - [ ] Add license badge to README header (Phase 5) — note dependency here.
 - [ ] Phase 1 complete — user confirmed.
 
@@ -159,16 +159,16 @@ test -f LICENSE && head -5 LICENSE
   - Categories: `Added`, `Changed`, `Fixed`, `Removed`, `Security` (as applicable).
 - [ ] Backfill from release summaries and README status sections:
 
-  | CHANGELOG section | Primary sources |
-  | ----------------- | --------------- |
-  | MVP (foundational chat platform) | `docs/plans/mvp-completion-implementation-plan.md`, README MVP section |
-  | Post-MVP V1 | `docs/releases/post-mvp-v1-release-summary.md` |
-  | Post-MVP V1.1 | `docs/releases/post-mvp-v1.1-release-summary.md` |
-  | Post-MVP V1.1.1 | `docs/releases/post-mvp-v1.1.1-release-summary.md` |
-  | V2 Epic 01 — Agent Framework | `docs/releases/post-mvp-v2-epic1-release-summary.md` |
-  | V2 Epic 02 — Advanced RAG | `docs/releases/post-mvp-v2-epic2-release-summary.md` + existing CHANGELOG entries |
-  | V2 Epic 03 — MCP Integration | Epic 03 plan completion record (add release summary if missing) |
-  | V2 Epic 04 — Voice Interfaces | `docs/releases/post-mvp-v2-epic4-release-summary.md` |
+  | CHANGELOG section                | Primary sources                                                                   |
+  | -------------------------------- | --------------------------------------------------------------------------------- |
+  | MVP (foundational chat platform) | `docs/plans/mvp-completion-implementation-plan.md`, README MVP section            |
+  | Post-MVP V1                      | `docs/releases/post-mvp-v1-release-summary.md`                                    |
+  | Post-MVP V1.1                    | `docs/releases/post-mvp-v1.1-release-summary.md`                                  |
+  | Post-MVP V1.1.1                  | `docs/releases/post-mvp-v1.1.1-release-summary.md`                                |
+  | V2 Epic 01 — Agent Framework     | `docs/releases/post-mvp-v2-epic1-release-summary.md`                              |
+  | V2 Epic 02 — Advanced RAG        | `docs/releases/post-mvp-v2-epic2-release-summary.md` + existing CHANGELOG entries |
+  | V2 Epic 03 — MCP Integration     | Epic 03 plan completion record (add release summary if missing)                   |
+  | V2 Epic 04 — Voice Interfaces    | `docs/releases/post-mvp-v2-epic4-release-summary.md`                              |
 
 - [ ] Write user-facing bullets (outcomes, not internal phase numbers).
 - [ ] Add semver mapping note, e.g.:
@@ -204,7 +204,6 @@ test -f LICENSE && head -5 LICENSE
 **Steps:**
 
 - [ ] Create `CONTRIBUTING.md` with these sections (concise; ~150–250 lines max):
-
   1. **Welcome** — contributions welcome but not required; project is primarily a portfolio/reference implementation.
   2. **Getting started** — link to README Quick Start; prerequisites (Python 3.12+, uv, Node 20+, Docker).
   3. **Development workflow** — branch from `main`, small PRs, one app area per PR when possible.
@@ -350,7 +349,6 @@ flowchart TB
 - [ ] Restructure README for **first-scan clarity** (~200–350 lines target; move depth to linked docs):
 
   **Recommended outline:**
-
   1. **Title + one-line pitch** — "Production-grade full-stack AI chat platform with RAG, tools, agents, MCP, and voice."
   2. **Badges** — license, CI status (if public), optional demo link.
   3. **Hero screenshot** — link to Phase 6 asset (`docs/assets/screenshots/chat-desktop.png`).
@@ -433,8 +431,8 @@ npx markdown-link-check README.md CONTRIBUTING.md CHANGELOG.md
   ```markdown
   ## Screenshots
 
-  | Chat (desktop) | Documents |
-  | -------------- | --------- |
+  | Chat (desktop)                                      | Documents                                                  |
+  | --------------------------------------------------- | ---------------------------------------------------------- |
   | ![Chat](./docs/assets/screenshots/chat-desktop.png) | ![Documents](./docs/assets/screenshots/documents-page.png) |
   ```
 
@@ -546,45 +544,45 @@ Use this as the Phase 7 gate:
 
 ## Files Index
 
-| Path | Action | Phase |
-| ---- | ------ | ----- |
-| `LICENSE` | create | 1 |
-| `CHANGELOG.md` | rewrite / expand | 2 |
-| `CONTRIBUTING.md` | create | 3 |
-| `docs/architecture/system-overview.md` | create | 4 |
-| `docs/architecture/system-overview.svg` | create (optional) | 4 |
-| `README.md` | restructure | 5 |
-| `docs/README.md` | create | 5 |
-| `docs/tech-references/local-google-oauth.md` | create (optional) | 5 |
-| `docs/assets/screenshots/*.png` | create | 6 |
-| `docs/assets/gifs/*.gif` | create (optional) | 6 |
-| `docs/audits/public-release-readiness-phase-0-baseline-audit.md` | create | 0 |
-| `docs/audits/public-release-readiness-phase-7-completion.md` | create | 7 |
+| Path                                                             | Action            | Phase |
+| ---------------------------------------------------------------- | ----------------- | ----- |
+| `LICENSE`                                                        | create            | 1     |
+| `CHANGELOG.md`                                                   | rewrite / expand  | 2     |
+| `CONTRIBUTING.md`                                                | create            | 3     |
+| `docs/architecture/system-overview.md`                           | create            | 4     |
+| `docs/architecture/system-overview.svg`                          | create (optional) | 4     |
+| `README.md`                                                      | restructure       | 5     |
+| `docs/README.md`                                                 | create            | 5     |
+| `docs/tech-references/local-google-oauth.md`                     | create (optional) | 5     |
+| `docs/assets/screenshots/*.png`                                  | create            | 6     |
+| `docs/assets/gifs/*.gif`                                         | create (optional) | 6     |
+| `docs/audits/public-release-readiness-phase-0-baseline-audit.md` | create            | 0     |
+| `docs/audits/public-release-readiness-phase-7-completion.md`     | create            | 7     |
 
 ## PR Map
 
-| Branch | Phase | Scope |
-| ------ | ----- | ----- |
-| `docs/public-release/phase-0-audit` | 0 | Audit only |
-| `docs/public-release/phase-1-license` | 1 | LICENSE |
-| `docs/public-release/phase-2-changelog` | 2 | CHANGELOG |
-| `docs/public-release/phase-3-contributing` | 3 | CONTRIBUTING |
-| `docs/public-release/phase-4-architecture` | 4 | Architecture docs + README diagram |
-| `docs/public-release/phase-5-readme` | 5 | README + docs index |
-| `docs/public-release/phase-6-assets` | 6 | Screenshots/GIFs |
-| `docs/public-release/phase-7-validation` | 7 | Completion audit + tag |
+| Branch                                     | Phase | Scope                              |
+| ------------------------------------------ | ----- | ---------------------------------- |
+| `docs/public-release/phase-0-audit`        | 0     | Audit only                         |
+| `docs/public-release/phase-1-license`      | 1     | LICENSE                            |
+| `docs/public-release/phase-2-changelog`    | 2     | CHANGELOG                          |
+| `docs/public-release/phase-3-contributing` | 3     | CONTRIBUTING                       |
+| `docs/public-release/phase-4-architecture` | 4     | Architecture docs + README diagram |
+| `docs/public-release/phase-5-readme`       | 5     | README + docs index                |
+| `docs/public-release/phase-6-assets`       | 6     | Screenshots/GIFs                   |
+| `docs/public-release/phase-7-validation`   | 7     | Completion audit + tag             |
 
 Phases 1–3 may be combined into a single **governance** PR if preferred.
 
 ## Risks
 
-| Risk | Mitigation |
-| ---- | ---------- |
+| Risk                                       | Mitigation                                                                            |
+| ------------------------------------------ | ------------------------------------------------------------------------------------- |
 | README becomes stale again after next epic | Add "update README + CHANGELOG" to epic Phase N validation checklist in program guide |
-| Screenshots expose local env details | Use sanitized demo account; crop browser chrome; review before commit |
-| Over-long README refactor delays release | Time-box Phase 5; move depth to linked docs aggressively |
-| License choice blocks employer/IP policy | Confirm with user in Phase 0 before adding LICENSE |
-| Binary assets bloat repo | Optimize PNGs; keep GIFs short; consider Git LFS only if files exceed ~2 MB each |
+| Screenshots expose local env details       | Use sanitized demo account; crop browser chrome; review before commit                 |
+| Over-long README refactor delays release   | Time-box Phase 5; move depth to linked docs aggressively                              |
+| License choice blocks employer/IP policy   | Confirm with user in Phase 0 before adding LICENSE                                    |
+| Binary assets bloat repo                   | Optimize PNGs; keep GIFs short; consider Git LFS only if files exceed ~2 MB each      |
 
 ## Definition of Done
 
@@ -598,6 +596,6 @@ Phases 1–3 may be combined into a single **governance** PR if preferred.
 
 ## Changelog (this plan)
 
-| Date | Change |
-| ---- | ------ |
+| Date       | Change       |
+| ---------- | ------------ |
 | 2026-07-29 | Initial plan |
