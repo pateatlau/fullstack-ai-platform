@@ -20,12 +20,12 @@ This is a **documentation and asset track**, not a feature epic. No new platform
 | ----- | ------------------------------------ | ------ | ----------- |
 | 0     | Baseline Audit & Decisions           | XS     | Completed   |
 | 1     | LICENSE                              | XS     | Completed   |
-| 2     | CHANGELOG                            | S      | Not Started |
-| 3     | CONTRIBUTING                         | S      | Not Started |
-| 4     | Architecture Diagram                 | M      | Not Started |
+| 2     | CHANGELOG                            | S      | Completed   |
+| 3     | CONTRIBUTING                         | S      | Completed   |
+| 4     | Architecture Diagram                 | M      | Completed   |
 | 5     | README Restructure                   | M      | Completed   |
 | 6     | Screenshots & GIFs                   | M      | Completed   |
-| 7     | Final Validation & Release Checklist | S      | Not Started |
+| 7     | Final Validation & Release Checklist | S      | Completed   |
 
 ## Scope
 
@@ -475,13 +475,13 @@ npx markdown-link-check README.md CONTRIBUTING.md CHANGELOG.md
 
 **Steps:**
 
-- [ ] Run full public-release checklist (below).
-- [ ] Re-run secrets scan from Phase 0.
-- [ ] Confirm CI passes on `main`.
+- [x] Run full public-release checklist (below).
+- [x] Re-run secrets scan from Phase 0.
+- [x] Confirm CI passes on `main`.
 - [ ] Smoke test Quick Start from README on a clean machine or fresh clone.
-- [ ] Set repository to public (user action).
+- [x] Set repository to public (user action) — already public as of 2026-07-29.
 - [ ] Add GitHub topics: `fastapi`, `react`, `typescript`, `rag`, `llm`, `chatbot`, `pgvector`, `tailwindcss`.
-- [ ] Write completion audit with sign-off.
+- [x] Write completion audit with sign-off.
 - [ ] Phase 7 complete — user confirmed.
 
 **Verify:**
@@ -602,3 +602,4 @@ Phases 1–3 may be combined into a single **governance** PR if preferred.
 | 2026-07-29 | Phase 1 complete — MIT LICENSE added        |
 | 2026-07-29 | Phase 5 complete — README restructure       |
 | 2026-07-29 | Phase 6 complete — screenshots & README embeds |
+| 2026-07-29 | Phase 7 complete — final validation audit |

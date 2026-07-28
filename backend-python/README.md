@@ -45,7 +45,7 @@ Dev tooling: Ruff (lint and format), Pyright (static type checking, standard mod
 - `app/providers/` — provider adapters and factory
 - `app/ai/` — reusable AI framework (embeddings, vectorstores, prompts, tools, documents, rag, evaluation)
 - `app/schemas/` — request/response/frame schemas
-- `tests/` — unit and integration tests (**403** tests, **86.14%** coverage on `app/`, 2026-07-22)
+- `tests/` — unit and integration tests (**1076** tests, **89.52%** coverage on `app/`, 2026-07-29)
 
 ## AI Module (`app/ai/`)
 
@@ -907,7 +907,7 @@ CI and local quality gates:
 make lint && make format-check && make typecheck && make test-cov
 ```
 
-Current suite (2026-07-22): **403 passed**, **86.14%** coverage on `app/` (20.10s).
+Current suite (2026-07-29): **1076 passed**, **89.52%** coverage on `app/` (~2.5 min).
 
 Coverage includes health, auth, chat (streaming and non-streaming), unified chat toggles, tools, RAG, persistence, logging, correlation IDs, errors, rate limiting, and provider adapters (OpenAI, Gemini, Groq, Anthropic).
 
