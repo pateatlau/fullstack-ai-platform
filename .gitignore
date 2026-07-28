@@ -61,4 +61,7 @@ coverage/
 dist-ssr/
 
 # Documentation for internal use only
-docs/
+docs/prompts/
+docs/references/
+docs/tech-references/
+docs/ops/
