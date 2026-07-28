@@ -23,8 +23,8 @@ This is a **documentation and asset track**, not a feature epic. No new platform
 | 2     | CHANGELOG                            | S      | Not Started |
 | 3     | CONTRIBUTING                         | S      | Not Started |
 | 4     | Architecture Diagram                 | M      | Not Started |
-| 5     | README Restructure                   | M      | Not Started |
-| 6     | Screenshots & GIFs                   | M      | Not Started |
+| 5     | README Restructure                   | M      | Completed   |
+| 6     | Screenshots & GIFs                   | M      | Completed   |
 | 7     | Final Validation & Release Checklist | S      | Not Started |
 
 ## Scope
@@ -346,7 +346,7 @@ flowchart TB
 
 **Steps:**
 
-- [ ] Restructure README for **first-scan clarity** (~200–350 lines target; move depth to linked docs):
+- [x] Restructure README for **first-scan clarity** (~200–350 lines target; move depth to linked docs):
 
   **Recommended outline:**
   1. **Title + one-line pitch** — "Production-grade full-stack AI chat platform with RAG, tools, agents, MCP, and voice."
@@ -362,16 +362,16 @@ flowchart TB
   11. **Documentation map** — links to architecture, plans, releases, ops runbooks.
   12. **License** — link to `LICENSE`.
 
-- [ ] Move verbose content out of README into appropriate homes:
+- [x] Move verbose content out of README into appropriate homes:
   - Pre-commit troubleshooting → `CONTRIBUTING.md` or `docs/tech-references/pre-commit.md`
   - Epic-by-epoch status tables → `CHANGELOG.md` + `docs/releases/`
   - Google OAuth localhost debugging → `docs/tech-references/local-google-oauth.md` (new, short)
   - CI/CD image tagging details → keep in `docs/ci-image-tagging.md`; README one-liner only
 
-- [ ] Update README status section to reflect **current** epic completion (V2 Epic 04 complete; Epic 03 status accurate).
-- [ ] Add `docs/README.md` index grouping: Plans, Releases, Architecture, Ops, Audits, References.
-- [ ] Ensure all relative links resolve.
-- [ ] Phase 5 complete — user confirmed.
+- [x] Update README status section to reflect **current** epic completion (V2 Epic 04 complete; Epic 03 status accurate).
+- [x] Add `docs/README.md` index grouping: Plans, Releases, Architecture, Ops, Audits, References.
+- [x] Ensure all relative links resolve.
+- [x] Phase 5 complete — user confirmed.
 
 **Verify:**
 
@@ -400,7 +400,7 @@ npx markdown-link-check README.md CONTRIBUTING.md CHANGELOG.md
 
 **Steps:**
 
-- [ ] Create asset directory structure:
+- [x] Create asset directory structure:
 
   ```text
   docs/assets/
@@ -415,18 +415,18 @@ npx markdown-link-check README.md CONTRIBUTING.md CHANGELOG.md
       └── rag-documents.gif       # optional
   ```
 
-- [ ] Capture screenshots at consistent viewport sizes:
+- [x] Capture screenshots at consistent viewport sizes:
   - Desktop: 1440×900 (chat with sidebar open)
   - Mobile: 390×844 (drawer collapsed)
   - Documents: upload list with sample files (use fake filenames, no PII)
 
-- [ ] Recording guidelines for GIFs:
+- [ ] Recording guidelines for GIFs (deferred — optional; no GIFs committed):
   - 10–20 seconds, ≤ 5 MB each (use fps reduction or tool compression).
   - Show: send message → streaming response → stop/retry (optional).
   - Optional voice GIF only if stable local demo without API key exposure.
   - Tools: macOS Screenshot + `ffmpeg` or Kap/LICEcap.
 
-- [ ] Embed in README:
+- [x] Embed in README:
 
   ```markdown
   ## Screenshots
@@ -436,9 +436,9 @@ npx markdown-link-check README.md CONTRIBUTING.md CHANGELOG.md
   | ![Chat](./docs/assets/screenshots/chat-desktop.png) | ![Documents](./docs/assets/screenshots/documents-page.png) |
   ```
 
-- [ ] Add alt text for accessibility.
-- [ ] Confirm binary assets are reasonable size (< 500 KB per PNG after optimization; use `pngquant` or ImageOptim if needed).
-- [ ] Phase 6 complete — user confirmed.
+- [x] Add alt text for accessibility.
+- [x] Confirm binary assets are reasonable size (< 500 KB per PNG after optimization; use `pngquant` or ImageOptim if needed).
+- [x] Phase 6 complete — user confirmed.
 
 **Verify:** Open README on GitHub preview; images render; no secrets visible in UI.
 
@@ -454,12 +454,12 @@ npx markdown-link-check README.md CONTRIBUTING.md CHANGELOG.md
 
 **Capture checklist:**
 
-- [ ] Empty chat state with CTAs
-- [ ] Active streaming conversation
-- [ ] Documents upload/list view
-- [ ] Mobile responsive layout
-- [ ] (Optional) Voice mode controls visible
-- [ ] (Optional) Web search / document toggles enabled
+- [x] Empty chat state with CTAs
+- [ ] Active streaming conversation (deferred — static PNGs sufficient for release)
+- [x] Documents upload/list view
+- [x] Mobile responsive layout
+- [x] (Optional) Voice mode controls visible
+- [x] (Optional) Web search / document toggles enabled
 
 ---
 
@@ -600,3 +600,5 @@ Phases 1–3 may be combined into a single **governance** PR if preferred.
 | ---------- | ------------------------------------------- |
 | 2026-07-29 | Initial plan                                |
 | 2026-07-29 | Phase 1 complete — MIT LICENSE added        |
+| 2026-07-29 | Phase 5 complete — README restructure       |
+| 2026-07-29 | Phase 6 complete — screenshots & README embeds |
