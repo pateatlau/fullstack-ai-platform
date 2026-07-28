@@ -242,6 +242,11 @@ class TestWebSocketMessages:
         assert msg.retrieved_chunk_count is None
         assert msg.citations is None
 
+    def test_turn_complete_message_rejects_negative_chunk_count(self):
+        """Test TurnCompleteMessage rejects negative retrieved_chunk_count."""
+        with pytest.raises(ValidationError):
+            TurnCompleteMessage(retrieved_chunk_count=-1)
+
     def test_heartbeat_message(self):
         """Test HeartbeatMessage."""
         msg = HeartbeatMessage(ts=123.456)

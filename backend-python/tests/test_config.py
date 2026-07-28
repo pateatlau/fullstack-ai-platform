@@ -146,3 +146,85 @@ def test_get_settings_caches_result() -> None:
     first = get_settings()
     second = get_settings()
     assert first is second
+
+
+def test_voice_disabled_skips_validation() -> None:
+    """Voice validation should be skipped when VOICE_ENABLED=false."""
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="sk-placeholder",
+        voice_enabled=False,
+        voice_provider="invalid_provider",
+        voice_audio_encoding="invalid_encoding",
+    )
+    settings.validate_startup()  # Should not raise
+
+
+def test_voice_enabled_with_unsupported_provider_raises() -> None:
+    """Voice validation should reject unsupported providers."""
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="sk-placeholder",
+        voice_enabled=True,
+        voice_provider="deepgram",
+    )
+    with pytest.raises(ValueError, match="Unsupported VOICE_PROVIDER"):
+        settings.validate_startup()
+
+
+def test_voice_enabled_with_unsupported_encoding_raises() -> None:
+    """Voice validation should reject unsupported audio encodings."""
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="sk-placeholder",
+        voice_enabled=True,
+        voice_provider="openai",
+        voice_audio_encoding="opus",
+    )
+    with pytest.raises(ValueError, match="Unsupported VOICE_AUDIO_ENCODING"):
+        settings.validate_startup()
+
+
+def test_voice_enabled_openai_without_api_key_raises() -> None:
+    """Voice validation should require OpenAI API key when provider is openai."""
+    settings = Settings(
+        llm_provider="gemini",
+        gemini_api_key="gm-placeholder",
+        voice_enabled=True,
+        voice_provider="openai",
+        openai_api_key=None,
+    )
+    with pytest.raises(ValueError, match="OPENAI_API_KEY is not set"):
+        settings.validate_startup()
+
+
+def test_voice_enabled_with_invalid_timeout_relationship_raises() -> None:
+    """Voice validation should ensure heartbeat interval < session timeout."""
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="sk-placeholder",
+        voice_enabled=True,
+        voice_provider="openai",
+        voice_heartbeat_interval_seconds=300,
+        voice_session_timeout_seconds=300,
+    )
+    with pytest.raises(
+        ValueError,
+        match="VOICE_HEARTBEAT_INTERVAL_SECONDS must be less than "
+        "VOICE_SESSION_TIMEOUT_SECONDS",
+    ):
+        settings.validate_startup()
+
+
+def test_voice_enabled_with_valid_configuration() -> None:
+    """Voice validation should pass with valid configuration."""
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="sk-placeholder",
+        voice_enabled=True,
+        voice_provider="openai",
+        voice_audio_encoding="pcm16",
+        voice_heartbeat_interval_seconds=30,
+        voice_session_timeout_seconds=300,
+    )
+    settings.validate_startup()  # Should not raise

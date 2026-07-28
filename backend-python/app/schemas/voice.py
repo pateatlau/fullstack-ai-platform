@@ -103,7 +103,7 @@ class TurnCompleteMessage(BaseModel):
 
     type: Literal["turn_complete"] = "turn_complete"
     tools_used: list[str] | None = None
-    retrieved_chunk_count: int | None = None
+    retrieved_chunk_count: int | None = Field(default=None, ge=0)
     citations: list[dict] | None = None
 
 
