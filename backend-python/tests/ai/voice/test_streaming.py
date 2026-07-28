@@ -357,7 +357,7 @@ class TestChunkSizeLimits:
             {"type": "audio_in", "seq": 1, "payload_b64": payload, "final": False}
         )
 
-        with pytest.raises(VoiceSessionError, match="600 > 512"):
+        with pytest.raises(VoiceSessionError, match="exceeds max size"):
             bridge.decode_message(data)
 
 
