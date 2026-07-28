@@ -317,3 +317,44 @@ async def test_pipeline_handles_no_sentence_boundaries(
     assert fake_provider.call_count == 1
     synthesized_text = fake_provider.synthesized_texts[0]
     assert "No punctuation here more text even more" in synthesized_text
+
+
+async def test_pipeline_retains_trailing_fragment(
+    fake_provider: FakeTtsProvider, voice_config: VoiceConfig
+) -> None:
+    """Test that trailing fragments after sentence boundaries are retained."""
+    pipeline = TtsPipeline(fake_provider, voice_config)
+
+    text_chunks = ["Hello. Wor", "ld more text."]
+
+    audio_chunks = []
+    async for audio in pipeline.process(_text_chunk_generator(text_chunks)):
+        audio_chunks.append(audio)
+
+    assert len(audio_chunks) == 2
+    assert fake_provider.call_count == 2
+
+    assert "Hello." in fake_provider.synthesized_texts[0]
+    assert "Wor" not in fake_provider.synthesized_texts[0]
+
+    assert "World more text." in fake_provider.synthesized_texts[1]
+
+
+async def test_pipeline_multiple_trailing_fragments(
+    fake_provider: FakeTtsProvider, voice_config: VoiceConfig
+) -> None:
+    """Test multiple incomplete fragments across deltas."""
+    pipeline = TtsPipeline(fake_provider, voice_config)
+
+    text_chunks = ["First. Sec", "ond. Thi", "rd sentence."]
+
+    audio_chunks = []
+    async for audio in pipeline.process(_text_chunk_generator(text_chunks)):
+        audio_chunks.append(audio)
+
+    assert len(audio_chunks) == 3
+    assert fake_provider.call_count == 3
+
+    assert "First." in fake_provider.synthesized_texts[0]
+    assert "Second." in fake_provider.synthesized_texts[1]
+    assert "Third sentence." in fake_provider.synthesized_texts[2]

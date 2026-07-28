@@ -107,6 +107,49 @@ class TtsPipeline:
 
         return chunks
 
+    def _flush_to_last_sentence(self, text_buffer: str) -> tuple[str, str]:
+        """Flush text up to the last sentence boundary, retaining trailing fragment.
+
+        Args:
+            text_buffer: Accumulated text buffer.
+
+        Returns:
+            Tuple of (text_to_flush, remaining_fragment).
+        """
+        matches = list(self._SENTENCE_BOUNDARY_PATTERN.finditer(text_buffer))
+        if not matches:
+            return "", text_buffer
+
+        last_match = matches[-1]
+        flush_text = text_buffer[: last_match.end()].strip()
+        remaining = text_buffer[last_match.end() :].strip()
+        return flush_text, remaining
+
+    async def _synthesize_chunks(self, text: str) -> AsyncIterator[bytes]:
+        """Helper to synthesize text chunks through the provider.
+
+        Args:
+            text: Text to synthesize.
+
+        Yields:
+            Audio byte chunks.
+        """
+        chunks_to_synthesize = self._buffer_to_chunks(text)
+
+        for chunk in chunks_to_synthesize:
+            if self._cancel_requested:
+                break
+
+            async def _chunk_generator() -> AsyncIterator[str]:
+                yield chunk
+
+            async for audio_chunk in self._provider.synthesize_stream(
+                _chunk_generator()
+            ):
+                if self._cancel_requested:
+                    break
+                yield audio_chunk
+
     async def process(self, text_chunks: AsyncIterable[str]) -> AsyncIterator[bytes]:
         """Process streaming text and emit audio chunks.
 
@@ -135,39 +178,15 @@ class TtsPipeline:
                 text_buffer += text_delta
 
                 if self._SENTENCE_BOUNDARY_PATTERN.search(text_buffer):
-                    chunks_to_synthesize = self._buffer_to_chunks(text_buffer)
-                    text_buffer = ""
+                    flush_text, text_buffer = self._flush_to_last_sentence(text_buffer)
 
-                    for chunk in chunks_to_synthesize:
-                        if self._cancel_requested:
-                            break
-
-                        async def _chunk_generator() -> AsyncIterator[str]:
-                            yield chunk
-
-                        async for audio_chunk in self._provider.synthesize_stream(
-                            _chunk_generator()
-                        ):
-                            if self._cancel_requested:
-                                break
+                    if flush_text:
+                        async for audio_chunk in self._synthesize_chunks(flush_text):
                             yield audio_chunk
 
             if text_buffer and not self._cancel_requested:
-                chunks_to_synthesize = self._buffer_to_chunks(text_buffer)
-
-                for chunk in chunks_to_synthesize:
-                    if self._cancel_requested:
-                        break
-
-                    async def _chunk_generator() -> AsyncIterator[str]:
-                        yield chunk
-
-                    async for audio_chunk in self._provider.synthesize_stream(
-                        _chunk_generator()
-                    ):
-                        if self._cancel_requested:
-                            break
-                        yield audio_chunk
+                async for audio_chunk in self._synthesize_chunks(text_buffer):
+                    yield audio_chunk
 
         except TtsError:
             raise
