@@ -1,206 +1,31 @@
 # Fullstack AI Platform
 
-A full-stack streaming chatbot with Google OAuth, guest sessions, multi-provider LLM support, and production-grade Python backend hardening.
+Production-grade full-stack AI chat platform with RAG, tools, agents, MCP, and voice.
 
-- **Frontend:** React + TypeScript + Vite + Tailwind CSS v4
-- **Production backend:** FastAPI (Python) on Railway
-- **Reference / paused backend:** Express + TypeScript (Node.js) — chat-only parity; hardening deferred post-MVP
-- **LLM providers:** OpenAI, Gemini, Groq, and Anthropic (env-driven switching)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![PR Quality Checks](https://github.com/pateatlau/basic-chatbot-react-python/actions/workflows/pr-quality.yml/badge.svg)](https://github.com/pateatlau/basic-chatbot-react-python/actions/workflows/pr-quality.yml)
+[![Live Demo](https://img.shields.io/badge/demo-live-blue)](https://fullstack-ai-platform-umber.vercel.app/)
 
-## MVP Status (Complete — 2026-07-19)
-
-The MVP engineering track is **complete**. The Python backend is the production reference.
-
-| Area                                                       | Status                                               |
-| ---------------------------------------------------------- | ---------------------------------------------------- |
-| Env validation & config                                    | Done                                                 |
-| Structured logging (JSON in production)                    | Done                                                 |
-| Correlation IDs (`X-Request-ID`)                           | Done                                                 |
-| Centralized error envelope                                 | Done                                                 |
-| HTTP rate limiting (`Retry-After`)                         | Done                                                 |
-| Pyright standard mode + Ruff format/lint                   | Done                                                 |
-| CI quality gates (lint, format, typecheck, coverage ≥ 80%) | Done                                                 |
-| Node.js backend alignment                                  | **Deferred** — see `docs/plans/nodejs-backend-v1.md` |
-
-Validation record: `docs/plans/mvp-completion-implementation-plan.md` (Phase 9).
-
-## Post-MVP V1 Status (Complete — 2026-07-21)
-
-Post-MVP V1 engineering is **complete**. The Python backend is the production reference for the reusable AI platform.
-
-| Capability                                                     | Status |
-| -------------------------------------------------------------- | ------ |
-| Centralized prompt management (Jinja2, versioned templates)    | Done   |
-| Generic tool platform + web search (non-streaming chat path)   | Done   |
-| Knowledge platform (upload → parse → chunk → embed → pgvector) | Done   |
-| Generic RAG Framework (domain-agnostic)                        | Done   |
-| Evaluation CLI (prompt, retrieval, end-to-end)                 | Done   |
-| Document/RAG HTTP API (auth-only)                              | Done   |
-| Frontend `/documents` route (upload, list, delete, RAG ask)    | Done   |
-
-**Feature flags** (default off — MVP unchanged when disabled):
-
-- `RAG_ENABLED=false` — no RAG endpoints; chat/auth/persistence unchanged
-- `TOOLS_ENABLED=false` — no tool execution in chat
-- `CHAT_STREAMING_ENABLED=true` (default) — SSE streaming via `POST /api/chat/stream`; set `false` to use non-streaming `POST /api/chat`
-
-**Auth policy:** Document upload and RAG ask require authentication. Guests receive **401** on document/RAG API routes and see a login prompt on `/documents`.
-
-**UI:** Chat remains at `/`. Document management (upload/list/delete) lives at [`/documents`](frontend/src/pages/DocumentsPage.tsx); standalone RAG ask on that route is de-emphasized in V1.1 — primary ask surface is main chat with toggles. See [backend-python/README.md](backend-python/README.md) for API, eval CLI, and configuration matrix.
-
-**Release summary:** [docs/releases/post-mvp-v1-release-summary.md](docs/releases/post-mvp-v1-release-summary.md)
-
-Validation record: [docs/plans/post-mvp-v1-implementation-plan.md](docs/plans/post-mvp-v1-implementation-plan.md) (Phase 13 Completion Record).
-
-## Post-MVP V1.1 Status (Complete — 2026-07-22)
-
-Post-MVP V1.1 engineering is **complete**. Unified chat on `/` integrates web search and document grounding across all four providers in streaming and non-streaming modes.
-
-| Capability                                                                                | Status   |
-| ----------------------------------------------------------------------------------------- | -------- |
-| Multi-provider tool calling (OpenAI, Gemini, Groq, Anthropic) — non-streaming + streaming | Done     |
-| Per-request RAG provider/model on chat and `/api/rag/ask`                                 | Done     |
-| Unified chat toggles (`use_web_search`, `use_documents`) on main chat                     | Done     |
-| SSE extensions (`retrieval_complete`, `tool_start`, `tool_end`)                           | Done     |
-| Provider capability model on `GET /api/health`                                            | Done     |
-| V1 regression when toggles off                                                            | Verified |
-
-**Sub-tracks:** 1.1a provider parity → 1.1b unified chat (non-streaming) → 1.1c streaming tools + RAG.
-
-**Release summary:** [docs/releases/post-mvp-v1.1-release-summary.md](docs/releases/post-mvp-v1.1-release-summary.md)
-
-**Details:** [backend-python/README.md](backend-python/README.md) (canonical pipeline, SSE protocol, toggles, flags)
-
-Validation record: [docs/plans/post-mvp-v1.1-implementation-plan.md](docs/plans/post-mvp-v1.1-implementation-plan.md) (Phase 6 Completion Record).
-
-## Post-MVP V1.1.1 Status (Complete — 2026-07-22)
-
-Post-MVP V1.1.1 is a **polish release** on top of V1.1 unified chat — production-grade UX and operational safety without new platform capabilities.
-
-| Polish item                                                                                     | Status |
-| ----------------------------------------------------------------------------------------------- | ------ |
-| Delete chat session (`DELETE /api/chat/sessions/{id}` + UI confirmation + post-delete fallback) | Done   |
-| Auto-generate chat titles (~50 chars from first user message)                                   | Done   |
-| Protected routes (`/documents` requires sign-in; session expiry redirect + banner on `/`)       | Done   |
-| Friendly 404 page (catch-all with **Back to Chat** / **Go Home**)                               | Done   |
-| Public demo protection (guest output token cap, upload quota, ops spending-alert docs)          | Done   |
-| Consistent loading states (`LoadingIndicator` across long operations)                           | Done   |
-| Graceful provider errors (friendly copy; no raw SDK text)                                       | Done   |
-| Empty state improvements (`EmptyState` + actionable CTAs)                                       | Done   |
-| Mobile responsiveness review (375px / 390px checklist)                                          | Done   |
-
-**Release summary:** [docs/releases/post-mvp-v1.1.1-release-summary.md](docs/releases/post-mvp-v1.1.1-release-summary.md)
-
-**Ops:** [docs/ops/public-demo-protection.md](docs/ops/public-demo-protection.md)
-
-Validation record: [docs/plans/post-mvp-v1.1.1-implementation-plan.md](docs/plans/post-mvp-v1.1.1-implementation-plan.md) (Phase 10 Completion Record).
-
-## Post-MVP V2 Epic 01 Agent Framework — Complete
-
-V2 Epic 01 engineering is **complete**. A reusable, provider-agnostic agent runtime lives under `app/ai/agent/` and can power unified web-search chat behind a default-off feature flag.
-
-| Capability | Status |
-| ---------- | ------ |
-| Agent runtime (`DefaultAgent`, planner, executor, scratchpad, reflection, retry, streaming) | Done |
-| Public Protocols/models frozen after Phase 1 | Done |
-| Chat adapter (`UnifiedChatService` ↔ agent) behind `AGENT_RUNTIME_ENABLED` | Done |
-| V1.1 path unchanged when flag off; parity when on | Verified |
-| Coverage ≥80% on `app/` and `app/ai/agent/`; `make eval` | Verified |
-
-**Feature flag** (default off — V1.1.1 unchanged when disabled):
-
-- `AGENT_RUNTIME_ENABLED=false` — legacy `ToolChatService` tool loop remains the hot path; set `true` to route unified web-search chat through `app/ai/agent/adapters/`
-
-**Release summary:** [docs/releases/post-mvp-v2-epic1-release-summary.md](docs/releases/post-mvp-v2-epic1-release-summary.md)
-
-Validation record: [docs/plans/post-mvp-v2-epic-01-agent-framework.md](docs/plans/post-mvp-v2-epic-01-agent-framework.md) (Phase 12 Completion Record).
-
-## Post-MVP V2 Epic 02 Advanced RAG — Released
-
-Advanced retrieval (hybrid search, query rewrite, parent-child, Cohere rerank, faithful compression, citations) extends the V1 RAG stack behind a default-off flag.
-
-**Feature flag** (default off — V1 dense path unchanged when disabled):
-
-- `ADVANCED_RAG_ENABLED=false` — dense `Retriever` → `ContextBuilder`; set `true` to use `AdvancedRetrievalPipeline` on document chat and `/api/rag/ask` (requires `RAG_ENABLED=true` for document grounding). Optional `COHERE_API_KEY` for rerank.
-
-**Release summary:** [docs/releases/post-mvp-v2-epic2-release-summary.md](docs/releases/post-mvp-v2-epic2-release-summary.md)
-
-Validation record: [docs/plans/post-mvp-v2-epic-02-advanced-rag.md](docs/plans/post-mvp-v2-epic-02-advanced-rag.md) (Phase 12 Completion Record).
-
-## Post-MVP V2 Epic 03 MCP Integration — Complete
-
-V2 Epic 03 engineering is **complete**. MCP client integration under `app/ai/mcp/` enables dynamic tool discovery and execution from remote MCP servers behind a default-off feature flag.
-
-| Capability | Status |
-| ---------- | ------ |
-| MCP client (stdio transport, JSON-RPC subprocess) | Done |
-| Server registry, tool discovery, execution adapter | Done |
-| Config-driven startup registration (`MCP_SERVERS`) | Done |
-| Permission policy composing with `ToolAuthorizer` | Done |
-| DI wiring, lifecycle hooks, integration tests | Done |
-| Coverage ≥80% on `app/` and `app/ai/mcp/`; flag-off parity | Verified |
-
-**Feature flag** (default off — V1 local tools unchanged when disabled):
-
-- `MCP_ENABLED=false` — local tool path via `ToolRegistry` → `ToolExecutor` unchanged; set `true` to register MCP servers, discover remote tools, and execute via stdio transport (MCP spec 2024-11-05)
-
-**Release summary:** [docs/releases/post-mvp-v2-epic3-release-summary.md](docs/releases/post-mvp-v2-epic3-release-summary.md)
-
-Validation record: [docs/plans/post-mvp-v2-epic-03-mcp-integration.md](docs/plans/post-mvp-v2-epic-03-mcp-integration.md) (Phase 10 Completion Record).
-
-## Post-MVP V2 Epic 04 Voice Interfaces — Complete
-
-V2 Epic 04 engineering is **complete**. Bidirectional voice under `app/ai/voice/` feeds the same RAG, agent, and MCP orchestration path as text SSE, with an end-to-end frontend voice mode behind a default-off feature flag.
-
-| Capability | Status |
-| ---------- | ------ |
-| STT/TTS provider protocols and OpenAI Whisper + TTS adapter | Done |
-| WebSocket transport at `/api/voice/ws` with session manager and barge-in | Done |
-| `UnifiedChatService` bridge — voice transcripts reuse `chatReducer` parity with SSE | Done |
-| Frontend voice mode (`useVoiceSession`, `VoiceModeControls`, Composer integration) | Done |
-| Authenticated-only access; flag-off text SSE unchanged | Verified |
-| Coverage ≥80% on `app/` and `app/ai/voice/`; `make eval` | Verified |
-
-**Feature flag** (default off — text chat unchanged when disabled):
-
-- `VOICE_ENABLED=false` — no voice router or UI; set `true` for authenticated users to enable voice mode on an active chat session (requires `OPENAI_API_KEY` for default OpenAI STT/TTS)
-
-**Release summary:** [docs/releases/post-mvp-v2-epic4-release-summary.md](docs/releases/post-mvp-v2-epic4-release-summary.md)
-
-Validation record: [docs/plans/post-mvp-v2-epic-04-voice-interfaces.md](docs/plans/post-mvp-v2-epic-04-voice-interfaces.md) (Phase 11 Completion Record).
-
-## Current Capabilities
-
-- Responsive ChatGPT-like UI with sidebar, streaming, stop, and retry
-- Google OAuth login with app-issued JWT; anonymous guest token flow
-- Chat persistence (sessions, messages, guest quota) when enabled
-- Non-streaming and SSE streaming chat across four LLM providers
-- Unified chat toggles on main chat (`use_web_search`, `use_documents`) for authenticated users — non-streaming and **streaming** (document grounding streams after pre-retrieval; web search via SSE `tool_start` / `tool_end` and optional `retrieval_complete` when `use_documents=true` on `POST /api/chat/stream`)
-- Optional agent runtime for web-search chat when `AGENT_RUNTIME_ENABLED=true` (default off)
-- Optional advanced RAG when `ADVANCED_RAG_ENABLED=true` (default off) — hybrid retrieval, rewrite, parent expand, Cohere rerank, compression, additive `citations`
-- Optional voice mode when `VOICE_ENABLED=true` (default off) — authenticated WebSocket STT/TTS with transcript parity and barge-in; same orchestration path as SSE
-- Typed error envelopes and SSE error frames with `request_id`
-- Request-size and schema validation; provider timeout normalization
-
-## Repository Structure
-
-- `backend-python/` — **active MVP / production backend**
-- `backend-nodejs/` — post-MVP reference backend (paused)
-- `frontend/` — React client
-- `docs/` — plans and runbooks
+![Chat desktop screenshot](./docs/assets/screenshots/chat-desktop.png)
 
 ## Features
 
-- Non-streaming endpoint: `POST /api/chat`
-- Streaming SSE endpoint: `POST /api/chat/stream`
-- Health endpoint: `GET /api/health`
-- Provider abstraction: switch between OpenAI/Gemini/Groq/Anthropic without frontend changes
-- Responsive chat shell with persistent desktop sidebar, collapsible tablet sidebar, and mobile drawer
-- Tailwind CSS v4-driven chat UI with accessible landmarks, focus states, and sticky composer
-- Stop/cancel while streaming
-- Retry after interrupted streams
-- Web search and document grounding toggles on `/` for authenticated users (when `TOOLS_ENABLED` / `RAG_ENABLED` are on)
-- Standardized error handling for validation, timeout, and provider failures
+- Streaming chat with stop, retry, session persistence, and auto-generated titles
+- Google OAuth plus anonymous guest sessions with app-issued JWT
+- Multi-provider LLM support: OpenAI, Gemini, Groq, and Anthropic (env-driven switching)
+- Document upload, chunking, embedding, and RAG ask via pgvector
+- Unified chat toggles for web search and document grounding (streaming and non-streaming)
+- Advanced RAG pipeline: hybrid search, query rewrite, rerank, compression, citations (flag-guarded)
+- Agent runtime for provider-agnostic tool orchestration (flag-guarded)
+- MCP client for remote tool discovery and execution (flag-guarded)
+- Voice mode with WebSocket STT/TTS, barge-in, and transcript parity with SSE (flag-guarded)
+- Production hardening: correlation IDs, structured logging, rate limits, typed error envelopes
+- Responsive ChatGPT-like UI with desktop sidebar, tablet collapse, and mobile drawer
+- Evaluation CLI for prompt, retrieval, and end-to-end tuning
+
+**Stack:** React + TypeScript + Vite + Tailwind CSS v4 · FastAPI (Python) · PostgreSQL + pgvector · optional Node.js reference backend (paused)
+
+**Platform status:** MVP through Post-MVP V1.1.1 and V2 Epics 01–04 are complete. Flag-guarded epics default off so core chat works without extra configuration. See [CHANGELOG.md](CHANGELOG.md) and [docs/releases/](docs/releases/) for release history.
 
 ## Architecture
 
@@ -208,162 +33,89 @@ Production path: **Python FastAPI** (`backend-python/`). The Node.js backend is 
 
 Detailed narrative, package map, and sequence diagrams: [docs/architecture/system-overview.md](docs/architecture/system-overview.md). Static export: [docs/architecture/system-overview.svg](docs/architecture/system-overview.svg).
 
-Modules marked **⚑** are feature-flagged and **default off** (`RAG_ENABLED`, `ADVANCED_RAG_ENABLED`, `TOOLS_ENABLED`, `MCP_ENABLED`, `AGENT_RUNTIME_ENABLED`, `VOICE_ENABLED`).
+Modules marked **⚑** are feature-flagged and **default off**.
 
 ```mermaid
 flowchart TB
-  subgraph Client["React + Vite (frontend/)"]
-    Chat["Chat UI\nSSE streaming"]
+  subgraph Client["React + Vite"]
+    Chat["Chat UI"]
     DocsUI["Documents UI"]
-    VoiceUI["Voice mode UI\nWebSocket"]
+    VoiceUI["Voice mode ⚑"]
   end
 
-  subgraph API["FastAPI Gateway (backend-python/)"]
-    Auth["Auth · JWT · rate limits\ncorrelation IDs"]
+  subgraph API["FastAPI Gateway"]
+    Auth["Auth · JWT · rate limits"]
     ChatAPI["Chat REST / SSE"]
-    VoiceWS["Voice WebSocket"]
+    VoiceWS["Voice WebSocket ⚑"]
     DocAPI["Documents + RAG API"]
-    Health["GET /api/health"]
-  end
-
-  subgraph Services["Orchestration (app/services/)"]
-    UCS["UnifiedChatService\n+ ChatService · ToolChatService"]
   end
 
   subgraph Platform["AI Platform (app/ai/)"]
-    Agent["Agent runtime ⚑\nAGENT_RUNTIME_ENABLED"]
-    RAG["RAG + Advanced RAG ⚑\nRAG_ENABLED · ADVANCED_RAG_ENABLED"]
-    Tools["Tools + MCP client ⚑\nTOOLS_ENABLED · MCP_ENABLED"]
-    Voice["Voice STT/TTS ⚑\nVOICE_ENABLED"]
+    UCS["UnifiedChatService"]
+    Agent["Agent runtime ⚑"]
+    RAG["RAG + Advanced RAG ⚑"]
+    Tools["Tools + MCP ⚑"]
+    Voice["Voice STT/TTS ⚑"]
   end
 
   subgraph Providers["LLM Providers"]
-    Factory["ProviderFactory"]
     LLM["OpenAI · Gemini · Groq · Anthropic"]
   end
 
   subgraph Data["Persistence"]
-    PG[("PostgreSQL + pgvector\nsessions · messages · documents · embeddings")]
+    PG[("PostgreSQL + pgvector")]
   end
 
-  NodeRef["Node.js backend\n(reference / paused)"]
-
-  Chat -->|REST / SSE| ChatAPI
-  VoiceUI -->|WebSocket| VoiceWS
-  DocsUI -->|REST| DocAPI
-
-  ChatAPI --> Auth
-  DocAPI --> Auth
-  VoiceWS --> Auth
-
-  ChatAPI --> UCS
-  VoiceWS --> Voice
-  Voice --> UCS
+  Chat --> ChatAPI
+  VoiceUI --> VoiceWS
+  DocsUI --> DocAPI
+  ChatAPI --> Auth --> UCS
+  VoiceWS --> Voice --> UCS
   DocAPI --> RAG
-
   UCS --> Agent
   UCS --> RAG
   UCS --> Tools
-  UCS --> Factory
-  Factory --> LLM
-
+  UCS --> LLM
   RAG --> PG
-  DocAPI --> PG
   UCS --> PG
-
-  Client -.->|not production| NodeRef
 ```
-
-## Prerequisites
-
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
-- Node.js 20+ (24 works)
-- npm
-- Docker and Docker Compose (local PostgreSQL for the Python backend)
 
 ## Quick Start
 
-### 1) One-time setup (Python backend)
+**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node.js 20+, npm, Docker (local Postgres).
+
+### 1. Clone and configure backend
 
 ```bash
-cd backend-python
+git clone https://github.com/pateatlau/basic-chatbot-react-python.git
+cd fullstack-ai-platform/backend-python
 cp .env.example .env
-# Fill in API keys in .env for the selected provider
+# Add at least one LLM provider API key
 uv sync
 ```
 
-### 2) Start backend (Postgres + API)
+### 2. Start Postgres and migrate
 
-First-time setup — start Postgres on `localhost:5433`, then apply migrations (from repository root):
+From the repository root:
 
 ```bash
 ./scripts/ensure-postgres.sh
 cd backend-python && make db-migrate
 ```
 
-Start the API (ensures Postgres is running, then serves on `http://localhost:8000`):
+Postgres runs on `localhost:5433` (see `docker-compose.override.yml`). Full container stack: [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md).
+
+### 3. Start the API
+
+From the repository root:
 
 ```bash
 make backend
 ```
 
-This checks whether Docker Postgres is accepting connections on `localhost:5433`; if not, it runs `docker compose --profile python up -d postgres` and waits until ready, then starts the Python API on `http://localhost:8000`.
+API: `http://localhost:8000`. Prefer `uv run` / `make` commands so tooling uses the project virtualenv.
 
-Defaults match `backend-python/.env.example`:
-
-- **Image:** `pgvector/pgvector:pg16`
-- **Host/port:** `localhost:5433` (via `docker-compose.override.yml`; avoids conflict with system Postgres on 5432)
-- **Database:** `chatbot` (user/password: `chatbot` / `chatbot`)
-- **Connection URL:** `postgresql+asyncpg://chatbot:chatbot@localhost:5433/chatbot`
-
-To start Postgres only (without the API):
-
-```bash
-docker compose --profile python up -d postgres
-```
-
-If you already run Postgres locally on another port, install the `vector` extension and point `DATABASE_URL` at that instance instead. For the full stack in containers (frontend + backend + Postgres), see [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md).
-
-If migrations fail on an old Docker volume (for example after switching from `postgres:16-alpine`), reset and retry:
-
-```bash
-docker compose --profile python down -v
-make backend
-# in another shell after Postgres is up:
-cd backend-python && make db-migrate
-```
-
-To run the API without the root helper (Postgres must already be up):
-
-```bash
-cd backend-python && make run
-```
-
-Important environment note:
-
-- Python dependencies (including Groq) are installed in the uv-managed project environment.
-- If you run plain `python` from a different interpreter (for example a global/Conda environment), imports like `groq` can fail even though the project is configured correctly.
-- Prefer `uv run ...` and `make ...` commands in this repo so tooling always uses the project environment.
-
-Quick check:
-
-```bash
-cd backend-python
-python -c "import groq"            # may fail outside uv env
-uv run python -c "import groq"     # expected to succeed
-```
-
-### 3) Node Backend (Optional, Post-MVP)
-
-```bash
-cd backend-nodejs
-npm install
-# Create backend-nodejs/.env and fill in provider keys
-PORT=8001 npm run dev
-```
-
-### 4) Frontend
+### 4. Start the frontend
 
 ```bash
 cd frontend
@@ -372,443 +124,88 @@ npm install
 npm run dev
 ```
 
-Frontend default URL: `http://localhost:5173`
+App: `http://localhost:5173`. Local dev uses the Vite `/api` proxy (same-origin); set `VITE_API_BASE_URL` only for production builds.
 
-Local dev uses the Vite `/api` proxy (same-origin) so chat requests avoid CORS drift across ports. Set `VITE_API_BASE_URL` only for production/staging builds or when bypassing the proxy.
+### 5. Verify
 
-Frontend highlights:
+Open the app, send a chat message, and confirm `GET /api/health` returns `status: ok`.
 
-- Tailwind CSS v4 app shell and chat page styling
-- Responsive sidebar behavior across mobile, tablet, and desktop
-- Streaming thread UI with retry, stop, connection error feedback, and unified-chat status indicators (web search / document retrieval)
+**Google sign-in on localhost:** see [docs/tech-references/local-google-oauth.md](docs/tech-references/local-google-oauth.md).
 
-Python backend default URL: `http://localhost:8000`
+**Windows without `make`:** run `uv run python -m uvicorn app.main:app --reload --port 8000` from `backend-python/`, or use WSL2.
 
-Node backend recommended local URL: `http://localhost:8001`
+## Configuration
 
-Production backend URL (MVP): `https://fullstack-ai-platform-production.up.railway.app`
+Full flags matrix, API routes, and eval CLI: [backend-python/README.md](backend-python/README.md).
 
-Before running locally, make sure the selected backend provider has a real API key in the backend `.env` file you are using.
+| Flag | Default | Enables |
+| ---- | ------- | ------- |
+| `RAG_ENABLED` | `false` | Document upload grounding and `/api/rag/ask` |
+| `TOOLS_ENABLED` | `false` | Web search tool execution in chat |
+| `ADVANCED_RAG_ENABLED` | `false` | Hybrid retrieval, rerank, citations (requires `RAG_ENABLED`) |
+| `AGENT_RUNTIME_ENABLED` | `false` | Agent-based web-search orchestration |
+| `MCP_ENABLED` | `false` | Remote MCP tool discovery and execution |
+| `VOICE_ENABLED` | `false` | WebSocket voice mode (requires `OPENAI_API_KEY` for default STT/TTS) |
+| `CHAT_STREAMING_ENABLED` | `true` | SSE streaming via `POST /api/chat/stream` |
+| `DEMO_MODE_STRICT` | `false` | Tighter guest token and upload caps for public demos |
 
-Keep **`make backend`** (repo root) and **frontend** (`npm run dev`) running in separate terminals. If chat returns **502**, the Vite proxy cannot reach the backend on port 8000 — restart with `make backend`.
+Set `LLM_PROVIDER` to `openai`, `gemini`, `groq`, or `anthropic` and the matching API key in `backend-python/.env`.
 
-### Google login on localhost
+## Demo and deployment
 
-Local Vite proxies `/api` to **`http://127.0.0.1:8000`** (IPv4 loopback), not `http://localhost:8000`. On macOS, `localhost` often resolves to IPv6 (`::1`) first. Docker Compose publishes `*:8000` on that stack while `make backend` binds only `127.0.0.1:8000`, so proxying to `localhost` can hit a stale compose backend that has no `GOOGLE_CLIENT_ID` and return **503** `auth_not_configured` ("Login is temporarily unavailable.") even though the local API is fine.
+| Resource | URL / location |
+| -------- | -------------- |
+| Live demo (frontend) | [fullstack-ai-platform-umber.vercel.app](https://fullstack-ai-platform-umber.vercel.app/) |
+| Live demo (backend API) | [fullstack-ai-platform-production.up.railway.app](https://fullstack-ai-platform-production.up.railway.app) |
+| Public demo protection | [docs/ops/public-demo-protection.md](docs/ops/public-demo-protection.md) — enable `DEMO_MODE_STRICT=true` on public deploys |
+| Staging CD | [CD_STAGING.md](CD_STAGING.md) |
+| Production CD | [CD_PRODUCTION.md](CD_PRODUCTION.md) |
+| Container image tags | [docs/ci-image-tagging.md](docs/ci-image-tagging.md) |
 
-Checklist when Google sign-in fails locally:
+Keep API keys in local `.env` files only. Rotate immediately if exposed.
 
-1. Prefer **one** backend: either `make backend` **or** `docker compose --profile python up`, not both on port 8000.
-2. If compose was left running: `docker compose --profile python stop backend-python` (or `docker stop chatbot-backend-python`), then `make backend`.
-3. Confirm `GOOGLE_CLIENT_ID` in `backend-python/.env` and matching `VITE_GOOGLE_CLIENT_ID` in `frontend/.env` (same OAuth Web client ID as production is fine for local).
-4. Google Cloud Console → OAuth Web client → Authorized JavaScript origins must include `http://localhost:5173` (and `http://127.0.0.1:5173` if you open the app that way).
-5. Restart Vite after changing `frontend/vite.config.ts` or `frontend/.env` (`npm run dev`).
+## Project structure
 
-A `gsi/button` **403** from `accounts.google.com` is often a Google Identity Services iframe quirk and is not the same as app auth failing — the decisive request is `POST /api/auth/google`.
-
-## Cross-Platform Note (Windows)
-
-The Python backend Makefile commands are convenient, but `make` is not installed by default on native Windows.
-
-- WSL2 users can run the same `make` commands shown in this README.
-- Native Windows users can install GNU Make (for example with Chocolatey or Scoop), or run direct alternatives:
-
-```bash
-cd backend-python
-uv run python -m uvicorn app.main:app --reload --port 8000
-uv run python -m ruff check app tests
-uv run pyright app tests
-uv run python -m ruff format --check app tests
-uv run python -m pytest -q --cov=app --cov-fail-under=80
+```text
+fullstack-ai-platform/
+├── backend-python/     # Production FastAPI backend (active)
+├── frontend/           # React + Vite client
+├── backend-nodejs/     # Reference Express backend (paused)
+├── docs/               # Architecture, releases, plans, ops runbooks
+├── scripts/            # Dev helpers (e.g. ensure-postgres.sh)
+├── .github/workflows/  # CI and CD pipelines
+├── LICENSE
+├── CONTRIBUTING.md
+└── CHANGELOG.md
 ```
 
-## Developer Onboarding
+## Development
 
-### Setting Up Pre-Commit Hooks
+See [CONTRIBUTING.md](CONTRIBUTING.md) for workflow, pre-commit hooks, PR expectations, and scope policy.
 
-This repository uses [pre-commit](https://pre-commit.com) to enforce code quality gates locally before commits. Hooks run fast formatting and lint checks across all three app areas (frontend, Node backend, Python backend).
+| Area | Commands |
+| ---- | -------- |
+| Python | `make lint` · `make format-check` · `make typecheck` · `make test-cov` |
+| Frontend | `npm run lint` · `npm run format:check` · `npm test -- --run` · `npm run build` |
+| Node (optional) | `npm run lint` · `npm run format:check` · `npm test` · `npm run build` |
 
-#### Installation (< 10 minutes)
+Install pre-commit once: `pip install pre-commit && pre-commit install` (repo root).
 
-1. **Clone and install dependencies:**
+**Test baselines (2026-07-29):** Python 1076 passed, 89.52% coverage on `app/` · Frontend 219 passed · Node 26 passed (reference).
 
-   ```bash
-   git clone <repo>
-   cd fullstack-ai-platform
+**Optional Node backend:** `cd backend-nodejs && PORT=8001 npm run dev` — point `VITE_API_BASE_URL=http://localhost:8001` in `frontend/.env`.
 
-   # Install dependencies for all apps
-   npm install                    # frontend
-   (cd backend-nodejs && npm install)
-   (cd backend-python && uv sync)
-   ```
+## Documentation
 
-2. **Install pre-commit framework and git hooks:**
+| Topic | Link |
+| ----- | ---- |
+| Docs index | [docs/README.md](docs/README.md) |
+| Backend API and flags | [backend-python/README.md](backend-python/README.md) |
+| Architecture | [docs/architecture/system-overview.md](docs/architecture/system-overview.md) |
+| Release summaries | [docs/releases/](docs/releases/) |
+| Implementation plans | [docs/plans/](docs/plans/) |
+| Changelog | [CHANGELOG.md](CHANGELOG.md) |
 
-   ```bash
-   pip install pre-commit
-   # or with uv:
-   uv tool install pre-commit
+## License
 
-   # Install git hooks
-   pre-commit install
-   ```
-
-3. **Verify installation:**
-   ```bash
-   pre-commit --version
-   pre-commit run --all-files
-   ```
-
-#### Running Hooks
-
-- **On next commit:** hooks run automatically
-- **Check all files:** `pre-commit run --all-files`
-- **Skip hooks (emergency only):** `git commit --no-verify` (see bypass policy below)
-
-#### What Hooks Check
-
-| Area              | Check                                 | Auto-Fix          | Runtime |
-| ----------------- | ------------------------------------- | ----------------- | ------- |
-| `frontend/`       | Prettier format                       | Yes               | < 1s    |
-| `frontend/`       | ESLint                                | No (requires fix) | < 2s    |
-| `backend-nodejs/` | Prettier format                       | Yes               | < 1s    |
-| `backend-nodejs/` | ESLint                                | No (requires fix) | < 2s    |
-| `backend-python/` | Ruff check, Ruff format, Pyright      | Ruff only         | < 10s   |
-| Shared            | Trailing whitespace, YAML/JSON syntax | Yes               | < 1s    |
-
-**Total typical runtime: < 5 seconds per commit**
-
-### Hook Policy
-
-#### Fast vs Slow Hooks
-
-**Fast hooks (run on every commit):**
-
-- Formatting checks (Prettier, Ruff format)
-- Linting checks (ESLint, Ruff)
-- Type checking (Pyright for Python backend)
-- File validation (trailing whitespace, JSON/YAML syntax)
-- **Why:** Keep developer feedback loop tight, catch issues immediately
-
-**Slow hooks (run in CI only):**
-
-- Full test suites (see `npm test`, `make test`)
-- Build validation (see `npm run build`, `make build`)
-- **Why:** Reserve CI resources for comprehensive validation; developer commits should be fast
-
-PR CI for `backend-python/` runs `make lint`, `make format-check`, `make typecheck`, and `make test-cov`.
-
-#### Bypass Policy
-
-**When you can use `git commit --no-verify`:**
-
-- Emergency hotfix to production with documented follow-up fix
-- Temporary WIP commit that will be squashed/rebased before merge
-- Blocked hook that needs temporary bypass while diagnosed (use sparingly)
-
-**Required PR documentation when bypassing:**
-
-- Add line to PR description: `[hook-bypass] Reason: <brief reason> | Follow-up: <link to follow-up issue or PR>`
-- Example: `[hook-bypass] Reason: Urgent production hotfix | Follow-up: #42`
-
-**Rules:**
-
-- Bypass is exceptional, not routine
-- All bypassed commits must fix issues before merging to `main`
-- Team members may ask to validate hooks before merge approval
-
-### Complete Troubleshooting
-
-#### Installation Issues
-
-| Problem                             | Solution                                                                         |
-| ----------------------------------- | -------------------------------------------------------------------------------- |
-| `pre-commit not found`              | `pip install pre-commit` or `uv tool install pre-commit` (add to PATH if needed) |
-| `permission denied: .git/hooks/...` | Run `chmod +x .git/hooks/pre-commit` or reinstall with `pre-commit install`      |
-| Hooks not running on commit         | Run `pre-commit install` in repo root again                                      |
-
-#### Runtime Issues
-
-| Problem                         | Cause                              | Solution                                              |
-| ------------------------------- | ---------------------------------- | ----------------------------------------------------- |
-| `prettier not found`            | Node dependencies missing          | `npm install` in `frontend/` or `backend-nodejs/`     |
-| `eslint not found`              | Node dependencies missing          | `npm install` in `frontend/` or `backend-nodejs/`     |
-| `ruff not found`                | Python dependencies missing        | `uv sync` in `backend-python/`                        |
-| `ruff format` issues            | Python dependencies missing        | `uv sync` in `backend-python/`                        |
-| `pyright not found`             | Python dependencies missing        | `uv sync` in `backend-python/`                        |
-| Hooks timeout (> 20s)           | Large diff or missing dependencies | Check dependency installation, try smaller commits    |
-| Hooks modify files unexpectedly | Auto-fix hooks reformatting code   | Re-stage auto-fixed files after hook run, then commit |
-
-#### Common Hook Failures
-
-| Hook Failure               | How to Fix                                                                  |
-| -------------------------- | --------------------------------------------------------------------------- |
-| ESLint errors block commit | Fix the issue in code (cannot auto-fix); see ESLint output for details      |
-| Ruff check failures        | Run `cd backend-python && uv run ruff check --fix app tests`, then re-stage |
-| Pyright type errors        | Fix reported types; verify with `cd backend-python && make typecheck`       |
-| Prettier disagreement      | Re-run `pre-commit run --all-files` to auto-fix, then re-stage              |
-| Ruff format diff           | Run `cd backend-python && make format`, then re-stage                       |
-
-#### Getting Help
-
-If hooks remain broken after troubleshooting:
-
-1. Run `pre-commit clean` to reset cache
-2. Reinstall with `pre-commit uninstall && pre-commit install`
-3. Run `pre-commit run --all-files` to see detailed error logs
-4. Check `.pre-commit-config.yaml` for hook configuration
-5. Ask team member or create an issue with full error output
-
-### Onboarding Checklist
-
-- [ ] Clone repo and install app dependencies (npm, uv)
-- [ ] Install pre-commit: `pip install pre-commit` or `uv tool install pre-commit`
-- [ ] Run `pre-commit install` in repo root
-- [ ] Verify: `pre-commit --version` and `pre-commit run --all-files` (should pass)
-- [ ] Make a test commit to confirm hooks run
-- [ ] Ready to develop!
-
-**Expected time: < 10 minutes**
-
-## CI Image Tagging (Stage C2)
-
-Container images are published by `.github/workflows/build-publish-images.yml` to GHCR:
-
-- `ghcr.io/<owner>/fullstack-ai-platform-frontend`
-- `ghcr.io/<owner>/fullstack-ai-platform-backend-nodejs`
-- `ghcr.io/<owner>/fullstack-ai-platform-backend-python`
-
-Tag strategy:
-
-- Immutable: `sha-<git_sha>`
-- Mutable channels: `main`, `staging`, `prod`
-
-Publish rules:
-
-- Push to `main` publishes changed services with `sha-<git_sha>`, `main`, and `staging`
-- Push of release tags (`v*`, `release-*`) publishes all services from the tagged commit with `sha-<git_sha>` and `prod`
-
-Each image build also uploads a metadata artifact (service, ref, sha, digest, tags/labels) as a provenance baseline.
-
-## PR Quality Gates (Stage C3)
-
-`main` is protected with required CI checks and an up-to-date branch requirement.
-
-Required checks:
-
-- `Frontend PR Checks` — lint, format check, test, build
-- `Backend Node.js PR Checks` — lint, format check, test, build
-- `Backend Python PR Checks` — lint, format check, typecheck (Pyright standard), test with coverage (80% minimum on `app/`)
-
-`Backend Python PR Checks` runs, in order:
-
-1. `make lint` — Ruff
-2. `make format-check` — Ruff format
-3. `make typecheck` — Pyright (`typeCheckingMode = standard`)
-4. `make test-cov` — pytest with `--cov-fail-under=80` (baseline ~86% on `app/`; `app/db/seed.py` omitted as a CLI entrypoint)
-
-CI uploads `backend-python/coverage.xml` as a workflow artifact on Python PRs.
-
-Merge policy:
-
-- Merge commits are disabled
-- Linear history is required on `main`
-- Squash merge or rebase merge should be used
-
-Expected PR checklist:
-
-- [ ] Branch is up to date with `main`
-- [ ] Relevant required checks passed for changed app areas
-- [ ] No hook bypass remains unresolved in the PR description
-- [ ] Scope stays within the intended app area or rollout phase
-- [ ] Merge uses squash or rebase, not a merge commit
-
-## Backend Selection
-
-The frontend talks to whichever backend is configured in `frontend/.env`:
-
-```dotenv
-VITE_API_BASE_URL=http://localhost:8000
-```
-
-Use `8000` for Python and `8001` for Node during side-by-side development.
-
-## Provider Switching
-
-In the Python backend env file (`backend-python/.env`; see `.env.example` for the full list):
-
-- `LLM_PROVIDER=openai`, `gemini`, `groq`, or `anthropic`
-- set provider-specific key/model values
-
-Examples:
-
-```dotenv
-LLM_PROVIDER=openai
-OPENAI_MODEL=gpt-4o-mini
-```
-
-```dotenv
-LLM_PROVIDER=gemini
-GEMINI_MODEL=gemini-3.1-flash-lite
-```
-
-Then restart backend.
-
-For the Node backend, the equivalent env file is `backend-nodejs/.env`.
-
-## API Overview
-
-### Health
-
-```http
-GET /api/health
-```
-
-Example response (V1.1 fields shown):
-
-```json
-{
-  "status": "ok",
-  "provider": "gemini",
-  "version": "0.1.0",
-  "chat_streaming_enabled": true,
-  "tools_enabled": false,
-  "rag_enabled": false,
-  "capabilities": {
-    "by_provider": {
-      "openai": { "supports_streaming": true, "supports_tool_calling": true }
-    }
-  }
-}
-```
-
-See [backend-python/README.md](backend-python/README.md) for the full `capabilities.by_provider` shape.
-
-### Non-streaming chat
-
-```http
-POST /api/chat
-Content-Type: application/json
-```
-
-Body:
-
-```json
-{
-  "messages": [{ "role": "user", "content": "What is FastAPI?" }],
-  "use_web_search": false,
-  "use_documents": false
-}
-```
-
-Optional V1.1 toggles (`use_web_search`, `use_documents`) require authentication and respective feature flags. Default `false` preserves V1 plain chat.
-
-### Streaming chat (SSE)
-
-```http
-POST /api/chat/stream
-Content-Type: application/json
-```
-
-Returns `text/event-stream`. Core frames: `start`, `delta`, `end`, and `error`. Additive unified-chat frames (authenticated users; ignored by older clients):
-
-- `retrieval_complete` — emitted after document pre-retrieval when `use_documents=true` and `RAG_ENABLED=true`, before `start` or any tool loop
-- `tool_start` / `tool_end` — web search tool lifecycle when `use_web_search=true` and `TOOLS_ENABLED=true`, before the final answer stream
-
-Plain streaming (no toggles) uses `start` → `delta*` → `end` only. When both toggles are on: `retrieval_complete` → `tool_start`/`tool_end` (as needed) → `start` → `delta*` → `end`.
-Before running locally, make sure the selected backend provider has a real API key in the backend `.env` file you are using.
-
-## Development Commands
-
-### Python Backend
-
-```bash
-cd backend-python
-make run
-make lint
-make typecheck
-make format
-make format-check
-make test
-make test-cov
-uv run pytest
-```
-
-### Node Backend
-
-```bash
-cd backend-nodejs
-npm run dev
-npm test
-npm run lint
-npm run format:check
-npm run build
-```
-
-### Frontend
-
-```bash
-cd frontend
-npm run test
-npm run lint
-npm run format
-npm run format:check
-npm run build
-npm test -- --run
-```
-
-## Reliability and Observability
-
-- Every response includes `X-Request-ID`; the frontend forwards it on retry for traceability.
-- Non-streaming failures return `{ error: { code, message, request_id } }`.
-- Streaming failures surface as SSE `error` frames with the same codes.
-- HTTP rate limiting returns `429` with `rate_limit_exceeded` and a `Retry-After` header (separate from guest daily quota).
-- Production logs are structured JSON with correlation fields; development logs are human-readable.
-- The frontend preserves partial assistant output on interruption, marks the message as interrupted, and offers Retry.
-- Oversized or malformed requests are rejected before hitting the provider.
-
-Common error codes: `validation_error`, `invalid_google_token`, `quota_exceeded`, `rate_limit_exceeded`, `provider_timeout`, `provider_rate_limited`, `provider_error`, `database_error`, `internal_error`.
-
-## Tests
-
-| App      | Command                              | Baseline (2026-07-22, Post-MVP V1.1)  |
-| -------- | ------------------------------------ | ------------------------------------- |
-| Python   | `cd backend-python && make test-cov` | 403 passed, 86.14% coverage on `app/` |
-| Frontend | `cd frontend && npm test -- --run`   | 122 passed                            |
-| Node.js  | `cd backend-nodejs && npm test`      | 26 passed (baseline, unhardened)      |
-
-Recommended pre-push validation:
-
-```bash
-cd backend-python && make lint && make format-check && make typecheck && make test-cov
-cd frontend && npm run lint && npm run format:check && npm test -- --run && npm run build
-cd backend-nodejs && npm run lint && npm run format:check && npm test && npm run build
-```
-
-## Side-By-Side Workflow
-
-Recommended local ports:
-
-- Python backend: `8000`
-- Node backend: `8001`
-- Frontend: `5173`
-
-Typical parity workflow:
-
-1. Run the Python backend on `8000` as the reference implementation.
-2. Run the Node backend on `8001`.
-3. Point `VITE_API_BASE_URL` to `http://localhost:8001` when validating Node behavior.
-4. Switch `VITE_API_BASE_URL` back to `http://localhost:8000` when comparing against Python.
-
-## Deployment Status
-
-Deployment prerequisites and the operator runbook are documented in [docs/plans/chatbot-v1.md](docs/plans/chatbot-v1.md).
-
-Staging CD automation is now defined in [CD_STAGING.md](CD_STAGING.md) and implemented by `.github/workflows/cd-staging.yml`.
-
-Production deployment remains a manual promotion step pending Stage D2 controls.
-
-## Notes
-
-- Keep API keys in local `.env` files only.
-- Rotate keys immediately if exposed.
+[MIT](LICENSE) — Copyright (c) 2026 Laldingliana Tlau Vantawl

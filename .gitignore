@@ -63,5 +63,3 @@ dist-ssr/
 # Documentation for internal use only
 docs/prompts/
 docs/references/
-docs/tech-references/
-docs/ops/
