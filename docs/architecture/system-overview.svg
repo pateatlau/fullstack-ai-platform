@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 640" role="img" aria-labelledby="title desc">
+  <title id="title">Fullstack AI Platform  System Overview</title>
+  <desc id="desc">Layered architecture: React client, FastAPI gateway, AI platform services, LLM providers, PostgreSQL with pgvector. Flagged modules shown dashed.</desc>
+  <defs>
+    <style>
+      .box { fill: #f8fafc; stroke: #334155; stroke-width: 1.5; rx: 6; }
+      .box-flagged { fill: #fffbeb; stroke: #92400e; stroke-width: 1.5; stroke-dasharray: 6 4; rx: 6; }
+      .box-data { fill: #eff6ff; stroke: #1d4ed8; stroke-width: 1.5; rx: 6; }
+      .box-ref { fill: #f1f5f9; stroke: #64748b; stroke-width: 1; stroke-dasharray: 4 3; rx: 6; }
+      .label { font: 600 13px system-ui, sans-serif; fill: #0f172a; }
+      .sublabel { font: 11px system-ui, sans-serif; fill: #475569; }
+      .layer { font: 700 12px system-ui, sans-serif; fill: #64748b; letter-spacing: 0.04em; }
+      .arrow { stroke: #64748b; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead); }
+      .arrow-ref { stroke: #94a3b8; stroke-width: 1; stroke-dasharray: 4 3; fill: none; }
+    </style>
+    <marker id="arrowhead" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <!-- Client -->
+  <text x="40" y="28" class="layer">CLIENT</text>
+  <rect x="40" y="40" width="840" height="72" class="box"/>
+  <text x="60" y="64" class="label">React + Vite</text>
+  <text x="60" y="82" class="sublabel">Chat (SSE) · Documents UI · Voice mode (WebSocket)</text>
+  <text x="60" y="98" class="sublabel">REST / SSE / WebSocket</text>
+
+  <path d="M460 112 V132" class="arrow"/>
+
+  <!-- API Gateway -->
+  <text x="40" y="148" class="layer">API GATEWAY</text>
+  <rect x="40" y="160" width="840" height="72" class="box"/>
+  <text x="60" y="184" class="label">FastAPI (backend-python/)</text>
+  <text x="60" y="202" class="sublabel">Auth · JWT · rate limits · correlation IDs</text>
+  <text x="60" y="218" class="sublabel">Chat SSE/REST · Documents + RAG API · Voice WebSocket · GET /api/health</text>
+
+  <path d="M460 232 V252" class="arrow"/>
+
+  <!-- Orchestration -->
+  <text x="40" y="268" class="layer">ORCHESTRATION</text>
+  <rect x="280" y="280" width="360" height="48" class="box"/>
+  <text x="300" y="302" class="label">UnifiedChatService + ChatService / ToolChatService</text>
+  <text x="300" y="318" class="sublabel">app/services/</text>
+
+  <path d="M460 328 V348" class="arrow"/>
+
+  <!-- Platform -->
+  <text x="40" y="364" class="layer">AI PLATFORM (app/ai/)  dashed = feature-flagged, default off</text>
+  <rect x="40" y="376" width="190" height="56" class="box-flagged"/>
+  <text x="56" y="400" class="label">Agent runtime</text>
+  <text x="56" y="416" class="sublabel">AGENT_RUNTIME_ENABLED</text>
+
+  <rect x="250" y="376" width="190" height="56" class="box-flagged"/>
+  <text x="266" y="400" class="label">RAG + Advanced RAG</text>
+  <text x="266" y="416" class="sublabel">RAG_ENABLED · ADVANCED_RAG_ENABLED</text>
+
+  <rect x="460" y="376" width="190" height="56" class="box-flagged"/>
+  <text x="476" y="400" class="label">Tools + MCP client</text>
+  <text x="476" y="416" class="sublabel">TOOLS_ENABLED · MCP_ENABLED</text>
+
+  <rect x="670" y="376" width="210" height="56" class="box-flagged"/>
+  <text x="686" y="400" class="label">Voice STT/TTS</text>
+  <text x="686" y="416" class="sublabel">VOICE_ENABLED</text>
+
+  <path d="M460 432 V452" class="arrow"/>
+
+  <!-- Providers -->
+  <text x="40" y="468" class="layer">PROVIDERS</text>
+  <rect x="240" y="480" width="440" height="48" class="box"/>
+  <text x="260" y="502" class="label">ProviderFactory ’ OpenAI · Gemini · Groq · Anthropic</text>
+  <text x="260" y="518" class="sublabel">app/providers/</text>
+
+  <path d="M460 528 V548" class="arrow"/>
+
+  <!-- Data -->
+  <text x="40" y="564" class="layer">PERSISTENCE</text>
+  <rect x="240" y="576" width="440" height="48" class="box-data"/>
+  <text x="260" y="598" class="label">PostgreSQL + pgvector</text>
+  <text x="260" y="614" class="sublabel">sessions · messages · documents · embeddings</text>
+
+  <!-- Node reference -->
+  <rect x="40" y="576" width="170" height="48" class="box-ref"/>
+  <text x="56" y="598" class="label">Node.js backend</text>
+  <text x="56" y="614" class="sublabel">reference / paused</text>
+  <path d="M210 600 H230" class="arrow-ref"/>
+</svg>
