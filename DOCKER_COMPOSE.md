@@ -82,6 +82,7 @@ docker compose --profile nodejs -e LLM_PROVIDER=gemini up
 - **Build Context**: `./backend-python`
 - **Build Time**: ~60 seconds
 - **Runtime**: Python with FastAPI
+- **Voice WebSocket** (when `VOICE_ENABLED=true` in env): `ws://localhost:8000/api/voice/ws?session_id={chat_session_id}` — authenticated-only; JSON-framed PCM16 audio + transcript events (see [backend-python/README.md](./backend-python/README.md))
 
 ## Smoke Tests
 
