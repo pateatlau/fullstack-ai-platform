@@ -4,7 +4,15 @@
 class VoiceSessionError(Exception):
     """Base exception for voice session errors."""
 
-    pass
+    def __init__(self, message: str, code: str | None = None) -> None:
+        """Initialize voice session error.
+
+        Args:
+            message: Error message.
+            code: Optional error code for client classification.
+        """
+        super().__init__(message)
+        self.code = code
 
 
 class SttError(Exception):
