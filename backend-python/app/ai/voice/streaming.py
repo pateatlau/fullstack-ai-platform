@@ -166,11 +166,17 @@ class VoiceStreamBridge:
         Raises:
             VoiceSessionError: If decoded size exceeds max_chunk_bytes.
         """
-        try:
-            audio_bytes = base64.b64decode(payload_b64, validate=True)
-        except Exception as e:
-            raise VoiceSessionError(f"Invalid base64 in audio_in: {e}") from e
+        # Early rejection: base64 encodes 3 bytes as 4 chars (4/3 ratio).
+        # If encoded length > (max_chunk_bytes * 4/3), decoded will exceed limit.
+        max_encoded_len = (self._config.max_chunk_bytes * 4 // 3) + 4
+        if len(payload_b64) > max_encoded_len:
+            raise VoiceSessionError(
+                f"Audio chunk exceeds max size: encoded length {len(payload_b64)} "
+                f"exceeds maximum {max_encoded_len}"
+            )
 
+        # Decode and validate actual size (reuses existing logic).
+        audio_bytes = self.decode_audio_payload(payload_b64)
         if len(audio_bytes) > self._config.max_chunk_bytes:
             raise VoiceSessionError(
                 f"Audio chunk exceeds max size: {len(audio_bytes)} > "
