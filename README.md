@@ -202,57 +202,76 @@ Validation record: [docs/plans/post-mvp-v2-epic-04-voice-interfaces.md](docs/pla
 - Web search and document grounding toggles on `/` for authenticated users (when `TOOLS_ENABLED` / `RAG_ENABLED` are on)
 - Standardized error handling for validation, timeout, and provider failures
 
-## System Design Diagram
+## Architecture
+
+Production path: **Python FastAPI** (`backend-python/`). The Node.js backend is a reference implementation and is not deployed.
+
+Detailed narrative, package map, and sequence diagrams: [docs/architecture/system-overview.md](docs/architecture/system-overview.md). Static export: [docs/architecture/system-overview.svg](docs/architecture/system-overview.svg).
+
+Modules marked **⚑** are feature-flagged and **default off** (`RAG_ENABLED`, `ADVANCED_RAG_ENABLED`, `TOOLS_ENABLED`, `MCP_ENABLED`, `AGENT_RUNTIME_ENABLED`, `VOICE_ENABLED`).
 
 ```mermaid
-flowchart LR
-  subgraph Client["React Client (Vite + TS)"]
-    UI["Chat UI\nSidebar / MessageList / Composer"]
-    Hook["useChatStream hook\nfetch + SSE parser + AbortController"]
+flowchart TB
+  subgraph Client["React + Vite (frontend/)"]
+    Chat["Chat UI\nSSE streaming"]
+    DocsUI["Documents UI"]
+    VoiceUI["Voice mode UI\nWebSocket"]
   end
 
-  subgraph API["Backend Implementations"]
-    Py["Python FastAPI backend"]
-    Node["Node Express backend"]
-    Router["chat routes\nGET /api/health\nPOST /api/chat\nPOST /api/chat/stream"]
-    Service["ChatService / UnifiedChatService\n(plain vs toggled orchestration)"]
-    Factory["ProviderFactory\n(reads LLM_PROVIDER env)"]
+  subgraph API["FastAPI Gateway (backend-python/)"]
+    Auth["Auth · JWT · rate limits\ncorrelation IDs"]
+    ChatAPI["Chat REST / SSE"]
+    VoiceWS["Voice WebSocket"]
+    DocAPI["Documents + RAG API"]
+    Health["GET /api/health"]
   end
 
-  subgraph Providers["LLM Provider Adapters"]
-    Base[["LLMProvider interface"]]
-    OpenAIAdapter["OpenAIProvider"]
-    GeminiAdapter["GeminiProvider"]
-    GroqAdapter["GroqProvider"]
-    AnthropicAdapter["AnthropicProvider"]
+  subgraph Services["Orchestration (app/services/)"]
+    UCS["UnifiedChatService\n+ ChatService · ToolChatService"]
   end
 
-  subgraph External["External APIs"]
-    OpenAI[("OpenAI API")]
-    Gemini[("Gemini API")]
-    Groq[("Groq API")]
-    Anthropic[("Anthropic API")]
+  subgraph Platform["AI Platform (app/ai/)"]
+    Agent["Agent runtime ⚑\nAGENT_RUNTIME_ENABLED"]
+    RAG["RAG + Advanced RAG ⚑\nRAG_ENABLED · ADVANCED_RAG_ENABLED"]
+    Tools["Tools + MCP client ⚑\nTOOLS_ENABLED · MCP_ENABLED"]
+    Voice["Voice STT/TTS ⚑\nVOICE_ENABLED"]
   end
 
-  subgraph Data["Persistence (Python)"]
-    DB[("PostgreSQL:\nsessions / messages / guests")]
+  subgraph Providers["LLM Providers"]
+    Factory["ProviderFactory"]
+    LLM["OpenAI · Gemini · Groq · Anthropic"]
   end
 
-  subgraph PostMVP["Post-MVP (deferred)"]
-    NodeHarden["Node.js hardening"]
+  subgraph Data["Persistence"]
+    PG[("PostgreSQL + pgvector\nsessions · messages · documents · embeddings")]
   end
 
-  UI --> Hook --> Router
-  Py --> Router
-  Node --> Router
-  Router --> Service --> Factory
-  Factory --> Base
-  Base --> OpenAIAdapter --> OpenAI
-  Base --> GeminiAdapter --> Gemini
-  Base --> GroqAdapter --> Groq
-  Base --> AnthropicAdapter --> Anthropic
-  Service --> DB
-  Node -.-> NodeHarden
+  NodeRef["Node.js backend\n(reference / paused)"]
+
+  Chat -->|REST / SSE| ChatAPI
+  VoiceUI -->|WebSocket| VoiceWS
+  DocsUI -->|REST| DocAPI
+
+  ChatAPI --> Auth
+  DocAPI --> Auth
+  VoiceWS --> Auth
+
+  ChatAPI --> UCS
+  VoiceWS --> Voice
+  Voice --> UCS
+  DocAPI --> RAG
+
+  UCS --> Agent
+  UCS --> RAG
+  UCS --> Tools
+  UCS --> Factory
+  Factory --> LLM
+
+  RAG --> PG
+  DocAPI --> PG
+  UCS --> PG
+
+  Client -.->|not production| NodeRef
 ```
 
 ## Prerequisites
