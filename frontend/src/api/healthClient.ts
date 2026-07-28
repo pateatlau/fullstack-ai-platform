@@ -7,6 +7,7 @@ export interface HealthResponse {
   chat_streaming_enabled: boolean
   tools_enabled: boolean
   rag_enabled: boolean
+  voice_enabled: boolean
   capabilities?: {
     by_provider: Record<
       string,

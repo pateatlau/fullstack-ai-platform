@@ -207,6 +207,34 @@ async def test_handshake_and_chat_turn_with_fakes(
         get_settings.cache_clear()
 
 
+async def test_handshake_accepts_access_token_query_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Browser WebSocket clients cannot set Authorization headers; use query fallback."""
+    monkeypatch.setenv("VOICE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    user_id = uuid.uuid4()
+    chat_store = FakeChatStore()
+    chat_session = await chat_store.create_session(user_id=user_id, title="Voice")
+    test_app = _build_voice_test_app(chat_store)
+    token = create_access_token(user_id=user_id, settings=get_settings())
+
+    try:
+        with TestClient(test_app) as client:
+            with client.websocket_connect(
+                f"/api/voice/ws?session_id={chat_session.id}&access_token={token}"
+            ) as ws:
+                started = json.loads(ws.receive_text())
+                assert started["type"] == "session_started"
+                assert started["audio_format"] == "pcm16_24k_mono"
+                ws.send_text(json.dumps({"type": "session_end"}))
+                closed = json.loads(ws.receive_text())
+                assert closed["type"] == "session_closed"
+    finally:
+        get_settings.cache_clear()
+
+
 async def test_heartbeat_round_trip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
