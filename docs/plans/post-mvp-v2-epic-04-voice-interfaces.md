@@ -866,7 +866,7 @@ _Copied from Epic 03 Phase 10 completion record._
 - [x] `make eval`
 - [x] Write `docs/releases/post-mvp-v2-epic4-release-summary.md`
 - [x] Set Phase status rows to **Completed**; tick DoD
-- [ ] Phase 11 complete — user confirmed; Epic 05 authorized
+- [x] Phase 11 complete — user confirmed
 
 **Verify:** `make test-cov && make eval` · `npm test -- --run && npm run build`
 
@@ -983,7 +983,7 @@ Structured log fields (no raw audio/transcripts by default):
 - [x] `tests/ai/voice/` complete; coverage ≥80% on `app/ai/voice/` and `app/`
 - [x] Frontend voice tests pass; `npm run build` succeeds
 - [x] `make eval` passes; release summary published
-- [x] All phases **Completed**; user confirmed each (Phases 0–10 confirmed; Phase 11 awaiting user confirm)
+- [x] All phases **Completed**; user confirmed each
 - [x] Program DoD: [\_program-v2-execution-guide.md](./_program-v2-execution-guide.md)
 - [ ] User authorizes Epic 05
 
@@ -994,3 +994,4 @@ Structured log fields (no raw audio/transcripts by default):
 | 2026-07-28 | Initial plan                                                                                                                                                                                                                                               |
 | 2026-07-28 | v2 — Add end-to-end frontend voice mode; transcript parity with SSE; Phases 9–10                                                                                                                                                                           |
 | 2026-07-29 | Phase 11 validation complete: flag-off/on test matrices, eval, frontend gates, voice package 93% coverage, release summary published, Docker WS documented. Phase 11 status → Completed (pending user confirmation / Epic 05 authorization). Part II only. |
+| 2026-07-29 | Phase 11 marked Completed (user confirmed). Part II only. |

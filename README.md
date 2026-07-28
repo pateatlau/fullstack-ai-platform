@@ -127,30 +127,47 @@ Advanced retrieval (hybrid search, query rewrite, parent-child, Cohere rerank, f
 
 Validation record: [docs/plans/post-mvp-v2-epic-02-advanced-rag.md](docs/plans/post-mvp-v2-epic-02-advanced-rag.md) (Phase 12 Completion Record).
 
-## Post-MVP V2 Epic 03 MCP Integration — In Progress
+## Post-MVP V2 Epic 03 MCP Integration — Complete
 
-Model Context Protocol (MCP) client integration enables dynamic tool discovery and execution from remote MCP servers. Ships behind `MCP_ENABLED=false` (default off).
+V2 Epic 03 engineering is **complete**. MCP client integration under `app/ai/mcp/` enables dynamic tool discovery and execution from remote MCP servers behind a default-off feature flag.
+
+| Capability | Status |
+| ---------- | ------ |
+| MCP client (stdio transport, JSON-RPC subprocess) | Done |
+| Server registry, tool discovery, execution adapter | Done |
+| Config-driven startup registration (`MCP_SERVERS`) | Done |
+| Permission policy composing with `ToolAuthorizer` | Done |
+| DI wiring, lifecycle hooks, integration tests | Done |
+| Coverage ≥80% on `app/` and `app/ai/mcp/`; flag-off parity | Verified |
 
 **Feature flag** (default off — V1 local tools unchanged when disabled):
 
 - `MCP_ENABLED=false` — local tool path via `ToolRegistry` → `ToolExecutor` unchanged; set `true` to register MCP servers, discover remote tools, and execute via stdio transport (MCP spec 2024-11-05)
 
-**Phase 9 (Integration & DI Wiring) — Complete:**
+**Release summary:** [docs/releases/post-mvp-v2-epic3-release-summary.md](docs/releases/post-mvp-v2-epic3-release-summary.md)
 
-- DI wiring in `app/ai/deps.py` (`get_mcp_server_registry`, `get_mcp_permission_policy`)
-- Startup/shutdown hooks in `main.py` (register MCP tools when flag on; graceful disconnect on shutdown)
-- `ToolExecutor` composes `McpPermissionPolicy` with `ToolAuthorizer` (authenticated-only inherited; both must pass)
-- End-to-end integration tests (`tests/ai/mcp/test_integration.py`)
-- Documentation in `backend-python/README.md` and `.env.example` (MCP configuration, tool naming convention `{server_name}.{tool_name}`, permission model)
+Validation record: [docs/plans/post-mvp-v2-epic-03-mcp-integration.md](docs/plans/post-mvp-v2-epic-03-mcp-integration.md) (Phase 10 Completion Record).
 
-**Remaining Phase 10 (Validation & Release):**
+## Post-MVP V2 Epic 04 Voice Interfaces — Complete
 
-- Full suite with `MCP_ENABLED=false` and `true` (fake MCP servers; no real external dependencies for CI)
-- Flag-off parity verification; agent/RAG regression tests
-- Coverage ≥80% on `app/` and `app/ai/mcp/`
-- Release summary
+V2 Epic 04 engineering is **complete**. Bidirectional voice under `app/ai/voice/` feeds the same RAG, agent, and MCP orchestration path as text SSE, with an end-to-end frontend voice mode behind a default-off feature flag.
 
-**Plan:** [docs/plans/post-mvp-v2-epic-03-mcp-integration.md](docs/plans/post-mvp-v2-epic-03-mcp-integration.md)
+| Capability | Status |
+| ---------- | ------ |
+| STT/TTS provider protocols and OpenAI Whisper + TTS adapter | Done |
+| WebSocket transport at `/api/voice/ws` with session manager and barge-in | Done |
+| `UnifiedChatService` bridge — voice transcripts reuse `chatReducer` parity with SSE | Done |
+| Frontend voice mode (`useVoiceSession`, `VoiceModeControls`, Composer integration) | Done |
+| Authenticated-only access; flag-off text SSE unchanged | Verified |
+| Coverage ≥80% on `app/` and `app/ai/voice/`; `make eval` | Verified |
+
+**Feature flag** (default off — text chat unchanged when disabled):
+
+- `VOICE_ENABLED=false` — no voice router or UI; set `true` for authenticated users to enable voice mode on an active chat session (requires `OPENAI_API_KEY` for default OpenAI STT/TTS)
+
+**Release summary:** [docs/releases/post-mvp-v2-epic4-release-summary.md](docs/releases/post-mvp-v2-epic4-release-summary.md)
+
+Validation record: [docs/plans/post-mvp-v2-epic-04-voice-interfaces.md](docs/plans/post-mvp-v2-epic-04-voice-interfaces.md) (Phase 11 Completion Record).
 
 ## Current Capabilities
 
@@ -161,6 +178,7 @@ Model Context Protocol (MCP) client integration enables dynamic tool discovery a
 - Unified chat toggles on main chat (`use_web_search`, `use_documents`) for authenticated users — non-streaming and **streaming** (document grounding streams after pre-retrieval; web search via SSE `tool_start` / `tool_end` and optional `retrieval_complete` when `use_documents=true` on `POST /api/chat/stream`)
 - Optional agent runtime for web-search chat when `AGENT_RUNTIME_ENABLED=true` (default off)
 - Optional advanced RAG when `ADVANCED_RAG_ENABLED=true` (default off) — hybrid retrieval, rewrite, parent expand, Cohere rerank, compression, additive `citations`
+- Optional voice mode when `VOICE_ENABLED=true` (default off) — authenticated WebSocket STT/TTS with transcript parity and barge-in; same orchestration path as SSE
 - Typed error envelopes and SSE error frames with `request_id`
 - Request-size and schema validation; provider timeout normalization
 
