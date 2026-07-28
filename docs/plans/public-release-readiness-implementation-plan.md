@@ -19,7 +19,7 @@ This is a **documentation and asset track**, not a feature epic. No new platform
 | Phase | Name                                 | Effort | Status      |
 | ----- | ------------------------------------ | ------ | ----------- |
 | 0     | Baseline Audit & Decisions           | XS     | Completed   |
-| 1     | LICENSE                              | XS     | Not Started |
+| 1     | LICENSE                              | XS     | Completed   |
 | 2     | CHANGELOG                            | S      | Not Started |
 | 3     | CONTRIBUTING                         | S      | Not Started |
 | 4     | Architecture Diagram                 | M      | Not Started |
@@ -53,7 +53,7 @@ This is a **documentation and asset track**, not a feature epic. No new platform
 | -------------------- | -------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | README               | `README.md`                      | Exists (~776 lines) | Engineering changelog style; outdated system diagram (no RAG, agent, MCP, voice); no hero screenshot; dense for first-time visitors |
 | CHANGELOG            | `CHANGELOG.md`                   | Partial             | Only V2 Epic 2 entries; missing MVP → V2 Epic 4 history                                                                             |
-| LICENSE              | —                                | **Missing**         | Required before public release                                                                                                      |
+| LICENSE              | `LICENSE`                        | MIT (2026)          | README badge deferred to Phase 5                                                                                                    |
 | CONTRIBUTING         | —                                | **Missing**         | Required even if contributions are not yet expected                                                                                 |
 | Architecture diagram | `README.md` (Mermaid)            | Stale               | Chat-only flow; omits knowledge platform, agent runtime, MCP, voice                                                                 |
 | Screenshots / GIFs   | —                                | **Missing**         | Only `frontend/public/icons.svg` exists                                                                                             |
@@ -123,10 +123,10 @@ This is a **documentation and asset track**, not a feature epic. No new platform
 
 **Steps:**
 
-- [ ] Add `LICENSE` using the chosen template (MIT recommended).
-- [ ] Set copyright holder and year (e.g. `Copyright (c) 2026 Laldingliana Tlau Vantawl`).
+- [x] Add `LICENSE` using the chosen template (MIT recommended).
+- [x] Set copyright holder and year (e.g. `Copyright (c) 2026 Laldingliana Tlau Vantawl`).
 - [ ] Add license badge to README header (Phase 5) — note dependency here.
-- [ ] Phase 1 complete — user confirmed.
+- [x] Phase 1 complete — user confirmed.
 
 **Verify:**
 
@@ -596,6 +596,7 @@ Phases 1–3 may be combined into a single **governance** PR if preferred.
 
 ## Changelog (this plan)
 
-| Date       | Change       |
-| ---------- | ------------ |
-| 2026-07-29 | Initial plan |
+| Date       | Change                                      |
+| ---------- | ------------------------------------------- |
+| 2026-07-29 | Initial plan                                |
+| 2026-07-29 | Phase 1 complete — MIT LICENSE added        |
