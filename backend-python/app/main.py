@@ -74,6 +74,11 @@ app.include_router(chat.router)
 app.include_router(documents.router)
 app.include_router(rag.router)
 
+if settings.voice_enabled:
+    from app.routers.voice import create_voice_router
+
+    app.include_router(create_voice_router(settings))
+
 register_exception_handlers(app)
 
 
