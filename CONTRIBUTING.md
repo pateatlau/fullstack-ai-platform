@@ -173,7 +173,7 @@ Small bug fixes, documentation improvements, test coverage gaps, and clear typo 
 
 ## Questions
 
-Open a [GitHub Issue](https://github.com/pateatlau/basic-chatbot-react-python/issues) for bugs, questions, or feature proposals. This is a low-traffic repository; there is **no guaranteed response time or SLA**.
+Open a [GitHub Issue](https://github.com/pateatlau/fullstack-ai-platform/issues) for bugs, questions, or feature proposals. This is a low-traffic repository; there is **no guaranteed response time or SLA**.
 
 ## Code of conduct
 

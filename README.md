@@ -3,7 +3,7 @@
 Production-grade full-stack AI chat platform with RAG, tools, agents, MCP, and voice.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![PR Quality Checks](https://github.com/pateatlau/basic-chatbot-react-python/actions/workflows/pr-quality.yml/badge.svg)](https://github.com/pateatlau/basic-chatbot-react-python/actions/workflows/pr-quality.yml)
+[![PR Quality Checks](https://github.com/pateatlau/fullstack-ai-platform/actions/workflows/pr-quality.yml/badge.svg)](https://github.com/pateatlau/fullstack-ai-platform/actions/workflows/pr-quality.yml)
 [![Live Demo](https://img.shields.io/badge/demo-live-blue)](https://fullstack-ai-platform-umber.vercel.app/)
 
 ![Chat desktop view with sessions sidebar and empty conversation state](./docs/assets/screenshots/chat-desktop.png)
@@ -97,7 +97,7 @@ flowchart TB
 ### 1. Clone and configure backend
 
 ```bash
-git clone https://github.com/pateatlau/basic-chatbot-react-python.git
+git clone https://github.com/pateatlau/fullstack-ai-platform.git
 cd fullstack-ai-platform/backend-python
 cp .env.example .env
 # Add at least one LLM provider API key

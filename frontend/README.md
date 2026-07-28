@@ -159,7 +159,7 @@ The frontend expects the Python production backend to support:
 
 ## Tests
 
-Current frontend tests: **122 passed** (Vitest, 2026-07-22).
+Current frontend tests: **219 passed** (39 files, Vitest, 2026-07-28).
 
 Coverage includes:
 

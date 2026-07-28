@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-Platform releases use internal names (Post-MVP V1.1, V2 Epic 04). Git tags follow semver when cut — see [Releases](https://github.com/pateatlau/basic-chatbot-react-python/releases). Application package versions remain at `0.1.0` until a formal API freeze; the planned public-documentation tag is `v1.0.0-public`.
+Platform releases use internal names (Post-MVP V1.1, V2 Epic 04). Git tags follow semver when cut — see [Releases](https://github.com/pateatlau/fullstack-ai-platform/releases). Application package versions remain at `0.1.0` until a formal API freeze; the planned public-documentation tag is `v1.0.0-public`.
 
 ## [Unreleased]
 
