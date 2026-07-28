@@ -1,8 +1,10 @@
 """Tests for OpenAI voice adapter TTS functionality."""
 
 from collections.abc import AsyncIterator
+from contextlib import AbstractContextManager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from app.ai.voice.config import VoiceConfig
@@ -30,36 +32,60 @@ async def _text_chunk_generator(chunks: list[str]) -> AsyncIterator[str]:
         yield chunk
 
 
+def _speech_stream(*audio_frames: bytes) -> MagicMock:
+    """Stub streaming speech context manager emitting *audio_frames*."""
+
+    async def _iter_bytes() -> AsyncIterator[bytes]:
+        for frame in audio_frames:
+            yield frame
+
+    response = MagicMock()
+    response.iter_bytes = _iter_bytes
+
+    manager = MagicMock()
+    manager.__aenter__ = AsyncMock(return_value=response)
+    manager.__aexit__ = AsyncMock(return_value=False)
+    return manager
+
+
+def _failing_speech_stream(error: Exception) -> MagicMock:
+    """Stub streaming speech context manager that fails when opened."""
+    manager = MagicMock()
+    manager.__aenter__ = AsyncMock(side_effect=error)
+    manager.__aexit__ = AsyncMock(return_value=False)
+    return manager
+
+
+def _patch_speech_create(
+    adapter: OpenAiVoiceAdapter,
+) -> AbstractContextManager[MagicMock]:
+    """Patch the streaming speech endpoint used by the adapter."""
+    return patch.object(adapter._client.audio.speech.with_streaming_response, "create")
+
+
+async def _collect_audio(
+    adapter: OpenAiVoiceAdapter, text_chunks: list[str]
+) -> list[bytes]:
+    """Drain ``synthesize_stream`` into a list of audio frames."""
+    return [
+        audio
+        async for audio in adapter.synthesize_stream(_text_chunk_generator(text_chunks))
+    ]
+
+
 async def test_synthesize_stream_success(
     api_key: str, voice_config: VoiceConfig
 ) -> None:
     """Test successful synthesis."""
     adapter = OpenAiVoiceAdapter(api_key, voice_config)
-
     mock_audio_data = b"\x00\x01" * 1000
 
-    mock_response = MagicMock()
+    with _patch_speech_create(adapter) as mock_create:
+        mock_create.return_value = _speech_stream(mock_audio_data)
 
-    async def mock_iter_bytes():
-        yield mock_audio_data
+        audio_chunks = await _collect_audio(adapter, ["Hello world"])
 
-    mock_response.iter_bytes = mock_iter_bytes
-
-    with patch.object(
-        adapter._client.audio.speech, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = mock_response
-
-        text_chunks = ["Hello world"]
-
-        audio_chunks = []
-        async for audio in adapter.synthesize_stream(
-            _text_chunk_generator(text_chunks)
-        ):
-            audio_chunks.append(audio)
-
-        assert len(audio_chunks) == 1
-        assert audio_chunks[0] == mock_audio_data
+        assert audio_chunks == [mock_audio_data]
         assert mock_create.call_count == 1
 
         call_kwargs = mock_create.call_args[1]
@@ -69,19 +95,45 @@ async def test_synthesize_stream_success(
         assert call_kwargs["response_format"] == "pcm"
 
 
+async def test_synthesize_stream_forwards_frames_as_they_arrive(
+    api_key: str, voice_config: VoiceConfig
+) -> None:
+    """Test that response frames are forwarded without being buffered whole."""
+    adapter = OpenAiVoiceAdapter(api_key, voice_config)
+    frames = [b"\x00\x01" * 10, b"\x00\x02" * 10, b"\x00\x03" * 10]
+
+    with _patch_speech_create(adapter) as mock_create:
+        mock_create.return_value = _speech_stream(*frames)
+
+        audio_chunks = await _collect_audio(adapter, ["Test streaming"])
+
+        assert audio_chunks == frames
+
+
+async def test_synthesize_stream_realigns_split_pcm_samples(
+    api_key: str, voice_config: VoiceConfig
+) -> None:
+    """Test that a sample split across response frames is not corrupted."""
+    adapter = OpenAiVoiceAdapter(api_key, voice_config)
+
+    with _patch_speech_create(adapter) as mock_create:
+        mock_create.return_value = _speech_stream(b"\x01\x02\x03", b"\x04\x05\x06")
+
+        audio_chunks = await _collect_audio(adapter, ["Odd sized frames"])
+
+        assert audio_chunks == [b"\x01\x02", b"\x03\x04\x05\x06"]
+        assert b"".join(audio_chunks) == b"\x01\x02\x03\x04\x05\x06"
+
+
 async def test_synthesize_stream_empty_text_skipped(
     api_key: str, voice_config: VoiceConfig
 ) -> None:
     """Test that empty text is skipped."""
     adapter = OpenAiVoiceAdapter(api_key, voice_config)
 
-    text_chunks = ["", "  ", "   \n\t  "]
+    audio_chunks = await _collect_audio(adapter, ["", "  ", "   \n\t  "])
 
-    audio_chunks = []
-    async for audio in adapter.synthesize_stream(_text_chunk_generator(text_chunks)):
-        audio_chunks.append(audio)
-
-    assert len(audio_chunks) == 0
+    assert audio_chunks == []
 
 
 async def test_synthesize_stream_whitespace_trimming(
@@ -90,32 +142,13 @@ async def test_synthesize_stream_whitespace_trimming(
     """Test that text is trimmed before synthesis."""
     adapter = OpenAiVoiceAdapter(api_key, voice_config)
 
-    mock_audio_data = b"\x00\x01" * 100
+    with _patch_speech_create(adapter) as mock_create:
+        mock_create.return_value = _speech_stream(b"\x00\x01" * 100)
 
-    mock_response = MagicMock()
-
-    async def mock_iter_bytes():
-        yield mock_audio_data
-
-    mock_response.iter_bytes = mock_iter_bytes
-
-    with patch.object(
-        adapter._client.audio.speech, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = mock_response
-
-        text_chunks = ["  Hello world  \n"]
-
-        audio_chunks = []
-        async for audio in adapter.synthesize_stream(
-            _text_chunk_generator(text_chunks)
-        ):
-            audio_chunks.append(audio)
+        audio_chunks = await _collect_audio(adapter, ["  Hello world  \n"])
 
         assert len(audio_chunks) == 1
-
-        call_kwargs = mock_create.call_args[1]
-        assert call_kwargs["input"] == "Hello world"
+        assert mock_create.call_args[1]["input"] == "Hello world"
 
 
 async def test_synthesize_stream_multiple_chunks(
@@ -123,50 +156,19 @@ async def test_synthesize_stream_multiple_chunks(
 ) -> None:
     """Test synthesis with multiple text chunks."""
     adapter = OpenAiVoiceAdapter(api_key, voice_config)
-
     mock_audio_data_1 = b"\x00\x01" * 100
     mock_audio_data_2 = b"\x00\x02" * 100
 
-    call_count = 0
+    with _patch_speech_create(adapter) as mock_create:
+        mock_create.side_effect = [
+            _speech_stream(mock_audio_data_1),
+            _speech_stream(mock_audio_data_2),
+        ]
 
-    async def mock_create_side_effect(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
+        audio_chunks = await _collect_audio(adapter, ["First text", "Second text"])
 
-        mock_response = MagicMock()
-
-        if call_count == 1:
-
-            async def mock_iter_bytes_1():
-                yield mock_audio_data_1
-
-            mock_response.iter_bytes = mock_iter_bytes_1
-        else:
-
-            async def mock_iter_bytes_2():
-                yield mock_audio_data_2
-
-            mock_response.iter_bytes = mock_iter_bytes_2
-
-        return mock_response
-
-    with patch.object(
-        adapter._client.audio.speech, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.side_effect = mock_create_side_effect
-
-        text_chunks = ["First text", "Second text"]
-
-        audio_chunks = []
-        async for audio in adapter.synthesize_stream(
-            _text_chunk_generator(text_chunks)
-        ):
-            audio_chunks.append(audio)
-
-        assert len(audio_chunks) == 2
-        assert audio_chunks[0] == mock_audio_data_1
-        assert audio_chunks[1] == mock_audio_data_2
-        assert call_count == 2
+        assert audio_chunks == [mock_audio_data_1, mock_audio_data_2]
+        assert mock_create.call_count == 2
 
 
 async def test_synthesize_stream_empty_audio_error(
@@ -175,26 +177,11 @@ async def test_synthesize_stream_empty_audio_error(
     """Test that empty audio from API raises error."""
     adapter = OpenAiVoiceAdapter(api_key, voice_config)
 
-    mock_response = MagicMock()
-
-    async def mock_iter_bytes():
-        return
-        yield  # Make this an async generator
-
-    mock_response.iter_bytes = mock_iter_bytes
-
-    with patch.object(
-        adapter._client.audio.speech, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = mock_response
-
-        text_chunks = ["Hello world"]
+    with _patch_speech_create(adapter) as mock_create:
+        mock_create.return_value = _speech_stream()
 
         with pytest.raises(TtsError, match="Empty audio data"):
-            async for _ in adapter.synthesize_stream(
-                _text_chunk_generator(text_chunks)
-            ):
-                pass
+            await _collect_audio(adapter, ["Hello world"])
 
 
 async def test_synthesize_stream_api_error(
@@ -203,18 +190,11 @@ async def test_synthesize_stream_api_error(
     """Test that API errors are wrapped in TtsError."""
     adapter = OpenAiVoiceAdapter(api_key, voice_config)
 
-    with patch.object(
-        adapter._client.audio.speech, "create", new_callable=AsyncMock
-    ) as mock_create:
+    with _patch_speech_create(adapter) as mock_create:
         mock_create.side_effect = Exception("API error")
 
-        text_chunks = ["Hello world"]
-
         with pytest.raises(TtsError, match="TTS synthesis failed"):
-            async for _ in adapter.synthesize_stream(
-                _text_chunk_generator(text_chunks)
-            ):
-                pass
+            await _collect_audio(adapter, ["Hello world"])
 
 
 async def test_synthesize_stream_with_retry(
@@ -223,72 +203,17 @@ async def test_synthesize_stream_with_retry(
     """Test that retry mechanism is applied."""
     adapter = OpenAiVoiceAdapter(api_key, voice_config)
 
-    call_count = 0
+    with _patch_speech_create(adapter) as mock_create:
+        mock_create.side_effect = [
+            _failing_speech_stream(httpx.TimeoutException("Timeout")),
+            _failing_speech_stream(httpx.TimeoutException("Timeout")),
+            _speech_stream(b"retried_audio!"),
+        ]
 
-    async def _mock_create_with_retry(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count < 3:
-            import httpx
+        audio_chunks = await _collect_audio(adapter, ["Hello world"])
 
-            raise httpx.TimeoutException("Timeout")
-
-        mock_response = MagicMock()
-
-        async def mock_iter_bytes():
-            yield b"success_audio"
-
-        mock_response.iter_bytes = mock_iter_bytes
-        return mock_response
-
-    with patch.object(
-        adapter._client.audio.speech, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.side_effect = _mock_create_with_retry
-
-        text_chunks = ["Hello world"]
-
-        audio_chunks = []
-        async for audio in adapter.synthesize_stream(
-            _text_chunk_generator(text_chunks)
-        ):
-            audio_chunks.append(audio)
-
-        assert len(audio_chunks) == 1
-        assert audio_chunks[0] == b"success_audio"
-        assert call_count == 3
-
-
-async def test_synthesize_stream_response_format_pcm(
-    api_key: str, voice_config: VoiceConfig
-) -> None:
-    """Test that response format is set to PCM."""
-    adapter = OpenAiVoiceAdapter(api_key, voice_config)
-
-    mock_audio_data = b"\x00\x01" * 100
-
-    mock_response = MagicMock()
-
-    async def mock_iter_bytes():
-        yield mock_audio_data
-
-    mock_response.iter_bytes = mock_iter_bytes
-
-    with patch.object(
-        adapter._client.audio.speech, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = mock_response
-
-        text_chunks = ["Test audio"]
-
-        audio_chunks = []
-        async for audio in adapter.synthesize_stream(
-            _text_chunk_generator(text_chunks)
-        ):
-            audio_chunks.append(audio)
-
-        call_kwargs = mock_create.call_args[1]
-        assert call_kwargs["response_format"] == "pcm"
+        assert audio_chunks == [b"retried_audio!"]
+        assert mock_create.call_count == 3
 
 
 async def test_synthesize_stream_uses_config_model_and_voice(
@@ -298,65 +223,11 @@ async def test_synthesize_stream_uses_config_model_and_voice(
     custom_config = VoiceConfig(tts_model="tts-1-hd", tts_voice="nova")
     adapter = OpenAiVoiceAdapter(api_key, custom_config)
 
-    mock_audio_data = b"\x00\x01" * 100
+    with _patch_speech_create(adapter) as mock_create:
+        mock_create.return_value = _speech_stream(b"\x00\x01" * 100)
 
-    mock_response = MagicMock()
-
-    async def mock_iter_bytes():
-        yield mock_audio_data
-
-    mock_response.iter_bytes = mock_iter_bytes
-
-    with patch.object(
-        adapter._client.audio.speech, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = mock_response
-
-        text_chunks = ["Test"]
-
-        audio_chunks = []
-        async for audio in adapter.synthesize_stream(
-            _text_chunk_generator(text_chunks)
-        ):
-            audio_chunks.append(audio)
+        await _collect_audio(adapter, ["Test"])
 
         call_kwargs = mock_create.call_args[1]
         assert call_kwargs["model"] == "tts-1-hd"
         assert call_kwargs["voice"] == "nova"
-
-
-async def test_synthesize_stream_handles_streaming_response(
-    api_key: str, voice_config: VoiceConfig
-) -> None:
-    """Test handling of streaming audio response from API."""
-    adapter = OpenAiVoiceAdapter(api_key, voice_config)
-
-    mock_audio_chunk_1 = b"\x00\x01" * 50
-    mock_audio_chunk_2 = b"\x00\x02" * 50
-    mock_audio_chunk_3 = b"\x00\x03" * 50
-
-    mock_response = MagicMock()
-
-    async def mock_iter_bytes():
-        yield mock_audio_chunk_1
-        yield mock_audio_chunk_2
-        yield mock_audio_chunk_3
-
-    mock_response.iter_bytes = mock_iter_bytes
-
-    with patch.object(
-        adapter._client.audio.speech, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = mock_response
-
-        text_chunks = ["Test streaming"]
-
-        audio_chunks = []
-        async for audio in adapter.synthesize_stream(
-            _text_chunk_generator(text_chunks)
-        ):
-            audio_chunks.append(audio)
-
-        assert len(audio_chunks) == 1
-        expected_audio = mock_audio_chunk_1 + mock_audio_chunk_2 + mock_audio_chunk_3
-        assert audio_chunks[0] == expected_audio

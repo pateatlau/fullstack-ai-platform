@@ -3,12 +3,17 @@
 import io
 import wave
 from collections.abc import AsyncIterable, AsyncIterator
+from contextlib import AsyncExitStack
+from typing import Any
 
 from openai import AsyncOpenAI
 
 from app.ai.voice.config import VoiceConfig
-from app.ai.voice.exceptions import SttError
+from app.ai.voice.exceptions import SttError, TtsError
 from app.core.retry import retry_async
+
+# PCM16 encodes one sample per 2 bytes; audio frames must never split a sample.
+_PCM16_SAMPLE_BYTES = 2
 
 
 class OpenAiVoiceAdapter:
@@ -83,14 +88,49 @@ class OpenAiVoiceAdapter:
         except Exception as exc:
             raise SttError(f"STT transcription failed: {exc}") from exc
 
+    async def _stream_speech(self, text: str) -> AsyncIterator[bytes]:
+        """Yield PCM16 audio for ``text`` as the TTS response arrives.
+
+        Streaming the HTTP response keeps time-to-first-audio at the provider's
+        first byte instead of the full clip, which dominates perceived latency.
+
+        Args:
+            text: Non-empty text to synthesize.
+
+        Yields:
+            Sample-aligned PCM16 24kHz mono byte frames.
+        """
+        async with AsyncExitStack() as stack:
+
+            async def _open_response() -> Any:
+                # A response context manager is single-use, so each retry
+                # attempt needs a freshly built request.
+                return await stack.enter_async_context(
+                    self._client.audio.speech.with_streaming_response.create(
+                        model=self._config.tts_model,
+                        voice=self._config.tts_voice,
+                        input=text,
+                        response_format="pcm",
+                    )
+                )
+
+            response = await retry_async(_open_response)
+
+            partial_sample = b""
+            async for chunk in response.iter_bytes():
+                buffered = partial_sample + chunk
+                aligned_length = len(buffered) - len(buffered) % _PCM16_SAMPLE_BYTES
+                partial_sample = buffered[aligned_length:]
+                if aligned_length:
+                    yield buffered[:aligned_length]
+
     async def synthesize_stream(
         self, text_chunks: AsyncIterable[str]
     ) -> AsyncIterator[bytes]:
         """Synthesize streaming text chunks to audio using OpenAI TTS API.
 
-        Note: OpenAI TTS API does not support true streaming synthesis.
-        This implementation accumulates text chunks and synthesizes when
-        a complete chunk is ready (up to 4096 characters) or stream ends.
+        Each incoming text chunk is synthesized as one request whose audio is
+        forwarded incrementally, so playback can start before the clip is done.
 
         Args:
             text_chunks: Async iterable of text strings to synthesize.
@@ -101,32 +141,18 @@ class OpenAiVoiceAdapter:
         Raises:
             TtsError: On synthesis failure.
         """
-        from app.ai.voice.exceptions import TtsError
-
         try:
             async for text in text_chunks:
                 if not text or not text.strip():
                     continue
 
-                async def _synthesize() -> bytes:
-                    response = await self._client.audio.speech.create(
-                        model=self._config.tts_model,
-                        voice=self._config.tts_voice,
-                        input=text.strip(),
-                        response_format="pcm",
-                    )
+                emitted_audio = False
+                async for audio_chunk in self._stream_speech(text.strip()):
+                    emitted_audio = True
+                    yield audio_chunk
 
-                    audio_bytes = b""
-                    async for chunk in response.iter_bytes():  # type: ignore[attr-defined]
-                        audio_bytes += chunk
-                    return audio_bytes
-
-                audio_data = await retry_async(_synthesize)
-
-                if not audio_data:
+                if not emitted_audio:
                     raise TtsError("Empty audio data from TTS provider")
-
-                yield audio_data
 
         except TtsError:
             raise

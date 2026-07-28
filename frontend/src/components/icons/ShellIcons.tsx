@@ -125,6 +125,42 @@ export function DocumentIcon({ className = 'h-4 w-4' }: IconProps) {
   )
 }
 
+export function MicIcon({ className = 'h-4 w-4' }: IconProps) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z" />
+      <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v3M8 21h8" />
+    </svg>
+  )
+}
+
+export function StopCircleIcon({ className = 'h-4 w-4' }: IconProps) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
 export function ChevronDownIcon({ className = 'h-3.5 w-3.5' }: IconProps) {
   return (
     <svg

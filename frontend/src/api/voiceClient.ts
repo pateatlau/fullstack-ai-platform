@@ -264,6 +264,13 @@ export class VoiceClient {
   }
 }
 
+/**
+ * Lead time applied when the playback queue has drained. Assistant audio now
+ * arrives as small network-paced frames, so scheduling the first one slightly
+ * ahead absorbs jitter that would otherwise be audible as clipped syllables.
+ */
+const PLAYBACK_JITTER_BUFFER_SECONDS = 0.15
+
 /** Streams PCM16 chunks through the Web Audio API for assistant playback. */
 export class Pcm16AudioPlayer {
   private audioContext: AudioContext | null = null
@@ -272,6 +279,14 @@ export class Pcm16AudioPlayer {
 
   constructor(sampleRateHz = VOICE_SAMPLE_RATE_HZ) {
     this.sampleRateHz = sampleRateHz
+  }
+
+  /** Milliseconds of scheduled audio still to play; `0` once the queue drains. */
+  get remainingPlaybackMs(): number {
+    if (!this.audioContext) {
+      return 0
+    }
+    return Math.max(0, (this.nextStartTime - this.audioContext.currentTime) * 1000)
   }
 
   async playChunk(pcm16Bytes: Uint8Array): Promise<void> {
@@ -284,9 +299,20 @@ export class Pcm16AudioPlayer {
     source.buffer = buffer
     source.connect(context.destination)
 
-    const startAt = Math.max(context.currentTime, this.nextStartTime)
+    const startAt = Math.max(
+      context.currentTime + PLAYBACK_JITTER_BUFFER_SECONDS,
+      this.nextStartTime,
+    )
     source.start(startAt)
     this.nextStartTime = startAt + buffer.duration
+  }
+
+  /** Resume AudioContext during a user gesture so later TTS chunks can play. */
+  async prime(): Promise<void> {
+    const context = await this.ensureContext()
+    if (context.state === 'suspended') {
+      await context.resume()
+    }
   }
 
   stop(): void {
