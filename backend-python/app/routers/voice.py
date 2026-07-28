@@ -88,7 +88,6 @@ class _UtteranceState:
     """Buffered inbound audio for one user utterance."""
 
     chunks: list[bytes] = field(default_factory=list)
-    final_received: bool = False
 
 
 async def _send_error_and_close(
@@ -145,6 +144,7 @@ class VoiceWebSocketHandler:
         self._utterance = _UtteranceState()
         self._managed: ManagedVoiceSession | None = None
         self._running = True
+        self._turn_task: asyncio.Task[None] | None = None
 
     async def run(self) -> None:
         await self._websocket.accept()
@@ -248,8 +248,9 @@ class VoiceWebSocketHandler:
                     continue
 
                 if isinstance(message, AudioInMessage):
-                    await self._handle_audio_in(message, voice_session_id)
+                    self._handle_audio_in(message, voice_session_id)
         finally:
+            await self._cancel_pending_turn()
             expire_task.cancel()
             await asyncio.gather(expire_task, return_exceptions=True)
             if self._managed is not None and self._managed.is_active:
@@ -273,26 +274,46 @@ class VoiceWebSocketHandler:
                     await self._websocket.close(code=1000, reason=reason)
                     return
 
-    async def _handle_audio_in(
+    def _handle_audio_in(
         self,
         message: AudioInMessage,
         voice_session_id: str,
     ) -> None:
+        """Buffer an inbound audio chunk, starting the turn on the final one."""
         self._session_manager.record_activity(voice_session_id)
         audio_bytes = self._stream_bridge.decode_audio_payload(message.payload_b64)
         self._utterance.chunks.append(audio_bytes)
-        if message.final:
-            self._utterance.final_received = True
-
-        if not self._utterance.final_received:
+        if not message.final:
             return
 
+        utterance = self._utterance
+        self._utterance = _UtteranceState()
+        # Run the turn off the receive loop; otherwise the loop stays blocked
+        # for the whole reply and a barge-in `interrupt` is only read once the
+        # assistant has already finished speaking.
+        self._turn_task = asyncio.create_task(
+            self._process_utterance(utterance.chunks, voice_session_id)
+        )
+
+    async def _cancel_pending_turn(self) -> None:
+        task = self._turn_task
+        self._turn_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _process_utterance(
+        self,
+        chunks: list[bytes],
+        voice_session_id: str,
+    ) -> None:
         voice_config = VoiceConfig.from_settings(self._settings)
         stt_pipeline = SttPipeline(self._stt_provider, voice_config)
         self._interrupt.register_stt_pipeline(voice_session_id, stt_pipeline)
 
         async def audio_iter() -> AsyncIterator[bytes]:
-            for chunk in self._utterance.chunks:
+            for chunk in chunks:
                 yield chunk
 
         try:
@@ -306,13 +327,10 @@ class VoiceWebSocketHandler:
                     ErrorMessage(code=error_code, message=str(exc))
                 )
             )
-            self._utterance = _UtteranceState()
             return
         except asyncio.CancelledError:
-            self._utterance = _UtteranceState()
             return
 
-        self._utterance = _UtteranceState()
         if not transcript_text:
             return
 
@@ -392,10 +410,30 @@ class VoiceWebSocketHandler:
             await turn_task
         except asyncio.CancelledError:
             pass
+        except Exception as exc:
+            logger.exception(
+                "Voice chat turn failed",
+                voice_session_id=voice_session_id,
+                error=str(exc),
+            )
+            await self._send_json(
+                self._stream_bridge.encode_message(
+                    ErrorMessage(
+                        code="voice_turn_error",
+                        message="Assistant voice turn failed. You can try speaking again.",
+                    )
+                )
+            )
 
     async def _send_json(self, payload: str) -> None:
-        if self._websocket.client_state == WebSocketState.CONNECTED:
+        if self._websocket.client_state != WebSocketState.CONNECTED:
+            return
+        try:
             await self._websocket.send_text(payload)
+        except RuntimeError:
+            # The peer closed between the state check and the send; a turn task
+            # running off the receive loop can still be mid-flight here.
+            self._running = False
 
 
 def _resolve_voice_bearer_token(websocket: WebSocket) -> str | None:

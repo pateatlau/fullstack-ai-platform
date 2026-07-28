@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Pcm16AudioPlayer } from '../api/voiceClient'
 import { useVoiceSession } from './useVoiceSession'
 
 type MockWebSocketListener = ((event: Event | MessageEvent | CloseEvent) => void) | null
@@ -152,5 +153,61 @@ describe('useVoiceSession', () => {
     await waitFor(() => {
       expect(onInterrupted).toHaveBeenCalled()
     })
+  })
+
+  it('drops assistant audio that is still in flight after an interrupt', async () => {
+    const playChunk = vi.spyOn(Pcm16AudioPlayer.prototype, 'playChunk').mockResolvedValue()
+
+    const { result } = renderHook(() =>
+      useVoiceSession({
+        sessionId: 'chat-1',
+        accessToken: 'jwt',
+        webSocketFactory: (url) => new MockWebSocket(url) as unknown as WebSocket,
+      }),
+    )
+
+    await result.current.connect()
+    const socket = MockWebSocket.instances[0]
+    const audioFrame = JSON.stringify({ type: 'audio_out', seq: 0, payload_b64: 'AAA=' })
+
+    socket?.emitMessage(audioFrame)
+    expect(playChunk).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      result.current.interrupt()
+    })
+
+    // The server has not processed the cancel yet, so frames keep arriving.
+    socket?.emitMessage(audioFrame)
+    expect(playChunk).toHaveBeenCalledTimes(1)
+    expect(result.current.isSpeaking).toBe(false)
+  })
+
+  it('keeps isSpeaking set until queued audio finishes after turn_complete', async () => {
+    vi.spyOn(Pcm16AudioPlayer.prototype, 'playChunk').mockResolvedValue()
+    vi.spyOn(Pcm16AudioPlayer.prototype, 'remainingPlaybackMs', 'get').mockReturnValue(500)
+
+    const { result } = renderHook(() =>
+      useVoiceSession({
+        sessionId: 'chat-1',
+        accessToken: 'jwt',
+        webSocketFactory: (url) => new MockWebSocket(url) as unknown as WebSocket,
+      }),
+    )
+
+    await result.current.connect()
+    const socket = MockWebSocket.instances[0]
+
+    socket?.emitMessage(JSON.stringify({ type: 'assistant_text_delta', text: 'Hello' }))
+    socket?.emitMessage(JSON.stringify({ type: 'audio_out', seq: 0, payload_b64: 'AAA=' }))
+    await waitFor(() => {
+      expect(result.current.isSpeaking).toBe(true)
+    })
+
+    // `turn_complete` mirrors the SSE `end` frame and lands while the tail of
+    // the reply is still playing, so the interrupt affordance must stay up.
+    socket?.emitMessage(JSON.stringify({ type: 'turn_complete' }))
+    await Promise.resolve()
+    expect(result.current.isSpeaking).toBe(true)
   })
 })

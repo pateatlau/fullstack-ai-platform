@@ -8,6 +8,7 @@ import {
   listChatSessions,
   setRetryRequestId,
 } from '../api/chatClient'
+import { getStoredAccessToken } from '../auth/tokenStorage'
 import { type ProviderName } from '../constants/providerModels'
 import { AppNav } from '../components/AppNav'
 import { AuthControls } from '../components/AuthControls'
@@ -24,11 +25,12 @@ import { ChatProvider, useChatContext } from '../context/ChatContext'
 import { useChatStream } from '../hooks/useChatStream'
 import { useChatCompletion } from '../hooks/useChatCompletion'
 import { useChatStreamingEnabled } from '../hooks/useChatStreamingEnabled'
+import { useVoiceSession } from '../hooks/useVoiceSession'
 import { EmptyState } from '../components/EmptyState'
 import { MessageList } from '../components/MessageList'
 import { PageBanner } from '../components/PageBanner'
-import { Composer } from '../components/Composer'
-import type { ChatChunk, ChatRequest, ChatSessionSummary, Message } from '../types/chat'
+import { Composer, type VoiceTurnOptions } from '../components/Composer'
+import type { ChatChunk, ChatRequest, ChatSessionSummary, Citation, Message } from '../types/chat'
 import { toApiMessages, toLocalMessage } from '../utils/chatMessages'
 import { friendlyErrorMessage } from '../utils/friendlyErrors'
 
@@ -103,8 +105,18 @@ function ChatPageContent() {
   // never overwrite the transcript of the session the user is now viewing.
   const sessionLoadSeqRef = useRef(0)
   const isAuthenticated = status === 'authenticated'
-  const { chatStreamingEnabled, toolsEnabled, ragEnabled, capabilitiesByProvider } =
+  const { chatStreamingEnabled, toolsEnabled, ragEnabled, voiceEnabled, capabilitiesByProvider } =
     useChatStreamingEnabled()
+  const [isVoiceModeRequested, setIsVoiceModeRequested] = useState(false)
+  // Derived so losing the flag or the session drops voice mode without an
+  // extra render pass to reset the toggle.
+  const voiceModeEnabled = isVoiceModeRequested && voiceEnabled && isAuthenticated
+  const [transcriptPartial, setTranscriptPartial] = useState('')
+  const [voiceMicError, setVoiceMicError] = useState<string | null>(null)
+  // Held as state, not a ref: the backend fixes turn options at the WS
+  // handshake, so a change has to re-render and reconnect to take effect.
+  const [voiceTurnOptions, setVoiceTurnOptions] = useState<VoiceTurnOptions>({})
+  const currentVoiceMessageIdRef = useRef<string | null>(null)
   const activeSessionIdRef = useRef(state.activeSessionId)
   useEffect(() => {
     activeSessionIdRef.current = state.activeSessionId
@@ -120,6 +132,121 @@ function ChatPageContent() {
       return null
     }
   }, [dispatch])
+
+  const handleVoiceError = useCallback(
+    (error: Error | { code: string; message: string }) => {
+      if ('code' in error) {
+        dispatch({
+          type: 'SET_ERROR',
+          message: toChatDisplayError(error.code, error.message),
+        })
+      } else {
+        dispatch({ type: 'SET_ERROR', message: error.message })
+      }
+    },
+    [dispatch],
+  )
+
+  const {
+    connect: connectVoice,
+    disconnect: disconnectVoice,
+    startRecording: startVoiceRecording,
+    stopRecording: stopVoiceRecording,
+    interrupt: interruptVoice,
+    isConnected: isVoiceConnected,
+    isRecording: isVoiceRecording,
+    isSpeaking: isVoiceSpeaking,
+  } = useVoiceSession({
+    sessionId: state.activeSessionId,
+    accessToken: getStoredAccessToken(),
+    provider: voiceTurnOptions.provider,
+    model: voiceTurnOptions.model,
+    useWebSearch: voiceTurnOptions.useWebSearch,
+    useDocuments: voiceTurnOptions.useDocuments,
+    onTranscriptPartial: (text) => setTranscriptPartial(text),
+    onTranscriptFinal: (text) => {
+      setTranscriptPartial('')
+      if (!text.trim()) return
+      const userMessage: Message = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: text,
+        status: 'complete',
+        createdAt: new Date().toISOString(),
+      }
+      dispatch({ type: 'ADD_USER_MESSAGE', message: userMessage })
+    },
+    onStart: () => {
+      setStreamingRetrievalActive(false)
+      const messageId = crypto.randomUUID()
+      currentVoiceMessageIdRef.current = messageId
+      dispatch({
+        type: 'START_MESSAGE',
+        id: messageId,
+        createdAt: new Date().toISOString(),
+      })
+    },
+    onDelta: (text) => {
+      const id = currentVoiceMessageIdRef.current
+      if (id) {
+        dispatch({ type: 'APPEND_DELTA', id, content: text })
+      }
+    },
+    onEnd: (metadata) => {
+      const id = currentVoiceMessageIdRef.current
+      if (id) {
+        dispatch({
+          type: 'END_MESSAGE',
+          id,
+          toolsUsed: metadata.tools_used ?? undefined,
+          retrievedChunkCount: metadata.retrieved_chunk_count ?? undefined,
+          citations: metadata.citations as Citation[] | undefined,
+        })
+      }
+      currentVoiceMessageIdRef.current = null
+      setStreamingToolActive(false)
+      if (isAuthenticated) {
+        void refreshSessions()
+      }
+    },
+    onToolStart: () => setStreamingToolActive(true),
+    onToolEnd: () => setStreamingToolActive(false),
+    onInterrupted: () => {
+      const id = currentVoiceMessageIdRef.current
+      if (id) {
+        dispatch({ type: 'STOP_MESSAGE', id })
+      }
+      currentVoiceMessageIdRef.current = null
+      setStreamingToolActive(false)
+    },
+    onError: handleVoiceError,
+  })
+
+  useEffect(() => {
+    if (!voiceModeEnabled || !state.activeSessionId) return
+
+    let cancelled = false
+    void connectVoice().catch((error: unknown) => {
+      if (cancelled) return
+      const message = error instanceof Error ? error.message : 'Could not connect voice session.'
+      setVoiceMicError(message)
+      handleVoiceError(error instanceof Error ? error : new Error(message))
+    })
+
+    return () => {
+      cancelled = true
+      disconnectVoice()
+      setTranscriptPartial('')
+      setVoiceMicError(null)
+    }
+  }, [
+    voiceModeEnabled,
+    state.activeSessionId,
+    voiceTurnOptions,
+    connectVoice,
+    disconnectVoice,
+    handleVoiceError,
+  ])
 
   /** Fetches a session's transcript and loads it into the reducer (plan Sections 5.3, 6.4). */
   const loadSession = useCallback(
@@ -508,7 +635,8 @@ function ChatPageContent() {
     }
   }
 
-  const isGenerating = isStreaming || isPending
+  const isVoiceActive = voiceModeEnabled && (isVoiceSpeaking || isVoiceRecording)
+  const isGenerating = isStreaming || isPending || isVoiceActive
   const assistantWaitingVariant =
     streamingToolActive || activityPhase === 'web_search'
       ? ('searching_web' as const)
@@ -561,6 +689,14 @@ function ChatPageContent() {
   }
 
   const handleStop = () => {
+    if (voiceModeEnabled && (isVoiceSpeaking || isVoiceRecording)) {
+      if (isVoiceRecording) {
+        stopVoiceRecording()
+      }
+      interruptVoice()
+      return
+    }
+
     if (activeTransportRef.current === 'streaming') {
       stop()
     } else if (activeTransportRef.current === 'completion') {
@@ -585,6 +721,31 @@ function ChatPageContent() {
     }
     setStreamingToolActive(false)
   }
+
+  const handleVoiceMicPressStart = useCallback(async () => {
+    setVoiceMicError(null)
+    try {
+      await startVoiceRecording()
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Microphone access denied. Check browser permissions.'
+      setVoiceMicError(message)
+    }
+  }, [startVoiceRecording])
+
+  const handleVoiceMicPressEnd = useCallback(() => {
+    stopVoiceRecording()
+  }, [stopVoiceRecording])
+
+  const handleVoiceInterrupt = useCallback(() => {
+    interruptVoice()
+  }, [interruptVoice])
+
+  const handleVoiceModeChange = useCallback((enabled: boolean) => {
+    setIsVoiceModeRequested(enabled)
+  }, [])
 
   const activeSessionListItem = useMemo(
     () => state.sessions.find((session) => session.id === state.activeSessionId) ?? null,
@@ -1084,6 +1245,19 @@ function ChatPageContent() {
             toolsEnabled={toolsEnabled}
             ragEnabled={ragEnabled}
             capabilitiesByProvider={capabilitiesByProvider}
+            voiceEnabled={voiceEnabled}
+            voiceModeEnabled={voiceModeEnabled}
+            onVoiceModeChange={handleVoiceModeChange}
+            onVoiceTurnOptionsChange={setVoiceTurnOptions}
+            transcriptPartial={transcriptPartial}
+            isVoiceRecording={isVoiceRecording}
+            isVoiceSpeaking={isVoiceSpeaking}
+            isVoiceConnected={isVoiceConnected}
+            onVoiceMicPressStart={() => void handleVoiceMicPressStart()}
+            onVoiceMicPressEnd={handleVoiceMicPressEnd}
+            onVoiceInterrupt={handleVoiceInterrupt}
+            voiceMicError={voiceMicError}
+            hasActiveSession={Boolean(state.activeSessionId)}
           />
         </main>
       </section>

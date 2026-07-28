@@ -5,6 +5,7 @@ export function jsonHealthResponse(
   chatStreamingEnabled = true,
   toolsEnabled = false,
   ragEnabled = false,
+  voiceEnabled = false,
 ): Response {
   return new Response(
     JSON.stringify({
@@ -14,6 +15,7 @@ export function jsonHealthResponse(
       chat_streaming_enabled: chatStreamingEnabled,
       tools_enabled: toolsEnabled,
       rag_enabled: ragEnabled,
+      voice_enabled: voiceEnabled,
       capabilities: {
         by_provider: {
           openai: { supports_streaming: true, supports_tool_calling: true },
@@ -33,7 +35,12 @@ export function jsonHealthResponse(
  */
 export function withChatPageFetchStubs(
   chatFetchMock: (input: RequestInfo | URL, init?: RequestInit) => unknown,
-  options?: { chatStreamingEnabled?: boolean; toolsEnabled?: boolean; ragEnabled?: boolean },
+  options?: {
+    chatStreamingEnabled?: boolean
+    toolsEnabled?: boolean
+    ragEnabled?: boolean
+    voiceEnabled?: boolean
+  },
 ): ReturnType<typeof vi.fn> {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
@@ -44,6 +51,7 @@ export function withChatPageFetchStubs(
         options?.chatStreamingEnabled ?? true,
         options?.toolsEnabled ?? false,
         options?.ragEnabled ?? false,
+        options?.voiceEnabled ?? false,
       )
     }
 

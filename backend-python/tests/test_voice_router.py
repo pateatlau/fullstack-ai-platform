@@ -59,10 +59,12 @@ def _build_voice_test_app(
     *,
     stt: FakeSttProvider | None = None,
     tts: FakeTtsProvider | None = None,
+    unified: FakeUnifiedChatService | None = None,
 ) -> FastAPI:
     config = VoiceConfig()
     stt_provider = stt or FakeSttProvider()
     tts_provider = tts or FakeTtsProvider()
+    unified_service = unified or FakeUnifiedChatService()
 
     def services_builder(
         _settings: Settings, _session: object
@@ -73,7 +75,7 @@ def _build_voice_test_app(
             stt_provider=stt_provider,
             tts_provider=tts_provider,
             interrupt=InterruptController(),
-            unified_service=FakeUnifiedChatService(),  # type: ignore[arg-type]
+            unified_service=unified_service,  # type: ignore[arg-type]
             chat_service=NoopChatService(),  # type: ignore[arg-type]
         )
 
@@ -186,12 +188,14 @@ async def test_handshake_and_chat_turn_with_fakes(
 
                 seen_types: list[str] = []
                 assistant_text = ""
+                # `turn_complete` mirrors the SSE `end` frame and so precedes the
+                # trailing audio; keep reading until both have arrived.
                 for _ in range(8):
                     message = json.loads(ws.receive_text())
                     seen_types.append(message["type"])
                     if message["type"] == "assistant_text_delta":
                         assistant_text += message["text"]
-                    if message["type"] == "turn_complete":
+                    if {"turn_complete", "audio_out"} <= set(seen_types):
                         break
 
                 assert "assistant_text_delta" in seen_types
@@ -203,6 +207,60 @@ async def test_handshake_and_chat_turn_with_fakes(
                 closed = json.loads(ws.receive_text())
                 assert closed["type"] == "session_closed"
                 assert closed["reason"] == "client_end"
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_interrupt_is_handled_while_the_assistant_is_replying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The receive loop must stay responsive for the whole assistant turn."""
+    monkeypatch.setenv("VOICE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    user_id = uuid.uuid4()
+    chat_store = FakeChatStore()
+    chat_session = await chat_store.create_session(user_id=user_id, title="Voice")
+    test_app = _build_voice_test_app(
+        chat_store,
+        unified=FakeUnifiedChatService(delta_delay_seconds=0.2),
+    )
+
+    try:
+        with TestClient(test_app) as client:
+            with client.websocket_connect(
+                f"/api/voice/ws?session_id={chat_session.id}",
+                headers=_auth_header(user_id),
+            ) as ws:
+                assert json.loads(ws.receive_text())["type"] == "session_started"
+
+                for seq, (size, final) in enumerate(((4096, False), (704, True))):
+                    ws.send_text(
+                        json.dumps(
+                            {
+                                "type": "audio_in",
+                                "seq": seq,
+                                "payload_b64": base64.b64encode(b"\x00" * size).decode(
+                                    "ascii"
+                                ),
+                                "final": final,
+                            }
+                        )
+                    )
+
+                assert json.loads(ws.receive_text())["type"] == "transcript_final"
+                assert json.loads(ws.receive_text())["type"] == "assistant_text_delta"
+
+                ws.send_text(json.dumps({"type": "interrupt"}))
+
+                seen_types: list[str] = []
+                for _ in range(6):
+                    seen_types.append(json.loads(ws.receive_text())["type"])
+                    if "interrupted" in seen_types:
+                        break
+
+                assert "interrupted" in seen_types
+                assert "turn_complete" not in seen_types
     finally:
         get_settings.cache_clear()
 

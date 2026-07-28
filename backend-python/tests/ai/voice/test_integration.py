@@ -49,8 +49,14 @@ class FakeTtsProvider:
 class FakeUnifiedChatService:
     """Yield canned SSE frames like ``UnifiedChatService.stream_execute``."""
 
-    def __init__(self, *, include_tools: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        include_tools: bool = False,
+        delta_delay_seconds: float = 0.0,
+    ) -> None:
         self._include_tools = include_tools
+        self._delta_delay_seconds = delta_delay_seconds
         self.requests: list[ChatRequestSchema] = []
 
     async def stream_execute(
@@ -83,6 +89,8 @@ class FakeUnifiedChatService:
                 ),
             )
         yield format_sse("delta", DeltaFrame(id=response_id, content="Hello "))
+        if self._delta_delay_seconds:
+            await asyncio.sleep(self._delta_delay_seconds)
         yield format_sse("delta", DeltaFrame(id=response_id, content="world."))
         yield format_sse("end", EndFrame(id=response_id, finish_reason="stop"))
 
@@ -148,7 +156,7 @@ async def test_voice_chat_bridge_maps_sse_to_ws_and_tts() -> None:
     assert "tool_start" in types
     assert "tool_end" in types
     assert "audio_out" in types
-    assert types[-1] == "turn_complete"
+    assert "turn_complete" in types
 
     deltas = [
         message["text"]
@@ -157,7 +165,11 @@ async def test_voice_chat_bridge_maps_sse_to_ws_and_tts() -> None:
     ]
     assert "".join(deltas) == "Hello world."
 
-    turn_complete = messages[-1]
+    # `turn_complete` mirrors the SSE `end` frame, so it lands once the text is
+    # final — ahead of the trailing audio still being synthesised.
+    assert types.index("turn_complete") > types.index("assistant_text_delta")
+
+    turn_complete = messages[types.index("turn_complete")]
     assert turn_complete["tools_used"] == ["web_search"]
 
 

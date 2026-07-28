@@ -15,6 +15,7 @@ from app.ai.voice.interrupt import InterruptController
 from app.ai.voice.streaming import VoiceStreamBridge
 from app.ai.voice.tts import TtsPipeline
 from app.core.caller import CallerContext
+from app.core.logging import get_logger
 from app.schemas.chat import ChatRequestSchema
 from app.schemas.voice import (
     AssistantTextDeltaMessage,
@@ -26,6 +27,8 @@ from app.schemas.voice import (
 )
 from app.services.chat_service import ChatService, _StreamPrep
 from app.services.unified_chat_service import UnifiedChatService
+
+logger = get_logger(__name__)
 
 
 class DisconnectCheck(Protocol):
@@ -104,7 +107,6 @@ class VoiceChatBridge:
         metadata = VoiceTurnMetadata()
         text_queue: asyncio.Queue[str | None] = asyncio.Queue()
         audio_seq = 0
-        turn_completed = False
 
         async def emit_tts() -> None:
             nonlocal audio_seq
@@ -130,6 +132,7 @@ class VoiceChatBridge:
         )
         self._interrupt.register_tts_task(self._voice_session_id, tts_task)
         self._interrupt.set_turn_active(self._voice_session_id, True)
+        tts_error: str | None = None
 
         try:
             async for sse_frame in unified_service.stream_execute(
@@ -186,7 +189,19 @@ class VoiceChatBridge:
                     )
                     return
                 if event == "end":
-                    turn_completed = True
+                    # Mirror the SSE `end` frame: the transcript is final once
+                    # the text stream ends. Waiting for the slower TTS drain
+                    # would leave the assistant bubble unfinalised (and its
+                    # markdown unrendered) for seconds after the text is done.
+                    await self._send_json(
+                        self._stream_bridge.encode_message(
+                            TurnCompleteMessage(
+                                tools_used=metadata.tools_used or None,
+                                retrieved_chunk_count=metadata.retrieved_chunk_count,
+                                citations=metadata.citations,
+                            )
+                        )
+                    )
                     break
         finally:
             await text_queue.put(None)
@@ -194,15 +209,21 @@ class VoiceChatBridge:
                 await tts_task
             except asyncio.CancelledError:
                 pass
+            except Exception as exc:
+                tts_error = str(exc)
+                logger.warning(
+                    "Voice turn TTS failed; text transcript still delivered",
+                    voice_session_id=self._voice_session_id,
+                    error=tts_error,
+                )
             self._interrupt.set_turn_active(self._voice_session_id, False)
 
-        if turn_completed:
+        if tts_error:
             await self._send_json(
                 self._stream_bridge.encode_message(
-                    TurnCompleteMessage(
-                        tools_used=metadata.tools_used or None,
-                        retrieved_chunk_count=metadata.retrieved_chunk_count,
-                        citations=metadata.citations,
+                    ErrorMessage(
+                        code="tts_error",
+                        message="Assistant speech synthesis failed. Text reply is still available.",
                     )
                 )
             )

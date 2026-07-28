@@ -13,6 +13,14 @@ import {
 } from '../constants/providerModels'
 import type { ProviderCapabilityFlags } from '../hooks/useChatStreamingEnabled'
 import { ChevronDownIcon, DocumentIcon, GlobeIcon } from './icons/ShellIcons'
+import { VoiceModeControls } from './VoiceModeControls'
+
+export interface VoiceTurnOptions {
+  provider?: ProviderName
+  model?: string
+  useWebSearch?: boolean
+  useDocuments?: boolean
+}
 
 interface ComposerProps {
   onSend: (
@@ -33,6 +41,20 @@ interface ComposerProps {
   toolsEnabled: boolean
   ragEnabled: boolean
   capabilitiesByProvider: Partial<Record<ProviderName, ProviderCapabilityFlags>>
+  voiceEnabled?: boolean
+  voiceModeEnabled?: boolean
+  onVoiceModeChange?: (enabled: boolean) => void
+  /** Notified whenever the options applied to the next voice turn change. */
+  onVoiceTurnOptionsChange?: (options: VoiceTurnOptions) => void
+  transcriptPartial?: string
+  isVoiceRecording?: boolean
+  isVoiceSpeaking?: boolean
+  isVoiceConnected?: boolean
+  onVoiceMicPressStart?: () => void
+  onVoiceMicPressEnd?: () => void
+  onVoiceInterrupt?: () => void
+  voiceMicError?: string | null
+  hasActiveSession?: boolean
 }
 
 const TEXTAREA_LINE_HEIGHT_PX = 24
@@ -68,6 +90,19 @@ export function Composer({
   toolsEnabled,
   ragEnabled,
   capabilitiesByProvider,
+  voiceEnabled = false,
+  voiceModeEnabled = false,
+  onVoiceModeChange,
+  onVoiceTurnOptionsChange,
+  transcriptPartial = '',
+  isVoiceRecording = false,
+  isVoiceSpeaking = false,
+  isVoiceConnected = false,
+  onVoiceMicPressStart,
+  onVoiceMicPressEnd,
+  onVoiceInterrupt,
+  voiceMicError = null,
+  hasActiveSession = false,
 }: ComposerProps) {
   const [value, setValue] = useState('')
   const [selectedProvider, setSelectedProvider] = useState<ProviderName>('openai')
@@ -81,7 +116,12 @@ export function Composer({
   const providerPanelRef = useRef<HTMLDivElement>(null)
   const [keyboardInset, setKeyboardInset] = useState(0)
   const hasMessage = value.trim().length > 0
-  const isBlocked = isStreaming || disabled
+  const isVoiceInputActive = voiceEnabled && voiceModeEnabled
+  // Voice mode only replaces typing; provider, model and tool toggles still
+  // apply to voice turns, so they stay editable between turns.
+  const areTurnOptionsLocked = isStreaming || disabled
+  const isTextInputDisabled = areTurnOptionsLocked || isVoiceInputActive
+  const canSendText = !isVoiceInputActive
   const modelOptions = providerModelOptions.filter((option) => option.provider === selectedProvider)
   const selectedProviderLabel = getProviderOption(selectedProvider).label
   const providerSupportsTools =
@@ -97,8 +137,8 @@ export function Composer({
     ? 'Document grounding is not enabled on this server.'
     : null
 
-  const webSearchDisabled = isBlocked || !toolsEnabled || !providerSupportsTools
-  const documentsDisabled = isBlocked || !ragEnabled
+  const webSearchDisabled = areTurnOptionsLocked || !toolsEnabled || !providerSupportsTools
+  const documentsDisabled = areTurnOptionsLocked || !ragEnabled
   const showStatusChip = isStreaming || disabled
 
   const statusTone = isStreaming ? 'bg-amber-100 text-amber-800' : 'bg-danger-100 text-danger-600'
@@ -133,7 +173,7 @@ export function Composer({
 
   const submit = () => {
     const trimmed = value.trim()
-    if (!trimmed || isBlocked) return
+    if (!trimmed || isTextInputDisabled) return
     const toggleOptions = {
       useWebSearch: useWebSearch && isAuthenticated && toolsEnabled && providerSupportsTools,
       useDocuments: useDocuments && isAuthenticated && ragEnabled,
@@ -233,6 +273,26 @@ export function Composer({
     }
   }, [isProviderSettingsExpanded])
 
+  useEffect(() => {
+    onVoiceTurnOptionsChange?.({
+      provider: canSwitchProvider ? selectedProvider : undefined,
+      model: canSwitchProvider ? selectedModel : undefined,
+      useWebSearch: useWebSearch && isAuthenticated && toolsEnabled && providerSupportsTools,
+      useDocuments: useDocuments && isAuthenticated && ragEnabled,
+    })
+  }, [
+    onVoiceTurnOptionsChange,
+    canSwitchProvider,
+    selectedProvider,
+    selectedModel,
+    useWebSearch,
+    useDocuments,
+    isAuthenticated,
+    toolsEnabled,
+    ragEnabled,
+    providerSupportsTools,
+  ])
+
   return (
     <form
       className="sticky bottom-0 z-10 mt-2 bg-linear-to-t from-shell-100 via-shell-100/95 to-transparent px-1 pt-2 sm:px-0"
@@ -255,26 +315,36 @@ export function Composer({
                 adjustTextareaHeight()
               }}
               onKeyDown={handleKeyDown}
-              placeholder="Ask something…"
-              disabled={isBlocked}
+              placeholder={isVoiceInputActive ? 'Voice mode — hold mic to speak' : 'Ask something…'}
+              disabled={isTextInputDisabled}
               rows={1}
               aria-label="Message input"
             />
           </label>
 
-          {isStreaming ? (
+          {isStreaming || (isVoiceInputActive && isVoiceSpeaking) ? (
             <button
               type="button"
               className="inline-flex min-h-11 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-danger-600 px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-danger-600/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger-600 sm:min-w-20"
               onMouseDown={(event) => {
                 event.preventDefault()
-                onStop()
+                if (isVoiceInputActive) {
+                  onVoiceInterrupt?.()
+                } else {
+                  onStop()
+                }
               }}
-              onClick={onStop}
+              onClick={() => {
+                if (isVoiceInputActive) {
+                  onVoiceInterrupt?.()
+                } else {
+                  onStop()
+                }
+              }}
             >
               Stop
             </button>
-          ) : (
+          ) : canSendText ? (
             <button
               type="submit"
               className="inline-flex min-h-11 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-brand-600 px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-brand-500/40 sm:min-w-20"
@@ -282,8 +352,25 @@ export function Composer({
             >
               Send
             </button>
-          )}
+          ) : null}
         </div>
+
+        {voiceEnabled && isAuthenticated && onVoiceModeChange ? (
+          <VoiceModeControls
+            voiceModeEnabled={voiceModeEnabled}
+            onVoiceModeChange={onVoiceModeChange}
+            isRecording={isVoiceRecording}
+            isSpeaking={isVoiceSpeaking}
+            isVoiceReady={isVoiceConnected}
+            onMicPressStart={() => onVoiceMicPressStart?.()}
+            onMicPressEnd={() => onVoiceMicPressEnd?.()}
+            onInterrupt={() => onVoiceInterrupt?.()}
+            transcriptPartial={transcriptPartial}
+            disabled={disabled || isStreaming}
+            micError={voiceMicError}
+            hasActiveSession={hasActiveSession}
+          />
+        ) : null}
 
         {canSwitchProvider || isAuthenticated || showStatusChip ? (
           <div className="flex flex-wrap items-center gap-1.5">
@@ -295,7 +382,7 @@ export function Composer({
                   aria-expanded={isProviderSettingsExpanded}
                   aria-controls="provider-model-settings"
                   title={PROVIDER_MODEL_TOOLTIP}
-                  disabled={isBlocked}
+                  disabled={areTurnOptionsLocked}
                   onClick={() => setIsProviderSettingsExpanded((expanded) => !expanded)}
                 >
                   <span className="sr-only">Provider & model</span>
@@ -325,7 +412,7 @@ export function Composer({
                       className="h-10 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 text-sm text-shell-950 outline-none transition focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
                       value={selectedProvider}
                       onChange={handleProviderChange}
-                      disabled={isBlocked}
+                      disabled={areTurnOptionsLocked}
                       aria-label="Provider"
                     >
                       {providerModelOptions.map((option) => (
@@ -344,7 +431,7 @@ export function Composer({
                       className="h-10 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 text-sm text-shell-950 outline-none transition focus:border-brand-500/60 focus:bg-white focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:bg-zinc-100"
                       value={selectedModel}
                       onChange={handleModelChange}
-                      disabled={isBlocked}
+                      disabled={areTurnOptionsLocked}
                       aria-label="Model"
                     >
                       {modelOptions.map((option) => (
