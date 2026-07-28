@@ -127,6 +127,6 @@ Automated CI covers WS/router/hook/reducer paths with fakes; live mic/OpenAI smo
 
 - Epic plan: [docs/plans/post-mvp-v2-epic-04-voice-interfaces.md](../plans/post-mvp-v2-epic-04-voice-interfaces.md)
 - Phase 0 audit: [docs/audits/post-mvp-v2-epic4-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic4-phase-0-baseline-audit.md)
-- Prior release: [docs/releases/post-mvp-v2-epic2-release-summary.md](./post-mvp-v2-epic2-release-summary.md)
+- Prior release: [docs/releases/post-mvp-v2-epic3-release-summary.md](./post-mvp-v2-epic3-release-summary.md)
 - Backend reference: [backend-python/README.md](../../backend-python/README.md)
 - Docker local dev: [DOCKER_COMPOSE.md](../../DOCKER_COMPOSE.md)

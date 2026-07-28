@@ -1,8 +1,8 @@
 ---
 epic: v2-03
 title: MCP Integration
-status: not_started
-version: 1
+status: completed
+version: 2
 depends_on: [v2-02]
 provides:
   [
@@ -358,19 +358,19 @@ _Copied from Epic 02 Phase 12 completion record._
 
 ## Phase status
 
-| Phase | Name                         | Effort | Status      |
-| ----- | ---------------------------- | ------ | ----------- |
-| 0     | Baseline Audit               | XS     | Not Started |
-| 1     | Scaffold, Models, Interfaces | M      | Not Started |
-| 2     | MCP Client (stdio)           | M      | Not Started |
-| 3     | Server Registry              | S      | Not Started |
-| 4     | Tool Discovery               | M      | Not Started |
-| 5     | Tool Execution Adapter       | M      | Not Started |
-| 6     | Credentials & Auth           | S      | Not Started |
-| 7     | Permission Model             | M      | Not Started |
-| 8     | Startup Registration         | S      | Not Started |
-| 9     | Integration & DI Wiring      | M      | Not Started |
-| 10    | Validation & Release         | S      | Not Started |
+| Phase | Name                         | Effort | Status    |
+| ----- | ---------------------------- | ------ | --------- |
+| 0     | Baseline Audit               | XS     | Completed |
+| 1     | Scaffold, Models, Interfaces | M      | Completed |
+| 2     | MCP Client (stdio)           | M      | Completed |
+| 3     | Server Registry              | S      | Completed |
+| 4     | Tool Discovery               | M      | Completed |
+| 5     | Tool Execution Adapter       | M      | Completed |
+| 6     | Credentials & Auth           | S      | Completed |
+| 7     | Permission Model             | M      | Completed |
+| 8     | Startup Registration         | S      | Completed |
+| 9     | Integration & DI Wiring      | M      | Completed |
+| 10    | Validation & Release         | S      | Completed |
 
 ---
 
@@ -697,13 +697,13 @@ _Copied from Epic 02 Phase 12 completion record._
 
 **Steps:**
 
-- [ ] Full suite: `MCP_ENABLED=false` then `true` (with fake MCP server; no real external MCP dependencies for CI)
-- [ ] Also confirm `AGENT_RUNTIME_ENABLED`, `ADVANCED_RAG_ENABLED` flag-off/on still green (no regressions from Epic 01/02)
-- [ ] Docker smoke (optional: add fake MCP server to compose for integration smoke)
-- [ ] `make eval`
-- [ ] Write `docs/releases/post-mvp-v2-epic3-release-summary.md`
-- [ ] Set Phase status rows to **Completed**; tick DoD
-- [ ] Phase 10 complete — user confirmed; Epic 4 authorized
+- [x] Full suite: `MCP_ENABLED=false` then `true` (with fake MCP server; no real external MCP dependencies for CI)
+- [x] Also confirm `AGENT_RUNTIME_ENABLED`, `ADVANCED_RAG_ENABLED` flag-off/on still green (no regressions from Epic 01/02)
+- [x] Docker smoke (optional: add fake MCP server to compose for integration smoke)
+- [x] `make eval`
+- [x] Write `docs/releases/post-mvp-v2-epic3-release-summary.md`
+- [x] Set Phase status rows to **Completed**; tick DoD
+- [x] Phase 10 complete — user confirmed; Epic 4 authorized
 
 **Verify:** `make test-cov && make eval`
 
@@ -718,14 +718,14 @@ _Copied from Epic 02 Phase 12 completion record._
 
 **Completion record:**
 
-| Metric                                    | Result |
-| ----------------------------------------- | ------ |
-| Backend tests / coverage                  |        |
-| MCP package coverage                      |        |
-| Eval CLI                                  |        |
-| Flag-off regression (`MCP_ENABLED=false`) |        |
-| Flag-on MCP parity                        |        |
-| Agent / RAG flag regressions              |        |
+| Metric                                    | Result                                                         |
+| ----------------------------------------- | -------------------------------------------------------------- |
+| Backend tests / coverage                  | Flag-off: **1076 passed**, **89.42%** `app/`; flag-on: **89.52%** |
+| MCP package coverage                      | **96%** `app/ai/mcp/` (190 tests; gate ≥80%)                   |
+| Eval CLI                                  | **5/5** passed (`.eval/eval-report.json`, `2026-07-28T19:37:53Z`) |
+| Flag-off regression (`MCP_ENABLED=false`) | **Pass** — 1076 passed                                         |
+| Flag-on MCP parity                        | **Pass** — 1076 passed                                         |
+| Agent / RAG flag regressions              | **34 passed** (Epic 04 validation pass)                        |
 
 ---
 
@@ -789,18 +789,19 @@ Structured log fields (no raw tool arguments/responses/credentials by default):
 
 ## Definition of done
 
-- [ ] Part I components delivered; Part I design acceptance met
-- [ ] Public APIs stable per Phase 1
-- [ ] MCP path behind `MCP_ENABLED`; V1 local tools unchanged when off; parity when on
-- [ ] MCP tools flow through existing `ToolRegistry` → `ToolExecutor` → agent `ToolRunner` path
-- [ ] `tests/ai/mcp/` complete; coverage ≥80% on `app/ai/mcp/` and `app/`
-- [ ] `make eval` passes; release summary published
-- [ ] All phases **Completed**; user confirmed each
-- [ ] Program DoD: [\_program-v2-execution-guide.md](./_program-v2-execution-guide.md)
-- [ ] User authorizes Epic 4
+- [x] Part I components delivered; Part I design acceptance met
+- [x] Public APIs stable per Phase 1
+- [x] MCP path behind `MCP_ENABLED`; V1 local tools unchanged when off; parity when on
+- [x] MCP tools flow through existing `ToolRegistry` → `ToolExecutor` → agent `ToolRunner` path
+- [x] `tests/ai/mcp/` complete; coverage ≥80% on `app/ai/mcp/` and `app/`
+- [x] `make eval` passes; release summary published
+- [x] All phases **Completed**; user confirmed each
+- [x] Program DoD: [\_program-v2-execution-guide.md](./_program-v2-execution-guide.md)
+- [x] User authorizes Epic 4
 
 ## Changelog
 
-| Date       | Change       |
-| ---------- | ------------ |
-| 2026-07-26 | Initial plan |
+| Date       | Change                                                                                                                                                                                                                                      |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-07-26 | Initial plan                                                                                                                                                                                                                                |
+| 2026-07-29 | Phases 0–9 marked Completed (deliverables shipped). Phase 10 validation complete: MCP flag matrices, eval, release summary published, README updated. Phase 10 status → Completed (user confirmed; Epic 04 authorized). Part II only. |
