@@ -1,5 +1,6 @@
 """Tests for OpenAI voice adapter STT functionality."""
 
+import wave
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, patch
 
@@ -198,8 +199,14 @@ async def test_transcribe_stream_multiple_chunks(
         call_kwargs = mock_create.call_args[1]
         file_buffer = call_kwargs["file"]
 
-        total_expected_bytes = len(chunk1) + len(chunk2)
-        assert len(file_buffer.getvalue()) == total_expected_bytes
+        file_buffer.seek(0)
+        with wave.open(file_buffer, "rb") as wav_file:
+            assert wav_file.getnchannels() == 1
+            assert wav_file.getsampwidth() == 2
+            assert wav_file.getframerate() == 24000
+            pcm_data = wav_file.readframes(wav_file.getnframes())
+            total_expected_bytes = len(chunk1) + len(chunk2)
+            assert len(pcm_data) == total_expected_bytes
 
 
 async def test_transcribe_stream_with_retry(

@@ -1,6 +1,5 @@
 """Tests for STT pipeline."""
 
-import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
 
 import pytest
@@ -158,18 +157,17 @@ async def test_pipeline_min_audio_duration_check(
 async def test_pipeline_max_utterance_duration_check(
     voice_config: VoiceConfig,
 ) -> None:
-    """Test that utterances exceeding max duration are rejected."""
+    """Test that utterances exceeding max audio duration are rejected."""
     config = VoiceConfig(max_utterance_seconds=1)
     provider = FakeSttProvider()
     pipeline = SttPipeline(provider, config)
 
-    async def _slow_generator() -> AsyncIterator[bytes]:
-        yield _create_pcm16_audio(duration_ms=500)
-        await asyncio.sleep(1.1)
-        yield _create_pcm16_audio(duration_ms=500)
+    async def _long_audio_generator() -> AsyncIterator[bytes]:
+        yield _create_pcm16_audio(duration_ms=600)
+        yield _create_pcm16_audio(duration_ms=600)
 
-    with pytest.raises(SttError, match="exceeds max duration"):
-        async for _ in pipeline.process(_slow_generator(), final=True):
+    with pytest.raises(SttError, match="Audio duration.*exceeds max utterance"):
+        async for _ in pipeline.process(_long_audio_generator(), final=True):
             pass
 
 

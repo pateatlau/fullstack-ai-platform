@@ -1,6 +1,5 @@
 """STT pipeline — streaming transcription orchestration."""
 
-import time
 from collections.abc import AsyncIterable, AsyncIterator
 
 from app.ai.voice.config import VoiceConfig
@@ -56,16 +55,16 @@ class SttPipeline:
             SttError: On transcription failure or policy violations.
         """
         buffer = bytearray()
-        start_time = time.time()
+        max_utterance_ms = self._max_utterance_seconds * 1000
 
         try:
             async for chunk in audio_chunks:
                 buffer.extend(chunk)
 
-                elapsed = time.time() - start_time
-                if elapsed > self._max_utterance_seconds:
+                audio_duration_ms = self._calculate_audio_duration_ms(len(buffer))
+                if audio_duration_ms > max_utterance_ms:
                     raise SttError(
-                        f"Utterance exceeds max duration of {self._max_utterance_seconds}s"
+                        f"Audio duration ({audio_duration_ms:.1f}ms) exceeds max utterance {self._max_utterance_seconds}s"
                     )
 
             audio_duration_ms = self._calculate_audio_duration_ms(len(buffer))
