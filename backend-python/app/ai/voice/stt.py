@@ -22,6 +22,11 @@ class SttPipeline:
         self._config = config
         self._sample_rate = config.sample_rate_hz
         self._max_utterance_seconds = config.max_utterance_seconds
+        self._cancel_requested = False
+
+    def request_cancel(self) -> None:
+        """Signal the pipeline to stop transcription (Phase 6 interrupt hook)."""
+        self._cancel_requested = True
 
     def _calculate_audio_duration_ms(self, audio_bytes: int) -> float:
         """Calculate audio duration in milliseconds from byte count.
@@ -59,6 +64,9 @@ class SttPipeline:
 
         try:
             async for chunk in audio_chunks:
+                if self._cancel_requested:
+                    return
+
                 buffer.extend(chunk)
 
                 audio_duration_ms = self._calculate_audio_duration_ms(len(buffer))
@@ -68,6 +76,9 @@ class SttPipeline:
                     )
 
             audio_duration_ms = self._calculate_audio_duration_ms(len(buffer))
+
+            if self._cancel_requested:
+                return
 
             if audio_duration_ms < 100:
                 raise SttError(
@@ -81,6 +92,9 @@ class SttPipeline:
 
             has_transcript = False
             async for transcript_text in transcript_generator:
+                if self._cancel_requested:
+                    return
+
                 if transcript_text and transcript_text.strip():
                     has_transcript = True
                     yield TranscriptEvent(

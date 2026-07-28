@@ -1,8 +1,10 @@
 """Voice stream bridge — audio chunk framing; WS message codec."""
 
+from __future__ import annotations
+
 import base64
 import json
-from typing import Union
+from typing import TYPE_CHECKING, Union
 
 from pydantic import ValidationError
 
@@ -25,6 +27,9 @@ from app.schemas.voice import (
     TranscriptPartialMessage,
     TurnCompleteMessage,
 )
+
+if TYPE_CHECKING:
+    from app.ai.voice.interrupt import InterruptController
 
 ClientMessage = Union[
     AudioInMessage,
@@ -56,13 +61,53 @@ class VoiceStreamBridge:
     and enforces chunk size limits per VoiceConfig.
     """
 
-    def __init__(self, config: VoiceConfig) -> None:
+    def __init__(
+        self,
+        config: VoiceConfig,
+        interrupt_controller: InterruptController | None = None,
+    ) -> None:
         """Initialize voice stream bridge.
 
         Args:
             config: Voice configuration with max_chunk_bytes.
+            interrupt_controller: Optional barge-in controller wired for inbound
+                ``audio_in`` / ``interrupt`` handling (Phase 6).
         """
         self._config = config
+        self._interrupt = interrupt_controller
+
+    def bind_interrupt_controller(
+        self, interrupt_controller: InterruptController
+    ) -> None:
+        """Attach or replace the interrupt controller after construction."""
+        self._interrupt = interrupt_controller
+
+    def interrupted_message(self) -> InterruptedMessage:
+        """Build the server ``interrupted`` WS frame for barge-in acknowledgement."""
+        return InterruptedMessage()
+
+    async def decode_and_handle_barge_in(
+        self,
+        data: str,
+        *,
+        voice_session_id: str,
+    ) -> tuple[ClientMessage, InterruptedMessage | None]:
+        """Decode a client frame and run barge-in cancellation when triggered.
+
+        When ``audio_in`` arrives during an active TTS/LLM turn, or when the
+        client sends ``interrupt``, registered tasks are cancelled and an
+        ``interrupted`` message is returned alongside the decoded client frame.
+
+        Partial assistant text from the cancelled turn is not persisted —
+        the client should drop the in-progress assistant bubble.
+        """
+        message = self.decode_message(data)
+        interrupted: InterruptedMessage | None = None
+        if self._interrupt is not None:
+            interrupted = await self._interrupt.handle_barge_in(
+                voice_session_id, message
+            )
+        return message, interrupted
 
     def encode_message(self, message: ServerMessage) -> str:
         """Encode a server message to JSON for WebSocket send.

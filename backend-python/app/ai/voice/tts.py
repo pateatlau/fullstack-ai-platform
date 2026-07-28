@@ -27,12 +27,17 @@ class TtsPipeline:
         Args:
             provider: TTS provider implementing the TtsProvider protocol.
             config: Voice configuration.
-            cancel_requested: Placeholder for Phase 6 interrupt hook.
+            cancel_requested: Placeholder for Phase 6 interrupt hook; prefer
+                :meth:`request_cancel` on a live pipeline instance.
         """
         self._provider = provider
         self._config = config
         self._max_chunk_chars = 4096
         self._cancel_requested = cancel_requested
+
+    def request_cancel(self) -> None:
+        """Signal the pipeline to stop synthesis (Phase 6 interrupt hook)."""
+        self._cancel_requested = True
 
     def _split_into_sentences(self, text: str) -> list[str]:
         """Split text at sentence boundaries.
