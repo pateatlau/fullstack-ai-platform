@@ -436,86 +436,116 @@ export class MicCapture {
   private pending = new Uint8Array(0)
   private maxChunkBytes = VOICE_MAX_CHUNK_BYTES
   private targetSampleRateHz = VOICE_SAMPLE_RATE_HZ
+  private inputRateHz = VOICE_SAMPLE_RATE_HZ
   private captureGeneration = 0
-  private stopped = true
+  /** The gate: true only between a `start()` and the matching `stop()`. */
+  private capturing = false
   private onChunk: ((chunk: Uint8Array, final: boolean) => void) | null = null
+  private onError: ((error: Error) => void) | null = null
+  /** De-dupes concurrent prepare() calls (e.g. connect()'s warm-up racing a fast first press). */
+  private preparePromise: Promise<void> | null = null
 
-  /** Acquire and keep the mic stream warm so push-to-talk starts immediately on mobile. */
+  /**
+   * Acquire the mic stream AND build/wire the full capture graph so a later
+   * `start()` only has to flip a flag. Safe to call early (right after the
+   * voice WebSocket connects) and safe to call repeatedly — it's a no-op
+   * once everything is already warm.
+   */
   async prepare(): Promise<void> {
+    if (this.preparePromise) {
+      return this.preparePromise
+    }
+    this.preparePromise = this.doPrepare()
+    try {
+      await this.preparePromise
+    } finally {
+      this.preparePromise = null
+    }
+  }
+
+  private async doPrepare(): Promise<void> {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error('Microphone capture is not supported in this browser')
     }
-    if (this.mediaStream?.active) {
-      return
-    }
-    this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-  }
 
-  async start(options: MicCaptureOptions): Promise<void> {
-    const generation = (this.captureGeneration += 1)
-    this.stopped = false
-    this.maxChunkBytes = options.maxChunkBytes ?? VOICE_MAX_CHUNK_BYTES
-    this.targetSampleRateHz = options.sampleRateHz ?? VOICE_SAMPLE_RATE_HZ
-    this.pending = new Uint8Array(0)
-    this.onChunk = options.onChunk
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      const error = new Error('Microphone capture is not supported in this browser')
-      options.onError?.(error)
-      throw error
-    }
-
-    try {
-      await this.prepare()
-    } catch (cause) {
-      const error =
-        cause instanceof Error ? cause : new Error('Microphone permission denied or unavailable')
-      options.onError?.(error)
-      throw error
-    }
-
-    if (this.stopped || generation !== this.captureGeneration) {
-      return
+    if (!this.mediaStream?.active) {
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
     }
 
     if (!this.audioContext || this.audioContext.state === 'closed') {
-      // Use the device native rate; mobile browsers often ignore a requested rate.
+      // Use the device's native rate; mobile browsers often ignore a requested rate.
       this.audioContext = new AudioContext()
     }
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume()
     }
 
-    if (this.stopped || generation !== this.captureGeneration) {
+    if (this.processor && this.source) {
+      // Graph already built and wired up from a previous prepare() — nothing left to do.
       return
     }
 
-    this.teardownCaptureGraph()
-
-    const inputRateHz = this.audioContext.sampleRate
-    this.source = this.audioContext.createMediaStreamSource(this.mediaStream!)
+    this.inputRateHz = this.audioContext.sampleRate
+    this.source = this.audioContext.createMediaStreamSource(this.mediaStream)
     this.processor = this.audioContext.createScriptProcessor(4096, 1, 1)
 
     this.processor.onaudioprocess = (event) => {
-      if (this.stopped || generation !== this.captureGeneration) {
+      // The graph runs continuously once warm; only forward samples while a
+      // push-to-talk press is actually in progress. This is what makes
+      // start()/stop() instantaneous instead of rebuilding anything.
+      if (!this.capturing) {
         return
       }
       const input = event.inputBuffer.getChannelData(0)
       const resampled =
-        inputRateHz === this.targetSampleRateHz
+        this.inputRateHz === this.targetSampleRateHz
           ? input
-          : resampleFloat32(input, inputRateHz, this.targetSampleRateHz)
+          : resampleFloat32(input, this.inputRateHz, this.targetSampleRateHz)
       const pcmBytes = float32ToPcm16Bytes(resampled)
       this.enqueueBytes(pcmBytes)
     }
 
     this.source.connect(this.processor)
+    // ScriptProcessorNode must stay connected to a destination to keep firing
+    // in some engines; its output buffer is left untouched (silent), so the
+    // mic is never echoed back out through the speakers.
     this.processor.connect(this.audioContext.destination)
   }
 
+  /**
+   * Open the capture gate. Falls back to building the graph now if it isn't
+   * warm yet (same cost as the old behavior, but now only a fallback path,
+   * not the common one).
+   */
+  async start(options: MicCaptureOptions): Promise<void> {
+    const generation = (this.captureGeneration += 1)
+    this.maxChunkBytes = options.maxChunkBytes ?? VOICE_MAX_CHUNK_BYTES
+    this.targetSampleRateHz = options.sampleRateHz ?? VOICE_SAMPLE_RATE_HZ
+    this.pending = new Uint8Array(0)
+    this.onChunk = options.onChunk
+    this.onError = options.onError ?? null
+
+    try {
+      await this.prepare()
+    } catch (cause) {
+      const error =
+        cause instanceof Error ? cause : new Error('Microphone permission denied or unavailable')
+      this.onError?.(error)
+      throw error
+    }
+
+    // A stop() (or a newer start()) landed while prepare() was resolving.
+    if (generation !== this.captureGeneration) {
+      return
+    }
+
+    this.capturing = true
+  }
+
+  /** Close the capture gate. The graph itself stays warm and running for the next press. */
   stop(final = true): void {
     this.captureGeneration += 1
-    this.stopped = true
+    this.capturing = false
 
     if (this.pending.length > 0) {
       this.emitChunk(this.pending.slice(), final)
@@ -524,13 +554,18 @@ export class MicCapture {
       this.emitChunk(new Uint8Array(0), true)
     }
 
-    this.teardownCaptureGraph()
     this.onChunk = null
+    this.onError = null
   }
 
   /** Release mic hardware and audio resources when the voice session ends. */
   dispose(): void {
     this.stop(false)
+    this.processor?.disconnect()
+    this.source?.disconnect()
+    this.processor = null
+    this.source = null
+
     for (const track of this.mediaStream?.getTracks() ?? []) {
       track.stop()
     }
@@ -540,13 +575,6 @@ export class MicCapture {
       void this.audioContext.close()
       this.audioContext = null
     }
-  }
-
-  private teardownCaptureGraph(): void {
-    this.processor?.disconnect()
-    this.source?.disconnect()
-    this.processor = null
-    this.source = null
   }
 
   private enqueueBytes(bytes: Uint8Array): void {
