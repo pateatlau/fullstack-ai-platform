@@ -25,6 +25,7 @@ function makeJwt(expSecondsFromNow: number): string {
 
 const mockConnect = vi.fn().mockResolvedValue(undefined)
 const mockDisconnect = vi.fn()
+const mockPrepareMic = vi.fn().mockResolvedValue(undefined)
 const mockStartRecording = vi.fn().mockResolvedValue(undefined)
 const mockStopRecording = vi.fn()
 const mockInterrupt = vi.fn()
@@ -49,6 +50,7 @@ vi.mock('../hooks/useVoiceSession', () => ({
     return {
       connect: mockConnect,
       disconnect: mockDisconnect,
+      prepareMic: mockPrepareMic,
       startRecording: mockStartRecording,
       stopRecording: mockStopRecording,
       interrupt: mockInterrupt,
@@ -181,6 +183,7 @@ describe('ChatPage voice integration', () => {
 
     await waitFor(() => {
       expect(mockConnect).toHaveBeenCalledTimes(1)
+      expect(mockPrepareMic).toHaveBeenCalledTimes(1)
     })
   })
 

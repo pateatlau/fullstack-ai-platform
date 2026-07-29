@@ -30,7 +30,7 @@ import { EmptyState } from '../components/EmptyState'
 import { MessageList } from '../components/MessageList'
 import { PageBanner } from '../components/PageBanner'
 import { Composer, type VoiceTurnOptions } from '../components/Composer'
-import type { ChatChunk, ChatRequest, ChatSessionSummary, Citation, Message } from '../types/chat'
+import type { ChatChunk, ChatRequest, ChatSessionSummary, Message } from '../types/chat'
 import { toApiMessages, toLocalMessage } from '../utils/chatMessages'
 import { friendlyErrorMessage } from '../utils/friendlyErrors'
 
@@ -192,6 +192,7 @@ function ChatPageContent() {
   const {
     connect: connectVoice,
     disconnect: disconnectVoice,
+    prepareMic: prepareVoiceMic,
     startRecording: startVoiceRecording,
     stopRecording: stopVoiceRecording,
     interrupt: interruptVoice,
@@ -270,7 +271,7 @@ function ChatPageContent() {
           id,
           toolsUsed: metadata.tools_used ?? undefined,
           retrievedChunkCount: metadata.retrieved_chunk_count ?? undefined,
-          citations: metadata.citations as Citation[] | undefined,
+          citations: metadata.citations ?? undefined,
         })
       }
       currentVoiceMessageIdRef.current = null
@@ -828,6 +829,7 @@ function ChatPageContent() {
     setVoiceMicError(null)
     try {
       await startVoiceRecording()
+      beginVoiceUserTurn()
     } catch (error) {
       const message =
         error instanceof Error
@@ -835,20 +837,33 @@ function ChatPageContent() {
           : 'Microphone access denied. Check browser permissions.'
       setVoiceMicError(message)
     }
-  }, [startVoiceRecording])
+  }, [beginVoiceUserTurn, startVoiceRecording])
 
   const handleVoiceMicPressEnd = useCallback(() => {
-    beginVoiceUserTurn()
     stopVoiceRecording()
-  }, [beginVoiceUserTurn, stopVoiceRecording])
+  }, [stopVoiceRecording])
+
+  const handleVoiceModeChange = useCallback(
+    (enabled: boolean) => {
+      setIsVoiceModeRequested(enabled)
+      if (enabled) {
+        // Checkbox click is a user gesture — prompt for mic access here so the
+        // first push-to-talk press is not racing the permission dialog.
+        void prepareVoiceMic().catch((error: unknown) => {
+          const message =
+            error instanceof Error
+              ? error.message
+              : 'Microphone access denied. Check browser permissions.'
+          setVoiceMicError(message)
+        })
+      }
+    },
+    [prepareVoiceMic],
+  )
 
   const handleVoiceInterrupt = useCallback(() => {
     interruptVoice()
   }, [interruptVoice])
-
-  const handleVoiceModeChange = useCallback((enabled: boolean) => {
-    setIsVoiceModeRequested(enabled)
-  }, [])
 
   const activeSessionListItem = useMemo(
     () => state.sessions.find((session) => session.id === state.activeSessionId) ?? null,

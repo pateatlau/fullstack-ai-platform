@@ -58,17 +58,41 @@ export function VoiceModeControls({
   const showMic = voiceModeEnabled
   const showInterrupt = voiceModeEnabled && isSpeaking
 
+  const releaseGlobalPointerListenersRef = useRef<(() => void) | null>(null)
+
+  const clearGlobalPointerListeners = useCallback(() => {
+    releaseGlobalPointerListenersRef.current?.()
+    releaseGlobalPointerListenersRef.current = null
+  }, [])
+
   const beginMicPress = useCallback(() => {
     if (micDisabled || micHeldRef.current) return
     micHeldRef.current = true
     onMicPressStart()
-  }, [micDisabled, onMicPressStart])
+
+    // The permission dialog can steal pointer capture; listen globally so release
+    // still ends the utterance even when pointerup never reaches this button.
+    const endOnGlobalPointerEnd = () => {
+      clearGlobalPointerListeners()
+      if (micHeldRef.current) {
+        micHeldRef.current = false
+        onMicPressEnd()
+      }
+    }
+    window.addEventListener('pointerup', endOnGlobalPointerEnd)
+    window.addEventListener('pointercancel', endOnGlobalPointerEnd)
+    releaseGlobalPointerListenersRef.current = () => {
+      window.removeEventListener('pointerup', endOnGlobalPointerEnd)
+      window.removeEventListener('pointercancel', endOnGlobalPointerEnd)
+    }
+  }, [clearGlobalPointerListeners, micDisabled, onMicPressEnd, onMicPressStart])
 
   const endMicPress = useCallback(() => {
     if (!micHeldRef.current) return
     micHeldRef.current = false
+    clearGlobalPointerListeners()
     onMicPressEnd()
-  }, [onMicPressEnd])
+  }, [clearGlobalPointerListeners, onMicPressEnd])
 
   const handleMicPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -117,8 +141,19 @@ export function VoiceModeControls({
   )
 
   const handleMicBlur = useCallback(() => {
+    // Blur also fires when the browser permission sheet opens; only treat it as
+    // release once capture is actually running.
+    if (!isRecording) return
     endMicPress()
-  }, [endMicPress])
+  }, [endMicPress, isRecording])
+
+  const handleMicLostPointerCapture = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (!isRecording) return
+      handleMicPointerUp(event)
+    },
+    [handleMicPointerUp, isRecording],
+  )
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -161,7 +196,7 @@ export function VoiceModeControls({
           onPointerDown={handleMicPointerDown}
           onPointerUp={handleMicPointerUp}
           onPointerCancel={handleMicPointerUp}
-          onLostPointerCapture={handleMicPointerUp}
+          onLostPointerCapture={handleMicLostPointerCapture}
           onKeyDown={handleMicKeyDown}
           onKeyUp={handleMicKeyUp}
           onBlur={handleMicBlur}

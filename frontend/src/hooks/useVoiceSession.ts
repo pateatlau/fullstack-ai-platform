@@ -46,6 +46,9 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
   const playerRef = useRef<Pcm16AudioPlayer | null>(null)
   const micRef = useRef<MicCapture | null>(null)
   const recordingGenerationRef = useRef(0)
+  const micStartPromiseRef = useRef<Promise<void> | null>(null)
+  const micStartInFlightRef = useRef(false)
+  const pendingStopRef = useRef(false)
   const turnStartedRef = useRef(false)
   const turnEndedRef = useRef(true)
   const speakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -274,34 +277,53 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
       micRef.current = new MicCapture()
     }
 
-    if (!playerRef.current) {
-      playerRef.current = new Pcm16AudioPlayer()
-    }
-    await playerRef.current.prime()
+    micStartInFlightRef.current = true
+    pendingStopRef.current = false
 
-    const generation = (recordingGenerationRef.current += 1)
+    try {
+      if (!playerRef.current) {
+        playerRef.current = new Pcm16AudioPlayer()
+      }
+      await playerRef.current.prime()
 
-    await micRef.current.start({
-      onChunk: (chunk, final) => {
-        clientRef.current?.sendAudioChunk(chunk, final)
-        if (final) {
+      const generation = (recordingGenerationRef.current += 1)
+
+      const startPromise = micRef.current.start({
+        onChunk: (chunk, final) => {
+          clientRef.current?.sendAudioChunk(chunk, final)
+          if (final) {
+            setIsRecording(false)
+          }
+        },
+        onError: (error) => {
           setIsRecording(false)
-        }
-      },
-      onError: (error) => {
-        setIsRecording(false)
-        optionsRef.current.onError?.(error)
-      },
-    })
+          optionsRef.current.onError?.(error)
+        },
+      })
+      micStartPromiseRef.current = startPromise
 
-    if (generation !== recordingGenerationRef.current) {
-      return
+      await startPromise
+
+      if (pendingStopRef.current || generation !== recordingGenerationRef.current) {
+        pendingStopRef.current = false
+        micRef.current?.stop(true)
+        setIsRecording(false)
+        return
+      }
+      setIsRecording(true)
+    } finally {
+      micStartInFlightRef.current = false
+      micStartPromiseRef.current = null
     }
-    setIsRecording(true)
   }, [])
 
   const stopRecording = useCallback(() => {
     recordingGenerationRef.current += 1
+    if (micStartInFlightRef.current) {
+      pendingStopRef.current = true
+      setIsRecording(false)
+      return
+    }
     micRef.current?.stop(true)
     setIsRecording(false)
   }, [])
@@ -324,6 +346,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
   return {
     connect,
     disconnect,
+    prepareMic,
     startRecording,
     stopRecording,
     interrupt,

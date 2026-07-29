@@ -2,7 +2,7 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Pcm16AudioPlayer } from '../api/voiceClient'
+import { Pcm16AudioPlayer, MicCapture } from '../api/voiceClient'
 import { useVoiceSession } from './useVoiceSession'
 
 type MockWebSocketListener = ((event: Event | MessageEvent | CloseEvent) => void) | null
@@ -269,5 +269,49 @@ describe('useVoiceSession', () => {
     await waitFor(() => {
       expect(result.current.isSpeaking).toBe(false)
     })
+  })
+
+  it('defers stop until mic start finishes when permission is still pending', async () => {
+    let resolveStart: (() => void) | null = null
+    const stop = vi.fn()
+    vi.spyOn(MicCapture.prototype, 'prepare').mockResolvedValue(undefined)
+    vi.spyOn(MicCapture.prototype, 'start').mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve
+        }),
+    )
+    vi.spyOn(MicCapture.prototype, 'stop').mockImplementation(stop)
+    vi.spyOn(Pcm16AudioPlayer.prototype, 'prime').mockResolvedValue()
+
+    const { result } = renderHook(() =>
+      useVoiceSession({
+        sessionId: 'chat-1',
+        accessToken: 'jwt',
+        webSocketFactory: (url) => new MockWebSocket(url) as unknown as WebSocket,
+      }),
+    )
+
+    await result.current.connect()
+
+    let startPromise: Promise<void> | undefined
+    await act(async () => {
+      startPromise = result.current.startRecording()
+      await Promise.resolve()
+    })
+
+    act(() => {
+      result.current.stopRecording()
+    })
+    expect(stop).not.toHaveBeenCalled()
+    expect(result.current.isRecording).toBe(false)
+
+    await act(async () => {
+      resolveStart?.()
+      await startPromise
+    })
+
+    expect(stop).toHaveBeenCalledWith(true)
+    expect(result.current.isRecording).toBe(false)
   })
 })
