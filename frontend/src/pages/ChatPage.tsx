@@ -1197,7 +1197,7 @@ function ChatPageContent() {
               )}
               <AppNav current="chat" />
               <h1 className="min-w-0 truncate text-sm font-semibold tracking-wide text-shell-900 sm:text-base">
-                AI Chat Assistant
+                AI Assistant
               </h1>
             </div>
             <div className={isAuthenticated ? 'shrink-0' : 'flex items-center gap-2 sm:shrink-0'}>
