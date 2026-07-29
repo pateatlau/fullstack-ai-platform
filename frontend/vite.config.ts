@@ -20,6 +20,10 @@ export default defineConfig({
         ws: true,
       },
     },
+    host: true,
+    port: 5173,
+    strictPort: true,
+    allowedHosts: ['.trycloudflare.com'],
   },
   test: {
     environment: 'node',
