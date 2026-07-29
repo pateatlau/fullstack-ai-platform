@@ -117,6 +117,8 @@ function ChatPageContent() {
   // handshake, so a change has to re-render and reconnect to take effect.
   const [voiceTurnOptions, setVoiceTurnOptions] = useState<VoiceTurnOptions>({})
   const currentVoiceMessageIdRef = useRef<string | null>(null)
+  const currentVoiceUserMessageIdRef = useRef<string | null>(null)
+  const [isVoiceTranscribing, setIsVoiceTranscribing] = useState(false)
   const activeSessionIdRef = useRef(state.activeSessionId)
   useEffect(() => {
     activeSessionIdRef.current = state.activeSessionId
@@ -147,12 +149,53 @@ function ChatPageContent() {
     [dispatch],
   )
 
+  const clearVoiceUserTurn = useCallback(() => {
+    const userMessageId = currentVoiceUserMessageIdRef.current
+    if (userMessageId) {
+      dispatch({ type: 'REMOVE_MESSAGE', id: userMessageId })
+      currentVoiceUserMessageIdRef.current = null
+    }
+    setIsVoiceTranscribing(false)
+    setTranscriptPartial('')
+  }, [dispatch])
+
+  const beginVoiceUserTurn = useCallback(() => {
+    if (currentVoiceUserMessageIdRef.current) {
+      return
+    }
+    const userMessageId = crypto.randomUUID()
+    currentVoiceUserMessageIdRef.current = userMessageId
+    setIsVoiceTranscribing(true)
+    setTranscriptPartial('')
+    dispatch({
+      type: 'ADD_USER_MESSAGE',
+      message: {
+        id: userMessageId,
+        role: 'user',
+        content: '',
+        status: 'streaming',
+        createdAt: new Date().toISOString(),
+      },
+    })
+  }, [dispatch])
+
+  const startVoiceAssistantTurnRef = useRef<() => void>(() => {})
+
+  const handleVoiceErrorWithCleanup = useCallback(
+    (error: Error | { code: string; message: string }) => {
+      clearVoiceUserTurn()
+      handleVoiceError(error)
+    },
+    [clearVoiceUserTurn, handleVoiceError],
+  )
+
   const {
     connect: connectVoice,
     disconnect: disconnectVoice,
     startRecording: startVoiceRecording,
     stopRecording: stopVoiceRecording,
     interrupt: interruptVoice,
+    primePlayback: primeVoicePlayback,
     isConnected: isVoiceConnected,
     isRecording: isVoiceRecording,
     isSpeaking: isVoiceSpeaking,
@@ -163,28 +206,55 @@ function ChatPageContent() {
     model: voiceTurnOptions.model,
     useWebSearch: voiceTurnOptions.useWebSearch,
     useDocuments: voiceTurnOptions.useDocuments,
-    onTranscriptPartial: (text) => setTranscriptPartial(text),
+    onTranscriptPartial: (text) => {
+      const userMessageId = currentVoiceUserMessageIdRef.current
+      if (userMessageId) {
+        dispatch({ type: 'UPDATE_USER_MESSAGE', id: userMessageId, content: text })
+        return
+      }
+      setTranscriptPartial(text)
+    },
     onTranscriptFinal: (text) => {
       setTranscriptPartial('')
-      if (!text.trim()) return
-      const userMessage: Message = {
-        id: crypto.randomUUID(),
-        role: 'user',
-        content: text,
-        status: 'complete',
-        createdAt: new Date().toISOString(),
+      const trimmed = text.trim()
+      const userMessageId = currentVoiceUserMessageIdRef.current
+
+      if (userMessageId) {
+        if (trimmed) {
+          dispatch({
+            type: 'UPDATE_USER_MESSAGE',
+            id: userMessageId,
+            content: trimmed,
+            status: 'complete',
+          })
+        } else {
+          dispatch({ type: 'REMOVE_MESSAGE', id: userMessageId })
+        }
+        currentVoiceUserMessageIdRef.current = null
+        setIsVoiceTranscribing(false)
+      } else if (trimmed) {
+        dispatch({
+          type: 'ADD_USER_MESSAGE',
+          message: {
+            id: crypto.randomUUID(),
+            role: 'user',
+            content: trimmed,
+            status: 'complete',
+            createdAt: new Date().toISOString(),
+          },
+        })
       }
-      dispatch({ type: 'ADD_USER_MESSAGE', message: userMessage })
+
+      if (trimmed) {
+        startVoiceAssistantTurnRef.current()
+      }
     },
     onStart: () => {
+      if (!currentVoiceMessageIdRef.current) {
+        startVoiceAssistantTurnRef.current()
+        return
+      }
       setStreamingRetrievalActive(false)
-      const messageId = crypto.randomUUID()
-      currentVoiceMessageIdRef.current = messageId
-      dispatch({
-        type: 'START_MESSAGE',
-        id: messageId,
-        createdAt: new Date().toISOString(),
-      })
     },
     onDelta: (text) => {
       const id = currentVoiceMessageIdRef.current
@@ -212,15 +282,46 @@ function ChatPageContent() {
     onToolStart: () => setStreamingToolActive(true),
     onToolEnd: () => setStreamingToolActive(false),
     onInterrupted: () => {
+      clearVoiceUserTurn()
       const id = currentVoiceMessageIdRef.current
       if (id) {
         dispatch({ type: 'STOP_MESSAGE', id })
       }
       currentVoiceMessageIdRef.current = null
       setStreamingToolActive(false)
+      setStreamingRetrievalActive(false)
     },
-    onError: handleVoiceError,
+    onError: handleVoiceErrorWithCleanup,
   })
+
+  const startVoiceAssistantTurn = useCallback(() => {
+    if (currentVoiceMessageIdRef.current) {
+      return
+    }
+    const documentRetrievalPending = Boolean(voiceTurnOptions.useDocuments && ragEnabled)
+    const webSearchPending = Boolean(voiceTurnOptions.useWebSearch && toolsEnabled)
+    setStreamingRetrievalActive(documentRetrievalPending)
+    setStreamingToolActive(webSearchPending && !documentRetrievalPending)
+    const messageId = crypto.randomUUID()
+    currentVoiceMessageIdRef.current = messageId
+    dispatch({
+      type: 'START_MESSAGE',
+      id: messageId,
+      createdAt: new Date().toISOString(),
+    })
+    void primeVoicePlayback()
+  }, [
+    dispatch,
+    voiceTurnOptions.useDocuments,
+    voiceTurnOptions.useWebSearch,
+    ragEnabled,
+    toolsEnabled,
+    primeVoicePlayback,
+  ])
+
+  useEffect(() => {
+    startVoiceAssistantTurnRef.current = startVoiceAssistantTurn
+  }, [startVoiceAssistantTurn])
 
   useEffect(() => {
     if (!voiceModeEnabled || !state.activeSessionId) return
@@ -635,7 +736,8 @@ function ChatPageContent() {
     }
   }
 
-  const isVoiceActive = voiceModeEnabled && (isVoiceSpeaking || isVoiceRecording)
+  const isVoiceActive =
+    voiceModeEnabled && (isVoiceSpeaking || isVoiceRecording || isVoiceTranscribing)
   const isGenerating = isStreaming || isPending || isVoiceActive
   const assistantWaitingVariant =
     streamingToolActive || activityPhase === 'web_search'
@@ -736,8 +838,9 @@ function ChatPageContent() {
   }, [startVoiceRecording])
 
   const handleVoiceMicPressEnd = useCallback(() => {
+    beginVoiceUserTurn()
     stopVoiceRecording()
-  }, [stopVoiceRecording])
+  }, [beginVoiceUserTurn, stopVoiceRecording])
 
   const handleVoiceInterrupt = useCallback(() => {
     interruptVoice()
@@ -1249,7 +1352,7 @@ function ChatPageContent() {
             voiceModeEnabled={voiceModeEnabled}
             onVoiceModeChange={handleVoiceModeChange}
             onVoiceTurnOptionsChange={setVoiceTurnOptions}
-            transcriptPartial={transcriptPartial}
+            transcriptPartial={isVoiceTranscribing ? '' : transcriptPartial}
             isVoiceRecording={isVoiceRecording}
             isVoiceSpeaking={isVoiceSpeaking}
             isVoiceConnected={isVoiceConnected}

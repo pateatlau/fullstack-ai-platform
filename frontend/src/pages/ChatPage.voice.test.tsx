@@ -52,6 +52,7 @@ vi.mock('../hooks/useVoiceSession', () => ({
       startRecording: mockStartRecording,
       stopRecording: mockStopRecording,
       interrupt: mockInterrupt,
+      primePlayback: vi.fn().mockResolvedValue(undefined),
       isConnected: true,
       isRecording: false,
       isSpeaking: false,
@@ -183,6 +184,34 @@ describe('ChatPage voice integration', () => {
     })
   })
 
+  it('shows a transcribing user bubble immediately after mic release', async () => {
+    vi.stubGlobal('fetch', withVoiceEnabledFetchStub(sessionsFetchMock() as FetchMock, true))
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox', { name: 'Voice mode' })).not.toBeNull()
+      expect(screen.getByText('Voice chat')).not.toBeNull()
+    })
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('checkbox', { name: 'Voice mode' }))
+
+    await waitFor(() => {
+      expect(mockConnect).toHaveBeenCalled()
+    })
+
+    const micButton = screen.getByRole('button', { name: 'Hold to speak' })
+    await user.pointer([
+      { keys: '[MouseLeft>]', target: micButton },
+      { keys: '[/MouseLeft]', target: micButton },
+    ])
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Transcribing your speech')).not.toBeNull()
+    })
+  })
+
   it('maps voice transcript and assistant events into the message list', async () => {
     vi.stubGlobal('fetch', withVoiceEnabledFetchStub(sessionsFetchMock() as FetchMock, true))
 
@@ -212,10 +241,10 @@ describe('ChatPage voice integration', () => {
     })
     await waitFor(() => {
       expect(screen.getByText('Hello voice')).not.toBeNull()
+      expect(screen.getByLabelText('Assistant is typing')).not.toBeNull()
     })
 
     act(() => {
-      voiceCallbacks.onStart?.()
       voiceCallbacks.onDelta?.('Hi ')
       voiceCallbacks.onDelta?.('there')
       voiceCallbacks.onEnd?.({ tools_used: null, retrieved_chunk_count: null })

@@ -45,6 +45,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
   const clientRef = useRef<VoiceClient | null>(null)
   const playerRef = useRef<Pcm16AudioPlayer | null>(null)
   const micRef = useRef<MicCapture | null>(null)
+  const recordingGenerationRef = useRef(0)
   const turnStartedRef = useRef(false)
   const turnEndedRef = useRef(true)
   const speakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -174,6 +175,17 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
     [clearSpeakingTimer, scheduleSpeakingEnd, stopPlayback],
   )
 
+  const prepareMic = useCallback(async () => {
+    if (!micRef.current) {
+      micRef.current = new MicCapture()
+    }
+    try {
+      await micRef.current.prepare()
+    } catch {
+      // Permission may be granted on the first push-to-talk press instead.
+    }
+  }, [])
+
   const connect = useCallback(async () => {
     const {
       sessionId,
@@ -217,11 +229,24 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
     }
 
     await clientRef.current.connect(connectOptions)
+    if (!playerRef.current) {
+      playerRef.current = new Pcm16AudioPlayer()
+    }
+    void playerRef.current.prime()
     setIsConnected(true)
-  }, [handleServerMessage, clearSpeakingTimer])
+    void prepareMic()
+  }, [handleServerMessage, clearSpeakingTimer, prepareMic])
+
+  const primePlayback = useCallback(async () => {
+    if (!playerRef.current) {
+      playerRef.current = new Pcm16AudioPlayer()
+    }
+    await playerRef.current.prime()
+  }, [])
 
   const disconnect = useCallback(() => {
-    micRef.current?.stop(false)
+    recordingGenerationRef.current += 1
+    micRef.current?.dispose()
     micRef.current = null
     setIsRecording(false)
 
@@ -254,6 +279,8 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
     }
     await playerRef.current.prime()
 
+    const generation = (recordingGenerationRef.current += 1)
+
     await micRef.current.start({
       onChunk: (chunk, final) => {
         clientRef.current?.sendAudioChunk(chunk, final)
@@ -266,12 +293,16 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
         optionsRef.current.onError?.(error)
       },
     })
+
+    if (generation !== recordingGenerationRef.current) {
+      return
+    }
     setIsRecording(true)
   }, [])
 
   const stopRecording = useCallback(() => {
+    recordingGenerationRef.current += 1
     micRef.current?.stop(true)
-    micRef.current = null
     setIsRecording(false)
   }, [])
 
@@ -296,6 +327,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
     startRecording,
     stopRecording,
     interrupt,
+    primePlayback,
     isConnected,
     isRecording,
     isSpeaking,

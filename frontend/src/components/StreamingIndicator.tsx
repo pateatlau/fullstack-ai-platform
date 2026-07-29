@@ -1,9 +1,11 @@
 import { TypingDots } from './LoadingIndicator'
 
-export type StreamingIndicatorVariant = 'typing' | 'searching_web' | 'searching_documents'
+export type StreamingIndicatorVariant =
+  'typing' | 'transcribing' | 'searching_web' | 'searching_documents'
 
 const LABELS: Record<StreamingIndicatorVariant, { text: string; ariaLabel: string }> = {
   typing: { text: 'typing…', ariaLabel: 'Assistant is typing' },
+  transcribing: { text: 'transcribing…', ariaLabel: 'Transcribing your speech' },
   searching_web: { text: 'searching web…', ariaLabel: 'Assistant is searching the web' },
   searching_documents: {
     text: 'searching docs…',

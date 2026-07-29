@@ -148,7 +148,7 @@ export function VoiceModeControls({
         <button
           type="button"
           className={[
-            'inline-flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
+            'inline-flex min-h-11 min-w-11 shrink-0 cursor-pointer touch-none items-center justify-center rounded-xl border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
             isRecording
               ? 'border-danger-600/40 bg-danger-600/10 text-danger-600 animate-pulse'
               : 'border-brand-500/40 bg-brand-500/10 text-brand-600 hover:bg-brand-500/15',

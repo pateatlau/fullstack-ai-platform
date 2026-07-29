@@ -126,6 +126,32 @@ export function float32ToPcm16Bytes(samples: Float32Array): Uint8Array {
   return bytes
 }
 
+/** Linearly resample mono float samples to the voice wire-format sample rate. */
+export function resampleFloat32(
+  input: Float32Array,
+  inputRateHz: number,
+  outputRateHz: number,
+): Float32Array {
+  if (inputRateHz === outputRateHz || input.length === 0) {
+    return input
+  }
+
+  const ratio = inputRateHz / outputRateHz
+  const outputLength = Math.max(1, Math.round(input.length / ratio))
+  const output = new Float32Array(outputLength)
+
+  for (let index = 0; index < outputLength; index += 1) {
+    const srcIndex = index * ratio
+    const lowerIndex = Math.floor(srcIndex)
+    const fraction = srcIndex - lowerIndex
+    const sample0 = input[lowerIndex] ?? 0
+    const sample1 = input[Math.min(lowerIndex + 1, input.length - 1)] ?? sample0
+    output[index] = sample0 + fraction * (sample1 - sample0)
+  }
+
+  return output
+}
+
 /** Round-trips PCM16 bytes through the voice base64 codec. */
 export function pcm16RoundTrip(base64Payload: string): Uint8Array {
   return base64ToBytes(base64Payload)
@@ -349,12 +375,27 @@ export class MicCapture {
   private source: MediaStreamAudioSourceNode | null = null
   private pending = new Uint8Array(0)
   private maxChunkBytes = VOICE_MAX_CHUNK_BYTES
-  private stopped = false
+  private targetSampleRateHz = VOICE_SAMPLE_RATE_HZ
+  private captureGeneration = 0
+  private stopped = true
   private onChunk: ((chunk: Uint8Array, final: boolean) => void) | null = null
 
+  /** Acquire and keep the mic stream warm so push-to-talk starts immediately on mobile. */
+  async prepare(): Promise<void> {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Microphone capture is not supported in this browser')
+    }
+    if (this.mediaStream?.active) {
+      return
+    }
+    this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  }
+
   async start(options: MicCaptureOptions): Promise<void> {
+    const generation = (this.captureGeneration += 1)
     this.stopped = false
     this.maxChunkBytes = options.maxChunkBytes ?? VOICE_MAX_CHUNK_BYTES
+    this.targetSampleRateHz = options.sampleRateHz ?? VOICE_SAMPLE_RATE_HZ
     this.pending = new Uint8Array(0)
     this.onChunk = options.onChunk
 
@@ -365,7 +406,7 @@ export class MicCapture {
     }
 
     try {
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      await this.prepare()
     } catch (cause) {
       const error =
         cause instanceof Error ? cause : new Error('Microphone permission denied or unavailable')
@@ -373,17 +414,38 @@ export class MicCapture {
       throw error
     }
 
-    const sampleRateHz = options.sampleRateHz ?? VOICE_SAMPLE_RATE_HZ
-    this.audioContext = new AudioContext({ sampleRate: sampleRateHz })
-    this.source = this.audioContext.createMediaStreamSource(this.mediaStream)
+    if (this.stopped || generation !== this.captureGeneration) {
+      return
+    }
+
+    if (!this.audioContext || this.audioContext.state === 'closed') {
+      // Use the device native rate; mobile browsers often ignore a requested rate.
+      this.audioContext = new AudioContext()
+    }
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume()
+    }
+
+    if (this.stopped || generation !== this.captureGeneration) {
+      return
+    }
+
+    this.teardownCaptureGraph()
+
+    const inputRateHz = this.audioContext.sampleRate
+    this.source = this.audioContext.createMediaStreamSource(this.mediaStream!)
     this.processor = this.audioContext.createScriptProcessor(4096, 1, 1)
 
     this.processor.onaudioprocess = (event) => {
-      if (this.stopped) {
+      if (this.stopped || generation !== this.captureGeneration) {
         return
       }
       const input = event.inputBuffer.getChannelData(0)
-      const pcmBytes = float32ToPcm16Bytes(input)
+      const resampled =
+        inputRateHz === this.targetSampleRateHz
+          ? input
+          : resampleFloat32(input, inputRateHz, this.targetSampleRateHz)
+      const pcmBytes = float32ToPcm16Bytes(resampled)
       this.enqueueBytes(pcmBytes)
     }
 
@@ -392,6 +454,7 @@ export class MicCapture {
   }
 
   stop(final = true): void {
+    this.captureGeneration += 1
     this.stopped = true
 
     if (this.pending.length > 0) {
@@ -401,11 +464,13 @@ export class MicCapture {
       this.emitChunk(new Uint8Array(0), true)
     }
 
-    this.processor?.disconnect()
-    this.source?.disconnect()
-    this.processor = null
-    this.source = null
+    this.teardownCaptureGraph()
+    this.onChunk = null
+  }
 
+  /** Release mic hardware and audio resources when the voice session ends. */
+  dispose(): void {
+    this.stop(false)
     for (const track of this.mediaStream?.getTracks() ?? []) {
       track.stop()
     }
@@ -415,8 +480,13 @@ export class MicCapture {
       void this.audioContext.close()
       this.audioContext = null
     }
+  }
 
-    this.onChunk = null
+  private teardownCaptureGraph(): void {
+    this.processor?.disconnect()
+    this.source?.disconnect()
+    this.processor = null
+    this.source = null
   }
 
   private enqueueBytes(bytes: Uint8Array): void {
