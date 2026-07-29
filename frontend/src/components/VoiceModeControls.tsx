@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -38,7 +39,7 @@ function voiceChipClassName(active: boolean, disabled: boolean): string {
   ].join(' ')
 }
 
-export function VoiceModeControls({
+export const VoiceModeControls = memo(function VoiceModeControls({
   voiceModeEnabled,
   onVoiceModeChange,
   isRecording,
@@ -234,4 +235,4 @@ export function VoiceModeControls({
       ) : null}
     </div>
   )
-}
+})

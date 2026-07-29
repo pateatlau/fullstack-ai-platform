@@ -190,6 +190,124 @@ describe('Pcm16AudioPlayer', () => {
     expect(start).toHaveBeenCalled()
     player.stop()
   })
+
+  it('schedules consecutive chunks gaplessly without re-applying the initial lead', async () => {
+    const startAtTimes: number[] = []
+    const createBuffer = vi.fn((_channels: number, length: number, sampleRate: number) => ({
+      duration: length / sampleRate,
+      copyToChannel: vi.fn(),
+    }))
+    const createBufferSource = vi.fn(() => ({
+      buffer: null,
+      connect: vi.fn(),
+      start: (when: number) => {
+        startAtTimes.push(when)
+      },
+    }))
+    const resume = vi.fn().mockResolvedValue(undefined)
+
+    class MockAudioContext {
+      state = 'running'
+      currentTime = 0
+      destination = {}
+      createBuffer = createBuffer
+      createBufferSource = createBufferSource
+      resume = resume
+      close = vi.fn()
+    }
+
+    vi.stubGlobal('AudioContext', MockAudioContext)
+
+    const player = new Pcm16AudioPlayer()
+    const frame = float32ToPcm16Bytes(new Float32Array(2400).fill(0.1))
+
+    await player.playChunk(frame)
+    await player.playChunk(frame)
+
+    expect(startAtTimes).toHaveLength(2)
+    expect(startAtTimes[0]).toBeCloseTo(0.12, 3)
+    expect(startAtTimes[1]).toBeCloseTo(startAtTimes[0]! + 2400 / 24_000, 3)
+    player.stop()
+  })
+
+  it('uses a short catch-up lead after the queue underruns', async () => {
+    const startAtTimes: number[] = []
+    let currentTime = 0
+    const createBuffer = vi.fn((_channels: number, length: number, sampleRate: number) => ({
+      duration: length / sampleRate,
+      copyToChannel: vi.fn(),
+    }))
+    const createBufferSource = vi.fn(() => ({
+      buffer: null,
+      connect: vi.fn(),
+      start: (when: number) => {
+        startAtTimes.push(when)
+      },
+    }))
+    const resume = vi.fn().mockResolvedValue(undefined)
+
+    class MockAudioContext {
+      state = 'running'
+      get currentTime() {
+        return currentTime
+      }
+      destination = {}
+      createBuffer = createBuffer
+      createBufferSource = createBufferSource
+      resume = resume
+      close = vi.fn()
+    }
+
+    vi.stubGlobal('AudioContext', MockAudioContext)
+
+    const player = new Pcm16AudioPlayer()
+    const shortFrame = float32ToPcm16Bytes(new Float32Array(240).fill(0.1))
+
+    await player.playChunk(shortFrame)
+    currentTime = 1
+    await player.playChunk(shortFrame)
+
+    expect(startAtTimes).toHaveLength(2)
+    expect(startAtTimes[1]).toBeCloseTo(1.025, 3)
+    player.stop()
+  })
+
+  it('coalesces bursty small frames before scheduling', async () => {
+    const scheduledSampleCounts: number[] = []
+    const createBuffer = vi.fn((channels: number, length: number, sampleRate: number) => {
+      scheduledSampleCounts.push(length)
+      return {
+        duration: length / sampleRate,
+        copyToChannel: vi.fn(),
+      }
+    })
+    const createBufferSource = vi.fn(() => ({
+      buffer: null,
+      connect: vi.fn(),
+      start: vi.fn(),
+    }))
+    const resume = vi.fn().mockResolvedValue(undefined)
+
+    class MockAudioContext {
+      state = 'running'
+      currentTime = 0
+      destination = {}
+      createBuffer = createBuffer
+      createBufferSource = createBufferSource
+      resume = resume
+      close = vi.fn()
+    }
+
+    vi.stubGlobal('AudioContext', MockAudioContext)
+
+    const player = new Pcm16AudioPlayer()
+    const smallFrame = float32ToPcm16Bytes(new Float32Array(600).fill(0.1))
+
+    await Promise.all([player.playChunk(smallFrame), player.playChunk(smallFrame)])
+
+    expect(scheduledSampleCounts).toEqual([1200])
+    player.stop()
+  })
 })
 
 describe('MicCapture', () => {

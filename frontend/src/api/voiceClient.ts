@@ -291,16 +291,23 @@ export class VoiceClient {
 }
 
 /**
- * Lead time applied when the playback queue has drained. Assistant audio now
- * arrives as small network-paced frames, so scheduling the first one slightly
- * ahead absorbs jitter that would otherwise be audible as clipped syllables.
+ * Lead time before the first scheduled buffer in a playback session absorbs
+ * startup jitter without adding a full buffer on every network underrun.
  */
-const PLAYBACK_JITTER_BUFFER_SECONDS = 0.15
+const PLAYBACK_INITIAL_LEAD_SECONDS = 0.12
+
+/** Small lead when the queue drained and new audio arrives late. */
+const PLAYBACK_CATCHUP_LEAD_SECONDS = 0.025
+
+/** ~100 ms of PCM16 mono at 24 kHz — merges bursty WS frames without adding latency. */
+const PLAYBACK_COALESCE_TARGET_BYTES = 4_800
 
 /** Streams PCM16 chunks through the Web Audio API for assistant playback. */
 export class Pcm16AudioPlayer {
   private audioContext: AudioContext | null = null
   private nextStartTime = 0
+  private pendingPcm = new Uint8Array(0)
+  private drainPromise: Promise<void> = Promise.resolve()
   private readonly sampleRateHz: number
 
   constructor(sampleRateHz = VOICE_SAMPLE_RATE_HZ) {
@@ -309,28 +316,27 @@ export class Pcm16AudioPlayer {
 
   /** Milliseconds of scheduled audio still to play; `0` once the queue drains. */
   get remainingPlaybackMs(): number {
+    const pendingMs = (this.pendingPcm.length / 2 / this.sampleRateHz) * 1000
     if (!this.audioContext) {
-      return 0
+      return pendingMs
     }
-    return Math.max(0, (this.nextStartTime - this.audioContext.currentTime) * 1000)
+    const scheduledMs = Math.max(0, (this.nextStartTime - this.audioContext.currentTime) * 1000)
+    return scheduledMs + pendingMs
+  }
+
+  /** True while PCM is queued but not yet scheduled in the audio context. */
+  get hasPendingPlayback(): boolean {
+    return this.pendingPcm.length > 0
   }
 
   async playChunk(pcm16Bytes: Uint8Array): Promise<void> {
-    const context = await this.ensureContext()
-    const samples = pcm16BytesToFloat32(pcm16Bytes)
-    const buffer = context.createBuffer(1, samples.length, this.sampleRateHz)
-    buffer.copyToChannel(Float32Array.from(samples), 0)
+    if (pcm16Bytes.length === 0) {
+      return
+    }
 
-    const source = context.createBufferSource()
-    source.buffer = buffer
-    source.connect(context.destination)
-
-    const startAt = Math.max(
-      context.currentTime + PLAYBACK_JITTER_BUFFER_SECONDS,
-      this.nextStartTime,
-    )
-    source.start(startAt)
-    this.nextStartTime = startAt + buffer.duration
+    this.enqueuePcm(pcm16Bytes)
+    this.drainPromise = this.drainPromise.then(() => this.drainPending())
+    await this.drainPromise
   }
 
   /** Resume AudioContext during a user gesture so later TTS chunks can play. */
@@ -343,10 +349,62 @@ export class Pcm16AudioPlayer {
 
   stop(): void {
     this.nextStartTime = 0
+    this.pendingPcm = new Uint8Array(0)
+    this.drainPromise = Promise.resolve()
     if (this.audioContext) {
       void this.audioContext.close()
       this.audioContext = null
     }
+  }
+
+  private enqueuePcm(pcm16Bytes: Uint8Array): void {
+    const merged = new Uint8Array(this.pendingPcm.length + pcm16Bytes.length)
+    merged.set(this.pendingPcm, 0)
+    merged.set(pcm16Bytes, this.pendingPcm.length)
+    this.pendingPcm = merged
+  }
+
+  /** Drain coalesced PCM through the scheduler one buffer at a time. */
+  private async drainPending(): Promise<void> {
+    while (this.pendingPcm.length > 0) {
+      const context = await this.ensureContext()
+      const takeBytes = Math.min(this.pendingPcm.length, PLAYBACK_COALESCE_TARGET_BYTES)
+      const chunk = this.pendingPcm.slice(0, takeBytes)
+      this.pendingPcm = this.pendingPcm.slice(takeBytes)
+      this.scheduleBuffer(context, chunk)
+    }
+  }
+
+  private scheduleBuffer(context: AudioContext, pcm16Bytes: Uint8Array): void {
+    const alignedByteLength = pcm16Bytes.byteLength - (pcm16Bytes.byteLength % 2)
+    if (alignedByteLength <= 0) {
+      return
+    }
+
+    const alignedBytes =
+      alignedByteLength === pcm16Bytes.byteLength
+        ? pcm16Bytes
+        : pcm16Bytes.slice(0, alignedByteLength)
+
+    const samples = pcm16BytesToFloat32(alignedBytes)
+    const buffer = context.createBuffer(1, samples.length, this.sampleRateHz)
+    buffer.copyToChannel(samples, 0)
+
+    const source = context.createBufferSource()
+    source.buffer = buffer
+    source.connect(context.destination)
+
+    const queueAheadSeconds = this.nextStartTime - context.currentTime
+    const leadSeconds =
+      this.nextStartTime === 0
+        ? PLAYBACK_INITIAL_LEAD_SECONDS
+        : queueAheadSeconds <= 0
+          ? PLAYBACK_CATCHUP_LEAD_SECONDS
+          : 0
+
+    const startAt = Math.max(context.currentTime + leadSeconds, this.nextStartTime)
+    source.start(startAt)
+    this.nextStartTime = startAt + buffer.duration
   }
 
   private async ensureContext(): Promise<AudioContext> {

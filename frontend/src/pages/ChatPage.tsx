@@ -1371,7 +1371,7 @@ function ChatPageContent() {
             isVoiceRecording={isVoiceRecording}
             isVoiceSpeaking={isVoiceSpeaking}
             isVoiceConnected={isVoiceConnected}
-            onVoiceMicPressStart={() => void handleVoiceMicPressStart()}
+            onVoiceMicPressStart={handleVoiceMicPressStart}
             onVoiceMicPressEnd={handleVoiceMicPressEnd}
             onVoiceInterrupt={handleVoiceInterrupt}
             voiceMicError={voiceMicError}
