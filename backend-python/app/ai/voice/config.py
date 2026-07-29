@@ -24,6 +24,11 @@ class VoiceConfig(BaseModel):
     audio_encoding: str = "pcm16"
     max_chunk_bytes: int = Field(default=4096, ge=1)
 
+    # TTS latency tuning: lower values reduce time-to-first-audio.
+    tts_early_flush_chars: int = Field(default=40, ge=1)
+    tts_time_flush_ms: int = Field(default=500, ge=1)
+    tts_min_time_flush_chars: int = Field(default=12, ge=1)
+
     session_timeout_seconds: int = Field(default=300, ge=1)
     heartbeat_interval_seconds: int = Field(default=30, ge=1)
     max_utterance_seconds: int = Field(default=60, ge=1)
@@ -39,6 +44,9 @@ class VoiceConfig(BaseModel):
             sample_rate_hz=settings.voice_sample_rate_hz,
             audio_encoding=settings.voice_audio_encoding,
             max_chunk_bytes=settings.voice_max_chunk_bytes,
+            tts_early_flush_chars=settings.voice_tts_early_flush_chars,
+            tts_time_flush_ms=settings.voice_tts_time_flush_ms,
+            tts_min_time_flush_chars=settings.voice_tts_min_time_flush_chars,
             session_timeout_seconds=settings.voice_session_timeout_seconds,
             heartbeat_interval_seconds=settings.voice_heartbeat_interval_seconds,
             max_utterance_seconds=settings.voice_max_utterance_seconds,

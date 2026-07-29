@@ -25,6 +25,7 @@ function makeJwt(expSecondsFromNow: number): string {
 
 const mockConnect = vi.fn().mockResolvedValue(undefined)
 const mockDisconnect = vi.fn()
+const mockPrepareMic = vi.fn().mockResolvedValue(undefined)
 const mockStartRecording = vi.fn().mockResolvedValue(undefined)
 const mockStopRecording = vi.fn()
 const mockInterrupt = vi.fn()
@@ -49,9 +50,11 @@ vi.mock('../hooks/useVoiceSession', () => ({
     return {
       connect: mockConnect,
       disconnect: mockDisconnect,
+      prepareMic: mockPrepareMic,
       startRecording: mockStartRecording,
       stopRecording: mockStopRecording,
       interrupt: mockInterrupt,
+      primePlayback: vi.fn().mockResolvedValue(undefined),
       isConnected: true,
       isRecording: false,
       isSpeaking: false,
@@ -180,6 +183,35 @@ describe('ChatPage voice integration', () => {
 
     await waitFor(() => {
       expect(mockConnect).toHaveBeenCalledTimes(1)
+      expect(mockPrepareMic).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('shows a transcribing user bubble immediately after mic release', async () => {
+    vi.stubGlobal('fetch', withVoiceEnabledFetchStub(sessionsFetchMock() as FetchMock, true))
+
+    renderWithProviders(<ChatPage />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox', { name: 'Voice mode' })).not.toBeNull()
+      expect(screen.getByText('Voice chat')).not.toBeNull()
+    })
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('checkbox', { name: 'Voice mode' }))
+
+    await waitFor(() => {
+      expect(mockConnect).toHaveBeenCalled()
+    })
+
+    const micButton = screen.getByRole('button', { name: 'Hold to speak' })
+    await user.pointer([
+      { keys: '[MouseLeft>]', target: micButton },
+      { keys: '[/MouseLeft]', target: micButton },
+    ])
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Transcribing your speech')).not.toBeNull()
     })
   })
 
@@ -212,10 +244,10 @@ describe('ChatPage voice integration', () => {
     })
     await waitFor(() => {
       expect(screen.getByText('Hello voice')).not.toBeNull()
+      expect(screen.getByLabelText('Assistant is typing')).not.toBeNull()
     })
 
     act(() => {
-      voiceCallbacks.onStart?.()
       voiceCallbacks.onDelta?.('Hi ')
       voiceCallbacks.onDelta?.('there')
       voiceCallbacks.onEnd?.({ tools_used: null, retrieved_chunk_count: null })

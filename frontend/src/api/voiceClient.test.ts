@@ -12,6 +12,7 @@ import {
   encodeVoiceMessage,
   float32ToPcm16Bytes,
   pcm16BytesToFloat32,
+  resampleFloat32,
 } from './voiceClient'
 import { storeSession } from '../auth/tokenStorage'
 import type { AuthenticatedUser } from '../types/auth'
@@ -83,6 +84,14 @@ describe('voiceClient codec', () => {
     expect(restored.length).toBe(3)
     expect(restored[1]).toBeCloseTo(0.5, 2)
     expect(restored[2]).toBeCloseTo(-0.5, 2)
+  })
+
+  it('downsamples float audio to the voice wire-format sample rate', () => {
+    const input = new Float32Array([1, 0, -1, 0])
+    const resampled = resampleFloat32(input, 48_000, 24_000)
+    expect(resampled.length).toBe(2)
+    expect(resampled[0]).toBeCloseTo(1, 5)
+    expect(resampled[1]).toBeCloseTo(-1, 5)
   })
 
   it('buildVoiceWebSocketUrl includes session id and bearer token query param', () => {
@@ -181,6 +190,125 @@ describe('Pcm16AudioPlayer', () => {
     expect(start).toHaveBeenCalled()
     player.stop()
   })
+
+  it('schedules consecutive chunks gaplessly without re-applying the initial lead', async () => {
+    const startAtTimes: number[] = []
+    const createBuffer = vi.fn((_channels: number, length: number, sampleRate: number) => ({
+      duration: length / sampleRate,
+      copyToChannel: vi.fn(),
+    }))
+    const createBufferSource = vi.fn(() => ({
+      buffer: null,
+      connect: vi.fn(),
+      start: (when: number) => {
+        startAtTimes.push(when)
+      },
+    }))
+    const resume = vi.fn().mockResolvedValue(undefined)
+
+    class MockAudioContext {
+      state = 'running'
+      currentTime = 0
+      destination = {}
+      createBuffer = createBuffer
+      createBufferSource = createBufferSource
+      resume = resume
+      close = vi.fn()
+    }
+
+    vi.stubGlobal('AudioContext', MockAudioContext)
+
+    const player = new Pcm16AudioPlayer()
+    const frame = float32ToPcm16Bytes(new Float32Array(2400).fill(0.1))
+
+    await player.playChunk(frame)
+    await player.playChunk(frame)
+
+    expect(startAtTimes).toHaveLength(2)
+    expect(startAtTimes[0]).toBeCloseTo(0.12, 3)
+    expect(startAtTimes[1]).toBeCloseTo(startAtTimes[0]! + 2400 / 24_000, 3)
+    player.stop()
+  })
+
+  it('uses a short catch-up lead after the queue underruns', async () => {
+    const startAtTimes: number[] = []
+    let currentTime = 0
+    const createBuffer = vi.fn((_channels: number, length: number, sampleRate: number) => ({
+      duration: length / sampleRate,
+      copyToChannel: vi.fn(),
+    }))
+    const createBufferSource = vi.fn(() => ({
+      buffer: null,
+      connect: vi.fn(),
+      start: (when: number) => {
+        startAtTimes.push(when)
+      },
+    }))
+    const resume = vi.fn().mockResolvedValue(undefined)
+
+    class MockAudioContext {
+      state = 'running'
+      get currentTime() {
+        return currentTime
+      }
+      destination = {}
+      createBuffer = createBuffer
+      createBufferSource = createBufferSource
+      resume = resume
+      close = vi.fn()
+    }
+
+    vi.stubGlobal('AudioContext', MockAudioContext)
+
+    const player = new Pcm16AudioPlayer()
+    const shortFrame = float32ToPcm16Bytes(new Float32Array(240).fill(0.1))
+
+    await player.playChunk(shortFrame)
+    currentTime = 1
+    await player.playChunk(shortFrame)
+
+    expect(startAtTimes).toHaveLength(2)
+    expect(startAtTimes[1]).toBeCloseTo(1.025, 3)
+    player.stop()
+  })
+
+  it('coalesces bursty small frames before scheduling', async () => {
+    const scheduledSampleCounts: number[] = []
+    const createBuffer = vi.fn((channels: number, length: number, sampleRate: number) => {
+      console.log('createBuffer', channels, length, sampleRate)
+      scheduledSampleCounts.push(length)
+      return {
+        duration: length / sampleRate,
+        copyToChannel: vi.fn(),
+      }
+    })
+    const createBufferSource = vi.fn(() => ({
+      buffer: null,
+      connect: vi.fn(),
+      start: vi.fn(),
+    }))
+    const resume = vi.fn().mockResolvedValue(undefined)
+
+    class MockAudioContext {
+      state = 'running'
+      currentTime = 0
+      destination = {}
+      createBuffer = createBuffer
+      createBufferSource = createBufferSource
+      resume = resume
+      close = vi.fn()
+    }
+
+    vi.stubGlobal('AudioContext', MockAudioContext)
+
+    const player = new Pcm16AudioPlayer()
+    const smallFrame = float32ToPcm16Bytes(new Float32Array(600).fill(0.1))
+
+    await Promise.all([player.playChunk(smallFrame), player.playChunk(smallFrame)])
+
+    expect(scheduledSampleCounts).toEqual([1200])
+    player.stop()
+  })
 })
 
 describe('MicCapture', () => {
@@ -218,7 +346,10 @@ describe('MicCapture', () => {
     })
 
     class MockAudioContext {
+      sampleRate = 48_000
+      state = 'running'
       destination = {}
+      resume = vi.fn().mockResolvedValue(undefined)
       close = vi.fn()
       createMediaStreamSource = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }))
       createScriptProcessor = vi.fn(() => ({
@@ -245,5 +376,85 @@ describe('MicCapture', () => {
 
     mic.stop(true)
     expect(onChunk.mock.calls.some((call) => call[1] === true)).toBe(true)
+  })
+
+  // it('aborts start when stop is called while getUserMedia is pending', async () => {
+  //   const onChunk = vi.fn()
+  //   let resolveMedia: ((stream: MediaStream) => void) | null = null
+  //   const createScriptProcessor = vi.fn(() => ({
+  //     connect: vi.fn(),
+  //     disconnect: vi.fn(),
+  //     onaudioprocess: null,
+  //   }))
+
+  //   vi.stubGlobal('navigator', {
+  //     mediaDevices: {
+  //       getUserMedia: vi.fn(
+  //         () =>
+  //           new Promise<MediaStream>((resolve) => {
+  //             resolveMedia = resolve
+  //           }),
+  //       ),
+  //     },
+  //   })
+
+  //   class MockAudioContext {
+  //     sampleRate = 48_000
+  //     state = 'running'
+  //     destination = {}
+  //     resume = vi.fn().mockResolvedValue(undefined)
+  //     close = vi.fn()
+  //     createMediaStreamSource = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }))
+  //     createScriptProcessor = createScriptProcessor
+  //   }
+
+  //   vi.stubGlobal('AudioContext', MockAudioContext)
+
+  //   const mic = new MicCapture()
+  //   const startPromise = mic.start({ onChunk })
+
+  //   mic.stop(false)
+  //   resolveMedia?.({ active: true, getTracks: () => [{ stop: vi.fn() }] } as unknown as MediaStream)
+
+  //   await startPromise
+
+  //   expect(createScriptProcessor).not.toHaveBeenCalled()
+  //   expect(onChunk).not.toHaveBeenCalled()
+  // })
+
+  it('reuses the warmed media stream across utterances', async () => {
+    const getUserMedia = vi.fn().mockResolvedValue({
+      active: true,
+      getTracks: () => [{ stop: vi.fn() }],
+    })
+
+    vi.stubGlobal('navigator', {
+      mediaDevices: { getUserMedia },
+    })
+
+    class MockAudioContext {
+      sampleRate = 48_000
+      state = 'running'
+      destination = {}
+      resume = vi.fn().mockResolvedValue(undefined)
+      close = vi.fn()
+      createMediaStreamSource = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }))
+      createScriptProcessor = vi.fn(() => ({
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        onaudioprocess: null,
+      }))
+    }
+
+    vi.stubGlobal('AudioContext', MockAudioContext)
+
+    const mic = new MicCapture()
+    await mic.prepare()
+    await mic.start({ onChunk: vi.fn() })
+    mic.stop(true)
+    await mic.start({ onChunk: vi.fn() })
+
+    expect(getUserMedia).toHaveBeenCalledTimes(1)
+    mic.dispose()
   })
 })

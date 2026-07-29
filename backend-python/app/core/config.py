@@ -160,13 +160,18 @@ class Settings(BaseSettings):
     # V2 Epic 4: Voice provider and model configuration.
     voice_provider: str = "openai"
     voice_stt_model: str = "whisper-1"
-    voice_tts_model: str = "tts-1"
+    voice_tts_model: str = "tts-1"  # Prefer tts-1 over tts-1-hd for lower latency.
     voice_tts_voice: str = "alloy"
 
     # V2 Epic 4: Voice audio format and streaming configuration.
     voice_sample_rate_hz: int = Field(default=24000, ge=1)
     voice_audio_encoding: str = "pcm16"
     voice_max_chunk_bytes: int = Field(default=4096, ge=1)
+
+    # V2 Epic 4: TTS flush tuning (lower time-to-first-audio during voice replies).
+    voice_tts_early_flush_chars: int = Field(default=40, ge=1)
+    voice_tts_time_flush_ms: int = Field(default=500, ge=1)
+    voice_tts_min_time_flush_chars: int = Field(default=12, ge=1)
 
     # V2 Epic 4: Voice session lifecycle and timeout configuration.
     voice_session_timeout_seconds: int = Field(default=300, ge=1)

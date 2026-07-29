@@ -24,6 +24,8 @@ export const initialChatState: ChatState = {
 
 export type ChatAction =
   | { type: 'ADD_USER_MESSAGE'; message: Message }
+  | { type: 'UPDATE_USER_MESSAGE'; id: string; content?: string; status?: Message['status'] }
+  | { type: 'REMOVE_MESSAGE'; id: string }
   | { type: 'CLEAR_ERROR' }
   | { type: 'SET_ERROR'; message: string }
   | { type: 'START_MESSAGE'; id: string; createdAt: string }
@@ -51,6 +53,26 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         messages: [...state.messages, action.message],
+      }
+
+    case 'UPDATE_USER_MESSAGE':
+      return {
+        ...state,
+        messages: state.messages.map((message) =>
+          message.id === action.id && message.role === 'user'
+            ? {
+                ...message,
+                ...(action.content !== undefined ? { content: action.content } : {}),
+                ...(action.status !== undefined ? { status: action.status } : {}),
+              }
+            : message,
+        ),
+      }
+
+    case 'REMOVE_MESSAGE':
+      return {
+        ...state,
+        messages: state.messages.filter((message) => message.id !== action.id),
       }
 
     case 'CLEAR_ERROR':

@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -38,7 +39,7 @@ function voiceChipClassName(active: boolean, disabled: boolean): string {
   ].join(' ')
 }
 
-export function VoiceModeControls({
+export const VoiceModeControls = memo(function VoiceModeControls({
   voiceModeEnabled,
   onVoiceModeChange,
   isRecording,
@@ -58,17 +59,41 @@ export function VoiceModeControls({
   const showMic = voiceModeEnabled
   const showInterrupt = voiceModeEnabled && isSpeaking
 
+  const releaseGlobalPointerListenersRef = useRef<(() => void) | null>(null)
+
+  const clearGlobalPointerListeners = useCallback(() => {
+    releaseGlobalPointerListenersRef.current?.()
+    releaseGlobalPointerListenersRef.current = null
+  }, [])
+
   const beginMicPress = useCallback(() => {
     if (micDisabled || micHeldRef.current) return
     micHeldRef.current = true
     onMicPressStart()
-  }, [micDisabled, onMicPressStart])
+
+    // The permission dialog can steal pointer capture; listen globally so release
+    // still ends the utterance even when pointerup never reaches this button.
+    const endOnGlobalPointerEnd = () => {
+      clearGlobalPointerListeners()
+      if (micHeldRef.current) {
+        micHeldRef.current = false
+        onMicPressEnd()
+      }
+    }
+    window.addEventListener('pointerup', endOnGlobalPointerEnd)
+    window.addEventListener('pointercancel', endOnGlobalPointerEnd)
+    releaseGlobalPointerListenersRef.current = () => {
+      window.removeEventListener('pointerup', endOnGlobalPointerEnd)
+      window.removeEventListener('pointercancel', endOnGlobalPointerEnd)
+    }
+  }, [clearGlobalPointerListeners, micDisabled, onMicPressEnd, onMicPressStart])
 
   const endMicPress = useCallback(() => {
     if (!micHeldRef.current) return
     micHeldRef.current = false
+    clearGlobalPointerListeners()
     onMicPressEnd()
-  }, [onMicPressEnd])
+  }, [clearGlobalPointerListeners, onMicPressEnd])
 
   const handleMicPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -117,8 +142,19 @@ export function VoiceModeControls({
   )
 
   const handleMicBlur = useCallback(() => {
+    // Blur also fires when the browser permission sheet opens; only treat it as
+    // release once capture is actually running.
+    if (!isRecording) return
     endMicPress()
-  }, [endMicPress])
+  }, [endMicPress, isRecording])
+
+  const handleMicLostPointerCapture = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (!isRecording) return
+      handleMicPointerUp(event)
+    },
+    [handleMicPointerUp, isRecording],
+  )
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -148,7 +184,7 @@ export function VoiceModeControls({
         <button
           type="button"
           className={[
-            'inline-flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
+            'inline-flex min-h-11 min-w-11 shrink-0 cursor-pointer touch-none items-center justify-center rounded-xl border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
             isRecording
               ? 'border-danger-600/40 bg-danger-600/10 text-danger-600 animate-pulse'
               : 'border-brand-500/40 bg-brand-500/10 text-brand-600 hover:bg-brand-500/15',
@@ -161,7 +197,7 @@ export function VoiceModeControls({
           onPointerDown={handleMicPointerDown}
           onPointerUp={handleMicPointerUp}
           onPointerCancel={handleMicPointerUp}
-          onLostPointerCapture={handleMicPointerUp}
+          onLostPointerCapture={handleMicLostPointerCapture}
           onKeyDown={handleMicKeyDown}
           onKeyUp={handleMicKeyUp}
           onBlur={handleMicBlur}
@@ -199,4 +235,4 @@ export function VoiceModeControls({
       ) : null}
     </div>
   )
-}
+})

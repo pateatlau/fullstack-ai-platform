@@ -2,7 +2,7 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Pcm16AudioPlayer } from '../api/voiceClient'
+import { Pcm16AudioPlayer, MicCapture } from '../api/voiceClient'
 import { useVoiceSession } from './useVoiceSession'
 
 type MockWebSocketListener = ((event: Event | MessageEvent | CloseEvent) => void) | null
@@ -220,6 +220,7 @@ describe('useVoiceSession', () => {
   it('keeps isSpeaking set until queued audio finishes after turn_complete', async () => {
     vi.spyOn(Pcm16AudioPlayer.prototype, 'playChunk').mockResolvedValue()
     vi.spyOn(Pcm16AudioPlayer.prototype, 'remainingPlaybackMs', 'get').mockReturnValue(500)
+    vi.spyOn(Pcm16AudioPlayer.prototype, 'hasPendingPlayback', 'get').mockReturnValue(false)
 
     const { result } = renderHook(() =>
       useVoiceSession({
@@ -238,11 +239,11 @@ describe('useVoiceSession', () => {
       expect(result.current.isSpeaking).toBe(true)
     })
 
-    // `turn_complete` mirrors the SSE `end` frame and lands while the tail of
-    // the reply is still playing, so the interrupt affordance must stay up.
+    vi.useFakeTimers()
     socket?.emitMessage(JSON.stringify({ type: 'turn_complete' }))
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(250)
     expect(result.current.isSpeaking).toBe(true)
+    vi.useRealTimers()
   })
 
   it('clears isSpeaking when audio playback fails after turn_complete', async () => {
@@ -250,6 +251,7 @@ describe('useVoiceSession', () => {
       new Error('AudioContext failed'),
     )
     vi.spyOn(Pcm16AudioPlayer.prototype, 'remainingPlaybackMs', 'get').mockReturnValue(0)
+    vi.spyOn(Pcm16AudioPlayer.prototype, 'hasPendingPlayback', 'get').mockReturnValue(false)
 
     const { result } = renderHook(() =>
       useVoiceSession({
@@ -262,12 +264,99 @@ describe('useVoiceSession', () => {
     await result.current.connect()
     const socket = MockWebSocket.instances[0]
 
-    socket?.emitMessage(JSON.stringify({ type: 'assistant_text_delta', text: 'Hello' }))
-    socket?.emitMessage(JSON.stringify({ type: 'turn_complete' }))
-    socket?.emitMessage(JSON.stringify({ type: 'audio_out', seq: 0, payload_b64: 'AAA=' }))
-
-    await waitFor(() => {
-      expect(result.current.isSpeaking).toBe(false)
+    vi.useFakeTimers()
+    act(() => {
+      socket?.emitMessage(JSON.stringify({ type: 'assistant_text_delta', text: 'Hello' }))
+      socket?.emitMessage(JSON.stringify({ type: 'turn_complete' }))
+      socket?.emitMessage(JSON.stringify({ type: 'audio_out', seq: 0, payload_b64: 'AAA=' }))
     })
+    await act(async () => {
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(3_200)
+    })
+
+    expect(result.current.isSpeaking).toBe(false)
+    vi.useRealTimers()
+  })
+
+  it('keeps isSpeaking during TTS inter-segment gaps after turn_complete', async () => {
+    vi.spyOn(Pcm16AudioPlayer.prototype, 'playChunk').mockResolvedValue()
+    vi.spyOn(Pcm16AudioPlayer.prototype, 'remainingPlaybackMs', 'get').mockReturnValue(0)
+    vi.spyOn(Pcm16AudioPlayer.prototype, 'hasPendingPlayback', 'get').mockReturnValue(false)
+
+    const { result } = renderHook(() =>
+      useVoiceSession({
+        sessionId: 'chat-1',
+        accessToken: 'jwt',
+        webSocketFactory: (url) => new MockWebSocket(url) as unknown as WebSocket,
+      }),
+    )
+
+    await result.current.connect()
+    const socket = MockWebSocket.instances[0]
+
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+
+    act(() => {
+      socket?.emitMessage(JSON.stringify({ type: 'assistant_text_delta', text: 'Hello' }))
+      socket?.emitMessage(JSON.stringify({ type: 'audio_out', seq: 0, payload_b64: 'AAA=' }))
+      socket?.emitMessage(JSON.stringify({ type: 'turn_complete' }))
+    })
+    await act(async () => {
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+    expect(result.current.isSpeaking).toBe(true)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000)
+    })
+    expect(result.current.isSpeaking).toBe(false)
+    vi.useRealTimers()
+  })
+
+  it('defers stop until mic start finishes when permission is still pending', async () => {
+    let resolveStart: (() => void) | null = null
+    const stop = vi.fn()
+    vi.spyOn(MicCapture.prototype, 'prepare').mockResolvedValue(undefined)
+    vi.spyOn(MicCapture.prototype, 'start').mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve
+        }),
+    )
+    vi.spyOn(MicCapture.prototype, 'stop').mockImplementation(stop)
+    vi.spyOn(Pcm16AudioPlayer.prototype, 'prime').mockResolvedValue()
+
+    const { result } = renderHook(() =>
+      useVoiceSession({
+        sessionId: 'chat-1',
+        accessToken: 'jwt',
+        webSocketFactory: (url) => new MockWebSocket(url) as unknown as WebSocket,
+      }),
+    )
+
+    await result.current.connect()
+
+    let startPromise: Promise<void> | undefined
+    await act(async () => {
+      startPromise = result.current.startRecording()
+      await Promise.resolve()
+    })
+
+    act(() => {
+      result.current.stopRecording()
+    })
+    expect(stop).not.toHaveBeenCalled()
+    expect(result.current.isRecording).toBe(false)
+
+    await act(async () => {
+      resolveStart?.()
+      await startPromise
+    })
+
+    expect(stop).toHaveBeenCalledWith(true)
+    expect(result.current.isRecording).toBe(false)
   })
 })

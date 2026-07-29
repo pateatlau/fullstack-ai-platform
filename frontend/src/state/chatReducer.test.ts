@@ -20,6 +20,43 @@ describe('chatReducer', () => {
     expect(state.messages).toEqual([userMessage])
   })
 
+  it('UPDATE_USER_MESSAGE updates a user message in place', () => {
+    const withUser = chatReducer(initialChatState, {
+      type: 'ADD_USER_MESSAGE',
+      message: {
+        id: 'user_1',
+        role: 'user',
+        content: '',
+        status: 'streaming',
+        createdAt: 't1',
+      },
+    })
+
+    const updated = chatReducer(withUser, {
+      type: 'UPDATE_USER_MESSAGE',
+      id: 'user_1',
+      content: 'Hello',
+      status: 'complete',
+    })
+
+    expect(updated.messages[0]).toMatchObject({
+      id: 'user_1',
+      role: 'user',
+      content: 'Hello',
+      status: 'complete',
+    })
+  })
+
+  it('REMOVE_MESSAGE drops the matching message', () => {
+    const withUser = chatReducer(initialChatState, {
+      type: 'ADD_USER_MESSAGE',
+      message: userMessage,
+    })
+
+    const cleared = chatReducer(withUser, { type: 'REMOVE_MESSAGE', id: 'user-1' })
+    expect(cleared.messages).toEqual([])
+  })
+
   it('SET_ERROR and CLEAR_ERROR update the top-level error banner state', () => {
     const withError = chatReducer(initialChatState, {
       type: 'SET_ERROR',

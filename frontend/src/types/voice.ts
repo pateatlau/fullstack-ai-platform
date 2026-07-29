@@ -1,3 +1,5 @@
+import type { Citation } from './citation'
+
 /** Voice WebSocket protocol types (mirrors backend ``app/schemas/voice.py``). */
 
 /** Client → server messages. */
@@ -21,7 +23,7 @@ export type VoiceServerMessage =
       type: 'turn_complete'
       tools_used?: string[] | null
       retrieved_chunk_count?: number | null
-      citations?: Record<string, unknown>[] | null
+      citations?: Citation[] | null
     }
   | { type: 'heartbeat'; ts: number }
   | { type: 'session_closed'; reason: string }
@@ -57,5 +59,5 @@ export function isVoiceServerMessage(message: VoiceWsMessage): message is VoiceS
 export interface TurnCompleteMetadata {
   tools_used?: string[] | null
   retrieved_chunk_count?: number | null
-  citations?: Record<string, unknown>[] | null
+  citations?: Citation[] | null
 }

@@ -126,6 +126,32 @@ export function float32ToPcm16Bytes(samples: Float32Array): Uint8Array {
   return bytes
 }
 
+/** Linearly resample mono float samples to the voice wire-format sample rate. */
+export function resampleFloat32(
+  input: Float32Array,
+  inputRateHz: number,
+  outputRateHz: number,
+): Float32Array {
+  if (inputRateHz === outputRateHz || input.length === 0) {
+    return input
+  }
+
+  const ratio = inputRateHz / outputRateHz
+  const outputLength = Math.max(1, Math.round(input.length / ratio))
+  const output = new Float32Array(outputLength)
+
+  for (let index = 0; index < outputLength; index += 1) {
+    const srcIndex = index * ratio
+    const lowerIndex = Math.floor(srcIndex)
+    const fraction = srcIndex - lowerIndex
+    const sample0 = input[lowerIndex] ?? 0
+    const sample1 = input[Math.min(lowerIndex + 1, input.length - 1)] ?? sample0
+    output[index] = sample0 + fraction * (sample1 - sample0)
+  }
+
+  return output
+}
+
 /** Round-trips PCM16 bytes through the voice base64 codec. */
 export function pcm16RoundTrip(base64Payload: string): Uint8Array {
   return base64ToBytes(base64Payload)
@@ -265,16 +291,23 @@ export class VoiceClient {
 }
 
 /**
- * Lead time applied when the playback queue has drained. Assistant audio now
- * arrives as small network-paced frames, so scheduling the first one slightly
- * ahead absorbs jitter that would otherwise be audible as clipped syllables.
+ * Lead time before the first scheduled buffer in a playback session absorbs
+ * startup jitter without adding a full buffer on every network underrun.
  */
-const PLAYBACK_JITTER_BUFFER_SECONDS = 0.15
+const PLAYBACK_INITIAL_LEAD_SECONDS = 0.12
+
+/** Small lead when the queue drained and new audio arrives late. */
+const PLAYBACK_CATCHUP_LEAD_SECONDS = 0.025
+
+/** ~100 ms of PCM16 mono at 24 kHz — merges bursty WS frames without adding latency. */
+const PLAYBACK_COALESCE_TARGET_BYTES = 4_800
 
 /** Streams PCM16 chunks through the Web Audio API for assistant playback. */
 export class Pcm16AudioPlayer {
   private audioContext: AudioContext | null = null
   private nextStartTime = 0
+  private pendingPcm = new Uint8Array(0)
+  private drainPromise: Promise<void> = Promise.resolve()
   private readonly sampleRateHz: number
 
   constructor(sampleRateHz = VOICE_SAMPLE_RATE_HZ) {
@@ -283,28 +316,27 @@ export class Pcm16AudioPlayer {
 
   /** Milliseconds of scheduled audio still to play; `0` once the queue drains. */
   get remainingPlaybackMs(): number {
+    const pendingMs = (this.pendingPcm.length / 2 / this.sampleRateHz) * 1000
     if (!this.audioContext) {
-      return 0
+      return pendingMs
     }
-    return Math.max(0, (this.nextStartTime - this.audioContext.currentTime) * 1000)
+    const scheduledMs = Math.max(0, (this.nextStartTime - this.audioContext.currentTime) * 1000)
+    return scheduledMs + pendingMs
+  }
+
+  /** True while PCM is queued but not yet scheduled in the audio context. */
+  get hasPendingPlayback(): boolean {
+    return this.pendingPcm.length > 0
   }
 
   async playChunk(pcm16Bytes: Uint8Array): Promise<void> {
-    const context = await this.ensureContext()
-    const samples = pcm16BytesToFloat32(pcm16Bytes)
-    const buffer = context.createBuffer(1, samples.length, this.sampleRateHz)
-    buffer.copyToChannel(Float32Array.from(samples), 0)
+    if (pcm16Bytes.length === 0) {
+      return
+    }
 
-    const source = context.createBufferSource()
-    source.buffer = buffer
-    source.connect(context.destination)
-
-    const startAt = Math.max(
-      context.currentTime + PLAYBACK_JITTER_BUFFER_SECONDS,
-      this.nextStartTime,
-    )
-    source.start(startAt)
-    this.nextStartTime = startAt + buffer.duration
+    this.enqueuePcm(pcm16Bytes)
+    this.drainPromise = this.drainPromise.then(() => this.drainPending())
+    await this.drainPromise
   }
 
   /** Resume AudioContext during a user gesture so later TTS chunks can play. */
@@ -317,10 +349,64 @@ export class Pcm16AudioPlayer {
 
   stop(): void {
     this.nextStartTime = 0
+    this.pendingPcm = new Uint8Array(0)
+    this.drainPromise = Promise.resolve()
     if (this.audioContext) {
       void this.audioContext.close()
       this.audioContext = null
     }
+  }
+
+  private enqueuePcm(pcm16Bytes: Uint8Array): void {
+    const merged = new Uint8Array(this.pendingPcm.length + pcm16Bytes.length)
+    merged.set(this.pendingPcm, 0)
+    merged.set(pcm16Bytes, this.pendingPcm.length)
+    this.pendingPcm = merged
+  }
+
+  /** Drain coalesced PCM through the scheduler one buffer at a time. */
+  private async drainPending(): Promise<void> {
+    while (this.pendingPcm.length > 0) {
+      const context = await this.ensureContext()
+      const takeBytes = Math.min(this.pendingPcm.length, PLAYBACK_COALESCE_TARGET_BYTES)
+      const chunk = this.pendingPcm.slice(0, takeBytes)
+      this.pendingPcm = this.pendingPcm.slice(takeBytes)
+      this.scheduleBuffer(context, chunk)
+    }
+  }
+
+  private scheduleBuffer(context: AudioContext, pcm16Bytes: Uint8Array): void {
+    const alignedByteLength = pcm16Bytes.byteLength - (pcm16Bytes.byteLength % 2)
+    if (alignedByteLength <= 0) {
+      return
+    }
+
+    const alignedBytes =
+      alignedByteLength === pcm16Bytes.byteLength
+        ? pcm16Bytes
+        : pcm16Bytes.slice(0, alignedByteLength)
+
+    const samples = pcm16BytesToFloat32(alignedBytes)
+    const buffer = context.createBuffer(1, samples.length, this.sampleRateHz)
+    // buffer.copyToChannel(samples, 0)
+    // Reconstruct the array to force the underlying buffer type to ArrayBuffer
+    buffer.copyToChannel(new Float32Array(samples), 0)
+
+    const source = context.createBufferSource()
+    source.buffer = buffer
+    source.connect(context.destination)
+
+    const queueAheadSeconds = this.nextStartTime - context.currentTime
+    const leadSeconds =
+      this.nextStartTime === 0
+        ? PLAYBACK_INITIAL_LEAD_SECONDS
+        : queueAheadSeconds <= 0
+          ? PLAYBACK_CATCHUP_LEAD_SECONDS
+          : 0
+
+    const startAt = Math.max(context.currentTime + leadSeconds, this.nextStartTime)
+    source.start(startAt)
+    this.nextStartTime = startAt + buffer.duration
   }
 
   private async ensureContext(): Promise<AudioContext> {
@@ -349,12 +435,27 @@ export class MicCapture {
   private source: MediaStreamAudioSourceNode | null = null
   private pending = new Uint8Array(0)
   private maxChunkBytes = VOICE_MAX_CHUNK_BYTES
-  private stopped = false
+  private targetSampleRateHz = VOICE_SAMPLE_RATE_HZ
+  private captureGeneration = 0
+  private stopped = true
   private onChunk: ((chunk: Uint8Array, final: boolean) => void) | null = null
 
+  /** Acquire and keep the mic stream warm so push-to-talk starts immediately on mobile. */
+  async prepare(): Promise<void> {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Microphone capture is not supported in this browser')
+    }
+    if (this.mediaStream?.active) {
+      return
+    }
+    this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  }
+
   async start(options: MicCaptureOptions): Promise<void> {
+    const generation = (this.captureGeneration += 1)
     this.stopped = false
     this.maxChunkBytes = options.maxChunkBytes ?? VOICE_MAX_CHUNK_BYTES
+    this.targetSampleRateHz = options.sampleRateHz ?? VOICE_SAMPLE_RATE_HZ
     this.pending = new Uint8Array(0)
     this.onChunk = options.onChunk
 
@@ -365,7 +466,7 @@ export class MicCapture {
     }
 
     try {
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      await this.prepare()
     } catch (cause) {
       const error =
         cause instanceof Error ? cause : new Error('Microphone permission denied or unavailable')
@@ -373,17 +474,38 @@ export class MicCapture {
       throw error
     }
 
-    const sampleRateHz = options.sampleRateHz ?? VOICE_SAMPLE_RATE_HZ
-    this.audioContext = new AudioContext({ sampleRate: sampleRateHz })
-    this.source = this.audioContext.createMediaStreamSource(this.mediaStream)
+    if (this.stopped || generation !== this.captureGeneration) {
+      return
+    }
+
+    if (!this.audioContext || this.audioContext.state === 'closed') {
+      // Use the device native rate; mobile browsers often ignore a requested rate.
+      this.audioContext = new AudioContext()
+    }
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume()
+    }
+
+    if (this.stopped || generation !== this.captureGeneration) {
+      return
+    }
+
+    this.teardownCaptureGraph()
+
+    const inputRateHz = this.audioContext.sampleRate
+    this.source = this.audioContext.createMediaStreamSource(this.mediaStream!)
     this.processor = this.audioContext.createScriptProcessor(4096, 1, 1)
 
     this.processor.onaudioprocess = (event) => {
-      if (this.stopped) {
+      if (this.stopped || generation !== this.captureGeneration) {
         return
       }
       const input = event.inputBuffer.getChannelData(0)
-      const pcmBytes = float32ToPcm16Bytes(input)
+      const resampled =
+        inputRateHz === this.targetSampleRateHz
+          ? input
+          : resampleFloat32(input, inputRateHz, this.targetSampleRateHz)
+      const pcmBytes = float32ToPcm16Bytes(resampled)
       this.enqueueBytes(pcmBytes)
     }
 
@@ -392,6 +514,7 @@ export class MicCapture {
   }
 
   stop(final = true): void {
+    this.captureGeneration += 1
     this.stopped = true
 
     if (this.pending.length > 0) {
@@ -401,11 +524,13 @@ export class MicCapture {
       this.emitChunk(new Uint8Array(0), true)
     }
 
-    this.processor?.disconnect()
-    this.source?.disconnect()
-    this.processor = null
-    this.source = null
+    this.teardownCaptureGraph()
+    this.onChunk = null
+  }
 
+  /** Release mic hardware and audio resources when the voice session ends. */
+  dispose(): void {
+    this.stop(false)
     for (const track of this.mediaStream?.getTracks() ?? []) {
       track.stop()
     }
@@ -415,8 +540,13 @@ export class MicCapture {
       void this.audioContext.close()
       this.audioContext = null
     }
+  }
 
-    this.onChunk = null
+  private teardownCaptureGraph(): void {
+    this.processor?.disconnect()
+    this.source?.disconnect()
+    this.processor = null
+    this.source = null
   }
 
   private enqueueBytes(bytes: Uint8Array): void {

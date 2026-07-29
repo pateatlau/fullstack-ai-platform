@@ -10,6 +10,12 @@ import {
 import type { VoiceServerMessage } from '../types/voice'
 import type { TurnCompleteMetadata } from '../types/voice'
 
+const SPEAKING_END_POLL_MS = 100
+const SPEAKING_END_IDLE_POLLS = 5
+const SPEAKING_END_GRACE_MS = 50
+/** Keep interrupt visible across backend TTS segment gaps after the text stream ends. */
+const TTS_INTER_SEGMENT_GAP_MS = 2_500
+
 export interface UseVoiceSessionOptions {
   sessionId: string | null
   enabled?: boolean
@@ -45,9 +51,15 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
   const clientRef = useRef<VoiceClient | null>(null)
   const playerRef = useRef<Pcm16AudioPlayer | null>(null)
   const micRef = useRef<MicCapture | null>(null)
+  const recordingGenerationRef = useRef(0)
+  const micStartPromiseRef = useRef<Promise<void> | null>(null)
+  const micStartInFlightRef = useRef(false)
+  const pendingStopRef = useRef(false)
   const turnStartedRef = useRef(false)
   const turnEndedRef = useRef(true)
   const speakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isSpeakingRef = useRef(false)
+  const lastAudioReceivedAtRef = useRef(0)
   const audioSuppressedRef = useRef(false)
   const optionsRef = useRef(options)
 
@@ -62,6 +74,22 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
     }
   }, [])
 
+  const markSpeaking = useCallback(() => {
+    if (isSpeakingRef.current) {
+      return
+    }
+    isSpeakingRef.current = true
+    setIsSpeaking(true)
+  }, [])
+
+  const clearSpeaking = useCallback(() => {
+    if (!isSpeakingRef.current) {
+      return
+    }
+    isSpeakingRef.current = false
+    setIsSpeaking(false)
+  }, [])
+
   /**
    * Settle `isSpeaking` once the text stream ended *and* queued audio ran out.
    * `turn_complete` mirrors the SSE `end` frame, so it lands while the tail of
@@ -69,25 +97,46 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
    */
   const scheduleSpeakingEnd = useCallback(() => {
     clearSpeakingTimer()
-    if (!turnEndedRef.current) return
-
-    const remainingMs = playerRef.current?.remainingPlaybackMs ?? 0
-    if (remainingMs <= 0) {
-      setIsSpeaking(false)
+    if (!turnEndedRef.current) {
       return
     }
-    speakingTimerRef.current = setTimeout(() => {
-      speakingTimerRef.current = null
-      setIsSpeaking(false)
-    }, remainingMs)
-  }, [clearSpeakingTimer])
+
+    let idlePolls = 0
+
+    const poll = () => {
+      const player = playerRef.current
+      const remainingMs = player?.remainingPlaybackMs ?? 0
+      const hasPending = player?.hasPendingPlayback ?? false
+      const awaitingMoreTts =
+        turnEndedRef.current &&
+        lastAudioReceivedAtRef.current > 0 &&
+        Date.now() - lastAudioReceivedAtRef.current < TTS_INTER_SEGMENT_GAP_MS
+
+      if (remainingMs > SPEAKING_END_GRACE_MS || hasPending || awaitingMoreTts) {
+        idlePolls = 0
+        speakingTimerRef.current = setTimeout(poll, SPEAKING_END_POLL_MS)
+        return
+      }
+
+      idlePolls += 1
+      if (idlePolls < SPEAKING_END_IDLE_POLLS) {
+        speakingTimerRef.current = setTimeout(poll, SPEAKING_END_POLL_MS)
+        return
+      }
+
+      clearSpeaking()
+    }
+
+    poll()
+  }, [clearSpeaking, clearSpeakingTimer])
 
   const stopPlayback = useCallback(() => {
     clearSpeakingTimer()
+    lastAudioReceivedAtRef.current = 0
     playerRef.current?.stop()
     playerRef.current = new Pcm16AudioPlayer()
-    setIsSpeaking(false)
-  }, [clearSpeakingTimer])
+    clearSpeaking()
+  }, [clearSpeaking, clearSpeakingTimer])
 
   const handleServerMessage = useCallback(
     (message: VoiceServerMessage) => {
@@ -113,21 +162,30 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
             turnStartedRef.current = true
             turnEndedRef.current = false
             audioSuppressedRef.current = false
+            lastAudioReceivedAtRef.current = 0
             clearSpeakingTimer()
             callbacks.onStart?.()
           }
-          setIsSpeaking(true)
+          markSpeaking()
           callbacks.onDelta?.(message.text)
           break
         case 'audio_out': {
           const player = playerRef.current
           if (!player || audioSuppressedRef.current) break
-          // Audio outlives `turn_complete`, so playback re-asserts the speaking
-          // state rather than relying on the text stream still being open.
-          setIsSpeaking(true)
-          void player
-            .playChunk(base64ToBytes(message.payload_b64))
-            .then(scheduleSpeakingEnd, scheduleSpeakingEnd)
+          lastAudioReceivedAtRef.current = Date.now()
+          markSpeaking()
+          void player.playChunk(base64ToBytes(message.payload_b64)).then(
+            () => {
+              if (turnEndedRef.current) {
+                scheduleSpeakingEnd()
+              }
+            },
+            () => {
+              if (turnEndedRef.current) {
+                scheduleSpeakingEnd()
+              }
+            },
+          )
           break
         }
         case 'tool_start':
@@ -164,15 +222,26 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
           turnStartedRef.current = false
           turnEndedRef.current = true
           clearSpeakingTimer()
-          setIsSpeaking(false)
+          clearSpeaking()
           callbacks.onError?.({ code: message.code, message: message.message })
           break
         default:
           break
       }
     },
-    [clearSpeakingTimer, scheduleSpeakingEnd, stopPlayback],
+    [clearSpeaking, clearSpeakingTimer, markSpeaking, scheduleSpeakingEnd, stopPlayback],
   )
+
+  const prepareMic = useCallback(async () => {
+    if (!micRef.current) {
+      micRef.current = new MicCapture()
+    }
+    try {
+      await micRef.current.prepare()
+    } catch {
+      // Permission may be granted on the first push-to-talk press instead.
+    }
+  }, [])
 
   const connect = useCallback(async () => {
     const {
@@ -207,7 +276,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
       onClose: () => {
         setIsConnected(false)
         clearSpeakingTimer()
-        setIsSpeaking(false)
+        clearSpeaking()
       },
       onError: (event) => {
         if (event instanceof Event) {
@@ -217,11 +286,24 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
     }
 
     await clientRef.current.connect(connectOptions)
+    if (!playerRef.current) {
+      playerRef.current = new Pcm16AudioPlayer()
+    }
+    void playerRef.current.prime()
     setIsConnected(true)
-  }, [handleServerMessage, clearSpeakingTimer])
+    void prepareMic()
+  }, [clearSpeaking, clearSpeakingTimer, handleServerMessage, prepareMic])
+
+  const primePlayback = useCallback(async () => {
+    if (!playerRef.current) {
+      playerRef.current = new Pcm16AudioPlayer()
+    }
+    await playerRef.current.prime()
+  }, [])
 
   const disconnect = useCallback(() => {
-    micRef.current?.stop(false)
+    recordingGenerationRef.current += 1
+    micRef.current?.dispose()
     micRef.current = null
     setIsRecording(false)
 
@@ -233,12 +315,12 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
     playerRef.current = null
 
     setIsConnected(false)
-    setIsSpeaking(false)
+    clearSpeaking()
     setVoiceSessionId(null)
     turnStartedRef.current = false
     turnEndedRef.current = true
     audioSuppressedRef.current = false
-  }, [clearSpeakingTimer])
+  }, [clearSpeaking, clearSpeakingTimer])
 
   const startRecording = useCallback(async () => {
     if (!clientRef.current?.isConnected) {
@@ -249,29 +331,54 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
       micRef.current = new MicCapture()
     }
 
-    if (!playerRef.current) {
-      playerRef.current = new Pcm16AudioPlayer()
-    }
-    await playerRef.current.prime()
+    micStartInFlightRef.current = true
+    pendingStopRef.current = false
 
-    await micRef.current.start({
-      onChunk: (chunk, final) => {
-        clientRef.current?.sendAudioChunk(chunk, final)
-        if (final) {
+    try {
+      if (!playerRef.current) {
+        playerRef.current = new Pcm16AudioPlayer()
+      }
+      await playerRef.current.prime()
+
+      const generation = (recordingGenerationRef.current += 1)
+
+      const startPromise = micRef.current.start({
+        onChunk: (chunk, final) => {
+          clientRef.current?.sendAudioChunk(chunk, final)
+          if (final) {
+            setIsRecording(false)
+          }
+        },
+        onError: (error) => {
           setIsRecording(false)
-        }
-      },
-      onError: (error) => {
+          optionsRef.current.onError?.(error)
+        },
+      })
+      micStartPromiseRef.current = startPromise
+
+      await startPromise
+
+      if (pendingStopRef.current || generation !== recordingGenerationRef.current) {
+        pendingStopRef.current = false
+        micRef.current?.stop(true)
         setIsRecording(false)
-        optionsRef.current.onError?.(error)
-      },
-    })
-    setIsRecording(true)
+        return
+      }
+      setIsRecording(true)
+    } finally {
+      micStartInFlightRef.current = false
+      micStartPromiseRef.current = null
+    }
   }, [])
 
   const stopRecording = useCallback(() => {
+    recordingGenerationRef.current += 1
+    if (micStartInFlightRef.current) {
+      pendingStopRef.current = true
+      setIsRecording(false)
+      return
+    }
     micRef.current?.stop(true)
-    micRef.current = null
     setIsRecording(false)
   }, [])
 
@@ -293,9 +400,11 @@ export function useVoiceSession(options: UseVoiceSessionOptions) {
   return {
     connect,
     disconnect,
+    prepareMic,
     startRecording,
     stopRecording,
     interrupt,
+    primePlayback,
     isConnected,
     isRecording,
     isSpeaking,

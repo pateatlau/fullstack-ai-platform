@@ -128,6 +128,78 @@ async def test_pipeline_basic_synthesis(
     assert "Hello world." in fake_provider.synthesized_texts[0]
 
 
+async def test_pipeline_early_flush_before_sentence_end(
+    fake_provider: FakeTtsProvider, voice_config: VoiceConfig
+) -> None:
+    """First TTS chunk should start before a full sentence boundary arrives."""
+    pipeline = TtsPipeline(fake_provider, voice_config)
+
+    long_opening = "A" * 45
+    text_chunks = [long_opening, " keeps going without punctuation yet"]
+
+    audio_chunks = []
+    async for audio in pipeline.process(_text_chunk_generator(text_chunks)):
+        audio_chunks.append(audio)
+
+    assert len(audio_chunks) >= 2
+    assert fake_provider.call_count >= 2
+    assert len(fake_provider.synthesized_texts[0]) >= voice_config.tts_early_flush_chars
+
+
+async def test_pipeline_time_flush_before_enough_chars(
+    fake_provider: FakeTtsProvider,
+) -> None:
+    """Time-based flush should start TTS for slow token streams."""
+    import asyncio
+
+    config = VoiceConfig(tts_time_flush_ms=50, tts_min_time_flush_chars=8)
+
+    async def slow_text() -> AsyncIterator[str]:
+        yield "Hello there "
+        await asyncio.sleep(0.08)
+        yield "friend"
+
+    pipeline = TtsPipeline(fake_provider, config)
+    audio_chunks = []
+    async for audio in pipeline.process(slow_text()):
+        audio_chunks.append(audio)
+
+    assert len(audio_chunks) >= 2
+    assert fake_provider.call_count >= 2
+    assert fake_provider.synthesized_texts[0].startswith("Hello")
+
+
+async def test_pipeline_non_blocking_while_synthesizing(
+    voice_config: VoiceConfig,
+) -> None:
+    """Text should keep buffering while an earlier segment is synthesized."""
+    import asyncio
+
+    class SlowFakeTtsProvider:
+        def __init__(self) -> None:
+            self.synthesized_texts: list[str] = []
+
+        async def synthesize_stream(
+            self, text_chunks: AsyncIterable[str]
+        ) -> AsyncIterator[bytes]:
+            async for text in text_chunks:
+                self.synthesized_texts.append(text)
+                await asyncio.sleep(0.05)
+            yield b"audio"
+
+    provider = SlowFakeTtsProvider()
+    pipeline = TtsPipeline(provider, voice_config)
+
+    text_chunks = ["First sentence. ", "Second sentence. ", "Third sentence."]
+
+    audio_chunks = []
+    async for audio in pipeline.process(_text_chunk_generator(text_chunks)):
+        audio_chunks.append(audio)
+
+    assert len(audio_chunks) == 3
+    assert len(provider.synthesized_texts) == 3
+
+
 async def test_pipeline_sentence_boundary_buffering(
     fake_provider: FakeTtsProvider, voice_config: VoiceConfig
 ) -> None:

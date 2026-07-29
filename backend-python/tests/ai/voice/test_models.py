@@ -39,6 +39,9 @@ class TestVoiceConfig:
         assert config.sample_rate_hz == 24000
         assert config.audio_encoding == "pcm16"
         assert config.max_chunk_bytes == 4096
+        assert config.tts_early_flush_chars == 40
+        assert config.tts_time_flush_ms == 500
+        assert config.tts_min_time_flush_chars == 12
         assert config.session_timeout_seconds == 300
         assert config.heartbeat_interval_seconds == 30
         assert config.max_utterance_seconds == 60

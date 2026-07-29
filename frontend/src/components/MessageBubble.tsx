@@ -18,7 +18,9 @@ export function MessageBubble({
   showStreamingStatus = true,
   waitingVariant = 'typing',
 }: MessageBubbleProps) {
-  const isWaitingForFirstToken = message.status === 'streaming' && message.content === ''
+  const isWaitingWithIndicator = message.status === 'streaming' && message.content === ''
+  const waitingIndicatorVariant: StreamingIndicatorVariant =
+    message.role === 'user' ? 'transcribing' : waitingVariant
   const canRetry = message.canRetry && onRetry && message.role === 'assistant'
   const roleLabel = message.role === 'user' ? 'You' : 'Assistant'
 
@@ -50,8 +52,8 @@ export function MessageBubble({
         ) : null}
       </div>
 
-      {isWaitingForFirstToken ? (
-        <StreamingIndicator variant={waitingVariant} />
+      {isWaitingWithIndicator ? (
+        <StreamingIndicator variant={waitingIndicatorVariant} />
       ) : (
         <div className="max-w-full overflow-x-auto">
           <MessageContent
