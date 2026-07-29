@@ -23,18 +23,18 @@ Production-grade full-stack AI chat platform with RAG, tools, agents, MCP, and v
 - Responsive ChatGPT-like UI with desktop sidebar, tablet collapse, and mobile drawer
 - Evaluation CLI for prompt, retrieval, and end-to-end tuning
 
-**Stack:** React + TypeScript + Vite + Tailwind CSS v4 · FastAPI (Python) · PostgreSQL + pgvector · optional Node.js reference backend (paused)
+**Stack:** React + TypeScript + Vite + Tailwind CSS v4 · FastAPI (Python) · PostgreSQL + pgvector · optional Node.js reference backend (planned to reach feature parity with the Python backend in a future release.)
 
 **Platform status:** MVP through Post-MVP V1.1.1 and V2 Epics 01–04 are complete. Flag-guarded epics default off so core chat works without extra configuration. See [CHANGELOG.md](CHANGELOG.md) and [docs/releases/](docs/releases/) for release history.
 
 ## Screenshots
 
-| Chat (desktop) | Documents |
-| --- | --- |
+| Chat (desktop)                                                                                                      | Documents                                                                                             |
+| ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | ![Chat desktop view with sessions sidebar and streaming-ready composer](./docs/assets/screenshots/chat-desktop.png) | ![Documents page with upload form and sample file list](./docs/assets/screenshots/documents-page.png) |
 
-| Mobile chat | Voice mode |
-| --- | --- |
+| Mobile chat                                                                                    | Voice mode                                                                                        |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | ![Mobile chat layout with collapsed sidebar drawer](./docs/assets/screenshots/chat-mobile.png) | ![Voice mode controls with mic button and tool toggles](./docs/assets/screenshots/voice-mode.png) |
 
 ## Architecture
@@ -148,29 +148,29 @@ Open the app, send a chat message, and confirm `GET /api/health` returns `status
 
 Full flags matrix, API routes, and eval CLI: [backend-python/README.md](backend-python/README.md).
 
-| Flag | Default | Enables |
-| ---- | ------- | ------- |
-| `RAG_ENABLED` | `false` | Document upload grounding and `/api/rag/ask` |
-| `TOOLS_ENABLED` | `false` | Web search tool execution in chat |
-| `ADVANCED_RAG_ENABLED` | `false` | Hybrid retrieval, rerank, citations (requires `RAG_ENABLED`) |
-| `AGENT_RUNTIME_ENABLED` | `false` | Agent-based web-search orchestration |
-| `MCP_ENABLED` | `false` | Remote MCP tool discovery and execution |
-| `VOICE_ENABLED` | `false` | WebSocket voice mode (requires `OPENAI_API_KEY` for default STT/TTS) |
-| `CHAT_STREAMING_ENABLED` | `true` | SSE streaming via `POST /api/chat/stream` |
-| `DEMO_MODE_STRICT` | `false` | Tighter guest token and upload caps for public demos |
+| Flag                     | Default | Enables                                                              |
+| ------------------------ | ------- | -------------------------------------------------------------------- |
+| `RAG_ENABLED`            | `false` | Document upload grounding and `/api/rag/ask`                         |
+| `TOOLS_ENABLED`          | `false` | Web search tool execution in chat                                    |
+| `ADVANCED_RAG_ENABLED`   | `false` | Hybrid retrieval, rerank, citations (requires `RAG_ENABLED`)         |
+| `AGENT_RUNTIME_ENABLED`  | `false` | Agent-based web-search orchestration                                 |
+| `MCP_ENABLED`            | `false` | Remote MCP tool discovery and execution                              |
+| `VOICE_ENABLED`          | `false` | WebSocket voice mode (requires `OPENAI_API_KEY` for default STT/TTS) |
+| `CHAT_STREAMING_ENABLED` | `true`  | SSE streaming via `POST /api/chat/stream`                            |
+| `DEMO_MODE_STRICT`       | `false` | Tighter guest token and upload caps for public demos                 |
 
 Set `LLM_PROVIDER` to `openai`, `gemini`, `groq`, or `anthropic` and the matching API key in `backend-python/.env`.
 
 ## Demo and deployment
 
-| Resource | URL / location |
-| -------- | -------------- |
-| Live demo (frontend) | [fullstack-ai-platform-umber.vercel.app](https://fullstack-ai-platform-umber.vercel.app/) |
-| Live demo (backend API) | [fullstack-ai-platform-production.up.railway.app](https://fullstack-ai-platform-production.up.railway.app) |
-| Public demo protection | [docs/ops/public-demo-protection.md](docs/ops/public-demo-protection.md) — enable `DEMO_MODE_STRICT=true` on public deploys |
-| Staging CD | [CD_STAGING.md](CD_STAGING.md) |
-| Production CD | [CD_PRODUCTION.md](CD_PRODUCTION.md) |
-| Container image tags | [docs/ci-image-tagging.md](docs/ci-image-tagging.md) |
+| Resource                | URL / location                                                                                                              |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Live demo (frontend)    | [fullstack-ai-platform-umber.vercel.app](https://fullstack-ai-platform-umber.vercel.app/)                                   |
+| Live demo (backend API) | [fullstack-ai-platform-production.up.railway.app](https://fullstack-ai-platform-production.up.railway.app)                  |
+| Public demo protection  | [docs/ops/public-demo-protection.md](docs/ops/public-demo-protection.md) — enable `DEMO_MODE_STRICT=true` on public deploys |
+| Staging CD              | [CD_STAGING.md](CD_STAGING.md)                                                                                              |
+| Production CD           | [CD_PRODUCTION.md](CD_PRODUCTION.md)                                                                                        |
+| Container image tags    | [docs/ci-image-tagging.md](docs/ci-image-tagging.md)                                                                        |
 
 Keep API keys in local `.env` files only. Rotate immediately if exposed.
 
@@ -193,11 +193,11 @@ fullstack-ai-platform/
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for workflow, pre-commit hooks, PR expectations, and scope policy.
 
-| Area | Commands |
-| ---- | -------- |
-| Python | `make lint` · `make format-check` · `make typecheck` · `make test-cov` |
-| Frontend | `npm run lint` · `npm run format:check` · `npm test -- --run` · `npm run build` |
-| Node (optional) | `npm run lint` · `npm run format:check` · `npm test` · `npm run build` |
+| Area            | Commands                                                                        |
+| --------------- | ------------------------------------------------------------------------------- |
+| Python          | `make lint` · `make format-check` · `make typecheck` · `make test-cov`          |
+| Frontend        | `npm run lint` · `npm run format:check` · `npm test -- --run` · `npm run build` |
+| Node (optional) | `npm run lint` · `npm run format:check` · `npm test` · `npm run build`          |
 
 Install pre-commit once: `pip install pre-commit && pre-commit install` (repo root).
 
@@ -207,14 +207,14 @@ Install pre-commit once: `pip install pre-commit && pre-commit install` (repo ro
 
 ## Documentation
 
-| Topic | Link |
-| ----- | ---- |
-| Docs index | [docs/README.md](docs/README.md) |
-| Backend API and flags | [backend-python/README.md](backend-python/README.md) |
-| Architecture | [docs/architecture/system-overview.md](docs/architecture/system-overview.md) |
-| Release summaries | [docs/releases/](docs/releases/) |
-| Implementation plans | [docs/plans/](docs/plans/) |
-| Changelog | [CHANGELOG.md](CHANGELOG.md) |
+| Topic                 | Link                                                                         |
+| --------------------- | ---------------------------------------------------------------------------- |
+| Docs index            | [docs/README.md](docs/README.md)                                             |
+| Backend API and flags | [backend-python/README.md](backend-python/README.md)                         |
+| Architecture          | [docs/architecture/system-overview.md](docs/architecture/system-overview.md) |
+| Release summaries     | [docs/releases/](docs/releases/)                                             |
+| Implementation plans  | [docs/plans/](docs/plans/)                                                   |
+| Changelog             | [CHANGELOG.md](CHANGELOG.md)                                                 |
 
 ## License
 
