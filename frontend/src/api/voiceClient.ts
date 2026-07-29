@@ -388,7 +388,9 @@ export class Pcm16AudioPlayer {
 
     const samples = pcm16BytesToFloat32(alignedBytes)
     const buffer = context.createBuffer(1, samples.length, this.sampleRateHz)
-    buffer.copyToChannel(samples, 0)
+    // buffer.copyToChannel(samples, 0)
+    // Reconstruct the array to force the underlying buffer type to ArrayBuffer
+    buffer.copyToChannel(new Float32Array(samples), 0)
 
     const source = context.createBufferSource()
     source.buffer = buffer
