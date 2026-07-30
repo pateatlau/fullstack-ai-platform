@@ -28,7 +28,7 @@ export function WhyLoginInfo() {
             <strong>Sign in with Google to unlock additional capabilities:</strong>
           </p>
 
-          <ul>
+          <ul className="list-disc list-inside space-y-1">
             <li>
               Choose from multiple AI providers and models, including OpenAI, Gemini, Groq,
               Anthropic, and more.
