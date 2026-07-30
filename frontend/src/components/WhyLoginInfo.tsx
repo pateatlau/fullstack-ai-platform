@@ -24,11 +24,28 @@ export function WhyLoginInfo() {
           role="note"
           className="mt-2 w-full rounded-chat border border-shell-800/15 bg-white p-3 text-xs text-shell-800 shadow-chat-card sm:absolute sm:right-0 sm:top-full sm:mt-2 sm:w-64"
         >
-          Signing in with Google unlocks provider and model selection (OpenAI, Gemini, Groq,
-          Anthropic, and more), saves your chat history to your account, and lets you manage
-          multiple sessions. You also get access to Documents — upload PDF, DOCX, Markdown, or text
-          files and ask questions grounded in your content via RAG. You can keep chatting as a guest
-          at any time.
+          <p>
+            <strong>Sign in with Google to unlock additional capabilities:</strong>
+          </p>
+
+          <ul className="list-disc list-inside space-y-1">
+            <li>
+              Choose from multiple AI providers and models, including OpenAI, Gemini, Groq,
+              Anthropic, and more.
+            </li>
+            <li>Save your conversations to your account with persistent chat history.</li>
+            <li>Create and manage multiple chat sessions.</li>
+            <li>
+              Upload PDF, DOCX, Markdown, and text files, then ask questions grounded in your
+              documents using RAG (Retrieval-Augmented Generation).
+            </li>
+            <li>Use Voice Mode for natural voice conversations.</li>
+          </ul>
+
+          <p>
+            You can continue chatting as a guest anytime—signing in simply unlocks these additional
+            capabilities.
+          </p>
         </div>
       ) : null}
     </div>

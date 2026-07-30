@@ -21,9 +21,8 @@ describe('WhyLoginInfo', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Why login?' }))
 
-    expect(screen.getByRole('note').textContent).toContain('provider and model selection')
-    expect(screen.getByRole('note').textContent).toContain('multiple sessions')
-    expect(screen.getByRole('note').textContent).toContain('Documents')
-    expect(screen.getByRole('note').textContent).toContain('RAG')
+    expect(screen.getByRole('note').textContent).toContain(
+      'Sign in with Google to unlock additional capabilities:Choose from multiple AI providers and models, including OpenAI, Gemini, Groq, Anthropic, and more.Save your conversations to your account with persistent chat history.Create and manage multiple chat sessions.Upload PDF, DOCX, Markdown, and text files, then ask questions grounded in your documents using RAG (Retrieval-Augmented Generation).Use Voice Mode for natural voice conversations.You can continue chatting as a guest anytime—signing in simply unlocks these additional capabilities.',
+    )
   })
 })
