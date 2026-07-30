@@ -485,9 +485,13 @@ export class MicCapture {
       return
     }
 
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+
+    const bufferSize = isMobile ? 2048 : 4096
+
     this.inputRateHz = this.audioContext.sampleRate
     this.source = this.audioContext.createMediaStreamSource(this.mediaStream)
-    this.processor = this.audioContext.createScriptProcessor(4096, 1, 1)
+    this.processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1)
 
     this.processor.onaudioprocess = (event) => {
       // The graph runs continuously once warm; only forward samples while a
