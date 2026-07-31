@@ -312,6 +312,42 @@ describe('Pcm16AudioPlayer', () => {
 })
 
 describe('MicCapture', () => {
+  let mockWorkletNode: {
+    port: {
+      onmessage: ((event: MessageEvent) => void) | null
+      postMessage: ReturnType<typeof vi.fn>
+    }
+    connect: ReturnType<typeof vi.fn>
+    disconnect: ReturnType<typeof vi.fn>
+  }
+
+  const emitWorkletFlush = (generation: number, samples = new Float32Array(0)) => {
+    mockWorkletNode.port.onmessage?.({
+      data: { type: 'flush', generation, samples },
+    } as MessageEvent)
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      'AudioWorkletNode',
+      vi.fn(function MockAudioWorkletNode() {
+        mockWorkletNode = {
+          port: {
+            onmessage: null,
+            postMessage: vi.fn((message: { type: string; generation: number }) => {
+              if (message.type === 'stop') {
+                queueMicrotask(() => emitWorkletFlush(message.generation))
+              }
+            }),
+          },
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+        }
+        return mockWorkletNode
+      }),
+    )
+  })
+
   afterEach(() => {
     vi.restoreAllMocks()
   })
@@ -337,7 +373,6 @@ describe('MicCapture', () => {
 
   it('chunks PCM16 bytes to the configured max size', async () => {
     const onChunk = vi.fn()
-    const processorListeners: Array<(event: AudioProcessingEvent) => void> = []
 
     vi.stubGlobal('navigator', {
       mediaDevices: {
@@ -351,14 +386,8 @@ describe('MicCapture', () => {
       destination = {}
       resume = vi.fn().mockResolvedValue(undefined)
       close = vi.fn()
+      audioWorklet = { addModule: vi.fn().mockResolvedValue(undefined) }
       createMediaStreamSource = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }))
-      createScriptProcessor = vi.fn(() => ({
-        connect: vi.fn(),
-        disconnect: vi.fn(),
-        set onaudioprocess(listener: (event: AudioProcessingEvent) => void) {
-          processorListeners.push(listener)
-        },
-      }))
     }
 
     vi.stubGlobal('AudioContext', MockAudioContext)
@@ -367,14 +396,15 @@ describe('MicCapture', () => {
     await mic.start({ onChunk, maxChunkBytes: 4 })
 
     const samples = new Float32Array(4)
-    processorListeners[0]?.({
-      inputBuffer: { getChannelData: () => samples },
-    } as unknown as AudioProcessingEvent)
+    mockWorkletNode.port.onmessage?.({
+      data: { type: 'frame', generation: 1, samples },
+    } as MessageEvent)
 
     expect(onChunk).toHaveBeenCalledWith(expect.any(Uint8Array), false)
     expect(onChunk.mock.calls[0]?.[0]?.length).toBe(4)
 
     mic.stop(true)
+    await Promise.resolve()
     expect(onChunk.mock.calls.some((call) => call[1] === true)).toBe(true)
   })
 
@@ -427,6 +457,7 @@ describe('MicCapture', () => {
       active: true,
       getTracks: () => [{ stop: vi.fn() }],
     })
+    const addModule = vi.fn().mockResolvedValue(undefined)
 
     vi.stubGlobal('navigator', {
       mediaDevices: { getUserMedia },
@@ -438,12 +469,8 @@ describe('MicCapture', () => {
       destination = {}
       resume = vi.fn().mockResolvedValue(undefined)
       close = vi.fn()
+      audioWorklet = { addModule }
       createMediaStreamSource = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }))
-      createScriptProcessor = vi.fn(() => ({
-        connect: vi.fn(),
-        disconnect: vi.fn(),
-        onaudioprocess: null,
-      }))
     }
 
     vi.stubGlobal('AudioContext', MockAudioContext)
@@ -452,9 +479,131 @@ describe('MicCapture', () => {
     await mic.prepare()
     await mic.start({ onChunk: vi.fn() })
     mic.stop(true)
+    await Promise.resolve()
     await mic.start({ onChunk: vi.fn() })
 
     expect(getUserMedia).toHaveBeenCalledTimes(1)
+    expect(addModule).toHaveBeenCalledTimes(1)
     mic.dispose()
+  })
+
+  it('reports errors when AudioWorklet is not supported', async () => {
+    const onError = vi.fn()
+
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }),
+      },
+    })
+
+    class MockAudioContext {
+      sampleRate = 48_000
+      state = 'running'
+      destination = {}
+      resume = vi.fn().mockResolvedValue(undefined)
+      close = vi.fn()
+      audioWorklet = undefined
+      createMediaStreamSource = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }))
+    }
+
+    vi.stubGlobal('AudioContext', MockAudioContext)
+
+    const mic = new MicCapture()
+    await expect(
+      mic.start({
+        onChunk: vi.fn(),
+        onError,
+      }),
+    ).rejects.toThrow('AudioWorklet is not supported in this browser')
+
+    expect(onError).toHaveBeenCalled()
+  })
+
+  it('reports errors when addModule rejects', async () => {
+    const onError = vi.fn()
+
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }),
+      },
+    })
+
+    class MockAudioContext {
+      sampleRate = 48_000
+      state = 'running'
+      destination = {}
+      resume = vi.fn().mockResolvedValue(undefined)
+      close = vi.fn()
+      audioWorklet = {
+        addModule: vi.fn().mockRejectedValue(new DOMException('failed', 'NotSupportedError')),
+      }
+      createMediaStreamSource = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }))
+    }
+
+    vi.stubGlobal('AudioContext', MockAudioContext)
+
+    const mic = new MicCapture()
+    await expect(
+      mic.start({
+        onChunk: vi.fn(),
+        onError,
+      }),
+    ).rejects.toThrow()
+
+    expect(onError).toHaveBeenCalled()
+  })
+
+  it('flushes partial worklet frames on stop and drops stale frames after utterance boundaries', async () => {
+    const onChunk = vi.fn()
+
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }),
+      },
+    })
+
+    class MockAudioContext {
+      sampleRate = 48_000
+      state = 'running'
+      destination = {}
+      resume = vi.fn().mockResolvedValue(undefined)
+      close = vi.fn()
+      audioWorklet = { addModule: vi.fn().mockResolvedValue(undefined) }
+      createMediaStreamSource = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }))
+    }
+
+    vi.stubGlobal('AudioContext', MockAudioContext)
+
+    const mic = new MicCapture()
+    await mic.start({ onChunk, maxChunkBytes: 100, sampleRateHz: 48_000 })
+
+    mockWorkletNode.port.onmessage?.({
+      data: { type: 'frame', generation: 1, samples: new Float32Array(2) },
+    } as MessageEvent)
+    expect(onChunk).not.toHaveBeenCalled()
+
+    mockWorkletNode.port.postMessage.mockImplementation(
+      (message: { type: string; generation: number }) => {
+        if (message.type === 'stop') {
+          queueMicrotask(() =>
+            emitWorkletFlush(message.generation, new Float32Array([0.25, -0.25])),
+          )
+        }
+      },
+    )
+
+    mic.stop(true)
+    await Promise.resolve()
+
+    expect(onChunk).toHaveBeenCalledTimes(1)
+    expect(onChunk.mock.calls[0]?.[0]?.length).toBe(8)
+    expect(onChunk.mock.calls[0]?.[1]).toBe(true)
+
+    await mic.start({ onChunk: vi.fn(), sampleRateHz: 48_000 })
+    mockWorkletNode.port.onmessage?.({
+      data: { type: 'frame', generation: 1, samples: new Float32Array(2) },
+    } as MessageEvent)
+
+    expect(onChunk).toHaveBeenCalledTimes(1)
   })
 })

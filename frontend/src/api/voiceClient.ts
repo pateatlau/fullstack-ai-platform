@@ -427,17 +427,27 @@ export interface MicCaptureOptions {
   sampleRateHz?: number
 }
 
+interface WorkletCaptureMessage {
+  type: 'frame' | 'flush'
+  generation: number
+  samples: Float32Array
+}
+
 /** Captures microphone input, resamples to PCM16 mono, and emits bounded chunks. */
 export class MicCapture {
   private mediaStream: MediaStream | null = null
   private audioContext: AudioContext | null = null
-  private processor: ScriptProcessorNode | null = null
+  private processor: AudioWorkletNode | null = null
   private source: MediaStreamAudioSourceNode | null = null
+  private workletModuleLoaded = false
   private pending = new Uint8Array(0)
   private maxChunkBytes = VOICE_MAX_CHUNK_BYTES
   private targetSampleRateHz = VOICE_SAMPLE_RATE_HZ
   private inputRateHz = VOICE_SAMPLE_RATE_HZ
   private captureGeneration = 0
+  private activeCaptureGeneration = 0
+  private awaitingFlushGeneration: number | null = null
+  private stopFinal = true
   /** The gate: true only between a `start()` and the matching `stop()`. */
   private capturing = false
   private onChunk: ((chunk: Uint8Array, final: boolean) => void) | null = null
@@ -485,35 +495,50 @@ export class MicCapture {
       return
     }
 
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+    if (!this.workletModuleLoaded) {
+      if (!this.audioContext.audioWorklet) {
+        throw new Error('AudioWorklet is not supported in this browser')
+      }
+      const workletUrl = new URL('/audio-worklets/pcm-capture-processor.js', import.meta.url).href
+      await this.audioContext.audioWorklet.addModule(workletUrl)
+      this.workletModuleLoaded = true
+    }
 
-    const bufferSize = isMobile ? 2048 : 4096
+    const frameSize = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ? 2048 : 4096
 
     this.inputRateHz = this.audioContext.sampleRate
     this.source = this.audioContext.createMediaStreamSource(this.mediaStream)
-    this.processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1)
+    this.processor = new AudioWorkletNode(this.audioContext, 'pcm-capture-processor', {
+      numberOfInputs: 1,
+      numberOfOutputs: 0,
+      channelCount: 1,
+      channelCountMode: 'explicit',
+      processorOptions: { frameSize },
+    })
 
-    this.processor.onaudioprocess = (event) => {
-      // The graph runs continuously once warm; only forward samples while a
-      // push-to-talk press is actually in progress. This is what makes
-      // start()/stop() instantaneous instead of rebuilding anything.
-      if (!this.capturing) {
+    this.processor.port.onmessage = (event: MessageEvent<WorkletCaptureMessage>) => {
+      const message = event.data
+      if (message.type === 'frame') {
+        if (!this.capturing || message.generation !== this.activeCaptureGeneration) {
+          return
+        }
+        this.processWorkletSamples(message.samples)
         return
       }
-      const input = event.inputBuffer.getChannelData(0)
-      const resampled =
-        this.inputRateHz === this.targetSampleRateHz
-          ? input
-          : resampleFloat32(input, this.inputRateHz, this.targetSampleRateHz)
-      const pcmBytes = float32ToPcm16Bytes(resampled)
-      this.enqueueBytes(pcmBytes)
+
+      if (message.type !== 'flush' || message.generation !== this.awaitingFlushGeneration) {
+        return
+      }
+
+      if (message.samples.length > 0) {
+        this.processWorkletSamples(message.samples)
+      }
+      this.completeStop(this.stopFinal)
     }
 
     this.source.connect(this.processor)
-    // ScriptProcessorNode must stay connected to a destination to keep firing
-    // in some engines; its output buffer is left untouched (silent), so the
-    // mic is never echoed back out through the speakers.
-    this.processor.connect(this.audioContext.destination)
+    // AudioWorkletNode with numberOfOutputs: 0 does not need a destination
+    // connection to keep processing; omitting destination avoids mic echo.
   }
 
   /**
@@ -543,23 +568,26 @@ export class MicCapture {
       return
     }
 
+    this.activeCaptureGeneration = generation
+    this.awaitingFlushGeneration = null
+    this.processor?.port.postMessage({ type: 'start', generation })
     this.capturing = true
   }
 
   /** Close the capture gate. The graph itself stays warm and running for the next press. */
   stop(final = true): void {
+    const stoppedGeneration = this.activeCaptureGeneration
     this.captureGeneration += 1
     this.capturing = false
 
-    if (this.pending.length > 0) {
-      this.emitChunk(this.pending.slice(), final)
-      this.pending = new Uint8Array(0)
-    } else if (final) {
-      this.emitChunk(new Uint8Array(0), true)
+    if (this.processor) {
+      this.awaitingFlushGeneration = stoppedGeneration
+      this.stopFinal = final
+      this.processor.port.postMessage({ type: 'stop', generation: stoppedGeneration })
+      return
     }
 
-    this.onChunk = null
-    this.onError = null
+    this.completeStop(final)
   }
 
   /** Release mic hardware and audio resources when the voice session ends. */
@@ -578,7 +606,31 @@ export class MicCapture {
     if (this.audioContext) {
       void this.audioContext.close()
       this.audioContext = null
+      this.workletModuleLoaded = false
     }
+  }
+
+  private processWorkletSamples(input: Float32Array): void {
+    const resampled =
+      this.inputRateHz === this.targetSampleRateHz
+        ? input
+        : resampleFloat32(input, this.inputRateHz, this.targetSampleRateHz)
+    const pcmBytes = float32ToPcm16Bytes(resampled)
+    this.enqueueBytes(pcmBytes)
+  }
+
+  private completeStop(final: boolean): void {
+    this.awaitingFlushGeneration = null
+
+    if (this.pending.length > 0) {
+      this.emitChunk(this.pending.slice(), final)
+      this.pending = new Uint8Array(0)
+    } else if (final) {
+      this.emitChunk(new Uint8Array(0), true)
+    }
+
+    this.onChunk = null
+    this.onError = null
   }
 
   private enqueueBytes(bytes: Uint8Array): void {
