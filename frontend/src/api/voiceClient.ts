@@ -427,6 +427,12 @@ export interface MicCaptureOptions {
   sampleRateHz?: number
 }
 
+interface WorkletCaptureMessage {
+  type: 'frame' | 'flush'
+  generation: number
+  samples: Float32Array
+}
+
 /** Captures microphone input, resamples to PCM16 mono, and emits bounded chunks. */
 export class MicCapture {
   private mediaStream: MediaStream | null = null
@@ -439,6 +445,9 @@ export class MicCapture {
   private targetSampleRateHz = VOICE_SAMPLE_RATE_HZ
   private inputRateHz = VOICE_SAMPLE_RATE_HZ
   private captureGeneration = 0
+  private activeCaptureGeneration = 0
+  private awaitingFlushGeneration: number | null = null
+  private stopFinal = true
   /** The gate: true only between a `start()` and the matching `stop()`. */
   private capturing = false
   private onChunk: ((chunk: Uint8Array, final: boolean) => void) | null = null
@@ -503,23 +512,28 @@ export class MicCapture {
       numberOfInputs: 1,
       numberOfOutputs: 0,
       channelCount: 1,
+      channelCountMode: 'explicit',
       processorOptions: { frameSize },
     })
 
-    this.processor.port.onmessage = (event: MessageEvent<Float32Array>) => {
-      // The graph runs continuously once warm; only forward samples while a
-      // push-to-talk press is actually in progress. This is what makes
-      // start()/stop() instantaneous instead of rebuilding anything.
-      if (!this.capturing) {
+    this.processor.port.onmessage = (event: MessageEvent<WorkletCaptureMessage>) => {
+      const message = event.data
+      if (message.type === 'frame') {
+        if (!this.capturing || message.generation !== this.activeCaptureGeneration) {
+          return
+        }
+        this.processWorkletSamples(message.samples)
         return
       }
-      const input = event.data
-      const resampled =
-        this.inputRateHz === this.targetSampleRateHz
-          ? input
-          : resampleFloat32(input, this.inputRateHz, this.targetSampleRateHz)
-      const pcmBytes = float32ToPcm16Bytes(resampled)
-      this.enqueueBytes(pcmBytes)
+
+      if (message.type !== 'flush' || message.generation !== this.awaitingFlushGeneration) {
+        return
+      }
+
+      if (message.samples.length > 0) {
+        this.processWorkletSamples(message.samples)
+      }
+      this.completeStop(this.stopFinal)
     }
 
     this.source.connect(this.processor)
@@ -554,23 +568,26 @@ export class MicCapture {
       return
     }
 
+    this.activeCaptureGeneration = generation
+    this.awaitingFlushGeneration = null
+    this.processor?.port.postMessage({ type: 'start', generation })
     this.capturing = true
   }
 
   /** Close the capture gate. The graph itself stays warm and running for the next press. */
   stop(final = true): void {
+    const stoppedGeneration = this.activeCaptureGeneration
     this.captureGeneration += 1
     this.capturing = false
 
-    if (this.pending.length > 0) {
-      this.emitChunk(this.pending.slice(), final)
-      this.pending = new Uint8Array(0)
-    } else if (final) {
-      this.emitChunk(new Uint8Array(0), true)
+    if (this.processor) {
+      this.awaitingFlushGeneration = stoppedGeneration
+      this.stopFinal = final
+      this.processor.port.postMessage({ type: 'stop', generation: stoppedGeneration })
+      return
     }
 
-    this.onChunk = null
-    this.onError = null
+    this.completeStop(final)
   }
 
   /** Release mic hardware and audio resources when the voice session ends. */
@@ -591,6 +608,29 @@ export class MicCapture {
       this.audioContext = null
       this.workletModuleLoaded = false
     }
+  }
+
+  private processWorkletSamples(input: Float32Array): void {
+    const resampled =
+      this.inputRateHz === this.targetSampleRateHz
+        ? input
+        : resampleFloat32(input, this.inputRateHz, this.targetSampleRateHz)
+    const pcmBytes = float32ToPcm16Bytes(resampled)
+    this.enqueueBytes(pcmBytes)
+  }
+
+  private completeStop(final: boolean): void {
+    this.awaitingFlushGeneration = null
+
+    if (this.pending.length > 0) {
+      this.emitChunk(this.pending.slice(), final)
+      this.pending = new Uint8Array(0)
+    } else if (final) {
+      this.emitChunk(new Uint8Array(0), true)
+    }
+
+    this.onChunk = null
+    this.onError = null
   }
 
   private enqueueBytes(bytes: Uint8Array): void {
