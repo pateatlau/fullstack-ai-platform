@@ -80,7 +80,10 @@ def upgrade() -> None:
         sa.Column("expires_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id", name="pk_memory_records"),
         sa.ForeignKeyConstraint(
-            ["owner_id"], ["users.id"], name="fk_memory_records_owner_id_users"
+            ["owner_id"],
+            ["users.id"],
+            name="fk_memory_records_owner_id_users",
+            ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
             ["session_id"],

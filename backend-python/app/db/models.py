@@ -409,7 +409,7 @@ class MemoryRecord(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     owner_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     # Set for memory_type='project' (v1 project scope == chat_session_id).
     session_id: Mapped[uuid.UUID | None] = mapped_column(

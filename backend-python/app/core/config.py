@@ -178,10 +178,11 @@ class Settings(BaseSettings):
     voice_heartbeat_interval_seconds: int = Field(default=30, ge=1)
     voice_max_utterance_seconds: int = Field(default=60, ge=1)
 
-    # V2 Epic 5: Memory system flag (default false). When true: chat retrieves/
-    # injects durable memory + preferences, durable memories persist async, and
-    # the authenticated Memory management API + Settings UI are enabled.
-    # Flag-off keeps chat/RAG/voice/MCP/agent paths unchanged from Epic 04.
+    # V2 Epic 5 Phase 1: Memory subsystem infrastructure flag (default false).
+    # When true: validates memory provider config and registers Memory DI wiring;
+    # domain models, provider scaffold, and DB tables are present. Chat
+    # retrieval/injection, persistence, REST API, and Settings UI are not wired
+    # until later phases. Flag-off keeps chat/RAG/voice/MCP/agent paths unchanged.
     memory_enabled: bool = False
 
     # V2 Epic 5: Memory provider and retrieval/quality tuning.
@@ -190,7 +191,7 @@ class Settings(BaseSettings):
     memory_min_quality_score: float = Field(default=0.4, ge=0.0, le=1.0)
     memory_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     memory_dedupe_similarity_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
-    # Chars budget for the injected memory block (bounded prompt growth).
+    # Token budget for the injected memory block (caps prompt growth from memory context).
     memory_token_budget: int = Field(default=1500, ge=1)
     memory_extraction_enabled: bool = True
     # Empty string means: use the same model as the originating chat turn.
@@ -432,6 +433,14 @@ class Settings(BaseSettings):
             supported = ", ".join(sorted(supported_memory_providers))
             raise ValueError(
                 f"Unsupported MEMORY_PROVIDER '{self.memory_provider}'. "
+                f"Supported providers: {supported}."
+            )
+
+        supported_embedding_providers = {"openai"}
+        if self.embedding_provider not in supported_embedding_providers:
+            supported = ", ".join(sorted(supported_embedding_providers))
+            raise ValueError(
+                f"Unsupported EMBEDDING_PROVIDER '{self.embedding_provider}'. "
                 f"Supported providers: {supported}."
             )
 

@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from app.ai.memory.lifecycle import LifecycleState
 from app.ai.memory.models import MemoryContext, MemoryRecord, MemoryScope, MemoryType
 
-_NOW = datetime.datetime.now(datetime.timezone.utc)
+_NOW = datetime.datetime.now(datetime.UTC)
 
 
 def _user_record(**overrides: object) -> MemoryRecord:

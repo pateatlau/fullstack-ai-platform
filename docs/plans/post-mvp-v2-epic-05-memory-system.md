@@ -399,7 +399,7 @@ app/ai/deps.py                            # extend — Memory DI factories
 app/services/chat_service.py              # modify — memory retrieve/inject/post-process
 app/services/unified_chat_service.py      # modify — same memory hooks as ChatService
 app/db/models.py                          # modify — MemoryRecord, UserPreference ORM
-alembic/versions/000N_memory_tables.py   # NEW — memory_records, user_preferences
+alembic/versions/0006_memory_tables.py   # NEW — memory_records, user_preferences
 ```
 
 ---
@@ -513,7 +513,7 @@ Memory hooks run on **all persisted authenticated chat paths** when `MEMORY_ENAB
 
 ## Persistence Schema
 
-Alembic migration **`000N_memory_tables`** (Phase 1). Separate from RAG `document_chunks.embedding`.
+Alembic migration **`0006_memory_tables`** (Phase 1). Separate from RAG `document_chunks.embedding`.
 
 ### `memory_records`
 
@@ -985,7 +985,7 @@ Memory events use provider-independent domain event abstractions. Event payload 
 ### Database Migration
 
 - [x] Add `MemoryRecord` and `UserPreference` ORM models to `app/db/models.py`.
-- [x] Create Alembic migration `000N_memory_tables` per Part I schema.
+- [x] Create Alembic migration `0006_memory_tables` per Part I schema.
 - [x] Add HNSW index on `memory_records.embedding` (cosine, same dimensions as RAG).
 - [x] Verify migration is independent of `document_chunks` table.
 - [x] Add migration rollback test in CI (upgrade/downgrade smoke).
@@ -1051,7 +1051,7 @@ Additional verification:
 | Models implemented   | `MemoryRecord`, `MemoryContext`, `MemoryType`, `MemoryScope`, `LifecycleState` |
 | Provider interfaces  | `MemoryProvider` (Protocol) + `PgVectorMemoryProvider` scaffold        |
 | Lifecycle enums      | 5 states, transition table, `validate_transition()`                   |
-| Unit tests           | ✅ 78 new/updated tests (1157 total passed, up from 1079 baseline)     |
+| Unit tests           | ✅ 78 new/updated tests (1157 total passed; +78 vs Phase 0 audit baseline of 1079 — Epic 04 table shows 1076 pre-audit) |
 | Coverage             | ✅ 89.77% `app/` (100% on `app/ai/memory/`)                            |
 | API freeze completed | ✅ `app/ai/memory/__init__.py` exports frozen Phase 1 surface          |
 
@@ -2453,7 +2453,7 @@ No memory content, embeddings, or personally identifiable information should be 
 # Definition of Done
 
 - [ ] All Part I architectural invariants preserved.
-- [ ] Public APIs frozen after Phase 1.
+- [x] Public APIs frozen after Phase 1.
 - [ ] Memory fully orchestrated through `ChatService` and `UnifiedChatService`.
 - [ ] Memory injected via `MemoryPromptInjector` (not direct storage access).
 - [ ] RAG and Memory remain independent.
@@ -2476,7 +2476,7 @@ No memory content, embeddings, or personally identifiable information should be 
 | `app/ai/prompts/chat/memory_context.v1.j2`                | create | Core     | 8     |
 | `app/ai/prompts/memory/extract.v1.j2`                     | create | Core     | 3     |
 | `app/db/models.py`                                        | modify | Core     | 1     |
-| `alembic/versions/000N_memory_tables.py`                  | create | Core     | 1     |
+| `alembic/versions/0006_memory_tables.py`                  | create | Core     | 1     |
 | `app/core/config.py`                                      | modify | Core     | 1     |
 | `backend-python/.env.example`                             | modify | Docs     | 1     |
 | `app/schemas/memory.py`                                   | create | Core     | 7     |

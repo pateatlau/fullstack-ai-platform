@@ -253,6 +253,18 @@ def test_memory_enabled_with_unsupported_provider_raises() -> None:
         settings.validate_startup()
 
 
+def test_memory_enabled_with_unsupported_embedding_provider_raises() -> None:
+    """Memory validation should reject unsupported embedding providers."""
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="sk-placeholder",
+        memory_enabled=True,
+        embedding_provider="gemini",
+    )
+    with pytest.raises(ValueError, match="Unsupported EMBEDDING_PROVIDER"):
+        settings.validate_startup()
+
+
 def test_memory_enabled_openai_embeddings_without_api_key_raises() -> None:
     """Memory validation should require OpenAI API key for OpenAI embeddings."""
     settings = Settings(
