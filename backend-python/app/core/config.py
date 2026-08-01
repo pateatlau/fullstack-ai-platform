@@ -178,6 +178,25 @@ class Settings(BaseSettings):
     voice_heartbeat_interval_seconds: int = Field(default=30, ge=1)
     voice_max_utterance_seconds: int = Field(default=60, ge=1)
 
+    # V2 Epic 5: Memory system flag (default false). When true: chat retrieves/
+    # injects durable memory + preferences, durable memories persist async, and
+    # the authenticated Memory management API + Settings UI are enabled.
+    # Flag-off keeps chat/RAG/voice/MCP/agent paths unchanged from Epic 04.
+    memory_enabled: bool = False
+
+    # V2 Epic 5: Memory provider and retrieval/quality tuning.
+    memory_provider: str = "pgvector"
+    memory_retrieval_top_k: int = Field(default=8, ge=1)
+    memory_min_quality_score: float = Field(default=0.4, ge=0.0, le=1.0)
+    memory_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    memory_dedupe_similarity_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
+    # Chars budget for the injected memory block (bounded prompt growth).
+    memory_token_budget: int = Field(default=1500, ge=1)
+    memory_extraction_enabled: bool = True
+    # Empty string means: use the same model as the originating chat turn.
+    memory_extraction_model: str = ""
+    memory_archived_retention_days: int = Field(default=90, ge=1)
+
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, value: object) -> str:
@@ -403,6 +422,26 @@ class Settings(BaseSettings):
                 f"VOICE_SESSION_TIMEOUT_SECONDS={self.voice_session_timeout_seconds}."
             )
 
+    def validate_memory_requirements(self) -> None:
+        """Fail fast when Memory is enabled but configuration is invalid."""
+        if not self.memory_enabled:
+            return
+
+        supported_memory_providers = {"pgvector"}
+        if self.memory_provider not in supported_memory_providers:
+            supported = ", ".join(sorted(supported_memory_providers))
+            raise ValueError(
+                f"Unsupported MEMORY_PROVIDER '{self.memory_provider}'. "
+                f"Supported providers: {supported}."
+            )
+
+        if self.embedding_provider == "openai" and not self.openai_api_key:
+            raise ValueError(
+                "MEMORY_ENABLED is true but OPENAI_API_KEY is not set "
+                "(required when EMBEDDING_PROVIDER=openai). "
+                "Set it in backend-python/.env (see .env.example)."
+            )
+
     def log_development_warnings(self, logger: object) -> None:
         """Emit human-readable warnings for permissive development defaults."""
         if not self.is_development:
@@ -436,6 +475,7 @@ class Settings(BaseSettings):
         self.validate_advanced_rag_requirements()
         self.validate_tools_requirements()
         self.validate_voice_requirements()
+        self.validate_memory_requirements()
         self.validate_production_requirements()
 
 

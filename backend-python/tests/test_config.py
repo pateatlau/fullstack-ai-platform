@@ -228,3 +228,66 @@ def test_voice_enabled_with_valid_configuration() -> None:
         voice_session_timeout_seconds=300,
     )
     settings.validate_startup()  # Should not raise
+
+
+def test_memory_disabled_skips_validation() -> None:
+    """Memory validation should be skipped when MEMORY_ENABLED=false."""
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="sk-placeholder",
+        memory_enabled=False,
+        memory_provider="invalid_provider",
+    )
+    settings.validate_startup()  # Should not raise
+
+
+def test_memory_enabled_with_unsupported_provider_raises() -> None:
+    """Memory validation should reject unsupported providers."""
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="sk-placeholder",
+        memory_enabled=True,
+        memory_provider="pinecone",
+    )
+    with pytest.raises(ValueError, match="Unsupported MEMORY_PROVIDER"):
+        settings.validate_startup()
+
+
+def test_memory_enabled_openai_embeddings_without_api_key_raises() -> None:
+    """Memory validation should require OpenAI API key for OpenAI embeddings."""
+    settings = Settings(
+        llm_provider="gemini",
+        gemini_api_key="gm-placeholder",
+        memory_enabled=True,
+        embedding_provider="openai",
+        openai_api_key=None,
+    )
+    with pytest.raises(ValueError, match="OPENAI_API_KEY is not set"):
+        settings.validate_startup()
+
+
+def test_memory_enabled_with_valid_configuration() -> None:
+    """Memory validation should pass with valid configuration."""
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="sk-placeholder",
+        memory_enabled=True,
+        memory_provider="pgvector",
+    )
+    settings.validate_startup()  # Should not raise
+
+
+def test_memory_configuration_defaults() -> None:
+    """Memory settings default to the frozen Part I configuration defaults."""
+    settings = Settings(llm_provider="openai", openai_api_key="sk-placeholder")
+
+    assert settings.memory_enabled is False
+    assert settings.memory_provider == "pgvector"
+    assert settings.memory_retrieval_top_k == 8
+    assert settings.memory_min_quality_score == 0.4
+    assert settings.memory_min_confidence == 0.5
+    assert settings.memory_dedupe_similarity_threshold == 0.92
+    assert settings.memory_token_budget == 1500
+    assert settings.memory_extraction_enabled is True
+    assert settings.memory_extraction_model == ""
+    assert settings.memory_archived_retention_days == 90

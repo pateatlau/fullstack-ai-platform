@@ -153,6 +153,11 @@ jobs:
       - name: Apply database migrations
         run: uv run alembic upgrade head
 
+      - name: Migration rollback smoke test
+        run: |
+          uv run alembic downgrade -1
+          uv run alembic upgrade head
+
       - name: Lint
         run: make lint
 
