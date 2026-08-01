@@ -763,7 +763,7 @@ _Copied from Epic 04 Phase 11 completion record (update in Phase 0 audit)._
 
 | Phase | Name                           | Effort | Status      |
 | ----- | ------------------------------ | ------ | ----------- |
-| 0     | Baseline Audit                 | XS     | Not Started |
+| 0     | Baseline Audit                 | XS     | Completed   |
 | 1     | Models, Interfaces & Migration | L      | Not Started |
 | 2     | Rolling Conversation Summary   | M      | Not Started |
 | 3     | Long-Term Memory               | L      | Not Started |
@@ -887,6 +887,7 @@ Additional verification:
 - Quality gates passed.
 - Architecture verified.
 - Implementation baseline frozen.
+- User confirmation pending to proceed to Phase 1 (see audit exit criteria).
 
 **Rollback**
 
