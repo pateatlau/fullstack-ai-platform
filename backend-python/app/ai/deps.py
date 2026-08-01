@@ -18,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
     from app.ai.mcp.registry import McpServerRegistry
+    from app.ai.memory.manager import MemoryManager
+    from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
     from app.ai.voice.config import VoiceConfig
     from app.ai.voice.interfaces import SttProvider, TtsProvider
     from app.ai.voice.interrupt import InterruptController
@@ -393,3 +395,27 @@ def get_voice_session_manager(
         voice_config_from_settings(settings),
         SqlChatStore(session),
     )
+
+
+# ============================================================================
+# Memory System (Epic 05)
+# ============================================================================
+
+
+def get_memory_provider(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_ai_settings),
+) -> "PgVectorMemoryProvider":
+    """Return a request-scoped pgvector-backed Memory provider."""
+    from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
+
+    return PgVectorMemoryProvider(session=session, settings=settings)
+
+
+def get_memory_manager(
+    provider: "PgVectorMemoryProvider" = Depends(get_memory_provider),
+) -> "MemoryManager":
+    """Return a request-scoped ``MemoryManager`` wired to the configured provider."""
+    from app.ai.memory.manager import MemoryManager
+
+    return MemoryManager(provider=provider)

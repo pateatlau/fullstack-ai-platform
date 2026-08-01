@@ -23,6 +23,7 @@ from sqlalchemy import (
     CheckConstraint,
     Computed,
     Date,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -393,4 +394,111 @@ class DocumentChunk(Base):
             "content_tsv",
             postgresql_using="gin",
         ),
+    )
+
+
+class MemoryRecord(Base):
+    """Durable Memory subsystem record — user or project scoped (Epic 05 Phase 1).
+
+    Separate from ``document_chunks`` (Part I § RAG boundary — no shared
+    storage). The HNSW index on ``embedding`` is created in the Alembic
+    migration, mirroring ``document_chunks`` (not declared in ``__table_args__``).
+    """
+
+    __tablename__ = "memory_records"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    # Set for memory_type='project' (v1 project scope == chat_session_id).
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    memory_type: Mapped[str] = mapped_column(nullable=False)
+    title: Mapped[str | None] = mapped_column(nullable=True)
+    content: Mapped[str] = mapped_column(nullable=False)
+    summary: Mapped[str | None] = mapped_column(nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(_EMBEDDING_DIMENSIONS),
+        nullable=True,
+    )
+    metadata_json: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    importance: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("0.5")
+    )
+    confidence: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("0.5")
+    )
+    quality_score: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("0.5")
+    )
+    lifecycle_state: Mapped[str] = mapped_column(
+        nullable=False, server_default=text("'created'")
+    )
+    source: Mapped[str] = mapped_column(nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=_NOW,
+        onupdate=_NOW,
+    )
+    last_accessed_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint("memory_type IN ('user', 'project')", name="memory_type_valid"),
+        CheckConstraint(
+            "lifecycle_state IN "
+            "('created', 'active', 'consolidated', 'archived', 'deleted')",
+            name="lifecycle_state_valid",
+        ),
+        Index(
+            "ix_memory_records_owner_type_lifecycle",
+            "owner_id",
+            "memory_type",
+            "lifecycle_state",
+        ),
+        Index(
+            "ix_memory_records_session_id",
+            "session_id",
+            postgresql_where=text("session_id IS NOT NULL"),
+        ),
+    )
+
+
+class UserPreference(Base):
+    """Structured user preference — no embeddings, no vector search (Epic 05 Phase 1)."""
+
+    __tablename__ = "user_preferences"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    key: Mapped[str] = mapped_column(nullable=False)
+    value: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=_NOW,
+        onupdate=_NOW,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "key", name="uq_user_preferences_user_key"),
     )

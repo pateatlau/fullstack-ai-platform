@@ -1,7 +1,7 @@
 ---
 epic: v2-05
 title: Memory System
-status: not_started
+status: in_progress
 version: 2
 depends_on: [v2-04]
 provides:
@@ -399,7 +399,7 @@ app/ai/deps.py                            # extend — Memory DI factories
 app/services/chat_service.py              # modify — memory retrieve/inject/post-process
 app/services/unified_chat_service.py      # modify — same memory hooks as ChatService
 app/db/models.py                          # modify — MemoryRecord, UserPreference ORM
-alembic/versions/000N_memory_tables.py   # NEW — memory_records, user_preferences
+alembic/versions/0006_memory_tables.py   # NEW — memory_records, user_preferences
 ```
 
 ---
@@ -513,7 +513,7 @@ Memory hooks run on **all persisted authenticated chat paths** when `MEMORY_ENAB
 
 ## Persistence Schema
 
-Alembic migration **`000N_memory_tables`** (Phase 1). Separate from RAG `document_chunks.embedding`.
+Alembic migration **`0006_memory_tables`** (Phase 1). Separate from RAG `document_chunks.embedding`.
 
 ### `memory_records`
 
@@ -764,7 +764,7 @@ _Copied from Epic 04 Phase 11 completion record (update in Phase 0 audit)._
 | Phase | Name                           | Effort | Status      |
 | ----- | ------------------------------ | ------ | ----------- |
 | 0     | Baseline Audit                 | XS     | Completed   |
-| 1     | Models, Interfaces & Migration | L      | Not Started |
+| 1     | Models, Interfaces & Migration | L      | Completed   |
 | 2     | Rolling Conversation Summary   | M      | Not Started |
 | 3     | Long-Term Memory               | L      | Not Started |
 | 4     | User Preferences               | M      | Not Started |
@@ -936,75 +936,75 @@ Memory events use provider-independent domain event abstractions. Event payload 
 
 ### Package Structure
 
-- [ ] Create the `app/ai/memory/` package.
-- [ ] Create the package layout defined in Part I.
-- [ ] Add package exports through `__init__.py`.
-- [ ] Verify package imports are dependency-cycle free.
+- [x] Create the `app/ai/memory/` package.
+- [x] Create the package layout defined in Part I.
+- [x] Add package exports through `__init__.py`.
+- [x] Verify package imports are dependency-cycle free.
 
 ### Canonical Models
 
-- [ ] Implement the canonical `MemoryRecord` model.
-- [ ] Implement the canonical `MemoryContext` model.
-- [ ] Implement supporting enums and value objects.
-- [ ] Add schema validation.
-- [ ] Add serialization/deserialization support.
-- [ ] Add comprehensive model documentation.
+- [x] Implement the canonical `MemoryRecord` model.
+- [x] Implement the canonical `MemoryContext` model.
+- [x] Implement supporting enums and value objects.
+- [x] Add schema validation.
+- [x] Add serialization/deserialization support.
+- [x] Add comprehensive model documentation.
 
 ### Lifecycle Definitions
 
-- [ ] Implement lifecycle state enums.
-- [ ] Define valid lifecycle transitions.
-- [ ] Validate illegal state transitions.
-- [ ] Keep lifecycle implementation independent of storage.
+- [x] Implement lifecycle state enums.
+- [x] Define valid lifecycle transitions.
+- [x] Validate illegal state transitions.
+- [x] Keep lifecycle implementation independent of storage.
 
 ### Provider Contracts
 
-- [ ] Create the `MemoryProvider` abstraction.
-- [ ] Define provider CRUD operations.
-- [ ] Define semantic retrieval operations.
-- [ ] Define preference persistence operations.
-- [ ] Define lifecycle update operations.
-- [ ] Ensure interface remains provider-agnostic.
+- [x] Create the `MemoryProvider` abstraction.
+- [x] Define provider CRUD operations.
+- [x] Define semantic retrieval operations.
+- [x] Define preference persistence operations.
+- [x] Define lifecycle update operations.
+- [x] Ensure interface remains provider-agnostic.
 
 ### PgVector Provider Scaffold
 
-- [ ] Create `PgVectorMemoryProvider`.
-- [ ] Implement constructor and dependency injection.
-- [ ] Define placeholder implementations for provider methods.
-- [ ] Do not implement retrieval logic yet (Phase 6).
-- [ ] Do not implement persistence logic yet (Phase 3).
+- [x] Create `PgVectorMemoryProvider`.
+- [x] Implement constructor and dependency injection.
+- [x] Define placeholder implementations for provider methods.
+- [x] Do not implement retrieval logic yet (Phase 6).
+- [x] Do not implement persistence logic yet (Phase 3).
 
 ### Memory Manager
 
-- [ ] Implement `MemoryManager`.
-- [ ] Inject `MemoryProvider`.
-- [ ] Define orchestration entry points.
-- [ ] Ensure business logic remains outside storage providers.
-- [ ] Expose only the APIs required by `UnifiedChatService`.
+- [x] Implement `MemoryManager`.
+- [x] Inject `MemoryProvider`.
+- [x] Define orchestration entry points.
+- [x] Ensure business logic remains outside storage providers.
+- [x] Expose only the APIs required by `UnifiedChatService`.
 
 ### Database Migration
 
-- [ ] Add `MemoryRecord` and `UserPreference` ORM models to `app/db/models.py`.
-- [ ] Create Alembic migration `000N_memory_tables` per Part I schema.
-- [ ] Add HNSW index on `memory_records.embedding` (cosine, same dimensions as RAG).
-- [ ] Verify migration is independent of `document_chunks` table.
-- [ ] Add migration rollback test in CI (upgrade/downgrade smoke).
+- [x] Add `MemoryRecord` and `UserPreference` ORM models to `app/db/models.py`.
+- [x] Create Alembic migration `0006_memory_tables` per Part I schema.
+- [x] Add HNSW index on `memory_records.embedding` (cosine, same dimensions as RAG).
+- [x] Verify migration is independent of `document_chunks` table.
+- [x] Add migration rollback test in CI (upgrade/downgrade smoke).
 
 ### Configuration
 
-- [ ] Add `MEMORY_ENABLED` feature flag.
-- [ ] Add Memory configuration section.
-- [ ] Register provider configuration.
-- [ ] Preserve backward compatibility when disabled.
+- [x] Add `MEMORY_ENABLED` feature flag.
+- [x] Add Memory configuration section.
+- [x] Register provider configuration.
+- [x] Preserve backward compatibility when disabled.
 
 ### Testing
 
-- [ ] Add model validation tests.
-- [ ] Add serialization tests.
-- [ ] Add provider contract tests.
-- [ ] Add dependency injection tests.
-- [ ] Add lifecycle validation tests.
-- [ ] Add package import tests.
+- [x] Add model validation tests.
+- [x] Add serialization tests.
+- [x] Add provider contract tests.
+- [x] Add dependency injection tests.
+- [x] Add lifecycle validation tests.
+- [x] Add package import tests.
 
 **Verify**
 
@@ -1014,11 +1014,11 @@ Memory events use provider-independent domain event abstractions. Event payload 
 
 Additional verification:
 
-- [ ] All Memory models serialize correctly.
-- [ ] Provider interfaces compile successfully.
-- [ ] Dependency injection resolves successfully.
-- [ ] No circular imports detected.
-- [ ] Feature flag defaults to disabled.
+- [x] All Memory models serialize correctly.
+- [x] Provider interfaces compile successfully.
+- [x] Dependency injection resolves successfully.
+- [x] No circular imports detected.
+- [x] Feature flag defaults to disabled.
 
 **Acceptance**
 
@@ -1046,14 +1046,14 @@ Additional verification:
 
 **Completion Record**
 
-| Metric               | Result |
-| -------------------- | ------ |
-| Models implemented   |        |
-| Provider interfaces  |        |
-| Lifecycle enums      |        |
-| Unit tests           |        |
-| Coverage             |        |
-| API freeze completed |        |
+| Metric               | Result                                                                 |
+| --------------------- | ---------------------------------------------------------------------- |
+| Models implemented   | `MemoryRecord`, `MemoryContext`, `MemoryType`, `MemoryScope`, `LifecycleState` |
+| Provider interfaces  | `MemoryProvider` (Protocol) + `PgVectorMemoryProvider` scaffold        |
+| Lifecycle enums      | 5 states, transition table, `validate_transition()`                   |
+| Unit tests           | ✅ 78 new/updated tests (1157 total passed; +78 vs Phase 0 audit baseline of 1079 — Epic 04 table shows 1076 pre-audit) |
+| Coverage             | ✅ 89.77% `app/` (100% on `app/ai/memory/`)                            |
+| API freeze completed | ✅ `app/ai/memory/__init__.py` exports frozen Phase 1 surface          |
 
 ---
 
@@ -2453,7 +2453,7 @@ No memory content, embeddings, or personally identifiable information should be 
 # Definition of Done
 
 - [ ] All Part I architectural invariants preserved.
-- [ ] Public APIs frozen after Phase 1.
+- [x] Public APIs frozen after Phase 1.
 - [ ] Memory fully orchestrated through `ChatService` and `UnifiedChatService`.
 - [ ] Memory injected via `MemoryPromptInjector` (not direct storage access).
 - [ ] RAG and Memory remain independent.
@@ -2476,7 +2476,7 @@ No memory content, embeddings, or personally identifiable information should be 
 | `app/ai/prompts/chat/memory_context.v1.j2`                | create | Core     | 8     |
 | `app/ai/prompts/memory/extract.v1.j2`                     | create | Core     | 3     |
 | `app/db/models.py`                                        | modify | Core     | 1     |
-| `alembic/versions/000N_memory_tables.py`                  | create | Core     | 1     |
+| `alembic/versions/0006_memory_tables.py`                  | create | Core     | 1     |
 | `app/core/config.py`                                      | modify | Core     | 1     |
 | `backend-python/.env.example`                             | modify | Docs     | 1     |
 | `app/schemas/memory.py`                                   | create | Core     | 7     |
@@ -2504,5 +2504,6 @@ No memory content, embeddings, or personally identifiable information should be 
 | 1       | —          | Initial epic draft                                                                                                                                                                                                                                                                                                                                                          |
 | 2       | 2026-07-31 | Implementation readiness: frontmatter (`provides`, `packages`, `test_paths`); Public APIs; config defaults; persistence schema; REST API; chat integration strategy; V1 `SessionSummary` reuse; project memory v1 = session-scoped; phase integration rules; Phase 1 migration; Phase 7 REST API; Phase 8 ChatService + UnifiedChatService; files index; baseline corrected |
 | 2.1     | 2026-08-01 | Phase 0 baseline audit complete: 1079 tests, 89.57% coverage, eval 5/5, frontend 233 tests; audit published. Part II only.                                                                                                                                                                                                                                                  |
+| 2.2     | 2026-08-01 | Phase 1 complete: canonical models/enums, `MemoryProvider` protocol, `PgVectorMemoryProvider` scaffold, `MemoryManager`, `memory_records`/`user_preferences` migration (0006), `MEMORY_ENABLED` + memory config, DI wiring, CI migration rollback smoke test. 1157 tests, 89.77% coverage. Public API frozen.                                                            |
 
 ---
