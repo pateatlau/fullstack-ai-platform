@@ -749,6 +749,7 @@ _Copied from Epic 04 Phase 11 completion record (update in Phase 0 audit)._
 | Backend tests / coverage | **1076 passed**, **89.52%** `app/` (Epic 04)                                                     |
 | Voice package coverage   | **93%** `app/ai/voice/`                                                                          |
 | Eval CLI                 | **5/5 passed**                                                                                   |
+| Frontend tests           | **233 passed** (39 files); build pass                                                            |
 | Chat pipeline            | Stable — `ChatService` + `UnifiedChatService`                                                    |
 | Voice                    | Completed (Epic 04)                                                                              |
 | V1 session summaries     | **`SessionSummary` + `_maybe_summarize` exist**; `build_context_messages` not wired to live chat |
@@ -762,7 +763,7 @@ _Copied from Epic 04 Phase 11 completion record (update in Phase 0 audit)._
 
 | Phase | Name                           | Effort | Status      |
 | ----- | ------------------------------ | ------ | ----------- |
-| 0     | Baseline Audit                 | XS     | Not Started |
+| 0     | Baseline Audit                 | XS     | Completed   |
 | 1     | Models, Interfaces & Migration | L      | Not Started |
 | 2     | Rolling Conversation Summary   | M      | Not Started |
 | 3     | Long-Term Memory               | L      | Not Started |
@@ -798,60 +799,60 @@ Establish a verified implementation baseline before introducing the Memory subsy
 
 ### Platform Verification
 
-- [ ] Confirm Epic 04 Phase 11 complete / authorized for Epic 05
-- [ ] Inventory V1 `SessionSummary`, `_maybe_summarize`, `build_context_messages` wiring status
-- [ ] Inventory chat routing split (`ChatService` vs `UnifiedChatService`)
-- [ ] Verify pgvector availability and document-chunk schema (separate from memory)
-- [ ] Verify Voice integration remains operational.
-- [ ] Verify RAG integration remains operational.
-- [ ] Verify MCP integration remains operational.
-- [ ] Verify Tool execution remains operational.
-- [ ] Verify streaming responses remain operational.
+- [x] Confirm Epic 04 Phase 11 complete / authorized for Epic 05
+- [x] Inventory V1 `SessionSummary`, `_maybe_summarize`, `build_context_messages` wiring status
+- [x] Inventory chat routing split (`ChatService` vs `UnifiedChatService`)
+- [x] Verify pgvector availability and document-chunk schema (separate from memory)
+- [x] Verify Voice integration remains operational.
+- [x] Verify RAG integration remains operational.
+- [x] Verify MCP integration remains operational.
+- [x] Verify Tool execution remains operational.
+- [x] Verify streaming responses remain operational.
 
 ### Architecture Review
 
-- [ ] Review the frozen Part I architecture.
-- [ ] Verify all architectural invariants.
-- [ ] Identify all Memory integration points.
-- [ ] Identify existing extension points.
-- [ ] Confirm no Memory implementation already exists.
-- [ ] Record implementation assumptions.
+- [x] Review the frozen Part I architecture.
+- [x] Verify all architectural invariants.
+- [x] Identify all Memory integration points.
+- [x] Identify existing extension points.
+- [x] Confirm no Memory implementation already exists.
+- [x] Record implementation assumptions.
 
 ### Dependency Verification
 
-- [ ] Verify pgvector availability.
-- [ ] Verify PostgreSQL configuration.
-- [ ] Verify embedding provider configuration.
-- [ ] Verify existing provider abstractions.
-- [ ] Verify dependency injection configuration.
-- [ ] Verify feature flag infrastructure.
+- [x] Verify pgvector availability.
+- [x] Verify PostgreSQL configuration.
+- [x] Verify embedding provider configuration.
+- [x] Verify existing provider abstractions.
+- [x] Verify dependency injection configuration.
+- [x] Verify feature flag infrastructure.
 
 ### Codebase Inventory
 
-- [ ] Inventory existing chat services.
-- [ ] Inventory PromptBuilder implementation.
-- [ ] Inventory provider implementations.
-- [ ] Inventory embedding services.
-- [ ] Inventory RAG pipeline.
-- [ ] Inventory existing persistence services.
-- [ ] Record components to be reused.
+- [x] Inventory existing chat services.
+- [x] Inventory PromptBuilder implementation.
+- [x] Inventory provider implementations.
+- [x] Inventory embedding services.
+- [x] Inventory RAG pipeline.
+- [x] Inventory existing persistence services.
+- [x] Record components to be reused.
 
 ### Baseline Quality Validation
 
-- [ ] Execute lint.
-- [ ] Execute type checking.
-- [ ] Execute unit tests.
-- [ ] Execute integration tests.
-- [ ] Execute evaluation suite.
-- [ ] Record baseline quality metrics.
+- [x] Execute lint.
+- [x] Execute type checking.
+- [x] Execute unit tests.
+- [x] Execute integration tests.
+- [x] Execute evaluation suite.
+- [x] Record baseline quality metrics.
 
 ### Implementation Readiness
 
-- [ ] Confirm all required dependencies are available.
-- [ ] Confirm implementation order matches Part II.
-- [ ] Confirm no architectural conflicts exist.
-- [ ] Publish baseline audit document.
-- [ ] Freeze implementation baseline.
+- [x] Confirm all required dependencies are available.
+- [x] Confirm implementation order matches Part II.
+- [x] Confirm no architectural conflicts exist.
+- [x] Publish baseline audit document.
+- [x] Freeze implementation baseline.
 
 **Verify**
 
@@ -862,12 +863,12 @@ Establish a verified implementation baseline before introducing the Memory subsy
 
 Additional verification:
 
-- [ ] Chat functionality verified.
-- [ ] Voice functionality verified.
-- [ ] RAG functionality verified.
-- [ ] MCP functionality verified.
-- [ ] Streaming functionality verified.
-- [ ] All quality gates pass.
+- [x] Chat functionality verified.
+- [x] Voice functionality verified.
+- [x] RAG functionality verified.
+- [x] MCP functionality verified.
+- [x] Streaming functionality verified.
+- [x] All quality gates pass.
 
 **Acceptance**
 
@@ -886,23 +887,24 @@ Additional verification:
 - Quality gates passed.
 - Architecture verified.
 - Implementation baseline frozen.
+- User confirmation pending to proceed to Phase 1 (see audit exit criteria).
 
 **Rollback**
 
-- [ ] No rollback required.
-- [ ] This phase introduces no functional code changes.
+- [x] No rollback required.
+- [x] This phase introduces no functional code changes.
 
 **Completion Record**
 
-| Metric                   | Result |
-| ------------------------ | ------ |
-| Lint                     |        |
-| Typecheck                |        |
-| Unit Tests               |        |
-| Integration Tests        |        |
-| Evaluation Suite         |        |
-| Platform Readiness       |        |
-| Baseline Audit Published |        |
+| Metric                   | Result                                                       |
+| ------------------------ | ------------------------------------------------------------ |
+| Lint                     | ✅ PASS                                                      |
+| Typecheck                | ✅ PASS                                                      |
+| Unit Tests               | ✅ 1079 passed                                               |
+| Integration Tests        | ✅ (included in suite)                                       |
+| Evaluation Suite         | ✅ 5/5 passed                                                |
+| Platform Readiness       | ✅ Confirmed                                                 |
+| Baseline Audit Published | ✅ `docs/audits/post-mvp-v2-epic5-phase-0-baseline-audit.md` |
 
 ---
 
@@ -2501,5 +2503,6 @@ No memory content, embeddings, or personally identifiable information should be 
 | ------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1       | —          | Initial epic draft                                                                                                                                                                                                                                                                                                                                                          |
 | 2       | 2026-07-31 | Implementation readiness: frontmatter (`provides`, `packages`, `test_paths`); Public APIs; config defaults; persistence schema; REST API; chat integration strategy; V1 `SessionSummary` reuse; project memory v1 = session-scoped; phase integration rules; Phase 1 migration; Phase 7 REST API; Phase 8 ChatService + UnifiedChatService; files index; baseline corrected |
+| 2.1     | 2026-08-01 | Phase 0 baseline audit complete: 1079 tests, 89.57% coverage, eval 5/5, frontend 233 tests; audit published. Part II only.                                                                                                                                                                                                                                                  |
 
 ---
