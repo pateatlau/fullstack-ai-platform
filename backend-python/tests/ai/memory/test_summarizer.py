@@ -346,3 +346,29 @@ async def test_memory_enabled_summarization_still_runs(
     summary = await chat_store.get_latest_summary(result.session_id)
     assert summary is not None
     assert summary.content == "A concise summary."
+
+
+@pytest.mark.anyio
+async def test_fallback_summarization_failure_does_not_fail_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = RecordingProvider("assistant reply")
+    chat_store = FakeChatStore()
+    service = _memory_chat_service(
+        chat_store=chat_store,
+        provider=provider,
+        memory_enabled=False,
+        monkeypatch=monkeypatch,
+    )
+
+    async def failing_summarize(**kwargs: object) -> None:
+        raise RuntimeError("store error during summarize")
+
+    monkeypatch.setattr(service, "_maybe_summarize", failing_summarize)
+
+    result = await service.complete_chat(
+        ChatRequestSchema(messages=[ChatMessageSchema(role="user", content="hi")]),
+        CallerContext.for_user(uuid.uuid4()),
+    )
+
+    assert result.content == "assistant reply"

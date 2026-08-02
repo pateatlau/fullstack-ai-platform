@@ -490,13 +490,20 @@ class ChatService:
                 model=model,
             )
             return
-        await self._maybe_summarize(
-            caller=caller,
-            session_id=session_id,
-            provider=provider,
-            provider_name=provider_name,
-            model=model,
-        )
+        try:
+            await self._maybe_summarize(
+                caller=caller,
+                session_id=session_id,
+                provider=provider,
+                provider_name=provider_name,
+                model=model,
+            )
+        except Exception:  # noqa: BLE001 - summary is best-effort
+            logger.warning(
+                "Conversation summarization failed",
+                session_id=str(session_id),
+                exc_info=True,
+            )
 
     @staticmethod
     def _last_user_content(request: ChatRequestSchema) -> str:
