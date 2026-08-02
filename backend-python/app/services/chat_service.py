@@ -18,6 +18,10 @@ from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.core.text_utils import derive_session_title
 from app.ai.deps import get_prompt_manager
+from app.ai.memory.summarizer import (
+    ConversationSummaryService,
+    assemble_context_messages,
+)
 from app.ai.prompts.manager import PromptManager
 from app.db.models import ChatMessage, ChatSession, SessionSummary, UsageEvent
 from app.providers.base import LLMProvider, ProviderChunk, ProviderCompletion
@@ -319,6 +323,7 @@ class ChatService:
         quota_service: QuotaChecker | None = None,
         session: AsyncSession | None = None,
         prompt_manager: PromptManager | None = None,
+        conversation_summary_service: ConversationSummaryService | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._chat_store = chat_store
@@ -326,6 +331,7 @@ class ChatService:
         self._quota_service = quota_service
         self._session = session
         self._prompt_manager = prompt_manager or get_prompt_manager()
+        self._conversation_summary_service = conversation_summary_service
 
     def _resolve_provider(
         self, request: ChatRequestSchema
@@ -439,6 +445,65 @@ class ChatService:
             and self._chat_store is not None
             and self._usage_store is not None
         )
+
+    def _memory_summary_active(self, caller: CallerContext | None) -> bool:
+        """Authenticated persisted chat with MEMORY_ENABLED and summary service."""
+        return (
+            self._settings.memory_enabled
+            and self._persistence_active(caller)
+            and caller is not None
+            and caller.kind == "user"
+            and self._conversation_summary_service is not None
+        )
+
+    async def _resolve_llm_messages(
+        self,
+        session_id: uuid.UUID,
+        request: ChatRequestSchema,
+        caller: CallerContext | None,
+    ) -> list[ChatMessageSchema]:
+        if not self._memory_summary_active(caller):
+            return request.messages
+        assert self._conversation_summary_service is not None
+        context_messages = (
+            await self._conversation_summary_service.build_context_messages(session_id)
+        )
+        return context_messages if context_messages else request.messages
+
+    async def _trigger_summarization(
+        self,
+        *,
+        caller: CallerContext,
+        session_id: uuid.UUID,
+        provider: LLMProvider,
+        provider_name: ProviderName,
+        model: str,
+    ) -> None:
+        if self._memory_summary_active(caller):
+            assert self._conversation_summary_service is not None
+            await self._conversation_summary_service.trigger_summarization(
+                delegate=self,
+                caller=caller,
+                session_id=session_id,
+                provider=provider,
+                provider_name=provider_name,
+                model=model,
+            )
+            return
+        try:
+            await self._maybe_summarize(
+                caller=caller,
+                session_id=session_id,
+                provider=provider,
+                provider_name=provider_name,
+                model=model,
+            )
+        except Exception:  # noqa: BLE001 - summary is best-effort
+            logger.warning(
+                "Conversation summarization failed",
+                session_id=str(session_id),
+                exc_info=True,
+            )
 
     @staticmethod
     def _last_user_content(request: ChatRequestSchema) -> str:
@@ -648,31 +713,9 @@ class ChatService:
         """
         if self._chat_store is None:
             return []
-        latest = await self._chat_store.get_latest_summary(session_id)
-        covered = latest.covers_through_seq if latest is not None else 0
-        pending = await self._chat_store.list_messages_after_seq(session_id, covered)
-
-        assembled: list[ChatMessageSchema] = []
-        if latest is not None:
-            summary_content = self._prompt_manager.render(
-                "chat",
-                "context_summary_prefix",
-                "1",
-                {"summary_content": latest.content},
-            )
-            assembled.append(
-                ChatMessageSchema.model_construct(
-                    role="system",
-                    content=summary_content,
-                )
-            )
-        for message in pending:
-            assembled.append(
-                ChatMessageSchema.model_construct(
-                    role=message.role, content=message.content
-                )
-            )
-        return assembled
+        return await assemble_context_messages(
+            self._chat_store, self._prompt_manager, session_id
+        )
 
     async def _maybe_summarize(
         self,
@@ -827,9 +870,13 @@ class ChatService:
             raise DbUnavailableError() from exc
 
         try:
+            llm_messages = await self._resolve_llm_messages(
+                chat_session.id, request, caller
+            )
+            llm_request = request.model_copy(update={"messages": llm_messages})
             completion = await self._complete_and_log(
                 provider,
-                request,
+                llm_request,
                 model,
                 provider_name,
                 caller=caller,
@@ -888,7 +935,7 @@ class ChatService:
         )
         await self._maybe_record_quota(caller, tokens=usage_tokens)
         await self._chat_store.mark_last_message_at(chat_session.id)
-        await self._maybe_summarize(
+        await self._trigger_summarization(
             caller=caller,
             session_id=chat_session.id,
             provider=provider,
@@ -1124,8 +1171,13 @@ class ChatService:
         stream_start = time.perf_counter()
 
         try:
+            stream_messages = request.messages
+            if prep is not None:
+                stream_messages = await self._resolve_llm_messages(
+                    prep.session_id, request, caller
+                )
             provider_stream = provider.stream_chat(
-                request.messages,
+                stream_messages,
                 model,
                 request.temperature,
                 max_tokens=resolve_max_tokens(
@@ -1311,7 +1363,8 @@ class ChatService:
             await self._maybe_record_quota(caller, tokens=record.total_tokens or 0)
         await self._chat_store.mark_last_message_at(prep.session_id)
         if status == "complete":
-            await self._maybe_summarize(
+            assert caller is not None
+            await self._trigger_summarization(
                 caller=caller,
                 session_id=prep.session_id,
                 provider=provider,
