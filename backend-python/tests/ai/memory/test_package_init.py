@@ -17,6 +17,7 @@ def test_public_api_surface_matches_phase_1_scope() -> None:
     module = importlib.import_module("app.ai.memory")
 
     assert set(module.__all__) == {
+        "ConversationSummaryService",
         "LifecycleState",
         "MemoryAccessDeniedError",
         "MemoryContext",
@@ -40,3 +41,4 @@ def test_subpackages_import_independently() -> None:
     importlib.import_module("app.ai.memory.interfaces.memory_provider")
     importlib.import_module("app.ai.memory.providers")
     importlib.import_module("app.ai.memory.providers.pgvector")
+    importlib.import_module("app.ai.memory.summarizer")

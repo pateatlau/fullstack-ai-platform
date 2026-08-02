@@ -28,6 +28,7 @@ from app.ai.deps import (
     get_tool_registry,
 )
 from app.ai.agent.runtime.default_agent import DefaultAgent
+from app.ai.memory.summarizer import ConversationSummaryService
 from app.ai.prompts.manager import PromptManager
 from app.ai.rag.context_builder import ContextBuilder
 from app.ai.rag.pipeline import AdvancedRetrievalPipeline
@@ -165,15 +166,20 @@ def get_chat_service(
 ) -> ChatService:
     if session is None:
         return ChatService(settings, prompt_manager=prompt_manager)
+    chat_store = SqlChatStore(session)
     return ChatService(
         settings,
-        chat_store=SqlChatStore(session),
+        chat_store=chat_store,
         usage_store=SqlUsageStore(session),
         quota_service=QuotaService(
             store=SqlGuestQuotaStore(session), settings=settings
         ),
         session=session,
         prompt_manager=prompt_manager,
+        conversation_summary_service=ConversationSummaryService(
+            chat_store=chat_store,
+            prompt_manager=prompt_manager,
+        ),
     )
 
 

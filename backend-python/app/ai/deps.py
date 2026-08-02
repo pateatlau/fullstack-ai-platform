@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from app.ai.mcp.registry import McpServerRegistry
     from app.ai.memory.manager import MemoryManager
     from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
+    from app.ai.memory.summarizer import ConversationSummaryService
     from app.ai.voice.config import VoiceConfig
     from app.ai.voice.interfaces import SttProvider, TtsProvider
     from app.ai.voice.interrupt import InterruptController
@@ -419,3 +420,17 @@ def get_memory_manager(
     from app.ai.memory.manager import MemoryManager
 
     return MemoryManager(provider=provider)
+
+
+def get_conversation_summary_service(
+    session: AsyncSession = Depends(get_db_session),
+    prompt_manager: PromptManager = Depends(get_prompt_manager),
+) -> "ConversationSummaryService":
+    """Return a request-scoped summary façade over ``session_summaries``."""
+    from app.ai.memory.summarizer import ConversationSummaryService
+    from app.db.chat import SqlChatStore
+
+    return ConversationSummaryService(
+        chat_store=SqlChatStore(session),
+        prompt_manager=prompt_manager,
+    )
