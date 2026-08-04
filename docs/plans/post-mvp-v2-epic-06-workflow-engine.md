@@ -1215,7 +1215,7 @@ Implement `WorkflowExecutor` for the simple case: a linear or branching (but non
 ### Execution Engine
 
 - [x] Implement `NodeExecutor` Protocol.
-- [x] Implement `WorkflowExecutor.step()` — resolve ready nodes, execute, advance.
+- [x] Implement `WorkflowExecutor.execute_run()` — resolve ready nodes, execute, advance until terminal/paused.
 - [x] Implement the ready-node resolver for sequential/branching (non-parallel) graphs.
 - [x] Implement run completion detection (no more ready nodes, no pending branches).
 
@@ -1232,7 +1232,7 @@ Implement `WorkflowExecutor` for the simple case: a linear or branching (but non
 - [x] Implement `WorkflowManager.start_run(definition_id, trigger_input, idempotency_key, owner_id)`.
 - [x] Create `WorkflowRun` (`status=running`) when no run exists for `(owner_id, definition_id, idempotency_key)`; otherwise return the existing run without scheduling a duplicate executor.
 - [x] Schedule `WorkflowExecutor` on an in-process `asyncio.Task`, and return `run_id` + status snapshot immediately (do not block until terminal completion).
-- [x] Implement `WorkflowManager.get_run(run_id)` with full node execution history.
+- [x] Implement `WorkflowManager.get_run(run_id)` — returns owned `WorkflowRun` snapshot only (node execution history via `WorkflowStore.get_run_with_executions()`; `WorkflowManager` wrapper lands in Phase 9).
 - [x] Implement `WorkflowManager.list_runs()` (owner-scoped).
 
 ### Checkpointing

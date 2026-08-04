@@ -94,6 +94,15 @@ class WorkflowExecutor:
         while run.status is RunStatus.RUNNING:
             ready_node_ids = resolve_ready_nodes(definition, run)
             if not ready_node_ids:
+                if run.current_node_ids:
+                    # In-progress nodes remain (e.g. crash mid-execution); leave
+                    # status=running for Phase 8 resume rather than false-complete.
+                    _logger.warning(
+                        "Workflow run stalled with in-progress nodes",
+                        run_id=str(run.id),
+                        current_node_ids=list(run.current_node_ids),
+                    )
+                    break
                 run = await self._complete_run(run)
                 break
             run = await self._execute_node(run, nodes_by_id[ready_node_ids[0]])

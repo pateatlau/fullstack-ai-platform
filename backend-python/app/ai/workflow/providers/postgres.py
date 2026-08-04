@@ -19,6 +19,7 @@ import uuid
 
 from pydantic import ValidationError
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.workflow.exceptions import WorkflowNotFoundError, WorkflowValidationError
@@ -172,12 +173,62 @@ class PostgresWorkflowStore:
         return [_definition_to_domain(row) for row in rows]
 
     async def create_run(self, run: WorkflowRun) -> WorkflowRun:
+        persisted, _ = await self._persist_run_idempotently(run)
+        return persisted
+
+    async def get_or_create_run(self, run: WorkflowRun) -> tuple[WorkflowRun, bool]:
+        return await self._persist_run_idempotently(run)
+
+    async def _persist_run_idempotently(
+        self, run: WorkflowRun
+    ) -> tuple[WorkflowRun, bool]:
         row = _run_to_orm(run)
-        self._session.add(row)
-        await self._session.flush()
+        stmt = (
+            pg_insert(WorkflowRunRecord)
+            .values(
+                id=row.id,
+                workflow_definition_id=row.workflow_definition_id,
+                owner_id=row.owner_id,
+                idempotency_key=row.idempotency_key,
+                session_id=row.session_id,
+                status=row.status,
+                context=row.context,
+                current_node_ids=row.current_node_ids,
+                checkpoint_version=row.checkpoint_version,
+                error=row.error,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+                started_at=row.started_at,
+                completed_at=row.completed_at,
+            )
+            .on_conflict_do_nothing(
+                constraint="uq_workflow_runs_owner_definition_idempotency"
+            )
+            .returning(WorkflowRunRecord.id)
+        )
+        inserted_id = (await self._session.execute(stmt)).scalar_one_or_none()
         await self._session.commit()
-        await self._session.refresh(row)
-        return _run_to_domain(row)
+        if inserted_id is not None:
+            persisted = await self._session.scalar(
+                select(WorkflowRunRecord).where(WorkflowRunRecord.id == inserted_id)
+            )
+            if persisted is None:
+                raise WorkflowValidationError(
+                    "Workflow run insert succeeded but row was not found."
+                )
+            await self._session.refresh(persisted)
+            return _run_to_domain(persisted), True
+
+        existing = await self.get_run_by_idempotency_key(
+            owner_id=run.owner_id,
+            workflow_definition_id=run.workflow_definition_id,
+            idempotency_key=run.idempotency_key,
+        )
+        if existing is None:
+            raise WorkflowValidationError(
+                "Workflow run idempotency conflict without an existing row."
+            )
+        return existing, False
 
     async def get_run(
         self, run_id: uuid.UUID, *, owner_id: uuid.UUID
@@ -274,7 +325,13 @@ class PostgresWorkflowStore:
     async def append_node_execution(
         self, execution: WorkflowNodeExecution
     ) -> WorkflowNodeExecution:
-        existing = await self._session.get(WorkflowNodeExecutionRecord, execution.id)
+        existing = await self._session.scalar(
+            select(WorkflowNodeExecutionRecord).where(
+                WorkflowNodeExecutionRecord.run_id == execution.run_id,
+                WorkflowNodeExecutionRecord.node_id == execution.node_id,
+                WorkflowNodeExecutionRecord.attempt == execution.attempt,
+            )
+        )
         if existing is None:
             row = _node_execution_to_orm(execution)
             self._session.add(row)

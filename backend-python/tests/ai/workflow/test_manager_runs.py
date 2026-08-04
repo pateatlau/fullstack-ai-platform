@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import uuid
 
@@ -161,3 +162,91 @@ async def test_list_runs_is_owner_scoped() -> None:
     owned_runs = await manager.list_runs(owner_id=owner_id)
     assert len(owned_runs) == 1
     assert owned_runs[0].owner_id == owner_id
+
+
+@pytest.mark.anyio
+async def test_start_run_normalizes_idempotency_key_whitespace() -> None:
+    store = FakeWorkflowStore()
+    owner_id = uuid.uuid4()
+    definition = await store.create_definition(_active_definition(owner_id))
+    manager = WorkflowManager(store)
+    schedule_count = 0
+    original_schedule = manager._schedule_run
+
+    def counting_schedule(
+        run_id: uuid.UUID, *, owner_id: uuid.UUID
+    ) -> asyncio.Task[None]:
+        nonlocal schedule_count
+        schedule_count += 1
+        return original_schedule(run_id, owner_id=owner_id)
+
+    manager._schedule_run = counting_schedule  # type: ignore[method-assign]
+
+    first = await manager.start_run(
+        definition.id, owner_id=owner_id, idempotency_key="  key-1  "
+    )
+    await _await_scheduled(manager)
+    second = await manager.start_run(
+        definition.id, owner_id=owner_id, idempotency_key="key-1"
+    )
+
+    assert first.id == second.id
+    assert first.idempotency_key == "key-1"
+    assert schedule_count == 1
+
+
+@pytest.mark.anyio
+async def test_start_run_rejects_blank_idempotency_key() -> None:
+    store = FakeWorkflowStore()
+    owner_id = uuid.uuid4()
+    definition = await store.create_definition(_active_definition(owner_id))
+    manager = WorkflowManager(store)
+
+    with pytest.raises(WorkflowValidationError, match="idempotency_key"):
+        await manager.start_run(definition.id, owner_id=owner_id, idempotency_key="   ")
+
+
+@pytest.mark.anyio
+async def test_start_run_rejects_invalid_trigger_input_keys() -> None:
+    store = FakeWorkflowStore()
+    owner_id = uuid.uuid4()
+    definition = await store.create_definition(_active_definition(owner_id))
+    manager = WorkflowManager(store)
+
+    with pytest.raises(WorkflowValidationError, match="trigger_input key"):
+        await manager.start_run(
+            definition.id,
+            owner_id=owner_id,
+            idempotency_key="key-1",
+            trigger_input={"fetch-user": "value"},
+        )
+
+
+@pytest.mark.anyio
+async def test_start_run_concurrent_requests_deduplicate() -> None:
+    store = FakeWorkflowStore()
+    owner_id = uuid.uuid4()
+    definition = await store.create_definition(_active_definition(owner_id))
+    manager = WorkflowManager(store)
+    schedule_count = 0
+    original_schedule = manager._schedule_run
+
+    def counting_schedule(
+        run_id: uuid.UUID, *, owner_id: uuid.UUID
+    ) -> asyncio.Task[None]:
+        nonlocal schedule_count
+        schedule_count += 1
+        return original_schedule(run_id, owner_id=owner_id)
+
+    manager._schedule_run = counting_schedule  # type: ignore[method-assign]
+
+    results = await asyncio.gather(
+        *[
+            manager.start_run(definition.id, owner_id=owner_id, idempotency_key="key-1")
+            for _ in range(5)
+        ]
+    )
+
+    assert len({run.id for run in results}) == 1
+    assert schedule_count == 1
+    await _await_scheduled(manager)

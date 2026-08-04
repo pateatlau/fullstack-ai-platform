@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.ai.workflow.models.identifiers import validate_identifier_dict_keys
 
 
 class WorkflowContext(BaseModel):
@@ -15,3 +17,10 @@ class WorkflowContext(BaseModel):
     trigger_input: dict[str, object] = Field(default_factory=dict)
     variables: dict[str, object] = Field(default_factory=dict)
     metadata: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("trigger_input")
+    @classmethod
+    def _validate_trigger_input_keys(
+        cls, value: dict[str, object]
+    ) -> dict[str, object]:
+        return validate_identifier_dict_keys(value)

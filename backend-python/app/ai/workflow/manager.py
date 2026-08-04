@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.workflow.engine.background import schedule_run_task
@@ -30,6 +31,7 @@ from app.ai.workflow.models import (
     WorkflowDefinition,
     WorkflowRun,
 )
+from app.ai.workflow.models.run import normalize_idempotency_key
 from app.core.logging import get_logger
 
 if TYPE_CHECKING:
@@ -200,13 +202,10 @@ class WorkflowManager:
         instead of scheduling duplicate work (Part I § Run launch contract).
         Never blocks until terminal completion — callers poll ``get_run()``.
         """
-        existing = await self._store.get_run_by_idempotency_key(
-            owner_id=owner_id,
-            workflow_definition_id=definition_id,
-            idempotency_key=idempotency_key,
-        )
-        if existing is not None:
-            return existing
+        try:
+            normalized_key = normalize_idempotency_key(idempotency_key)
+        except ValueError as exc:
+            raise WorkflowValidationError(str(exc)) from exc
 
         definition = await self._store.get_definition(definition_id, owner_id=owner_id)
         if definition is None:
@@ -219,23 +218,28 @@ class WorkflowManager:
             )
 
         now = datetime.datetime.now(datetime.UTC)
+        try:
+            context = WorkflowContext(trigger_input=trigger_input or {})
+        except ValidationError as exc:
+            raise WorkflowValidationError(str(exc)) from exc
         run = WorkflowRun(
             id=uuid.uuid4(),
             workflow_definition_id=definition_id,
             owner_id=owner_id,
-            idempotency_key=idempotency_key,
+            idempotency_key=normalized_key,
             session_id=session_id,
             status=RunStatus.RUNNING,
-            context=WorkflowContext(trigger_input=trigger_input or {}),
+            context=context,
             current_node_ids=[],
             checkpoint_version=0,
             created_at=now,
             updated_at=now,
             started_at=now,
         )
-        created = await self._store.create_run(run)
-        self._schedule_run(created.id, owner_id=owner_id)
-        return created
+        result, created = await self._store.get_or_create_run(run)
+        if created:
+            self._schedule_run(result.id, owner_id=owner_id)
+        return result
 
     def _schedule_run(
         self, run_id: uuid.UUID, *, owner_id: uuid.UUID

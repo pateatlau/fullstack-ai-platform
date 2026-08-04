@@ -11,11 +11,14 @@ import re
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext
 from app.ai.workflow.models import WorkflowContext, WorkflowNode
+from app.ai.workflow.models.identifiers import IDENTIFIER_SEGMENT
 from app.ai.workflow.nodes.base import NodeExecutionRequest, WorkflowNodeExecutionError
 from app.core.caller import CallerContext
 
 #: Matches a whole-string placeholder such as ``"{{trigger_input.topic}}"``.
-_PLACEHOLDER = re.compile(r"^\{\{\s*([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*)\s*\}\}$")
+_PLACEHOLDER = re.compile(
+    rf"^\{{\{{\s*({IDENTIFIER_SEGMENT}(?:\.{IDENTIFIER_SEGMENT})*)\s*\}}\}}$"
+)
 
 
 class TaskNodeExecutor:

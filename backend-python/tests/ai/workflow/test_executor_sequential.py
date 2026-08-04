@@ -281,6 +281,36 @@ async def test_missing_node_executor_fails_node_not_run() -> None:
 
 
 @pytest.mark.anyio
+async def test_execute_run_leaves_stalled_run_running_with_in_progress_nodes() -> None:
+    """A checkpoint with in-flight nodes must not be falsely marked completed."""
+    owner_id = uuid.uuid4()
+    store = FakeWorkflowStore()
+    definition = _definition(
+        nodes=[
+            WorkflowNode(id="start", type=NodeType.TASK, config={}),
+            WorkflowNode(id="end", type=NodeType.TERMINAL, config={}),
+        ],
+        edges=[WorkflowEdge(id="e1", from_node_id="start", to_node_id="end")],
+        owner_id=owner_id,
+    )
+    await store.create_definition(definition)
+    run = await store.create_run(
+        _run(owner_id=owner_id, definition_id=definition.id).model_copy(
+            update={"current_node_ids": ["start"]}
+        )
+    )
+    task_executor = FakeNodeExecutor(output={"data": "ok"})
+    executor = WorkflowExecutor(store, {NodeType.TASK: task_executor})
+
+    result = await executor.execute_run(run.id, owner_id=owner_id)
+
+    assert result.status is RunStatus.RUNNING
+    assert result.current_node_ids == ["start"]
+    assert result.completed_at is None
+    assert task_executor.calls == []
+
+
+@pytest.mark.anyio
 async def test_execute_run_raises_for_missing_run() -> None:
     store = FakeWorkflowStore()
     executor = WorkflowExecutor(store, {})
