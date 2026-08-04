@@ -14,7 +14,7 @@ from app.ai.memory.events import MemoryEvent, MemoryEventType
 from app.ai.memory.exceptions import MemoryAccessDeniedError
 from app.ai.memory.lifecycle import LifecycleState
 from app.ai.memory.manager import MemoryManager
-from app.ai.memory.models import MemoryRecord, MemoryScope, MemoryType
+from app.ai.memory.models import MemoryContext, MemoryRecord, MemoryScope, MemoryType
 from app.ai.prompts.manager import create_prompt_manager
 from app.core.config import Settings
 from app.providers.base import LLMProvider
@@ -736,3 +736,106 @@ class TestMemoryManagerExtraction:
         )
 
         session.rollback.assert_awaited_once()
+
+
+class TestMemoryManagerRetrieveContext:
+    @pytest.mark.anyio
+    async def test_retrieve_context_builds_semantic_memory_context(self) -> None:
+        owner_id = uuid.uuid4()
+        session_id = uuid.uuid4()
+        provider = FakeMemoryProvider()
+        embedding = [0.1] * DIMENSIONS
+        project_embedding = [0.9] * DIMENSIONS
+        provider.existing_records = [
+            MemoryRecord(
+                id=uuid.uuid4(),
+                memory_type=MemoryType.USER,
+                scope=MemoryScope.USER,
+                owner_id=owner_id,
+                content="User prefers TypeScript.",
+                embedding=embedding,
+                confidence=0.9,
+                quality_score=0.9,
+                created_at=_NOW,
+                updated_at=_NOW,
+                lifecycle_state=LifecycleState.ACTIVE,
+                source="test",
+            ),
+            MemoryRecord(
+                id=uuid.uuid4(),
+                memory_type=MemoryType.PROJECT,
+                scope=MemoryScope.PROJECT,
+                owner_id=owner_id,
+                project_id=session_id,
+                content="Project uses FastAPI.",
+                embedding=project_embedding,
+                confidence=0.9,
+                quality_score=0.9,
+                created_at=_NOW,
+                updated_at=_NOW,
+                lifecycle_state=LifecycleState.ACTIVE,
+                source="test",
+            ),
+        ]
+        await provider.set_preference(
+            user_id=owner_id,
+            key="response_tone",
+            value={"tone": "concise"},
+        )
+        manager = _manager(
+            provider,
+            session_ownership_checker=_AlwaysOwnsSessionChecker(),
+        )
+
+        context = await manager.retrieve_context(
+            owner_id=owner_id,
+            session_id=session_id,
+            messages=[ChatMessageSchema(role="user", content="What stack do we use?")],
+            conversation_summary="Discussing backend architecture.",
+        )
+
+        assert context.conversation_summary == "Discussing backend architecture."
+        assert len(context.user_memories) == 1
+        assert len(context.project_memories) == 1
+        assert context.preferences == {"response_tone": {"tone": "concise"}}
+        assert "retrieval_latency_ms" in context.metadata
+
+    @pytest.mark.anyio
+    async def test_retrieve_context_returns_empty_when_memory_disabled(self) -> None:
+        provider = FakeMemoryProvider()
+        manager = _manager(
+            provider,
+            settings=Settings(
+                openai_api_key="test-key",
+                memory_enabled=False,
+                embedding_dimensions=DIMENSIONS,
+            ),
+        )
+
+        context = await manager.retrieve_context(
+            owner_id=uuid.uuid4(),
+            session_id=uuid.uuid4(),
+            messages=[ChatMessageSchema(role="user", content="Hello")],
+        )
+
+        assert context == MemoryContext()
+
+    @pytest.mark.anyio
+    async def test_retrieve_context_returns_summary_on_failure(self) -> None:
+        provider = FakeMemoryProvider()
+
+        async def failing_search(*args, **kwargs):  # noqa: ANN002, ANN003
+            raise RuntimeError("search unavailable")
+
+        provider.search_records = failing_search  # type: ignore[method-assign]
+        manager = _manager(provider)
+
+        context = await manager.retrieve_context(
+            owner_id=uuid.uuid4(),
+            session_id=None,
+            messages=[ChatMessageSchema(role="user", content="Hello")],
+            conversation_summary="Keep summary.",
+        )
+
+        assert context.conversation_summary == "Keep summary."
+        assert context.user_memories == []

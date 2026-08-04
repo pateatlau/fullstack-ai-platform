@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.memory.exceptions import MemoryAccessDeniedError
 from app.ai.memory.background_tasks import schedule_extraction_task
 from app.ai.memory.context_builder import MemoryContextBuilder
+from app.ai.memory.semantic_retriever import SemanticRetriever
 from app.ai.memory.events import (
     LoggingMemoryEventPublisher,
     MemoryEvent,
@@ -140,8 +141,52 @@ class MemoryManager:
         self, *, user_id: uuid.UUID, context: MemoryContext | None = None
     ) -> MemoryContext:
         """Load normalized preferences into a ``MemoryContext``."""
-        builder = MemoryContextBuilder(self._provider)
+        builder = MemoryContextBuilder(self._provider, settings=self._settings)
         return await builder.with_preferences(user_id, context=context)
+
+    async def retrieve_context(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        session_id: uuid.UUID | None,
+        messages: list[ChatMessageSchema],
+        conversation_summary: str | None = None,
+    ) -> MemoryContext:
+        """Retrieve ranked semantic memories and build a canonical ``MemoryContext``."""
+        if not self._retrieval_enabled():
+            return MemoryContext()
+
+        assert self._settings is not None
+        assert self._embedding_provider is not None
+
+        retriever = SemanticRetriever(
+            self._provider,
+            self._embedding_provider,
+            self._settings,
+            session_ownership_checker=self._session_ownership_checker,
+        )
+        builder = MemoryContextBuilder(self._provider, settings=self._settings)
+
+        try:
+            retrieval = await retriever.retrieve(
+                owner_id=owner_id,
+                messages=messages,
+                conversation_summary=conversation_summary,
+                project_id=session_id,
+            )
+            context = builder.build_from_retrieval(
+                retrieval,
+                conversation_summary=conversation_summary,
+            )
+            return await builder.with_preferences(owner_id, context=context)
+        except Exception:  # noqa: BLE001 - retrieval must not block callers
+            logger.warning(
+                "Semantic memory context retrieval failed",
+                owner_id=str(owner_id),
+                session_id=str(session_id) if session_id is not None else None,
+                exc_info=True,
+            )
+            return MemoryContext(conversation_summary=conversation_summary)
 
     async def list_project_memories(
         self, *, owner_id: uuid.UUID, project_id: uuid.UUID
@@ -261,7 +306,7 @@ class MemoryManager:
             )
             return context or MemoryContext()
 
-        builder = MemoryContextBuilder(self._provider)
+        builder = MemoryContextBuilder(self._provider, settings=self._settings)
         return await builder.with_project_memories(
             owner_id,
             validated_project_id,
@@ -581,3 +626,10 @@ class MemoryManager:
         if not self._settings.memory_extraction_enabled:
             return False
         return self._embedding_provider is not None and self._prompt_manager is not None
+
+    def _retrieval_enabled(self) -> bool:
+        if self._settings is None:
+            return False
+        if not self._settings.memory_enabled:
+            return False
+        return self._embedding_provider is not None

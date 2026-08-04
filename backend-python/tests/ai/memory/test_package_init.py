@@ -35,6 +35,7 @@ def test_public_api_surface_matches_phase_1_scope() -> None:
         "MemoryScope",
         "MemoryType",
         "PgVectorMemoryProvider",
+        "SemanticRetriever",
         "UserPreferenceItem",
         "UserPreferenceListResponse",
         "UserPreferenceUpsert",
@@ -56,3 +57,5 @@ def test_subpackages_import_independently() -> None:
     importlib.import_module("app.ai.memory.preferences")
     importlib.import_module("app.ai.memory.project")
     importlib.import_module("app.ai.memory.context_builder")
+    importlib.import_module("app.ai.memory.semantic_retriever")
+    importlib.import_module("app.ai.memory.token_budget")

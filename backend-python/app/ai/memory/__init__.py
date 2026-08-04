@@ -1,8 +1,8 @@
 """Memory subsystem public API (stable after Phase 1).
 
 See ``docs/plans/post-mvp-v2-epic-05-memory-system.md`` Part I § Public APIs.
-Components not yet implemented (``SemanticRetriever``, ``MemoryPromptInjector``,
-``MemoryPolicyEngine``, ``LifecycleManager``) are added in later phases.
+Components not yet implemented (``MemoryPromptInjector``, ``MemoryPolicyEngine``,
+``LifecycleManager``) are added in later phases.
 """
 
 from app.ai.memory.context_builder import MemoryContextBuilder
@@ -27,6 +27,7 @@ from app.ai.memory.models import (
 )
 from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
 from app.ai.memory.quality import MemoryQualityEvaluator
+from app.ai.memory.semantic_retriever import SemanticRetriever
 from app.ai.memory.summarizer import ConversationSummaryService
 
 __all__ = [
@@ -48,6 +49,7 @@ __all__ = [
     "MemoryScope",
     "MemoryType",
     "PgVectorMemoryProvider",
+    "SemanticRetriever",
     "UserPreferenceItem",
     "UserPreferenceListResponse",
     "UserPreferenceUpsert",
