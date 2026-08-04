@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.ai.memory.exceptions import MemoryNotFoundError
+from app.ai.memory.exceptions import MemoryAccessDeniedError, MemoryNotFoundError
 from app.ai.memory.interfaces import MemoryProvider
 from app.ai.memory.lifecycle import LifecycleState
 from app.ai.memory.models import MemoryRecord, MemoryScope, MemoryType
@@ -272,10 +272,67 @@ async def test_update_record_rejects_cross_session_project_move(db_session) -> N
     )
     moved = created.model_copy(update={"project_id": session_b})
 
-    from app.ai.memory.exceptions import MemoryAccessDeniedError
-
     with pytest.raises(MemoryAccessDeniedError, match="different session"):
         await provider.update_record(moved)
+
+
+@pytest.mark.anyio
+async def test_update_record_rejects_project_to_user_conversion(db_session) -> None:
+    owner_id = await _make_user(db_session)
+    session_id = await _make_session(db_session, user_id=owner_id)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+    created = await provider.create_record(
+        _domain_record(
+            owner_id=owner_id, project_id=session_id, content="Project fact."
+        )
+    )
+    demoted = created.model_copy(
+        update={
+            "memory_type": MemoryType.USER,
+            "scope": MemoryScope.USER,
+            "project_id": None,
+        }
+    )
+
+    with pytest.raises(MemoryAccessDeniedError, match="user scope"):
+        await provider.update_record(demoted)
+
+
+@pytest.mark.anyio
+async def test_update_record_rejects_user_to_project_conversion(db_session) -> None:
+    owner_id = await _make_user(db_session)
+    session_id = await _make_session(db_session, user_id=owner_id)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+    created = await provider.create_record(_domain_record(owner_id=owner_id))
+    promoted = created.model_copy(
+        update={
+            "memory_type": MemoryType.PROJECT,
+            "scope": MemoryScope.PROJECT,
+            "project_id": session_id,
+        }
+    )
+
+    with pytest.raises(MemoryAccessDeniedError, match="project scope"):
+        await provider.update_record(promoted)
+
+
+@pytest.mark.anyio
+async def test_update_record_preserves_project_memory_type(db_session) -> None:
+    owner_id = await _make_user(db_session)
+    session_id = await _make_session(db_session, user_id=owner_id)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+    created = await provider.create_record(
+        _domain_record(owner_id=owner_id, project_id=session_id, content="Before.")
+    )
+    updated = created.model_copy(update={"content": "After."})
+
+    persisted = await provider.update_record(updated)
+    fetched = await provider.get_record(created.id, owner_id=owner_id)
+
+    assert persisted.memory_type is MemoryType.PROJECT
+    assert fetched is not None
+    assert fetched.memory_type is MemoryType.PROJECT
+    assert fetched.content == "After."
 
 
 @pytest.mark.anyio
