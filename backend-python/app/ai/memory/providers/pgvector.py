@@ -2,24 +2,24 @@
 
 Phase 3 implements durable record CRUD and similarity search for dedupe.
 Phase 4 implements structured preference persistence. Phase 5 enforces project
-memory session isolation on updates. Lifecycle updates land in Phase 7.
+memory session isolation on updates. Phase 7 implements lifecycle updates,
+soft deletion, and record listing for the REST API.
 """
 
 from __future__ import annotations
 
+import datetime
 import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.memory.exceptions import MemoryAccessDeniedError, MemoryNotFoundError
-from app.ai.memory.lifecycle import LifecycleState
+from app.ai.memory.lifecycle import LifecycleState, validate_transition
 from app.ai.memory.models import MemoryRecord, MemoryScope, MemoryType
 from app.core.config import Settings
 from app.db.models import MemoryRecord as DbMemoryRecord
 from app.db.models import UserPreference as DbUserPreference
-
-_NOT_IMPLEMENTED = "PgVectorMemoryProvider.{method}() is implemented in {phase}."
 
 
 class PgVectorMemoryProvider:
@@ -70,8 +70,25 @@ class PgVectorMemoryProvider:
         return _to_domain(existing)
 
     async def delete_record(self, record_id: uuid.UUID, *, owner_id: uuid.UUID) -> None:
-        raise NotImplementedError(
-            _NOT_IMPLEMENTED.format(method="delete_record", phase="Phase 7")
+        existing = await self._session.scalar(
+            select(DbMemoryRecord).where(
+                DbMemoryRecord.id == record_id,
+                DbMemoryRecord.owner_id == owner_id,
+            )
+        )
+        if existing is None:
+            raise MemoryNotFoundError(
+                f"Memory record {record_id} not found for owner {owner_id}."
+            )
+        if LifecycleState(existing.lifecycle_state) is LifecycleState.DELETED:
+            return
+        await self.update_lifecycle_state(
+            record_id,
+            owner_id=owner_id,
+            state=LifecycleState.DELETED,
+            metadata={
+                "deleted_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+            },
         )
 
     async def get_record(
@@ -106,6 +123,7 @@ class PgVectorMemoryProvider:
                 DbMemoryRecord.owner_id == owner_id,
                 DbMemoryRecord.embedding.is_not(None),
                 DbMemoryRecord.lifecycle_state != LifecycleState.DELETED.value,
+                DbMemoryRecord.lifecycle_state != LifecycleState.ARCHIVED.value,
             )
             .order_by(distance)
             .limit(top_k)
@@ -149,16 +167,70 @@ class PgVectorMemoryProvider:
         rows = (await self._session.execute(stmt)).scalars().all()
         return [_to_domain(row) for row in rows]
 
+    async def list_records(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        memory_type: MemoryType | None = None,
+        session_id: uuid.UUID | None = None,
+        lifecycle_state: LifecycleState | None = None,
+        include_deleted: bool = False,
+        limit: int = 100,
+    ) -> list[MemoryRecord]:
+        """List caller-owned records for management APIs and lifecycle passes."""
+        stmt = (
+            select(DbMemoryRecord)
+            .where(DbMemoryRecord.owner_id == owner_id)
+            .order_by(DbMemoryRecord.created_at.desc())
+            .limit(limit)
+        )
+        if not include_deleted:
+            stmt = stmt.where(
+                DbMemoryRecord.lifecycle_state != LifecycleState.DELETED.value
+            )
+        if memory_type is not None:
+            stmt = stmt.where(DbMemoryRecord.memory_type == memory_type.value)
+        if session_id is not None:
+            stmt = stmt.where(DbMemoryRecord.session_id == session_id)
+        if lifecycle_state is not None:
+            stmt = stmt.where(DbMemoryRecord.lifecycle_state == lifecycle_state.value)
+
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [_to_domain(row) for row in rows]
+
     async def update_lifecycle_state(
         self,
         record_id: uuid.UUID,
         *,
         owner_id: uuid.UUID,
         state: LifecycleState,
+        metadata: dict[str, object] | None = None,
     ) -> MemoryRecord:
-        raise NotImplementedError(
-            _NOT_IMPLEMENTED.format(method="update_lifecycle_state", phase="Phase 7")
+        existing = await self._session.scalar(
+            select(DbMemoryRecord).where(
+                DbMemoryRecord.id == record_id,
+                DbMemoryRecord.owner_id == owner_id,
+            )
         )
+        if existing is None:
+            raise MemoryNotFoundError(
+                f"Memory record {record_id} not found for owner {owner_id}."
+            )
+
+        current = LifecycleState(existing.lifecycle_state)
+        validate_transition(current, state)
+
+        merged_metadata = dict(existing.metadata_json)
+        if metadata:
+            merged_metadata.update(metadata)
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        existing.lifecycle_state = state.value
+        existing.metadata_json = merged_metadata
+        existing.updated_at = now
+        await self._session.flush()
+        await self._session.refresh(existing)
+        return _to_domain(existing)
 
     async def get_preference(
         self, *, user_id: uuid.UUID, key: str

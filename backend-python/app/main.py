@@ -16,7 +16,7 @@ from app.core.logging import bind_context, get_logger, setup_logging
 from app.db.engine import get_engine
 from app.middleware.correlation_id import correlation_id_middleware
 from app.middleware.rate_limit import rate_limit_middleware
-from app.routers import auth, chat, documents, health, rag
+from app.routers import auth, chat, documents, health, memory, rag
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -73,6 +73,7 @@ app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(documents.router)
 app.include_router(rag.router)
+app.include_router(memory.router)
 
 if settings.voice_enabled:
     from app.routers.voice import create_voice_router

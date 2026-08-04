@@ -16,7 +16,10 @@ from typing import TYPE_CHECKING, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.memory.exceptions import MemoryAccessDeniedError
-from app.ai.memory.background_tasks import schedule_extraction_task
+from app.ai.memory.background_tasks import (
+    schedule_extraction_task,
+    schedule_lifecycle_task,
+)
 from app.ai.memory.context_builder import MemoryContextBuilder
 from app.ai.memory.semantic_retriever import SemanticRetriever
 from app.ai.memory.events import (
@@ -29,6 +32,7 @@ from app.ai.memory.events import (
 from app.ai.memory.extraction import CandidateMemory, MemoryExtractor
 from app.ai.memory.interfaces.memory_provider import MemoryProvider
 from app.ai.memory.lifecycle import LifecycleState
+from app.ai.memory.lifecycle_manager import LifecycleManager
 from app.ai.memory.models import MemoryContext, MemoryRecord, MemoryScope, MemoryType
 from app.ai.memory.preferences import (
     normalize_preferences,
@@ -49,6 +53,7 @@ from app.schemas.chat import ChatMessageSchema, ProviderName
 if TYPE_CHECKING:
     from app.ai.interfaces.embedding_provider import EmbeddingProvider
     from app.ai.prompts.manager import PromptManager
+    from app.ai.memory.summarizer import ConversationSummaryService
     from app.core.config import Settings
     from app.providers.base import LLMProvider
 
@@ -71,6 +76,7 @@ class MemoryManager:
         embedding_provider: EmbeddingProvider | None = None,
         prompt_manager: PromptManager | None = None,
         event_publisher: MemoryEventPublisher | None = None,
+        lifecycle_manager: LifecycleManager | None = None,
         background_provider_factory: BackgroundProviderFactory | None = None,
         session_ownership_checker: SessionOwnershipChecker | None = None,
     ) -> None:
@@ -79,6 +85,7 @@ class MemoryManager:
         self._embedding_provider = embedding_provider
         self._prompt_manager = prompt_manager
         self._event_publisher = event_publisher or LoggingMemoryEventPublisher()
+        self._lifecycle_manager = lifecycle_manager
         self._background_provider_factory = background_provider_factory
         self._session_ownership_checker = session_ownership_checker
 
@@ -89,8 +96,54 @@ class MemoryManager:
         return await self._provider.get_record(record_id, owner_id=owner_id)
 
     async def delete_record(self, record_id: uuid.UUID, *, owner_id: uuid.UUID) -> None:
-        """Delete an owned memory record via the configured provider."""
-        await self._provider.delete_record(record_id, owner_id=owner_id)
+        """Soft-delete an owned memory record via lifecycle management."""
+        manager = self._require_lifecycle_manager()
+        await manager.delete_record(record_id, owner_id=owner_id)
+
+    async def list_records(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        memory_type: MemoryType,
+        session_id: uuid.UUID | None = None,
+    ) -> list[MemoryRecord]:
+        """Return caller-owned records for management APIs (excludes deleted)."""
+        if memory_type is MemoryType.PROJECT:
+            validated_session = validate_project_id(session_id) if session_id else None
+            if validated_session is None:
+                raise ValueError("session_id is required for project memory.")
+            await self._assert_session_owned(
+                owner_id=owner_id, project_id=validated_session
+            )
+            list_records = getattr(self._provider, "list_records", None)
+            if list_records is None:
+                return []
+            records = await list_records(
+                owner_id=owner_id,
+                memory_type=MemoryType.PROJECT,
+                session_id=map_project_id_to_session_id(validated_session),
+                include_deleted=False,
+            )
+            return normalize_project_memories(records)
+
+        list_records = getattr(self._provider, "list_records", None)
+        if list_records is None:
+            return []
+        return await list_records(
+            owner_id=owner_id,
+            memory_type=MemoryType.USER,
+            include_deleted=False,
+        )
+
+    async def clear_session_summary(
+        self,
+        *,
+        session_id: uuid.UUID,
+        owner_id: uuid.UUID,
+        summary_service: ConversationSummaryService,
+    ) -> None:
+        """Clear rolling summaries for an owned chat session."""
+        await summary_service.clear_summary(session_id=session_id, owner_id=owner_id)
 
     async def get_preference(
         self, *, user_id: uuid.UUID, key: str
@@ -442,6 +495,7 @@ class MemoryManager:
             from app.db.engine import get_sessionmaker
 
             sessionmaker = get_sessionmaker()
+            bg_provider: MemoryProvider | None = None
             async with sessionmaker() as session:
                 try:
                     bg_provider = self._background_provider_factory(session)
@@ -472,6 +526,12 @@ class MemoryManager:
                 except Exception:
                     await session.rollback()
                     raise
+            assert bg_provider is not None
+            await self._schedule_lifecycle_processing(
+                provider=bg_provider,
+                owner_id=owner_id,
+                session_id=session_id,
+            )
             return
 
         existing_records = await self._load_existing_records(
@@ -494,6 +554,11 @@ class MemoryManager:
                 provider_name=provider_name,
                 extraction_model=extraction_model,
             )
+        await self._schedule_lifecycle_processing(
+            provider=self._provider,
+            owner_id=owner_id,
+            session_id=session_id,
+        )
 
     async def _persist_candidate(
         self,
@@ -568,13 +633,90 @@ class MemoryManager:
                     metadata=MemoryEventMetadata(source=persisted.source),
                 )
             )
+            activated = await self._activate_persisted_record(provider, persisted)
             logger.info(
                 "Durable memory persisted",
-                record_id=str(persisted.id),
-                owner_id=str(persisted.owner_id),
-                memory_type=persisted.memory_type.value,
+                record_id=str(activated.id),
+                owner_id=str(activated.owner_id),
+                memory_type=activated.memory_type.value,
             )
             return
+
+    async def _activate_persisted_record(
+        self,
+        provider: MemoryProvider,
+        record: MemoryRecord,
+    ) -> MemoryRecord:
+        manager = self._lifecycle_manager_for(provider)
+        if manager is None:
+            return record
+        return await manager.activate_record(record)
+
+    async def _schedule_lifecycle_processing(
+        self,
+        *,
+        provider: MemoryProvider,
+        owner_id: uuid.UUID,
+        session_id: uuid.UUID | None,
+    ) -> None:
+        if self._settings is None or not self._settings.memory_enabled:
+            return
+        settings = self._settings
+
+        async def _run() -> None:
+            if self._background_provider_factory is not None:
+                from app.db.engine import get_sessionmaker
+
+                sessionmaker = get_sessionmaker()
+                async with sessionmaker() as session:
+                    try:
+                        bg_provider = self._background_provider_factory(session)
+                        manager = LifecycleManager(
+                            bg_provider,
+                            settings=settings,
+                            event_publisher=self._event_publisher,
+                        )
+                        await manager.process_owner_memories(
+                            owner_id=owner_id,
+                            session_id=session_id,
+                        )
+                        await session.commit()
+                    except Exception:
+                        await session.rollback()
+                        raise
+                return
+
+            manager = self._lifecycle_manager_for(provider)
+            if manager is not None:
+                await manager.process_owner_memories(
+                    owner_id=owner_id,
+                    session_id=session_id,
+                )
+
+        schedule_lifecycle_task(_run())
+
+    def _lifecycle_manager_for(
+        self, provider: MemoryProvider
+    ) -> LifecycleManager | None:
+        if self._settings is None:
+            return None
+        return LifecycleManager(
+            provider,
+            settings=self._settings,
+            event_publisher=self._event_publisher,
+        )
+
+    def _require_lifecycle_manager(self) -> LifecycleManager:
+        if self._lifecycle_manager is not None:
+            return self._lifecycle_manager
+        if self._settings is None:
+            raise RuntimeError("Memory lifecycle manager is not configured.")
+        self._lifecycle_manager = LifecycleManager(
+            self._provider,
+            settings=self._settings,
+            event_publisher=self._event_publisher,
+        )
+        return self._lifecycle_manager
 
     @staticmethod
     async def _rollback_provider_session(provider: MemoryProvider) -> None:

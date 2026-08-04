@@ -70,7 +70,9 @@ class FakeMemoryProvider:
         *,
         owner_id: uuid.UUID,
         state: LifecycleState,
+        metadata: dict[str, object] | None = None,
     ) -> MemoryRecord:
+        del owner_id, metadata
         record = self._records[record_id]
         updated = record.model_copy(update={"lifecycle_state": state})
         self._records[record_id] = updated

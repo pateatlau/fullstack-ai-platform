@@ -149,3 +149,27 @@ class ConversationSummaryService:
                 session_id=str(session_id),
                 exc_info=True,
             )
+
+    async def clear_summary(
+        self, *, session_id: uuid.UUID, owner_id: uuid.UUID
+    ) -> None:
+        """Remove rolling summaries for an owned session."""
+        get_owned = getattr(self._chat_store, "get_owned_session", None)
+        delete_summaries = getattr(
+            self._chat_store, "delete_summaries_for_session", None
+        )
+        if get_owned is None or delete_summaries is None:
+            from app.ai.memory.exceptions import MemoryAccessDeniedError
+
+            raise MemoryAccessDeniedError(
+                "Summary clearing is not supported by the configured chat store."
+            )
+
+        owned = await get_owned(session_id, user_id=owner_id)
+        if owned is None:
+            from app.ai.memory.exceptions import MemoryAccessDeniedError
+
+            raise MemoryAccessDeniedError(
+                "Access to clear summary for this session is denied."
+            )
+        await delete_summaries(session_id)

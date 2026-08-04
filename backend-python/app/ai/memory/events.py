@@ -20,6 +20,11 @@ class MemoryEventType(StrEnum):
     """Canonical memory lifecycle event types."""
 
     CREATED = "memory.created"
+    ACTIVATED = "memory.activated"
+    CONSOLIDATED = "memory.consolidated"
+    ARCHIVED = "memory.archived"
+    DELETED = "memory.deleted"
+    TRANSITIONED = "memory.transitioned"
 
 
 class MemoryEventMetadata(BaseModel):
@@ -28,6 +33,7 @@ class MemoryEventMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: str | None = None
+    previous_state: str | None = None
 
 
 class MemoryEvent(BaseModel):

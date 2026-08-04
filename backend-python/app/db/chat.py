@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import ChatMessage, ChatSession, GuestIdentity, SessionSummary
@@ -271,3 +271,11 @@ class SqlChatStore:
         self._session.add(summary)
         await self._session.flush()
         return summary
+
+    async def delete_summaries_for_session(self, session_id: uuid.UUID) -> int:
+        """Remove all rolling summaries for a session (Memory REST API)."""
+        result = await self._session.execute(
+            delete(SessionSummary).where(SessionSummary.session_id == session_id)
+        )
+        await self._session.flush()
+        return int(getattr(result, "rowcount", 0) or 0)

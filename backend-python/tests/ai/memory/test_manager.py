@@ -6,13 +6,14 @@ import asyncio
 import datetime
 import json
 import uuid
-from typing import cast
+from typing import Callable, cast
 
 import pytest
 
 from app.ai.memory.events import MemoryEvent, MemoryEventType
-from app.ai.memory.exceptions import MemoryAccessDeniedError
+from app.ai.memory.exceptions import MemoryAccessDeniedError, MemoryNotFoundError
 from app.ai.memory.lifecycle import LifecycleState
+from app.ai.memory.lifecycle_manager import LifecycleManager
 from app.ai.memory.manager import MemoryManager
 from app.ai.memory.models import MemoryContext, MemoryRecord, MemoryScope, MemoryType
 from app.ai.prompts.manager import create_prompt_manager
@@ -93,8 +94,34 @@ class FakeMemoryProvider:
             and (session_id is None or r.project_id == session_id)
         ]
 
-    async def update_lifecycle_state(self, *args, **kwargs):  # noqa: ANN002, ANN003
-        raise NotImplementedError
+    async def update_lifecycle_state(
+        self,
+        record_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        state: LifecycleState,
+        metadata: dict[str, object] | None = None,
+    ) -> MemoryRecord:
+        self.calls.append(
+            (
+                "update_lifecycle_state",
+                {
+                    "record_id": record_id,
+                    "owner_id": owner_id,
+                    "state": state,
+                },
+            )
+        )
+        if self.record is None or self.record.id != record_id:
+            raise MemoryNotFoundError()
+        updated = self.record.model_copy(
+            update={
+                "lifecycle_state": state,
+                "metadata": metadata or self.record.metadata,
+            }
+        )
+        self.record = updated
+        return updated
 
     async def get_preference(
         self, *, user_id: uuid.UUID, key: str
@@ -214,17 +241,27 @@ class TestMemoryManager:
         ]
 
     @pytest.mark.anyio
-    async def test_delete_record_delegates_to_provider(self) -> None:
+    async def test_delete_record_delegates_to_lifecycle_manager(self) -> None:
         provider = FakeMemoryProvider()
         owner_id = uuid.uuid4()
-        record_id = uuid.uuid4()
-        manager = _manager(provider)
+        record = MemoryRecord(
+            id=uuid.uuid4(),
+            memory_type=MemoryType.USER,
+            scope=MemoryScope.USER,
+            owner_id=owner_id,
+            content="Delete me.",
+            created_at=_NOW,
+            updated_at=_NOW,
+            lifecycle_state=LifecycleState.ACTIVE,
+            source="test",
+        )
+        provider.record = record
+        manager = _manager(provider, settings=Settings(openai_api_key="test-key"))
 
-        await manager.delete_record(record_id, owner_id=owner_id)
+        await manager.delete_record(record.id, owner_id=owner_id)
 
-        assert provider.calls == [
-            ("delete_record", {"record_id": record_id, "owner_id": owner_id})
-        ]
+        assert provider.record is not None
+        assert provider.record.lifecycle_state is LifecycleState.DELETED
 
     @pytest.mark.anyio
     async def test_preference_round_trip_delegates_to_provider(self) -> None:
@@ -548,8 +585,9 @@ class TestMemoryManagerExtraction:
         assert provider.created_records[0].content == "User prefers TypeScript."
         assert provider.created_records[0].source == "extraction_v1"
         assert provider.created_records[0].embedding is not None
-        assert len(publisher.events) == 1
+        assert len(publisher.events) == 2
         assert publisher.events[0].event_type is MemoryEventType.CREATED
+        assert publisher.events[1].event_type is MemoryEventType.ACTIVATED
 
     @pytest.mark.anyio
     async def test_extract_and_persist_async_persists_project_memories(self) -> None:
@@ -587,8 +625,94 @@ class TestMemoryManagerExtraction:
         assert len(provider.created_records) == 1
         assert provider.created_records[0].memory_type is MemoryType.PROJECT
         assert provider.created_records[0].project_id == session_id
-        assert provider.created_records[0].lifecycle_state is LifecycleState.CREATED
+        assert len(publisher.events) == 2
         assert publisher.events[0].event_type is MemoryEventType.CREATED
+        assert publisher.events[1].event_type is MemoryEventType.ACTIVATED
+
+    @pytest.mark.anyio
+    async def test_background_persist_activates_on_background_provider(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        request_provider = FakeMemoryProvider()
+        bg_provider = FakeMemoryProvider()
+        publisher = _RecordingPublisher()
+
+        class _FakeDbSession:
+            async def commit(self) -> None:
+                pass
+
+            async def rollback(self) -> None:
+                pass
+
+        class _FakeSessionContext:
+            async def __aenter__(self) -> _FakeDbSession:
+                return _FakeDbSession()
+
+            async def __aexit__(self, *args: object) -> None:
+                pass
+
+        def fake_get_sessionmaker() -> Callable[[], _FakeSessionContext]:
+            return _FakeSessionContext
+
+        monkeypatch.setattr("app.db.engine.get_sessionmaker", fake_get_sessionmaker)
+
+        settings = Settings(
+            openai_api_key="test-key",
+            memory_enabled=True,
+            memory_extraction_enabled=True,
+            embedding_dimensions=DIMENSIONS,
+        )
+        lifecycle_manager = LifecycleManager(
+            request_provider,  # type: ignore[arg-type]
+            settings=settings,
+            event_publisher=publisher,
+        )
+        manager = MemoryManager(
+            provider=request_provider,  # type: ignore[arg-type]
+            settings=settings,
+            embedding_provider=_FakeEmbeddingProvider(),
+            prompt_manager=create_prompt_manager(),
+            event_publisher=publisher,
+            lifecycle_manager=lifecycle_manager,
+            background_provider_factory=lambda _session: bg_provider,  # type: ignore[arg-type]
+        )
+        owner_id = uuid.uuid4()
+        payload = {
+            "memories": [
+                {
+                    "memory_type": "user",
+                    "content": "User prefers TypeScript.",
+                    "confidence": 0.95,
+                    "importance": 0.9,
+                }
+            ]
+        }
+        llm = FakeLLMProvider(response=json.dumps(payload))
+
+        manager.extract_and_persist_async(
+            owner_id=owner_id,
+            session_id=None,
+            messages=[ChatMessageSchema(role="user", content="I prefer TypeScript.")],
+            provider=cast(LLMProvider, llm),
+            provider_name="openai",
+            model="gpt-4o-mini",
+        )
+        await _await_extraction(publisher.completed)
+
+        assert len(bg_provider.created_records) == 1
+        assert request_provider.created_records == []
+        request_lifecycle_calls = [
+            call
+            for call in request_provider.calls
+            if call[0] == "update_lifecycle_state"
+        ]
+        bg_lifecycle_calls = [
+            call for call in bg_provider.calls if call[0] == "update_lifecycle_state"
+        ]
+        assert request_lifecycle_calls == []
+        assert len(bg_lifecycle_calls) == 1
+        assert bg_lifecycle_calls[0][1]["state"] is LifecycleState.ACTIVE
+        assert publisher.events[1].event_type is MemoryEventType.ACTIVATED
 
     @pytest.mark.anyio
     async def test_extract_and_persist_async_noops_when_flag_disabled(self) -> None:
