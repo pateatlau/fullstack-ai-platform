@@ -35,10 +35,10 @@ def test_get_workflow_manager_wires_the_resolved_store() -> None:
 
 
 @pytest.mark.anyio
-async def test_postgres_store_methods_raise_not_implemented() -> None:
+async def test_postgres_store_run_methods_raise_not_implemented() -> None:
     store = PostgresWorkflowStore(
         session=AsyncMock(), settings=Settings(openai_api_key="test-key")
     )
 
     with pytest.raises(NotImplementedError):
-        await store.get_definition(uuid.uuid4(), owner_id=uuid.uuid4())
+        await store.list_runs(owner_id=uuid.uuid4())

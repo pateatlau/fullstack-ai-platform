@@ -6,7 +6,9 @@ import uuid
 
 import pytest
 
+from app.ai.workflow.exceptions import WorkflowValidationError
 from app.ai.workflow.manager import WorkflowManager
+from app.ai.workflow.models import WorkflowEdge
 from tests.ai.workflow.test_interfaces import FakeWorkflowStore
 
 
@@ -29,13 +31,25 @@ async def test_get_run_delegates_to_store() -> None:
 
 
 @pytest.mark.anyio
-async def test_create_definition_not_implemented_in_phase_1() -> None:
+async def test_create_definition_validates_graph() -> None:
     from tests.ai.workflow.test_interfaces import _definition
 
     manager = WorkflowManager(FakeWorkflowStore())
 
-    with pytest.raises(NotImplementedError, match="Phase 2"):
-        await manager.create_definition(_definition(uuid.uuid4()))
+    with pytest.raises(WorkflowValidationError):
+        await manager.create_definition(
+            _definition(uuid.uuid4()).model_copy(
+                update={
+                    "edges": [
+                        WorkflowEdge(
+                            id="cycle",
+                            from_node_id="start",
+                            to_node_id="start",
+                        )
+                    ],
+                }
+            )
+        )
 
 
 @pytest.mark.anyio

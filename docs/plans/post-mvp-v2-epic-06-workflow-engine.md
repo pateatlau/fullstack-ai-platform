@@ -2,7 +2,7 @@
 epic: v2-06
 title: Workflow Engine
 status: in_progress
-version: 1.8
+version: 1.9
 depends_on: [v2-05]
 provides:
   [
@@ -809,13 +809,13 @@ _Reverified in Phase 0 audit (2026-08-04). See [post-mvp-v2-epic6-phase-0-baseli
 
 | Area                      | State                                                             |
 | --------------------------- | -------------------------------------------------------------------- |
-| Backend tests / coverage   | 1305 passed, 89.66% `app/` (Phase 0 reverified)                     |
+| Backend tests / coverage   | 1370 passed, 90.00% `app/` (Phase 2 reverified)                      |
 | Frontend tests             | 251 passed (41 files); build pass                                 |
 | Eval CLI                   | 5/5 passed                                                          |
 | Chat pipeline              | Stable — `ChatService` + `UnifiedChatService`, Memory fully wired |
 | Agent Framework            | Completed (Epic 01); `AGENT_RUNTIME_ENABLED` behind flag           |
 | Memory subsystem           | Completed (Epic 05); `MEMORY_ENABLED` behind flag                 |
-| Workflow Engine            | None                                                                |
+| Workflow Engine            | Phase 2 complete — models, validation, definition CRUD (61 workflow tests) |
 
 ---
 
@@ -824,8 +824,8 @@ _Reverified in Phase 0 audit (2026-08-04). See [post-mvp-v2-epic6-phase-0-baseli
 | Phase | Name                                          | Effort | Status      |
 | ----- | ----------------------------------------------- | ------ | ----------- |
 | 0     | Baseline Audit                                  | XS     | Completed   |
-| 1     | Models, Interfaces & Migration                  | L      | Not Started |
-| 2     | Graph Definition & Validation                   | M      | Not Started |
+| 1     | Models, Interfaces & Migration                  | L      | Completed   |
+| 2     | Graph Definition & Validation                   | M      | Completed   |
 | 3     | Sequential Execution Engine                     | L      | Not Started |
 | 4     | Conditional Routing                             | M      | Not Started |
 | 5     | Parallel Execution (Fork/Join)                  | M      | Not Started |
@@ -995,64 +995,64 @@ Establish the complete Workflow domain foundation: canonical data models, the `W
 
 ### Package Structure
 
-- [ ] Create the `app/ai/workflow/` package.
-- [ ] Create the package layout defined in Part I.
-- [ ] Add package exports through `__init__.py`.
-- [ ] Verify package imports are dependency-cycle free.
+- [x] Create the `app/ai/workflow/` package.
+- [x] Create the package layout defined in Part I.
+- [x] Add package exports through `__init__.py`.
+- [x] Verify package imports are dependency-cycle free.
 
 ### Canonical Models
 
-- [ ] Implement `WorkflowDefinition`, `WorkflowNode`, `WorkflowEdge`.
-- [ ] Implement `WorkflowRun`, `WorkflowNodeExecution`, `WorkflowContext`.
-- [ ] Implement `NodeType`, `RunStatus`, `NodeStatus` enums.
-- [ ] Add schema validation.
-- [ ] Add serialization/deserialization support.
-- [ ] Add comprehensive model documentation.
+- [x] Implement `WorkflowDefinition`, `WorkflowNode`, `WorkflowEdge`.
+- [x] Implement `WorkflowRun`, `WorkflowNodeExecution`, `WorkflowContext`.
+- [x] Implement `NodeType`, `RunStatus`, `NodeStatus` enums.
+- [x] Add schema validation.
+- [x] Add serialization/deserialization support.
+- [x] Add comprehensive model documentation.
 
 ### Provider Contract
 
-- [ ] Create the `WorkflowStore` abstraction.
-- [ ] Define definition CRUD operations.
-- [ ] Define run + node-execution checkpoint operations.
-- [ ] Define listing/query operations (by owner, definition, status).
-- [ ] Ensure interface remains storage-agnostic.
+- [x] Create the `WorkflowStore` abstraction.
+- [x] Define definition CRUD operations.
+- [x] Define run + node-execution checkpoint operations.
+- [x] Define listing/query operations (by owner, definition, status).
+- [x] Ensure interface remains storage-agnostic.
 
 ### PostgreSQL Store Scaffold
 
-- [ ] Create `PostgresWorkflowStore`.
-- [ ] Implement constructor and dependency injection.
-- [ ] Define placeholder implementations for provider methods.
-- [ ] Do not implement graph validation yet (Phase 2).
-- [ ] Do not implement execution logic yet (Phase 3).
+- [x] Create `PostgresWorkflowStore`.
+- [x] Implement constructor and dependency injection.
+- [x] Define placeholder implementations for provider methods.
+- [x] Do not implement graph validation yet (Phase 2).
+- [x] Do not implement execution logic yet (Phase 3).
 
 ### Workflow Manager
 
-- [ ] Implement `WorkflowManager` skeleton.
-- [ ] Inject `WorkflowStore`.
-- [ ] Define orchestration entry points (create/get definition; start/get run).
-- [ ] Ensure business logic remains outside the storage provider.
+- [x] Implement `WorkflowManager` skeleton.
+- [x] Inject `WorkflowStore`.
+- [x] Define orchestration entry points (create/get definition; start/get run).
+- [x] Ensure business logic remains outside the storage provider.
 
 ### Database Migration
 
-- [ ] Add `WorkflowDefinition`, `WorkflowRun`, `WorkflowNodeExecution` ORM models to `app/db/models.py`.
-- [ ] Create Alembic migration `0007_workflow_tables` per Part I schema.
-- [ ] Verify migration is independent of `memory_records` and `document_chunks`.
+- [x] Add `WorkflowDefinition`, `WorkflowRun`, `WorkflowNodeExecution` ORM models to `app/db/models.py`.
+- [x] Create Alembic migration `0007_workflow_tables` per Part I schema.
+- [x] Verify migration is independent of `memory_records` and `document_chunks`.
 - [ ] Add migration rollback test in CI (upgrade/downgrade smoke).
 
 ### Configuration
 
-- [ ] Add `WORKFLOW_ENGINE_ENABLED` feature flag.
-- [ ] Add Workflow configuration section (Part I § Configuration defaults).
-- [ ] Register provider configuration.
-- [ ] Preserve backward compatibility when disabled.
+- [x] Add `WORKFLOW_ENGINE_ENABLED` feature flag.
+- [x] Add Workflow configuration section (Part I § Configuration defaults).
+- [x] Register provider configuration.
+- [x] Preserve backward compatibility when disabled.
 
 ### Testing
 
-- [ ] Add model validation tests.
-- [ ] Add serialization tests.
-- [ ] Add provider contract tests.
-- [ ] Add dependency injection tests.
-- [ ] Add package import tests.
+- [x] Add model validation tests.
+- [x] Add serialization tests.
+- [x] Add provider contract tests.
+- [x] Add dependency injection tests.
+- [x] Add package import tests.
 
 **Verify**
 
@@ -1062,11 +1062,11 @@ Establish the complete Workflow domain foundation: canonical data models, the `W
 
 Additional verification:
 
-- [ ] All Workflow models serialize correctly.
-- [ ] `WorkflowStore` interface compiles successfully.
-- [ ] Dependency injection resolves successfully.
-- [ ] No circular imports detected.
-- [ ] Feature flag defaults to disabled.
+- [x] All Workflow models serialize correctly.
+- [x] `WorkflowStore` interface compiles successfully.
+- [x] Dependency injection resolves successfully.
+- [x] No circular imports detected.
+- [x] Feature flag defaults to disabled.
 
 **Acceptance**
 
@@ -1094,13 +1094,14 @@ Additional verification:
 
 **Completion Record**
 
-| Metric                | Result  |
-| ------------------------ | ------- |
-| Models implemented      | Pending |
-| Provider interfaces     | Pending |
-| Unit tests               | Pending |
-| Coverage                 | Pending |
-| API freeze completed     | Pending |
+| Metric                | Result                                                                 |
+| ------------------------ | ---------------------------------------------------------------------- |
+| Models implemented      | `WorkflowDefinition`, `WorkflowNode`, `WorkflowEdge`, `WorkflowRun`, `WorkflowNodeExecution`, `WorkflowContext`, enums |
+| Provider interfaces     | `WorkflowStore` (Protocol) + `PostgresWorkflowStore` scaffold        |
+| Unit tests               | ✅ 39 new tests (`tests/ai/workflow/`); 1344 total backend passed     |
+| Coverage                 | ✅ 89.80% `app/`                                                       |
+| API freeze completed     | ✅ `app/ai/workflow/__init__.py` exports frozen Phase 1 surface       |
+| Migration rollback CI    | ⏳ Pending (`0007_workflow_tables` smoke test not yet added)          |
 
 ---
 
@@ -1125,36 +1126,36 @@ Implement `GraphValidator`, the definition-time structural checks that every `Wo
 
 ### Graph Validation
 
-- [ ] Implement `GraphValidator.validate(definition)`.
-- [ ] Detect cycles (reject unless explicitly modeled as retry edges — none allowed in v1).
-- [ ] Detect unreachable nodes from `entry_node_id`.
-- [ ] Detect dangling edges (edges referencing missing nodes).
-- [ ] Validate every `fork` node has a matching `join` node reference.
-- [ ] Validate node `type` against the supported `NodeType` set.
-- [ ] Validate `condition` DSL shape on edges (without evaluating it).
+- [x] Implement `GraphValidator.validate(definition)`.
+- [x] Detect cycles (reject unless explicitly modeled as retry edges — none allowed in v1).
+- [x] Detect unreachable nodes from `entry_node_id`.
+- [x] Detect dangling edges (edges referencing missing nodes).
+- [x] Validate every `fork` node has a matching `join` node reference.
+- [x] Validate node `type` against the supported `NodeType` set.
+- [x] Validate `condition` DSL shape on edges (without evaluating it).
 
 ### Definition CRUD
 
-- [ ] Implement `WorkflowManager.create_definition()` (runs `GraphValidator` before persisting).
-- [ ] Implement `WorkflowManager.get_definition()` / `list_definitions()` (owner-scoped).
-- [ ] Implement `WorkflowManager.update_definition()` — creates a new version once any run references the current version.
-- [ ] Implement `WorkflowManager.archive_definition()`.
-- [ ] Persist via `PostgresWorkflowStore`.
+- [x] Implement `WorkflowManager.create_definition()` (runs `GraphValidator` before persisting).
+- [x] Implement `WorkflowManager.get_definition()` / `list_definitions()` (owner-scoped).
+- [x] Implement `WorkflowManager.update_definition()` — creates a new version once any run references the current version.
+- [x] Implement `WorkflowManager.archive_definition()`.
+- [x] Persist via `PostgresWorkflowStore`.
 
 ### Error Handling
 
-- [ ] Raise `WorkflowValidationError` with actionable messages for each failure class.
-- [ ] Raise `WorkflowNotFoundError` / `WorkflowAccessDeniedError` for CRUD lookups.
-- [ ] Ensure invalid definitions are never persisted as `active`.
+- [x] Raise `WorkflowValidationError` with actionable messages for each failure class.
+- [x] Raise `WorkflowNotFoundError` / `WorkflowAccessDeniedError` for CRUD lookups.
+- [x] Ensure invalid definitions are never persisted as `active`.
 
 ### Testing
 
-- [ ] Add cycle detection tests.
-- [ ] Add reachability tests.
-- [ ] Add fork/join pairing tests.
-- [ ] Add definition CRUD tests.
-- [ ] Add versioning tests (edit after run vs. before run).
-- [ ] Add owner-isolation tests.
+- [x] Add cycle detection tests.
+- [x] Add reachability tests.
+- [x] Add fork/join pairing tests.
+- [x] Add definition CRUD tests.
+- [x] Add versioning tests (edit after run vs. before run).
+- [x] Add owner-isolation tests.
 
 **Verify**
 
@@ -1162,10 +1163,10 @@ Implement `GraphValidator`, the definition-time structural checks that every `Wo
 
 Additional verification:
 
-- [ ] Valid graphs pass validation.
-- [ ] Invalid graphs are rejected with clear errors.
-- [ ] Definitions version correctly after being referenced by a run.
-- [ ] Owner isolation holds for all CRUD operations.
+- [x] Valid graphs pass validation.
+- [x] Invalid graphs are rejected with clear errors.
+- [x] Definitions version correctly after being referenced by a run.
+- [x] Owner isolation holds for all CRUD operations.
 
 **Acceptance**
 
@@ -1177,6 +1178,17 @@ Additional verification:
 
 - Validation and CRUD tests pass.
 - Ready for the execution engine (Phase 3).
+
+**Completion Record**
+
+| Metric                  | Result                                                                 |
+| ----------------------- | ---------------------------------------------------------------------- |
+| Graph validation        | ✅ `GraphValidator` + `conditions/schema.py` (DSL shape only)         |
+| Definition CRUD         | ✅ `WorkflowManager` + `PostgresWorkflowStore` definition persistence  |
+| Fork/join pairing       | ✅ `config.join_node_id` / `config.fork_node_id` bidirectional checks  |
+| Unit tests              | ✅ 22 new tests; 61 total in `tests/ai/workflow/`                      |
+| Backend regression      | ✅ 1370 passed; 90.00% `app/` coverage                                 |
+| Run persistence         | ⏳ Deferred to Phase 3 (`PostgresWorkflowStore` run methods stubbed)   |
 
 ---
 
@@ -2176,5 +2188,6 @@ No workflow input/output content or personally identifiable information should b
 | 1.6     | 2026-08-04 | Define crash-safe protocol for interrupted `status=running` nodes: execution receipts + fail-closed for non-idempotent side effects. Part I + Phases 3/8 sync. |
 | 1.7     | 2026-08-04 | Parallel branch checkpoints: optimistic `checkpoint_version` merge + retry; prevent last-writer-wins on `context`/`current_node_ids`. Part I + Phase 5 sync. |
 | 1.8     | 2026-08-04 | `apply_decision()` atomic CAS on `waiting_approval` + same-transaction run transition; no-op/conflict on duplicate decisions. Phase 7 sync. |
+| 1.9     | 2026-08-05 | Phase 1 complete: canonical models/enums, `WorkflowStore` protocol, `PostgresWorkflowStore` scaffold, `WorkflowManager` skeleton, `0007_workflow_tables` migration, `WORKFLOW_ENGINE_ENABLED` + workflow config, DI wiring. 39 workflow tests; 1344 total backend passed; 89.80% coverage. Public API frozen. Phase 2 complete: `GraphValidator`, condition DSL shape validation, definition CRUD via `WorkflowManager`/`PostgresWorkflowStore`, versioning on run reference. 61 workflow tests; 1370 total backend passed; 90.00% coverage. Migration rollback CI smoke test pending. |
 
 ---
