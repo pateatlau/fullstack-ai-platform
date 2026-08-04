@@ -151,22 +151,38 @@ class SemanticRetriever:
             )
 
         top_k = self._settings.memory_retrieval_top_k
-        user_task = self._search_domain(
-            query_embedding,
-            owner_id=owner_id,
-            memory_type=MemoryType.USER,
-            session_id=None,
-            top_k=top_k,
+        user_task = asyncio.create_task(
+            self._search_domain(
+                query_embedding,
+                owner_id=owner_id,
+                memory_type=MemoryType.USER,
+                session_id=None,
+                top_k=top_k,
+            )
         )
 
         project_task: asyncio.Task[list[MemoryRecord]] | None = None
         validated_project_id: uuid.UUID | None = None
         if project_id is not None:
             try:
-                validated_project_id = validate_project_id(project_id)
+                candidate_project_id = validate_project_id(project_id)
                 await self._assert_session_owned(
-                    owner_id=owner_id, project_id=validated_project_id
+                    owner_id=owner_id, project_id=candidate_project_id
                 )
+            except ValueError:
+                logger.warning(
+                    "Project memory retrieval skipped — invalid project_id",
+                    owner_id=str(owner_id),
+                    project_id=str(project_id),
+                )
+            except MemoryAccessDeniedError:
+                logger.warning(
+                    "Project memory retrieval skipped — session ownership denied",
+                    owner_id=str(owner_id),
+                    project_id=str(project_id),
+                )
+            else:
+                validated_project_id = candidate_project_id
                 project_task = asyncio.create_task(
                     self._search_domain(
                         query_embedding,
@@ -175,12 +191,6 @@ class SemanticRetriever:
                         session_id=map_project_id_to_session_id(validated_project_id),
                         top_k=top_k,
                     )
-                )
-            except MemoryAccessDeniedError:
-                logger.warning(
-                    "Project memory retrieval skipped — session ownership denied",
-                    owner_id=str(owner_id),
-                    project_id=str(project_id),
                 )
 
         user_raw = await user_task

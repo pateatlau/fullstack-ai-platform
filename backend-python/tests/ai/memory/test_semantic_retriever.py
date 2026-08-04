@@ -354,6 +354,33 @@ class TestSemanticRetriever:
         )
 
         assert result.project_memories == []
+        assert "project_id" not in result.metadata
+
+    @pytest.mark.anyio
+    async def test_retrieve_skips_invalid_project_id_but_returns_user_memories(
+        self,
+    ) -> None:
+        owner_id = uuid.uuid4()
+        provider = FakeMemoryProvider()
+        provider.existing_records = [
+            _record(
+                owner_id=owner_id,
+                content="User fact.",
+                embedding=_vector(1.0),
+            ),
+        ]
+        retriever = _retriever(provider)
+        messages = [ChatMessageSchema(role="user", content="Recall facts.")]
+
+        result = await retriever.retrieve(
+            owner_id=owner_id,
+            messages=messages,
+            project_id=uuid.UUID(int=0),
+        )
+
+        assert len(result.user_memories) == 1
+        assert result.project_memories == []
+        assert "project_id" not in result.metadata
 
     @pytest.mark.anyio
     async def test_retrieve_handles_embedding_failure_gracefully(self) -> None:
