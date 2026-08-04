@@ -182,11 +182,15 @@ def get_chat_service(
             chat_store=chat_store,
             prompt_manager=prompt_manager,
         ),
-        memory_manager=build_memory_manager(
-            session=session,
-            settings=settings,
-            embedding_provider=get_embedding_provider(),
-            prompt_manager=prompt_manager,
+        memory_manager=(
+            build_memory_manager(
+                session=session,
+                settings=settings,
+                embedding_provider=get_embedding_provider(),
+                prompt_manager=prompt_manager,
+            )
+            if settings.memory_enabled
+            else None
         ),
     )
 

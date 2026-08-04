@@ -1967,11 +1967,11 @@ Integrate the complete Memory subsystem into **`ChatService` and `UnifiedChatSer
 
 ### Post-Response Processing
 
-- [x] Invoke durable memory extraction asynchronously (`asyncio.create_task`) — `_maybe_extract_memory` calls `MemoryManager.extract_and_persist_async`, which schedules its own background task (Phase 6, unchanged).
+- [x] Invoke durable memory extraction asynchronously (`asyncio.create_task`) — `_maybe_extract_memory` calls `MemoryManager.extract_and_persist_async`, which schedules its own background task (Phase 6, unchanged); registration happens only after the chat turn is committed so extraction sees durable messages.
 - [x] Evaluate candidates via `MemoryQualityEvaluator` — inside `MemoryManager.extract_and_persist_async` (unchanged).
 - [x] Persist approved memories; publish lifecycle events — inside `MemoryManager.extract_and_persist_async` (unchanged).
-- [x] Trigger existing `_maybe_summarize` (Phase 2 gating) — unchanged; `_trigger_summarization` still runs alongside the new `_maybe_extract_memory` call.
-- [x] Ensure post-processing never delays the response to the user — extraction is fire-and-forget; response is constructed/returned/streamed before scheduling it.
+- [x] Trigger existing `_maybe_summarize` (Phase 2 gating) — unchanged; `_trigger_summarization` still runs before commit alongside durable-memory extraction registration.
+- [x] Ensure post-processing never delays the response to the user — extraction is fire-and-forget; response is constructed/returned/streamed before the background task runs (commit + registration are synchronous but lightweight relative to the LLM call).
 
 ### Feature Flag Integration
 
@@ -2022,7 +2022,7 @@ Additional verification:
 - [x] Tool execution remains unchanged.
 - [x] Voice mode remains unchanged.
 - [x] MCP integration remains unchanged.
-- [x] Existing regression suite passes (1302 tests).
+- [x] Existing regression suite passes.
 
 **Acceptance**
 
@@ -2058,14 +2058,14 @@ Additional verification:
 | ----------------------- | ------ |
 | End-to-end integration  | ✅ `MemoryOrchestrator` protocol + `_apply_memory_context`/`_maybe_extract_memory` wired into `ChatService.complete_chat`/`stream_chat` and `UnifiedChatService.execute`/`stream_execute` |
 | Feature flag regression | ✅ `_memory_active` gates all hooks on `settings.memory_enabled`, read per-call (no caching) |
-| Chat latency            | ✅ No new synchronous work on the response path; extraction is fire-and-forget |
+| Chat latency            | ⏳ Pending formal benchmarks; when enabled, adds bounded synchronous pre-provider work (`resolve_persisted_context` / summary fetch + `retrieve_context` + prompt render); extraction remains fire-and-forget after commit |
 | Retrieval latency       | ✅ Reuses Phase 6 `MemoryManager.retrieve_context`; retrieval completes before the LLM/provider call in every path |
 | Streaming regression    | ✅ Memory applied before the provider stream opens in both `ChatService.stream_chat` and `UnifiedChatService.stream_execute`; first-delta timing unaffected |
 | RAG regression          | ✅ Unified document-toggle path merges memory + document context (`bypass_summary_reconstruction` prevents the ephemeral doc context from being discarded by DB-reconstructed summary history) |
 | Voice regression        | ✅ Full voice suite passes unchanged (voice streams via `UnifiedChatService.stream_execute`) |
 | MCP regression          | ✅ Full MCP suite passes unchanged (MCP does not route through `ChatService`/`UnifiedChatService`) |
 | Integration tests       | ✅ `tests/test_chat_service_memory.py` (9), `tests/test_unified_chat_memory.py` (5), `tests/ai/memory/test_prompt_injector.py` (6) |
-| Coverage                | ✅ 1302 tests passed, 90% `app/`; lint + typecheck clean |
+| Coverage                | ✅ Full regression suite passed, 90% `app/`; lint + typecheck clean |
 
 ---
 
@@ -2516,6 +2516,6 @@ No memory content, embeddings, or personally identifiable information should be 
 | 2.7     | 2026-08-04 | Phase 6 complete: `SemanticRetriever` multi-domain retrieval, ranking/dedupe/quality filtering, token budgeting, `MemoryManager.retrieve_context`.                                                                                                                                                                                                                        |
 | 2.8     | 2026-08-04 | Phase 7 complete: `LifecycleManager`, `MemoryPolicyEngine`, lifecycle integration in `MemoryManager`, Memory REST API (`app/routers/memory.py`), `memory_enabled` health field. 1278 tests, 89.31% coverage.                                                                                                                                                             |
 | 2.9     | 2026-08-04 | Phase 7 doc sync: aligned Part I / Phase 7 router contract (always mounted, route-level `503`); verification gates documented with test evidence; epic-level flag-off parity deferred to Phase 10; PR review fixes (lifecycle provider binding, post-commit scheduling, consolidation eligibility, idempotent delete, fixture teardown). |
-| 2.10    | 2026-08-04 | Phase 8 complete: `MemoryOrchestrator` protocol + `_apply_memory_context`/`_maybe_extract_memory` wired into `ChatService` and `UnifiedChatService` (plain, RAG/document, tool-use, streaming); `MemoryPromptInjector` + `chat/memory_context/v1` template; `bypass_summary_reconstruction` fix preserves ephemeral RAG context; RAG `PromptBuilder`/`instructions` deliverable resolved as a system-message injection instead (standalone RAG service untouched). 1302 tests, 90% coverage. |
+| 2.10    | 2026-08-04 | Phase 8 complete: `MemoryOrchestrator` protocol + `_apply_memory_context`/`_maybe_extract_memory` wired into `ChatService` and `UnifiedChatService` (plain, RAG/document, tool-use, streaming); `MemoryPromptInjector` + `chat/memory_context/v1` template; `bypass_summary_reconstruction` fix preserves ephemeral RAG context; RAG `PromptBuilder`/`instructions` deliverable resolved as a system-message injection instead (standalone RAG service untouched). Full regression suite, 90% coverage. |
 
 ---

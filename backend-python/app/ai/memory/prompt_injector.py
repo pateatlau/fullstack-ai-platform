@@ -73,5 +73,8 @@ def _format_memory_section(heading: str, records: list[MemoryRecord]) -> str:
 def _format_preferences_section(preferences: dict[str, object]) -> str:
     if not preferences:
         return ""
-    lines = "\n".join(f"- {key}: {value}" for key, value in preferences.items())
+    lines = "\n".join(
+        f"- {key}: {value}"
+        for key, value in sorted(preferences.items(), key=lambda item: item[0])
+    )
     return f"User preferences to honor:\n{lines}"

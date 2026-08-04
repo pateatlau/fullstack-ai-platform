@@ -111,6 +111,46 @@ async def test_build_context_messages_returns_empty_on_failure() -> None:
 
 
 @pytest.mark.anyio
+async def test_resolve_persisted_context_fetches_summary_once() -> None:
+    chat_store = FakeChatStore()
+    session = await chat_store.create_session(user_id=uuid.uuid4())
+    for seq, (role, content) in enumerate(
+        [("user", "q1"), ("assistant", "a1"), ("user", "q2")], start=1
+    ):
+        await chat_store.add_message(
+            session_id=session.id, seq=seq, role=role, content=content
+        )
+    await chat_store.add_summary(
+        session_id=session.id,
+        version=1,
+        covers_through_seq=2,
+        content="Earlier: greeting.",
+        provider="openai",
+        model="gpt-4o-mini",
+    )
+    original_get_latest = chat_store.get_latest_summary
+    call_count = 0
+
+    async def counting_get_latest(session_id: uuid.UUID):
+        nonlocal call_count
+        call_count += 1
+        return await original_get_latest(session_id)
+
+    chat_store.get_latest_summary = counting_get_latest  # type: ignore[method-assign]
+    service = _summary_service(chat_store)
+
+    summary_context, context_messages = await service.resolve_persisted_context(
+        session.id
+    )
+
+    assert call_count == 1
+    assert summary_context.conversation_summary == "Earlier: greeting."
+    assert context_messages[0].role == "system"
+    assert "Earlier: greeting." in context_messages[0].content
+    assert context_messages[-1].content == "q2"
+
+
+@pytest.mark.anyio
 async def test_trigger_summarization_delegates_to_chat_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

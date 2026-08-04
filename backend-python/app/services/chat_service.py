@@ -511,11 +511,17 @@ class ChatService:
         session_id: uuid.UUID | None,
         caller: CallerContext | None,
         messages: list[ChatMessageSchema],
+        conversation_summary: str | None = None,
+        fetch_conversation_summary: bool = True,
     ) -> list[ChatMessageSchema]:
         """Retrieve and inject Memory context (Part I § Chat Integration Strategy).
 
         Best-effort: any retrieval, provider, or rendering failure isolates and
         returns ``messages`` unchanged so Memory never blocks chat execution.
+
+        When the caller already fetched the summary (e.g. via
+        ``ConversationSummaryService.resolve_persisted_context``), pass
+        ``fetch_conversation_summary=False`` to skip a duplicate DB round-trip.
         """
         if not self._memory_active(caller):
             return messages
@@ -523,8 +529,7 @@ class ChatService:
         assert self._memory_manager is not None
 
         try:
-            conversation_summary: str | None = None
-            if (
+            if fetch_conversation_summary and (
                 self._conversation_summary_service is not None
                 and session_id is not None
             ):
@@ -597,17 +602,26 @@ class ChatService:
         bypass_summary_reconstruction: bool = False,
     ) -> list[ChatMessageSchema]:
         messages = request.messages
+        conversation_summary: str | None = None
+        fetch_conversation_summary = True
         if self._memory_summary_active(caller) and not bypass_summary_reconstruction:
             assert self._conversation_summary_service is not None
-            context_messages = (
-                await self._conversation_summary_service.build_context_messages(
-                    session_id
-                )
+            (
+                summary_context,
+                context_messages,
+            ) = await self._conversation_summary_service.resolve_persisted_context(
+                session_id
             )
+            conversation_summary = summary_context.conversation_summary
+            fetch_conversation_summary = False
             if context_messages:
                 messages = context_messages
         return await self._apply_memory_context(
-            session_id=session_id, caller=caller, messages=messages
+            session_id=session_id,
+            caller=caller,
+            messages=messages,
+            conversation_summary=conversation_summary,
+            fetch_conversation_summary=fetch_conversation_summary,
         )
 
     async def _trigger_summarization(
@@ -1089,6 +1103,7 @@ class ChatService:
             provider_name=provider_name,
             model=model,
         )
+        await self._commit()
         self._maybe_extract_memory(
             caller=caller,
             session_id=chat_session.id,
@@ -1527,6 +1542,7 @@ class ChatService:
                 provider_name=provider_name,
                 model=model,
             )
+            await self._commit()
             self._maybe_extract_memory(
                 caller=caller,
                 session_id=prep.session_id,

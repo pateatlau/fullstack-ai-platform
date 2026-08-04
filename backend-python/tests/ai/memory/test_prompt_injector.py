@@ -98,6 +98,21 @@ class TestMemoryPromptInjector:
         assert "response_tone" in block
         assert "formal" in block
 
+    def test_preferences_are_rendered_in_sorted_key_order(self) -> None:
+        injector = _injector()
+        context_a = MemoryContext(
+            preferences={"zebra": "last", "alpha": "first", "middle": "mid"}
+        )
+        context_b = MemoryContext(
+            preferences={"middle": "mid", "zebra": "last", "alpha": "first"}
+        )
+
+        block_a = injector.inject(_messages(), context_a)[0].content
+        block_b = injector.inject(_messages(), context_b)[0].content
+
+        assert block_a == block_b
+        assert block_a.index("alpha") < block_a.index("middle") < block_a.index("zebra")
+
     def test_injected_message_does_not_mutate_input_list(self) -> None:
         injector = _injector()
         messages = _messages()
