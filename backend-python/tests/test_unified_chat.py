@@ -102,7 +102,6 @@ def _clear_settings_and_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[No
     # (Phase 12). Advanced parity uses explicit Settings(advanced_rag_enabled=True).
     monkeypatch.setenv("ADVANCED_RAG_ENABLED", "false")
     monkeypatch.setenv("RAG_ENABLED", "true")
-    monkeypatch.setenv("TOOLS_ENABLED", "true")
     get_settings.cache_clear()
     get_tool_registry.cache_clear()
     yield
