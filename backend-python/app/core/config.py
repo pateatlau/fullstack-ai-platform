@@ -198,6 +198,25 @@ class Settings(BaseSettings):
     memory_extraction_model: str = ""
     memory_archived_retention_days: int = Field(default=90, ge=1)
 
+    # V2 Epic 6 Phase 1: Workflow Engine infrastructure flag (default false).
+    # When true: validates workflow provider config and registers Workflow DI
+    # wiring; domain models, provider scaffold, and DB tables are present.
+    # Graph validation, execution engine, REST API, and frontend are not wired
+    # until later phases. Flag-off keeps chat/RAG/voice/MCP/memory/agent paths
+    # unchanged.
+    workflow_engine_enabled: bool = False
+
+    # V2 Epic 6: Workflow provider and execution tuning.
+    workflow_provider: str = "postgres"
+    workflow_max_nodes_per_definition: int = Field(default=50, ge=1)
+    workflow_max_parallel_branches: int = Field(default=8, ge=1)
+    workflow_node_timeout_seconds: int = Field(default=120, ge=1)
+    workflow_max_node_retries: int = Field(default=3, ge=0)
+    workflow_node_retry_base_delay_seconds: float = Field(default=1.0, ge=0.0)
+    workflow_max_run_duration_minutes: int = Field(default=60, ge=1)
+    workflow_approval_timeout_hours: int = Field(default=0, ge=0)
+    workflow_run_retention_days: int = Field(default=90, ge=1)
+
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, value: object) -> str:
@@ -451,6 +470,19 @@ class Settings(BaseSettings):
                 "Set it in backend-python/.env (see .env.example)."
             )
 
+    def validate_workflow_requirements(self) -> None:
+        """Fail fast when Workflow Engine is enabled but configuration is invalid."""
+        if not self.workflow_engine_enabled:
+            return
+
+        supported_workflow_providers = {"postgres"}
+        if self.workflow_provider not in supported_workflow_providers:
+            supported = ", ".join(sorted(supported_workflow_providers))
+            raise ValueError(
+                f"Unsupported WORKFLOW_PROVIDER '{self.workflow_provider}'. "
+                f"Supported providers: {supported}."
+            )
+
     def log_development_warnings(self, logger: object) -> None:
         """Emit human-readable warnings for permissive development defaults."""
         if not self.is_development:
@@ -485,6 +517,7 @@ class Settings(BaseSettings):
         self.validate_tools_requirements()
         self.validate_voice_requirements()
         self.validate_memory_requirements()
+        self.validate_workflow_requirements()
         self.validate_production_requirements()
 
 
