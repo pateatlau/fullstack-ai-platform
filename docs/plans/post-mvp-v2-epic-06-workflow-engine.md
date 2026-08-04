@@ -1,8 +1,8 @@
 ---
 epic: v2-06
 title: Workflow Engine
-status: not_started
-version: 1
+status: in_progress
+version: 1.1
 depends_on: [v2-05]
 provides:
   [
@@ -784,11 +784,11 @@ Workflow Engine is additive. Existing chat, RAG, agent runtime, MCP, memory, voi
 
 ## Baseline
 
-_Carried from Epic 05 Phase 10 completion record — to be reverified in Phase 0 audit._
+_Reverified in Phase 0 audit (2026-08-04). See [post-mvp-v2-epic6-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic6-phase-0-baseline-audit.md)._
 
 | Area                      | State                                                             |
 | --------------------------- | -------------------------------------------------------------------- |
-| Backend tests / coverage   | 1305 passed, 89.68% `app/` (Epic 05)                              |
+| Backend tests / coverage   | 1305 passed, 89.66% `app/` (Phase 0 reverified)                     |
 | Frontend tests             | 251 passed (41 files); build pass                                 |
 | Eval CLI                   | 5/5 passed                                                          |
 | Chat pipeline              | Stable — `ChatService` + `UnifiedChatService`, Memory fully wired |
@@ -840,59 +840,59 @@ Establish a verified implementation baseline before introducing the Workflow Eng
 
 ### Platform Verification
 
-- [ ] Confirm Epic 05 Phase 10 complete / authorized for Epic 06
-- [ ] Inventory `ToolExecutor`, `ToolAuthorizer`, registry, validator
-- [ ] Inventory Agent Framework (`DefaultAgent`, `AgentRequest`/`AgentResponse`, `AGENT_RUNTIME_ENABLED`)
-- [ ] Inventory `LLMProvider`, `ProviderFactory`, `PromptManager`
-- [ ] Verify Memory integration remains operational.
-- [ ] Verify Voice integration remains operational.
-- [ ] Verify RAG integration remains operational.
-- [ ] Verify MCP integration remains operational.
-- [ ] Verify Agent Framework remains operational.
-- [ ] Verify streaming responses remain operational.
+- [x] Confirm Epic 05 Phase 10 complete / authorized for Epic 06
+- [x] Inventory `ToolExecutor`, `ToolAuthorizer`, registry, validator
+- [x] Inventory Agent Framework (`DefaultAgent`, `AgentRequest`/`AgentResponse`, `AGENT_RUNTIME_ENABLED`)
+- [x] Inventory `LLMProvider`, `ProviderFactory`, `PromptManager`
+- [x] Verify Memory integration remains operational.
+- [x] Verify Voice integration remains operational.
+- [x] Verify RAG integration remains operational.
+- [x] Verify MCP integration remains operational.
+- [x] Verify Agent Framework remains operational.
+- [x] Verify streaming responses remain operational.
 
 ### Architecture Review
 
-- [ ] Review the frozen Part I architecture.
-- [ ] Verify all architectural invariants.
-- [ ] Identify all Workflow Engine integration points.
-- [ ] Identify existing extension points (tool registry, DI factories).
-- [ ] Confirm no Workflow Engine implementation already exists.
-- [ ] Record implementation assumptions.
+- [x] Review the frozen Part I architecture.
+- [x] Verify all architectural invariants.
+- [x] Identify all Workflow Engine integration points.
+- [x] Identify existing extension points (tool registry, DI factories).
+- [x] Confirm no Workflow Engine implementation already exists.
+- [x] Record implementation assumptions.
 
 ### Dependency Verification
 
-- [ ] Verify PostgreSQL configuration.
-- [ ] Verify `app/core/retry.py` availability.
-- [ ] Verify existing provider abstractions.
-- [ ] Verify dependency injection configuration.
-- [ ] Verify feature flag infrastructure.
+- [x] Verify PostgreSQL configuration.
+- [x] Verify `app/core/retry.py` availability.
+- [x] Verify existing provider abstractions.
+- [x] Verify dependency injection configuration.
+- [x] Verify feature flag infrastructure.
 
 ### Codebase Inventory
 
-- [ ] Inventory existing chat services.
-- [ ] Inventory tool platform implementation.
-- [ ] Inventory Agent Framework implementation.
-- [ ] Inventory provider implementations.
-- [ ] Inventory existing Alembic migrations and numbering.
-- [ ] Record components to be reused.
+- [x] Inventory existing chat services.
+- [x] Inventory tool platform implementation.
+- [x] Inventory Agent Framework implementation.
+- [x] Inventory provider implementations.
+- [x] Inventory existing Alembic migrations and numbering.
+- [x] Record components to be reused.
 
 ### Baseline Quality Validation
 
-- [ ] Execute lint.
-- [ ] Execute type checking.
-- [ ] Execute unit tests.
-- [ ] Execute integration tests.
-- [ ] Execute evaluation suite.
-- [ ] Record baseline quality metrics.
+- [x] Execute lint.
+- [x] Execute type checking.
+- [x] Execute unit tests.
+- [x] Execute integration tests.
+- [x] Execute evaluation suite.
+- [x] Record baseline quality metrics.
 
 ### Implementation Readiness
 
-- [ ] Confirm all required dependencies are available.
-- [ ] Confirm implementation order matches Part II.
-- [ ] Confirm no architectural conflicts exist.
-- [ ] Publish baseline audit document.
-- [ ] Freeze implementation baseline.
+- [x] Confirm all required dependencies are available.
+- [x] Confirm implementation order matches Part II.
+- [x] Confirm no architectural conflicts exist.
+- [x] Publish baseline audit document.
+- [x] Freeze implementation baseline.
 
 **Verify**
 
@@ -903,12 +903,12 @@ Establish a verified implementation baseline before introducing the Workflow Eng
 
 Additional verification:
 
-- [ ] Chat functionality verified.
-- [ ] Agent functionality verified.
-- [ ] Memory functionality verified.
-- [ ] Tool execution verified.
-- [ ] Streaming functionality verified.
-- [ ] All quality gates pass.
+- [x] Chat functionality verified.
+- [x] Agent functionality verified.
+- [x] Memory functionality verified.
+- [x] Tool execution verified.
+- [x] Streaming functionality verified.
+- [x] All quality gates pass.
 
 **Acceptance**
 
@@ -931,8 +931,8 @@ Additional verification:
 
 **Rollback**
 
-- [ ] No rollback required.
-- [ ] This phase introduces no functional code changes.
+- [x] No rollback required.
+- [x] This phase introduces no functional code changes.
 
 **Completion Record**
 
