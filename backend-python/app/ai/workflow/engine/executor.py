@@ -16,12 +16,18 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from app.ai.workflow.exceptions import WorkflowNotFoundError
-from app.ai.workflow.graph.traversal import resolve_ready_nodes
+from app.ai.workflow.graph.traversal import (
+    SKIPPED_NODE_IDS_KEY,
+    collect_nodes_to_skip,
+    outgoing_edges,
+    resolve_ready_nodes,
+)
 from app.ai.workflow.models import (
     NodeStatus,
     NodeType,
     RunStatus,
     WorkflowContext,
+    WorkflowDefinition,
     WorkflowNode,
     WorkflowNodeExecution,
     WorkflowRun,
@@ -105,11 +111,15 @@ class WorkflowExecutor:
                     break
                 run = await self._complete_run(run)
                 break
-            run = await self._execute_node(run, nodes_by_id[ready_node_ids[0]])
+            run = await self._execute_node(
+                run, nodes_by_id[ready_node_ids[0]], definition=definition
+            )
 
         return run
 
-    async def _execute_node(self, run: WorkflowRun, node: WorkflowNode) -> WorkflowRun:
+    async def _execute_node(
+        self, run: WorkflowRun, node: WorkflowNode, *, definition: WorkflowDefinition
+    ) -> WorkflowRun:
         attempt = 1
         receipt_id = f"{run.id}:{node.id}:{attempt}"
         now = _utcnow()
@@ -138,7 +148,9 @@ class WorkflowExecutor:
             )
 
         request = NodeExecutionRequest(
-            owner_id=run.owner_id, execution_receipt_id=receipt_id
+            owner_id=run.owner_id,
+            execution_receipt_id=receipt_id,
+            outgoing_edges=tuple(outgoing_edges(definition, node.id)),
         )
         timeout_seconds = node.timeout_seconds or self._default_node_timeout_seconds
         try:
@@ -161,7 +173,9 @@ class WorkflowExecutor:
                 run, pending, error=f"Node {node.id!r} execution failed."
             )
 
-        return await self._succeed_node(run, pending, output=output)
+        return await self._succeed_node(
+            run, pending, output=output, definition=definition
+        )
 
     async def _succeed_node(
         self,
@@ -169,6 +183,7 @@ class WorkflowExecutor:
         execution: WorkflowNodeExecution,
         *,
         output: dict[str, object],
+        definition: WorkflowDefinition,
     ) -> WorkflowRun:
         now = _utcnow()
         await self._store.append_node_execution(
@@ -183,15 +198,25 @@ class WorkflowExecutor:
         updated_context = run.context.model_copy(
             update={"variables": {**run.context.variables, execution.node_id: output}}
         )
-        return await self._checkpoint_run(
-            run,
-            context=updated_context,
+        run = await self._checkpoint_run(
+            run.model_copy(update={"context": updated_context}),
             current_node_ids=[
                 node_id
                 for node_id in run.current_node_ids
                 if node_id != execution.node_id
             ],
         )
+        if execution.node_type is NodeType.ROUTER:
+            selected = output.get("selected_edge_ids")
+            if isinstance(selected, list):
+                selected_ids = [item for item in selected if isinstance(item, str)]
+                run = await self._skip_unselected_branches(
+                    run,
+                    definition=definition,
+                    router_node_id=execution.node_id,
+                    selected_edge_ids=selected_ids,
+                )
+        return run
 
     async def _fail_node(
         self, run: WorkflowRun, execution: WorkflowNodeExecution, *, error: str
@@ -213,6 +238,62 @@ class WorkflowExecutor:
             current_node_ids=[],
             completed_at=now,
         )
+
+    async def _skip_unselected_branches(
+        self,
+        run: WorkflowRun,
+        *,
+        definition: WorkflowDefinition,
+        router_node_id: str,
+        selected_edge_ids: list[str],
+    ) -> WorkflowRun:
+        node_ids = collect_nodes_to_skip(
+            definition,
+            router_node_id=router_node_id,
+            selected_edge_ids=selected_edge_ids,
+            run=run,
+        )
+        if not node_ids:
+            return run
+
+        now = _utcnow()
+        for node_id in node_ids:
+            node = next((item for item in definition.nodes if item.id == node_id), None)
+            if node is None:
+                continue
+            await self._store.append_node_execution(
+                WorkflowNodeExecution(
+                    id=uuid.uuid4(),
+                    run_id=run.id,
+                    node_id=node_id,
+                    node_type=node.type,
+                    attempt=1,
+                    status=NodeStatus.SKIPPED,
+                    completed_at=now,
+                )
+            )
+
+        existing_skipped_raw = run.context.metadata.get(SKIPPED_NODE_IDS_KEY, [])
+        existing_skipped = (
+            existing_skipped_raw if isinstance(existing_skipped_raw, list) else []
+        )
+        merged_skipped = [
+            *(
+                item
+                for item in existing_skipped
+                if isinstance(item, str) and item not in node_ids
+            ),
+            *node_ids,
+        ]
+        updated_context = run.context.model_copy(
+            update={
+                "metadata": {
+                    **run.context.metadata,
+                    SKIPPED_NODE_IDS_KEY: merged_skipped,
+                }
+            }
+        )
+        return await self._checkpoint_run(run, context=updated_context)
 
     async def _complete_run(self, run: WorkflowRun) -> WorkflowRun:
         return await self._checkpoint_run(

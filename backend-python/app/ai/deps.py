@@ -545,8 +545,10 @@ def get_workflow_manager(
     ``WorkflowExecutor`` task (Part I § Background execution), never the
     request-scoped ``session`` above.
     """
+    from app.ai.workflow.conditions.evaluator import ConditionEvaluator
     from app.ai.workflow.manager import WorkflowManager
     from app.ai.workflow.models import NodeType
+    from app.ai.workflow.nodes.router_node import RouterNodeExecutor
     from app.ai.workflow.nodes.task_node import TaskNodeExecutor
     from app.ai.workflow.providers.postgres import PostgresWorkflowStore
 
@@ -556,6 +558,9 @@ def get_workflow_manager(
     return WorkflowManager(
         store=store,
         settings=settings,
-        node_executors={NodeType.TASK: TaskNodeExecutor(tool_executor)},
+        node_executors={
+            NodeType.TASK: TaskNodeExecutor(tool_executor),
+            NodeType.ROUTER: RouterNodeExecutor(ConditionEvaluator()),
+        },
         background_store_factory=background_store_factory,
     )
