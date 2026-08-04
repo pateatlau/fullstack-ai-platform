@@ -13,7 +13,10 @@ def test_package_imports_cleanly() -> None:
         assert hasattr(module, name), f"app.ai.memory is missing export {name!r}"
 
 
-def test_public_api_surface_matches_phase_1_scope() -> None:
+def test_public_api_surface_matches_locked_scope() -> None:
+    """Part I § Public APIs: stable after Phase 1, plus ``MemoryPromptInjector``
+    (documented Phase 8 addition — chat prompt-assembly integration).
+    """
     module = importlib.import_module("app.ai.memory")
 
     assert set(module.__all__) == {
@@ -31,6 +34,7 @@ def test_public_api_surface_matches_phase_1_scope() -> None:
         "MemoryManager",
         "MemoryNotFoundError",
         "MemoryPolicyEngine",
+        "MemoryPromptInjector",
         "MemoryProvider",
         "MemoryQualityEvaluator",
         "MemoryRecord",
@@ -61,3 +65,4 @@ def test_subpackages_import_independently() -> None:
     importlib.import_module("app.ai.memory.context_builder")
     importlib.import_module("app.ai.memory.semantic_retriever")
     importlib.import_module("app.ai.memory.token_budget")
+    importlib.import_module("app.ai.memory.prompt_injector")

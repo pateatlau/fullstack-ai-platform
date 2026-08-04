@@ -192,6 +192,12 @@ class UnifiedChatService:
             )
 
         if effective_web_search:
+            # ToolChatService/ChatAgentAdapter bypass ChatService.complete_chat's
+            # own message resolution, so Memory must be applied here explicitly
+            # (Part I: orchestrated only from ChatService/UnifiedChatService).
+            working_request = await self._apply_memory_context(
+                working_request, caller, session_id=working_request.session_id
+            )
             if self._use_agent_runtime():
                 assert self._chat_agent_adapter is not None
                 response = await self._chat_agent_adapter.complete_chat(
@@ -207,8 +213,25 @@ class UnifiedChatService:
                     on_activity=on_activity,
                     allowed_tool_names=frozenset({WEB_SEARCH_TOOL_NAME}),
                 )
+            self._chat_service._maybe_extract_memory(
+                caller=caller,
+                session_id=response.session_id,
+                provider=provider,
+                provider_name=provider_name,
+                model=model,
+                user_content=self._chat_service._last_user_content(request),
+                assistant_content=response.content,
+            )
         else:
-            response = await self._chat_service.complete_chat(working_request, caller)
+            # Memory + conversation-summary substitution both happen inside
+            # complete_chat; bypass the latter when documents were merged so
+            # the ephemeral RAG context (never persisted) isn't discarded by
+            # the DB-reconstructed message history.
+            response = await self._chat_service.complete_chat(
+                working_request,
+                caller,
+                bypass_summary_reconstruction=effective_documents,
+            )
 
         response_updates: dict[str, object] = {}
         if retrieved_chunks is not None:
@@ -263,7 +286,13 @@ class UnifiedChatService:
                 yield frame
             return
 
-        working_request = request
+        # stream_execute never delegates to ChatService.stream_chat (unlike the
+        # plain SSE route), so Memory must be applied here for every branch
+        # below (plain, RAG, tool-loop, and agent streaming all read from
+        # ``working_request``).
+        working_request = await self._apply_memory_context(
+            request, caller, session_id=session_id
+        )
         retrieval_latency_ms: int | None = None
 
         try:
@@ -343,7 +372,7 @@ class UnifiedChatService:
                     return
 
                 working_request = self._merge_document_context(
-                    request=request,
+                    request=working_request,
                     question=question,
                     context_text=doc_result.context_text,
                 )
@@ -1093,6 +1122,29 @@ class UnifiedChatService:
             retrieved_chunks=[],
             citations=citations,
         )
+
+    async def _apply_memory_context(
+        self,
+        request: ChatRequestSchema,
+        caller: CallerContext | None,
+        *,
+        session_id: uuid.UUID | None,
+    ) -> ChatRequestSchema:
+        """Inject Memory context via the shared ``ChatService`` helper.
+
+        Used by branches that bypass ``ChatService.complete_chat``/``stream_chat``
+        own message resolution (tool loop, agent runtime, RAG/plain streaming)
+        so Memory retrieve/inject still runs — orchestrated from this class per
+        Part I's architectural boundary.
+        """
+        messages = await self._chat_service._apply_memory_context(
+            session_id=session_id,
+            caller=caller,
+            messages=request.messages,
+        )
+        if messages is request.messages:
+            return request
+        return request.model_copy(update={"messages": messages})
 
     def _merge_document_context(
         self,

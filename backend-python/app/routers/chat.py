@@ -19,9 +19,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.deps import (
+    build_memory_manager,
     get_advanced_retrieval_pipeline,
     get_agent_runtime,
     get_context_builder,
+    get_embedding_provider,
     get_prompt_manager,
     get_retriever,
     get_tool_executor,
@@ -179,6 +181,16 @@ def get_chat_service(
         conversation_summary_service=ConversationSummaryService(
             chat_store=chat_store,
             prompt_manager=prompt_manager,
+        ),
+        memory_manager=(
+            build_memory_manager(
+                session=session,
+                settings=settings,
+                embedding_provider=get_embedding_provider(),
+                prompt_manager=prompt_manager,
+            )
+            if settings.memory_enabled
+            else None
         ),
     )
 

@@ -18,6 +18,8 @@ from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.core.text_utils import derive_session_title
 from app.ai.deps import get_prompt_manager
+from app.ai.memory.models import MemoryContext
+from app.ai.memory.prompt_injector import MemoryPromptInjector
 from app.ai.memory.summarizer import (
     ConversationSummaryService,
     assemble_context_messages,
@@ -157,6 +159,35 @@ class QuotaChecker(Protocol):
     async def record(self, guest_id: uuid.UUID, *, tokens: int = 0) -> None: ...
 
     async def remaining(self, guest_id: uuid.UUID) -> int: ...
+
+
+class MemoryOrchestrator(Protocol):
+    """``MemoryManager`` surface used by chat orchestration (Part I § Phase 8).
+
+    A ``Protocol`` (rather than importing the concrete ``MemoryManager``)
+    keeps ``ChatService`` decoupled from the Memory provider implementation
+    and matches the existing ``ChatStore``/``UsageStore`` DI pattern.
+    """
+
+    async def retrieve_context(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        session_id: uuid.UUID | None,
+        messages: list[ChatMessageSchema],
+        conversation_summary: str | None = None,
+    ) -> MemoryContext: ...
+
+    def extract_and_persist_async(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        session_id: uuid.UUID | None,
+        messages: list[ChatMessageSchema],
+        provider: LLMProvider,
+        provider_name: ProviderName,
+        model: str,
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -324,6 +355,7 @@ class ChatService:
         session: AsyncSession | None = None,
         prompt_manager: PromptManager | None = None,
         conversation_summary_service: ConversationSummaryService | None = None,
+        memory_manager: MemoryOrchestrator | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._chat_store = chat_store
@@ -332,6 +364,7 @@ class ChatService:
         self._session = session
         self._prompt_manager = prompt_manager or get_prompt_manager()
         self._conversation_summary_service = conversation_summary_service
+        self._memory_manager = memory_manager
 
     def _resolve_provider(
         self, request: ChatRequestSchema
@@ -456,19 +489,140 @@ class ChatService:
             and self._conversation_summary_service is not None
         )
 
+    def _memory_active(self, caller: CallerContext | None) -> bool:
+        """Authenticated persisted chat with MEMORY_ENABLED and a MemoryManager.
+
+        Mirrors ``_memory_summary_active`` (Part I § auth-only memory / flag-off
+        parity) but gates Memory retrieval/injection/extraction rather than
+        conversation-summary substitution.
+        """
+        return (
+            self._settings.memory_enabled
+            and self._persistence_active(caller)
+            and caller is not None
+            and caller.kind == "user"
+            and caller.user_id is not None
+            and self._memory_manager is not None
+        )
+
+    async def _apply_memory_context(
+        self,
+        *,
+        session_id: uuid.UUID | None,
+        caller: CallerContext | None,
+        messages: list[ChatMessageSchema],
+        conversation_summary: str | None = None,
+        fetch_conversation_summary: bool = True,
+    ) -> list[ChatMessageSchema]:
+        """Retrieve and inject Memory context (Part I § Chat Integration Strategy).
+
+        Best-effort: any retrieval, provider, or rendering failure isolates and
+        returns ``messages`` unchanged so Memory never blocks chat execution.
+
+        When the caller already fetched the summary (e.g. via
+        ``ConversationSummaryService.resolve_persisted_context``), pass
+        ``fetch_conversation_summary=False`` to skip a duplicate DB round-trip.
+        """
+        if not self._memory_active(caller):
+            return messages
+        assert caller is not None and caller.user_id is not None
+        assert self._memory_manager is not None
+
+        try:
+            if fetch_conversation_summary and (
+                self._conversation_summary_service is not None
+                and session_id is not None
+            ):
+                summary_context = (
+                    await self._conversation_summary_service.retrieve_summary(
+                        session_id
+                    )
+                )
+                conversation_summary = summary_context.conversation_summary
+
+            memory_context = await self._memory_manager.retrieve_context(
+                owner_id=caller.user_id,
+                session_id=session_id,
+                messages=messages,
+                conversation_summary=conversation_summary,
+            )
+            return MemoryPromptInjector(self._prompt_manager).inject(
+                messages, memory_context
+            )
+        except Exception:  # noqa: BLE001 - memory must never block chat execution
+            logger.warning(
+                "Memory context application failed",
+                session_id=str(session_id) if session_id is not None else None,
+                exc_info=True,
+            )
+            return messages
+
+    def _maybe_extract_memory(
+        self,
+        *,
+        caller: CallerContext | None,
+        session_id: uuid.UUID | None,
+        provider: LLMProvider,
+        provider_name: ProviderName,
+        model: str,
+        user_content: str,
+        assistant_content: str,
+    ) -> None:
+        """Schedule async durable-memory extraction for a completed turn.
+
+        Fire-and-forget (``MemoryManager.extract_and_persist_async`` schedules
+        its own background task) so the response is never delayed.
+        """
+        if not self._memory_active(caller) or not assistant_content.strip():
+            return
+        assert caller is not None and caller.user_id is not None
+        assert self._memory_manager is not None
+
+        turn_messages = [
+            ChatMessageSchema.model_construct(role="user", content=user_content),
+            ChatMessageSchema.model_construct(
+                role="assistant", content=assistant_content
+            ),
+        ]
+        self._memory_manager.extract_and_persist_async(
+            owner_id=caller.user_id,
+            session_id=session_id,
+            messages=turn_messages,
+            provider=provider,
+            provider_name=provider_name,
+            model=model,
+        )
+
     async def _resolve_llm_messages(
         self,
         session_id: uuid.UUID,
         request: ChatRequestSchema,
         caller: CallerContext | None,
+        *,
+        bypass_summary_reconstruction: bool = False,
     ) -> list[ChatMessageSchema]:
-        if not self._memory_summary_active(caller):
-            return request.messages
-        assert self._conversation_summary_service is not None
-        context_messages = (
-            await self._conversation_summary_service.build_context_messages(session_id)
+        messages = request.messages
+        conversation_summary: str | None = None
+        fetch_conversation_summary = True
+        if self._memory_summary_active(caller) and not bypass_summary_reconstruction:
+            assert self._conversation_summary_service is not None
+            (
+                summary_context,
+                context_messages,
+            ) = await self._conversation_summary_service.resolve_persisted_context(
+                session_id
+            )
+            conversation_summary = summary_context.conversation_summary
+            fetch_conversation_summary = False
+            if context_messages:
+                messages = context_messages
+        return await self._apply_memory_context(
+            session_id=session_id,
+            caller=caller,
+            messages=messages,
+            conversation_summary=conversation_summary,
+            fetch_conversation_summary=fetch_conversation_summary,
         )
-        return context_messages if context_messages else request.messages
 
     async def _trigger_summarization(
         self,
@@ -806,7 +960,11 @@ class ChatService:
     # ---- non-streaming completion -------------------------------------------
 
     async def complete_chat(
-        self, request: ChatRequestSchema, caller: CallerContext | None = None
+        self,
+        request: ChatRequestSchema,
+        caller: CallerContext | None = None,
+        *,
+        bypass_summary_reconstruction: bool = False,
     ) -> ChatResponseSchema:
         provider, model, provider_name = self._resolve_provider(request)
 
@@ -871,7 +1029,10 @@ class ChatService:
 
         try:
             llm_messages = await self._resolve_llm_messages(
-                chat_session.id, request, caller
+                chat_session.id,
+                request,
+                caller,
+                bypass_summary_reconstruction=bypass_summary_reconstruction,
             )
             llm_request = request.model_copy(update={"messages": llm_messages})
             completion = await self._complete_and_log(
@@ -941,6 +1102,16 @@ class ChatService:
             provider=provider,
             provider_name=provider_name,
             model=model,
+        )
+        await self._commit()
+        self._maybe_extract_memory(
+            caller=caller,
+            session_id=chat_session.id,
+            provider=provider,
+            provider_name=provider_name,
+            model=model,
+            user_content=prompt_text,
+            assistant_content=completion.content,
         )
 
         return ChatResponseSchema(
@@ -1370,4 +1541,14 @@ class ChatService:
                 provider=provider,
                 provider_name=provider_name,
                 model=model,
+            )
+            await self._commit()
+            self._maybe_extract_memory(
+                caller=caller,
+                session_id=prep.session_id,
+                provider=provider,
+                provider_name=provider_name,
+                model=model,
+                user_content=prep.prompt_text,
+                assistant_content=content,
             )

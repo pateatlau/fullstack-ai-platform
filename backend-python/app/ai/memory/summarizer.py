@@ -47,8 +47,11 @@ async def assemble_context_messages(
     chat_store: SummaryChatStore,
     prompt_manager: PromptManager,
     session_id: uuid.UUID,
+    *,
+    latest: SessionSummary | None = None,
 ) -> list[ChatMessageSchema]:
-    latest = await chat_store.get_latest_summary(session_id)
+    if latest is None:
+        latest = await chat_store.get_latest_summary(session_id)
     covered = latest.covers_through_seq if latest is not None else 0
     pending = await chat_store.list_messages_after_seq(session_id, covered)
 
@@ -123,6 +126,51 @@ class ConversationSummaryService:
                 exc_info=True,
             )
             return []
+
+    async def resolve_persisted_context(
+        self, session_id: uuid.UUID
+    ) -> tuple[MemoryContext, list[ChatMessageSchema]]:
+        """Fetch the latest summary once and build both memory + LLM context.
+
+        Used by ``ChatService._resolve_llm_messages`` when summary substitution
+        and memory retrieval are both active, avoiding a duplicate
+        ``get_latest_summary`` round-trip per request.
+        """
+        try:
+            latest = await self._chat_store.get_latest_summary(session_id)
+        except Exception:  # noqa: BLE001 - retrieval must not block chat
+            logger.warning(
+                "Conversation summary retrieval failed",
+                session_id=str(session_id),
+                exc_info=True,
+            )
+            return MemoryContext(), []
+
+        summary_context = MemoryContext(
+            conversation_summary=latest.content if latest is not None else None,
+            metadata={
+                "summary_version": latest.version,
+                "covers_through_seq": latest.covers_through_seq,
+            }
+            if latest is not None
+            else {},
+        )
+        try:
+            context_messages = await assemble_context_messages(
+                self._chat_store,
+                self._prompt_manager,
+                session_id,
+                latest=latest,
+            )
+        except Exception:  # noqa: BLE001 - fall back to caller-supplied history
+            logger.warning(
+                "Conversation context assembly failed",
+                session_id=str(session_id),
+                exc_info=True,
+            )
+            return summary_context, []
+
+        return summary_context, context_messages
 
     async def trigger_summarization(
         self,

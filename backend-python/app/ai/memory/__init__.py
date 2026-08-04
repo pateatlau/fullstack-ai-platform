@@ -1,7 +1,6 @@
 """Memory subsystem public API (stable after Phase 1).
 
 See ``docs/plans/post-mvp-v2-epic-05-memory-system.md`` Part I § Public APIs.
-``MemoryPromptInjector`` is added in Phase 8.
 """
 
 from app.ai.memory.context_builder import MemoryContextBuilder
@@ -26,6 +25,7 @@ from app.ai.memory.models import (
     UserPreferenceUpsert,
 )
 from app.ai.memory.policy_engine import MemoryPolicyEngine
+from app.ai.memory.prompt_injector import MemoryPromptInjector
 from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
 from app.ai.memory.quality import MemoryQualityEvaluator
 from app.ai.memory.semantic_retriever import SemanticRetriever
@@ -46,6 +46,7 @@ __all__ = [
     "MemoryManager",
     "MemoryNotFoundError",
     "MemoryPolicyEngine",
+    "MemoryPromptInjector",
     "MemoryProvider",
     "MemoryQualityEvaluator",
     "MemoryRecord",

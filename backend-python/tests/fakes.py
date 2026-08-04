@@ -1,8 +1,9 @@
 import asyncio
 import datetime
 import uuid
-from typing import AsyncIterator
+from typing import AsyncIterator, TypedDict
 
+from app.ai.memory.models import MemoryContext
 from app.db.models import (
     ChatMessage,
     ChatSession,
@@ -13,12 +14,13 @@ from app.db.models import (
 )
 from app.providers.base import (
     ChatMessageInput,
+    LLMProvider,
     ProviderChunk,
     ProviderCompletion,
     ProviderToolCompletion,
     ProviderUsage,
 )
-from app.schemas.chat import ChatMessageSchema
+from app.schemas.chat import ChatMessageSchema, ProviderName
 from app.services.auth_service import GoogleClaims
 
 
@@ -481,6 +483,81 @@ class FakeChatStore:
         )
         self.summaries.append(summary)
         return summary
+
+
+class MemoryRetrieveCall(TypedDict):
+    owner_id: uuid.UUID
+    session_id: uuid.UUID | None
+    messages: list[ChatMessageSchema]
+    conversation_summary: str | None
+
+
+class MemoryExtractionCall(TypedDict):
+    owner_id: uuid.UUID
+    session_id: uuid.UUID | None
+    messages: list[ChatMessageSchema]
+    provider_name: ProviderName
+    model: str
+
+
+class FakeMemoryManager:
+    """``MemoryOrchestrator`` test double (chat_service.MemoryOrchestrator).
+
+    Records every call so tests can assert on Memory retrieve/inject/extract
+    wiring without a real ``MemoryManager``/pgvector provider.
+    """
+
+    def __init__(
+        self,
+        *,
+        context: MemoryContext | None = None,
+        raise_on_retrieve: bool = False,
+    ) -> None:
+        self.context = context if context is not None else MemoryContext()
+        self.raise_on_retrieve = raise_on_retrieve
+        self.retrieve_calls: list[MemoryRetrieveCall] = []
+        self.extraction_calls: list[MemoryExtractionCall] = []
+
+    async def retrieve_context(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        session_id: uuid.UUID | None,
+        messages: list[ChatMessageSchema],
+        conversation_summary: str | None = None,
+    ) -> MemoryContext:
+        self.retrieve_calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": session_id,
+                "messages": messages,
+                "conversation_summary": conversation_summary,
+            }
+        )
+        if self.raise_on_retrieve:
+            raise RuntimeError("memory retrieval exploded")
+        return self.context
+
+    def extract_and_persist_async(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        session_id: uuid.UUID | None,
+        messages: list[ChatMessageSchema],
+        provider: LLMProvider,
+        provider_name: ProviderName,
+        model: str,
+    ) -> None:
+        del provider
+        self.extraction_calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": session_id,
+                "messages": messages,
+                "provider_name": provider_name,
+                "model": model,
+            }
+        )
 
 
 class FakeUsageStore:
