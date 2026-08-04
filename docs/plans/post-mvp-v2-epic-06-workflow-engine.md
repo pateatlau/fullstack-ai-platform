@@ -1214,48 +1214,48 @@ Implement `WorkflowExecutor` for the simple case: a linear or branching (but non
 
 ### Execution Engine
 
-- [ ] Implement `NodeExecutor` Protocol.
-- [ ] Implement `WorkflowExecutor.step()` — resolve ready nodes, execute, advance.
-- [ ] Implement the ready-node resolver for sequential/branching (non-parallel) graphs.
-- [ ] Implement run completion detection (no more ready nodes, no pending branches).
+- [x] Implement `NodeExecutor` Protocol.
+- [x] Implement `WorkflowExecutor.step()` — resolve ready nodes, execute, advance.
+- [x] Implement the ready-node resolver for sequential/branching (non-parallel) graphs.
+- [x] Implement run completion detection (no more ready nodes, no pending branches).
 
 ### Task Node
 
-- [ ] Implement `TaskNodeExecutor` calling `ToolExecutor.execute()`.
-- [ ] Map node `config` (`tool_name`, `arguments_template`) against `WorkflowContext`.
-- [ ] Map `ToolResult` into `WorkflowNodeExecution.output`.
-- [ ] Pass `execution_receipt_id` via `ToolExecutionContext` (crash-safe protocol; Phase 8).
-- [ ] Handle tool authorization failures as node failures (not run crashes).
+- [x] Implement `TaskNodeExecutor` calling `ToolExecutor.execute()`.
+- [x] Map node `config` (`tool_name`, `arguments_template`) against `WorkflowContext`.
+- [x] Map `ToolResult` into `WorkflowNodeExecution.output`.
+- [x] Pass `execution_receipt_id` via `ToolExecutionContext` (crash-safe protocol; Phase 8).
+- [x] Handle tool authorization failures as node failures (not run crashes).
 
 ### Run Lifecycle
 
-- [ ] Implement `WorkflowManager.start_run(definition_id, trigger_input, idempotency_key, owner_id)`.
-- [ ] Create `WorkflowRun` (`status=running`) when no run exists for `(owner_id, definition_id, idempotency_key)`; otherwise return the existing run without scheduling a duplicate executor.
-- [ ] Schedule `WorkflowExecutor` on an in-process `asyncio.Task`, and return `run_id` + status snapshot immediately (do not block until terminal completion).
-- [ ] Implement `WorkflowManager.get_run(run_id)` with full node execution history.
-- [ ] Implement `WorkflowManager.list_runs()` (owner-scoped).
+- [x] Implement `WorkflowManager.start_run(definition_id, trigger_input, idempotency_key, owner_id)`.
+- [x] Create `WorkflowRun` (`status=running`) when no run exists for `(owner_id, definition_id, idempotency_key)`; otherwise return the existing run without scheduling a duplicate executor.
+- [x] Schedule `WorkflowExecutor` on an in-process `asyncio.Task`, and return `run_id` + status snapshot immediately (do not block until terminal completion).
+- [x] Implement `WorkflowManager.get_run(run_id)` with full node execution history.
+- [x] Implement `WorkflowManager.list_runs()` (owner-scoped).
 
 ### Checkpointing
 
-- [ ] Persist a `WorkflowNodeExecution` row before executing a node (`status=running`), including a stable per-attempt `execution_receipt_id` (`{run_id}:{node_id}:{attempt}`) in the checkpointed `input`.
-- [ ] Persist the node result and updated `WorkflowRun.context` after execution in the same atomic write as the terminal node status (`succeeded`/`failed`).
-- [ ] Ensure checkpoint writes are atomic (run + node execution together) so a crash after an external side effect but before the result checkpoint leaves the node in `running`, not `succeeded`.
+- [x] Persist a `WorkflowNodeExecution` row before executing a node (`status=running`), including a stable per-attempt `execution_receipt_id` (`{run_id}:{node_id}:{attempt}`) in the checkpointed `input`.
+- [x] Persist the node result and updated `WorkflowRun.context` after execution in the same atomic write as the terminal node status (`succeeded`/`failed`).
+- [x] Ensure checkpoint writes are atomic (run + node execution together) so a crash after an external side effect but before the result checkpoint leaves the node in `running`, not `succeeded`.
 
 ### Error Handling
 
-- [ ] Handle node execution failures — mark node `failed`, fail the run (retry arrives in Phase 8).
-- [ ] Handle tool timeouts.
-- [ ] Log operational failures without exposing node input/output content.
+- [x] Handle node execution failures — mark node `failed`, fail the run (retry arrives in Phase 8).
+- [x] Handle tool timeouts.
+- [x] Log operational failures without exposing node input/output content.
 
 ### Testing
 
-- [ ] Add single-node run tests.
-- [ ] Add multi-node sequential run tests.
-- [ ] Add branching (non-parallel) run tests.
-- [ ] Add checkpoint persistence tests.
-- [ ] Add failure propagation tests.
-- [ ] Add idempotent start tests (same owner + definition + key returns existing run).
-- [ ] Add owner-isolation tests for runs.
+- [x] Add single-node run tests.
+- [x] Add multi-node sequential run tests.
+- [x] Add branching (non-parallel) run tests.
+- [x] Add checkpoint persistence tests.
+- [x] Add failure propagation tests.
+- [x] Add idempotent start tests (same owner + definition + key returns existing run).
+- [x] Add owner-isolation tests for runs.
 
 **Verify**
 
@@ -1263,10 +1263,10 @@ Implement `WorkflowExecutor` for the simple case: a linear or branching (but non
 
 Additional verification:
 
-- [ ] Sequential workflows execute to completion.
-- [ ] Task nodes correctly invoke `ToolExecutor`.
-- [ ] Every node transition is checkpointed.
-- [ ] Failures mark the run `failed` without crashing the process.
+- [x] Sequential workflows execute to completion.
+- [x] Task nodes correctly invoke `ToolExecutor`.
+- [x] Every node transition is checkpointed.
+- [x] Failures mark the run `failed` without crashing the process.
 
 **Acceptance**
 
@@ -1278,6 +1278,18 @@ Additional verification:
 
 - Sequential execution tests pass.
 - Ready for conditional routing (Phase 4).
+
+**Completion Record**
+
+| Metric               | Result                                                                     |
+| -------------------- | --------------------------------------------------------------------------- |
+| Execution engine     | ✅ `WorkflowExecutor` step loop + sequential/branching ready-node resolver  |
+| Task node            | ✅ `TaskNodeExecutor` — dot-path `arguments_template` resolution, `ToolExecutor` reuse |
+| Run lifecycle        | ✅ `WorkflowManager.start_run()` (idempotent, requires `ACTIVE` definition) / `get_run()` / `list_runs()` |
+| Checkpointing        | ✅ `PostgresWorkflowStore` run + node execution persistence, optimistic concurrency via `checkpoint_version` |
+| Background execution | ✅ `asyncio.Task` scheduling with dedicated session (`engine/background.py`) |
+| Unit tests           | ✅ 27 new tests; 88 total in `tests/ai/workflow/`                            |
+| Backend regression   | ✅ 1397 passed; 89.20% `app/` coverage                                       |
 
 ---
 
@@ -2189,5 +2201,6 @@ No workflow input/output content or personally identifiable information should b
 | 1.7     | 2026-08-04 | Parallel branch checkpoints: optimistic `checkpoint_version` merge + retry; prevent last-writer-wins on `context`/`current_node_ids`. Part I + Phase 5 sync. |
 | 1.8     | 2026-08-04 | `apply_decision()` atomic CAS on `waiting_approval` + same-transaction run transition; no-op/conflict on duplicate decisions. Phase 7 sync. |
 | 1.9     | 2026-08-05 | Phase 1 complete: canonical models/enums, `WorkflowStore` protocol, `PostgresWorkflowStore` scaffold, `WorkflowManager` skeleton, `0007_workflow_tables` migration, `WORKFLOW_ENGINE_ENABLED` + workflow config, DI wiring. 39 workflow tests; 1344 total backend passed; 89.80% coverage. Public API frozen. Phase 2 complete: `GraphValidator`, condition DSL shape validation, definition CRUD via `WorkflowManager`/`PostgresWorkflowStore`, versioning on run reference. 61 workflow tests; 1370 total backend passed; 90.00% coverage. Migration rollback CI smoke test pending. |
+| 1.10    | 2026-08-05 | Phase 3 complete: `WorkflowExecutor` sequential/branching step loop, `NodeExecutor` protocol, `TaskNodeExecutor` (dot-path `arguments_template` resolution), `WorkflowManager.start_run()`/`get_run()`/`list_runs()`, per-transition checkpointing via `PostgresWorkflowStore`, background run scheduling. 88 workflow tests; 1397 total backend passed; 89.20% coverage. |
 
 ---

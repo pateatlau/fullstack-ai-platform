@@ -536,8 +536,26 @@ def get_workflow_store(
 def get_workflow_manager(
     store: "PostgresWorkflowStore" = Depends(get_workflow_store),
     settings: Settings = Depends(get_ai_settings),
+    tool_executor: ToolExecutor = Depends(get_tool_executor),
 ) -> "WorkflowManager":
-    """Return a request-scoped ``WorkflowManager`` wired to the configured store."""
-    from app.ai.workflow.manager import WorkflowManager
+    """Return a request-scoped ``WorkflowManager`` wired to the configured store.
 
-    return WorkflowManager(store=store, settings=settings)
+    Task nodes execute through the same ``ToolExecutor`` used elsewhere; run
+    execution is scheduled on a session dedicated to the background
+    ``WorkflowExecutor`` task (Part I § Background execution), never the
+    request-scoped ``session`` above.
+    """
+    from app.ai.workflow.manager import WorkflowManager
+    from app.ai.workflow.models import NodeType
+    from app.ai.workflow.nodes.task_node import TaskNodeExecutor
+    from app.ai.workflow.providers.postgres import PostgresWorkflowStore
+
+    def background_store_factory(session: AsyncSession) -> "PostgresWorkflowStore":
+        return PostgresWorkflowStore(session=session, settings=settings)
+
+    return WorkflowManager(
+        store=store,
+        settings=settings,
+        node_executors={NodeType.TASK: TaskNodeExecutor(tool_executor)},
+        background_store_factory=background_store_factory,
+    )
