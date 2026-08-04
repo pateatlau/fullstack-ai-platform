@@ -419,13 +419,16 @@ def get_memory_manager(
     settings: Settings = Depends(get_ai_settings),
     embedding_provider: EmbeddingProvider = Depends(get_embedding_provider),
     prompt_manager: PromptManager = Depends(get_prompt_manager),
+    session: AsyncSession = Depends(get_db_session),
 ) -> "MemoryManager":
     """Return a request-scoped ``MemoryManager`` wired to the configured provider."""
     from app.ai.memory.manager import MemoryManager
+    from app.ai.memory.project import ChatStoreSessionOwnershipChecker
     from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
+    from app.db.chat import SqlChatStore
 
-    def background_provider_factory(session: AsyncSession) -> PgVectorMemoryProvider:
-        return PgVectorMemoryProvider(session=session, settings=settings)
+    def background_provider_factory(db_session: AsyncSession) -> PgVectorMemoryProvider:
+        return PgVectorMemoryProvider(session=db_session, settings=settings)
 
     return MemoryManager(
         provider=provider,
@@ -433,6 +436,9 @@ def get_memory_manager(
         embedding_provider=embedding_provider,
         prompt_manager=prompt_manager,
         background_provider_factory=background_provider_factory,
+        session_ownership_checker=ChatStoreSessionOwnershipChecker(
+            SqlChatStore(session)
+        ),
     )
 
 

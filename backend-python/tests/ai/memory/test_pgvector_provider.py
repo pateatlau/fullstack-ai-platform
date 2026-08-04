@@ -203,6 +203,82 @@ async def test_project_record_persists_session_scope(db_session) -> None:
 
 
 @pytest.mark.anyio
+async def test_search_records_isolates_project_sessions(db_session) -> None:
+    owner_id = await _make_user(db_session)
+    session_a = await _make_session(db_session, user_id=owner_id)
+    session_b = await _make_session(db_session, user_id=owner_id)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+    query = _vector_at(0, 1.0)
+    await provider.create_record(
+        _domain_record(
+            owner_id=owner_id,
+            project_id=session_a,
+            content="Session A",
+            embedding=_vector_at_two(0.99, 0.01),
+        )
+    )
+    await provider.create_record(
+        _domain_record(
+            owner_id=owner_id,
+            project_id=session_b,
+            content="Session B",
+            embedding=_vector_at_two(0.98, 0.02),
+        )
+    )
+
+    results = await provider.search_records(
+        query,
+        owner_id=owner_id,
+        memory_type=MemoryType.PROJECT,
+        session_id=session_a,
+        top_k=5,
+    )
+
+    assert len(results) == 1
+    assert results[0].content == "Session A"
+
+
+@pytest.mark.anyio
+async def test_list_active_records_isolates_project_sessions(db_session) -> None:
+    owner_id = await _make_user(db_session)
+    session_a = await _make_session(db_session, user_id=owner_id)
+    session_b = await _make_session(db_session, user_id=owner_id)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+    await provider.create_record(
+        _domain_record(owner_id=owner_id, project_id=session_a, content="Session A")
+    )
+    await provider.create_record(
+        _domain_record(owner_id=owner_id, project_id=session_b, content="Session B")
+    )
+
+    results = await provider.list_active_records(
+        owner_id=owner_id,
+        memory_type=MemoryType.PROJECT,
+        session_id=session_a,
+    )
+
+    assert len(results) == 1
+    assert results[0].content == "Session A"
+
+
+@pytest.mark.anyio
+async def test_update_record_rejects_cross_session_project_move(db_session) -> None:
+    owner_id = await _make_user(db_session)
+    session_a = await _make_session(db_session, user_id=owner_id)
+    session_b = await _make_session(db_session, user_id=owner_id)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+    created = await provider.create_record(
+        _domain_record(owner_id=owner_id, project_id=session_a, content="Session A")
+    )
+    moved = created.model_copy(update={"project_id": session_b})
+
+    from app.ai.memory.exceptions import MemoryAccessDeniedError
+
+    with pytest.raises(MemoryAccessDeniedError, match="different session"):
+        await provider.update_record(moved)
+
+
+@pytest.mark.anyio
 async def test_preference_round_trip(db_session) -> None:
     user_id = await _make_user(db_session)
     provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))

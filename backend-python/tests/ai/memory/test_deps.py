@@ -32,8 +32,10 @@ async def test_get_memory_manager_wires_the_resolved_provider() -> None:
         settings=settings,
         embedding_provider=AsyncMock(),
         prompt_manager=AsyncMock(),
+        session=session,
     )
 
     assert isinstance(manager, MemoryManager)
     assert manager.get_record is not None
     assert manager._background_provider_factory is not None
+    assert manager._session_ownership_checker is not None

@@ -1,8 +1,8 @@
 """pgvector-backed ``MemoryProvider`` (Epic 05).
 
 Phase 3 implements durable record CRUD and similarity search for dedupe.
-Phase 4 implements structured preference persistence. Lifecycle updates land
-in Phase 7.
+Phase 4 implements structured preference persistence. Phase 5 enforces project
+memory session isolation on updates. Lifecycle updates land in Phase 7.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.memory.exceptions import MemoryNotFoundError
+from app.ai.memory.exceptions import MemoryAccessDeniedError, MemoryNotFoundError
 from app.ai.memory.lifecycle import LifecycleState
 from app.ai.memory.models import MemoryRecord, MemoryScope, MemoryType
 from app.core.config import Settings
@@ -47,6 +47,14 @@ class PgVectorMemoryProvider:
         if existing is None:
             raise MemoryNotFoundError(
                 f"Memory record {record.id} not found for owner {record.owner_id}."
+            )
+
+        if (
+            existing.memory_type == MemoryType.PROJECT.value
+            and record.project_id != existing.session_id
+        ):
+            raise MemoryAccessDeniedError(
+                "Cannot move project memory to a different session."
             )
 
         existing.session_id = record.project_id

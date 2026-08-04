@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.memory.exceptions import MemoryAccessDeniedError
 from app.ai.memory.background_tasks import schedule_extraction_task
 from app.ai.memory.context_builder import MemoryContextBuilder
 from app.ai.memory.events import (
@@ -32,6 +33,13 @@ from app.ai.memory.preferences import (
     normalize_preferences,
     validate_preference_key,
     validate_preference_value,
+)
+from app.ai.memory.project import (
+    SessionOwnershipChecker,
+    assert_project_record_scope,
+    map_project_id_to_session_id,
+    normalize_project_memories,
+    validate_project_id,
 )
 from app.ai.memory.quality import MemoryQualityEvaluator
 from app.core.logging import get_logger
@@ -63,6 +71,7 @@ class MemoryManager:
         prompt_manager: PromptManager | None = None,
         event_publisher: MemoryEventPublisher | None = None,
         background_provider_factory: BackgroundProviderFactory | None = None,
+        session_ownership_checker: SessionOwnershipChecker | None = None,
     ) -> None:
         self._provider = provider
         self._settings = settings
@@ -70,6 +79,7 @@ class MemoryManager:
         self._prompt_manager = prompt_manager
         self._event_publisher = event_publisher or LoggingMemoryEventPublisher()
         self._background_provider_factory = background_provider_factory
+        self._session_ownership_checker = session_ownership_checker
 
     async def get_record(
         self, record_id: uuid.UUID, *, owner_id: uuid.UUID
@@ -132,6 +142,166 @@ class MemoryManager:
         """Load normalized preferences into a ``MemoryContext``."""
         builder = MemoryContextBuilder(self._provider)
         return await builder.with_preferences(user_id, context=context)
+
+    async def list_project_memories(
+        self, *, owner_id: uuid.UUID, project_id: uuid.UUID
+    ) -> list[MemoryRecord]:
+        """Return active project memories scoped to an owned chat session."""
+        validated_project_id = validate_project_id(project_id)
+        await self._assert_session_owned(
+            owner_id=owner_id, project_id=validated_project_id
+        )
+        try:
+            records = await self._list_active_records(
+                owner_id=owner_id,
+                memory_type=MemoryType.PROJECT,
+                session_id=map_project_id_to_session_id(validated_project_id),
+            )
+            return normalize_project_memories(records)
+        except MemoryAccessDeniedError:
+            raise
+        except Exception:  # noqa: BLE001 - retrieval must not block callers
+            logger.warning(
+                "Project memory list retrieval failed",
+                owner_id=str(owner_id),
+                project_id=str(validated_project_id),
+                exc_info=True,
+            )
+            return []
+
+    async def search_project_memories(
+        self,
+        query_embedding: list[float],
+        *,
+        owner_id: uuid.UUID,
+        project_id: uuid.UUID,
+        top_k: int,
+    ) -> list[MemoryRecord]:
+        """Return provider-ranked project memories for an owned session."""
+        validated_project_id = validate_project_id(project_id)
+        await self._assert_session_owned(
+            owner_id=owner_id, project_id=validated_project_id
+        )
+        try:
+            results = await self._provider.search_records(
+                query_embedding,
+                owner_id=owner_id,
+                memory_type=MemoryType.PROJECT,
+                session_id=map_project_id_to_session_id(validated_project_id),
+                top_k=top_k,
+            )
+            return normalize_project_memories(results)
+        except MemoryAccessDeniedError:
+            raise
+        except Exception:  # noqa: BLE001 - retrieval must not block callers
+            logger.warning(
+                "Project memory search failed",
+                owner_id=str(owner_id),
+                project_id=str(validated_project_id),
+                exc_info=True,
+            )
+            return []
+
+    async def get_project_record(
+        self,
+        record_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        project_id: uuid.UUID,
+    ) -> MemoryRecord | None:
+        """Return a project memory when it belongs to the owned session."""
+        validated_project_id = validate_project_id(project_id)
+        await self._assert_session_owned(
+            owner_id=owner_id, project_id=validated_project_id
+        )
+        record = await self._provider.get_record(record_id, owner_id=owner_id)
+        if record is None:
+            return None
+        try:
+            assert_project_record_scope(record, project_id=validated_project_id)
+        except MemoryAccessDeniedError:
+            return None
+        return record
+
+    async def update_project_record(
+        self,
+        record: MemoryRecord,
+        *,
+        owner_id: uuid.UUID,
+        project_id: uuid.UUID,
+    ) -> MemoryRecord:
+        """Update a project memory after session ownership and scope checks."""
+        validated_project_id = validate_project_id(project_id)
+        await self._assert_session_owned(
+            owner_id=owner_id, project_id=validated_project_id
+        )
+        if record.owner_id != owner_id:
+            raise MemoryAccessDeniedError("Project memory owner mismatch.")
+        assert_project_record_scope(record, project_id=validated_project_id)
+        return await self._provider.update_record(record)
+
+    async def retrieve_project_context(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        project_id: uuid.UUID,
+        context: MemoryContext | None = None,
+    ) -> MemoryContext:
+        """Load normalized project memories into a ``MemoryContext``."""
+        validated_project_id = validate_project_id(project_id)
+        try:
+            await self._assert_session_owned(
+                owner_id=owner_id, project_id=validated_project_id
+            )
+        except MemoryAccessDeniedError:
+            logger.warning(
+                "Project memory context skipped — session ownership denied",
+                owner_id=str(owner_id),
+                project_id=str(validated_project_id),
+            )
+            return context or MemoryContext()
+
+        builder = MemoryContextBuilder(self._provider)
+        return await builder.with_project_memories(
+            owner_id,
+            validated_project_id,
+            context=context,
+        )
+
+    async def _assert_session_owned(
+        self, *, owner_id: uuid.UUID, project_id: uuid.UUID
+    ) -> None:
+        if self._session_ownership_checker is None:
+            return
+        session_id = map_project_id_to_session_id(project_id)
+        owns_session = await self._session_ownership_checker.user_owns_session(
+            user_id=owner_id,
+            session_id=session_id,
+        )
+        if not owns_session:
+            raise MemoryAccessDeniedError(
+                "Access to project memory for this session is denied."
+            )
+
+    async def _list_active_records(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        memory_type: MemoryType | None = None,
+        session_id: uuid.UUID | None = None,
+    ) -> list[MemoryRecord]:
+        list_active = getattr(self._provider, "list_active_records", None)
+        if list_active is None:
+            return []
+        loader = cast(
+            Callable[..., Awaitable[list[MemoryRecord]]],
+            list_active,
+        )
+        return await loader(
+            owner_id=owner_id,
+            memory_type=memory_type,
+            session_id=session_id,
+        )
 
     def extract_and_persist_async(
         self,
