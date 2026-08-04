@@ -1,0 +1,2136 @@
+---
+epic: v2-06
+title: Workflow Engine
+status: not_started
+version: 1
+depends_on: [v2-05]
+provides:
+  [
+    WorkflowManager,
+    WorkflowStore,
+    WorkflowDefinition,
+    WorkflowNode,
+    WorkflowEdge,
+    WorkflowRun,
+    WorkflowNodeExecution,
+    WorkflowContext,
+    WorkflowExecutor,
+    GraphValidator,
+    ConditionEvaluator,
+    PostgresWorkflowStore,
+    WorkflowExecutionTool,
+    WORKFLOW_ENGINE_ENABLED,
+    workflow_router,
+  ]
+feature_flags: [WORKFLOW_ENGINE_ENABLED]
+packages: [app/ai/workflow]
+test_paths:
+  [
+    tests/ai/workflow,
+    tests/test_workflow_router.py,
+    tests/test_workflow_tool.py,
+    frontend/src/pages/WorkflowsPage.test.tsx,
+    frontend/src/api/workflowClient.test.ts,
+  ]
+---
+
+# Post-MVP V2 Epic 06 — Workflow Engine
+
+> **Agents:** Read [\_program-v2-execution-guide.md](./_program-v2-execution-guide.md). Implement **Part II** phase-by-phase; consult **Part I** for behaviour and scope questions only.
+
+**Strategy:** [V2 architecture](../references/fullstack-ai-platform-v2-architecture-implementation-strategy.md) § "6. Workflow Engine"
+
+**Predecessor:** [Epic 05 — Memory System](./post-mvp-v2-epic-05-memory-system.md)
+
+---
+
+# Part I — Design
+
+## Objective
+
+Introduce a reusable, provider-agnostic Workflow Engine that lets the platform define, execute, pause, resume, and audit multi-step graphs of tasks, LLM calls, agent sub-tasks, and human approvals — independent of any single chat turn.
+
+The Agent Framework (Epic 01) executes one bounded ReAct loop per request. The Workflow Engine is a distinct, longer-lived orchestration layer: an explicit graph of nodes and edges whose execution can span multiple processes, pause indefinitely for human approval, survive process restarts, and fan work out into parallel branches. A workflow may call into the Agent Framework or the Tool platform for individual node execution, but the two subsystems remain independently addressable.
+
+**Delivers:** A durable workflow graph model (nodes, edges, conditional routing), a checkpointing execution engine (sequential, parallel fan-out/fan-in), task/LLM/agent node types, human approval nodes with pause/resume, node-level retry and run-level crash recovery, an authenticated Workflow REST API, an agent-invocable `WorkflowExecutionTool`, and a frontend workflow dashboard — all behind `WORKFLOW_ENGINE_ENABLED=false` (default).
+
+**Does not ship:** A visual drag-and-drop workflow builder (definitions are JSON/API-authored in v1); scheduled/cron-triggered workflows; distributed multi-worker execution; a workflow plugin SDK or dynamically loaded external node types; the full human-in-the-loop audit trail and editable-tool-argument UX; OpenTelemetry spans; multi-agent collaborative workflows; shared/organization workflows; workflow-scoped long-term memory.
+
+Capabilities:
+
+- Workflow graphs (nodes, edges, versioned definitions)
+- Conditional routing
+- Parallel execution (fork/join)
+- Human approval nodes
+- Resume/retry
+- Persistence
+
+The Workflow Engine is additive. When disabled, existing chat, RAG, MCP, memory, voice, agent, and streaming pipelines remain unchanged.
+
+---
+
+## Design Principles
+
+- Platform-first
+- Provider-agnostic (storage and node execution)
+- Composition over coupling — reuses Tools, Agent, and Providers; does not reimplement them
+- Deterministic orchestration
+- Explainable execution (every transition persisted and inspectable)
+- Security by default — no arbitrary code evaluation; conditions use a declarative DSL only
+- Explicit run lifecycle
+- Feature-flag rollout
+
+---
+
+## Scope
+
+### In Scope
+
+- Workflow graph definition (nodes, edges, versioning)
+- Graph validation (cycles, reachability, structural integrity)
+- Sequential execution engine with checkpointing
+- Conditional routing (declarative condition DSL)
+- Parallel execution (fork/join with configurable join policy)
+- Task nodes (existing `ToolExecutor`)
+- LLM nodes (existing `LLMProvider` / `PromptManager`)
+- Agent nodes (existing Agent Framework `DefaultAgent`)
+- Human approval nodes (pause, decision, resume)
+- Node-level retry and run-level crash recovery
+- Durable persistence of definitions, runs, and node executions
+- Authenticated Workflow management REST API
+- Agent-invocable `WorkflowExecutionTool`
+- Frontend workflow dashboard (list, trigger, inspect, approve/reject)
+
+### Out of Scope
+
+- Visual drag-and-drop workflow builder
+- Scheduled / cron-triggered workflows
+- Distributed or multi-worker execution
+- Workflow plugin SDK / externally loaded node types
+- Full HITL audit trail, editable tool arguments, approval UX polish
+- OTel spans, prompt regression, evaluation harness
+- Multi-agent collaborative workflows
+- Shared/organization workflows
+- Workflow-scoped memory
+
+---
+
+## High-Level Architecture
+
+```text
+Client (REST API)          Agent (WorkflowExecutionTool)
+        │                             │
+        └───────────────┬────────────┘
+                         ▼
+                  WorkflowManager
+                         │
+        ┌────────────────┼─────────────────┐
+        ▼                ▼                  ▼
+  Definition CRUD   WorkflowRun         Approval
+  + GraphValidator   Lifecycle          Decisions
+        │                │                  │
+        └────────┬───────┴──────────────────┘
+                 ▼
+           WorkflowExecutor
+                 │
+   ┌─────────┬───┴──────┬───────────┬────────────┐
+   ▼         ▼           ▼           ▼            ▼
+TaskNode  LLMNode    AgentNode   RouterNode  Fork/JoinNode
+(ToolExecutor) (LLMProvider) (DefaultAgent) (ConditionEvaluator) (asyncio)
+   │         │           │           │            │
+   └────┬────┴───────────┴───────────┴────────────┘
+        ▼
+  WorkflowStore (checkpoint after every node transition)
+        ▼
+   PostgreSQL (workflow_definitions / workflow_runs / workflow_node_executions)
+```
+
+---
+
+## Locked Architectural Decisions
+
+| Topic                   | Decision                                                                                                                             | Deferred to                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Graph model              | Directed graph; cycles are rejected at validation time (no implicit loop nodes in v1)                                                | Explicit loop/iteration node type → future           |
+| Execution model          | Single-process, in-process `asyncio` scheduler with a DB checkpoint after every node transition — not a distributed workflow engine | Distributed execution (Temporal-like) → future epic  |
+| Storage                  | PostgreSQL only (`workflow_definitions`, `workflow_runs`, `workflow_node_executions`); no vector/embedding columns                   | Alternate backends (Redis hot-state) → future        |
+| Agent/Tool integration   | Workflows invoke Tools via existing `ToolExecutor` and Agent Framework via existing `DefaultAgent` — never reimplemented             | —                                                    |
+| Chat/agent invocation    | Workflows are triggered via REST API or a registered `WorkflowExecutionTool`; never via direct `ChatService`/`UnifiedChatService` hooks | Agent-authored workflow graphs → V3                  |
+| Approval nodes           | Pause execution; persist `waiting_approval`; resume via REST decision endpoint. Full audit trail / editable args UX deferred          | HITL audit trail, editable tool arguments → Epic 09  |
+| Conditional routing      | Deterministic declarative condition DSL evaluated against `WorkflowContext`; no `eval()` / arbitrary code                            | Richer expression language → future                  |
+| Parallel execution       | Explicit Fork/Join node pair; branches run concurrently via `asyncio.gather`; join policy `all` \| `any` \| `count(n)`               | —                                                    |
+| Retry                    | Per-node retry policy wraps `app/core/retry.py`; workflow-level resume is a distinct concern from node-level retry                    | —                                                    |
+| Background execution     | In-process `asyncio` execution; manual/API-triggered resume — no dedicated worker or queue                                           | Background Jobs queue → Epic 10                     |
+| Auth                     | Workflow definitions and runs are owner-scoped; authenticated users only (no guest workflows)                                        | Shared/organization workflows → future               |
+| Versioning               | Definitions are immutable once referenced by a run; edits create a new version                                                       | Full version diff/rollback UI → Epic 08 plugin SDK   |
+
+---
+
+## High-Level Flow
+
+Trigger (REST API or `WorkflowExecutionTool`)
+→ Load & Validate Definition
+→ Create WorkflowRun (`status=running`)
+→ WorkflowExecutor step loop
+→ Execute ready node(s): task | llm | agent | router | fork | join | approval
+→ Persist WorkflowNodeExecution + checkpoint WorkflowRun
+→ Repeat while ready nodes remain
+→ Run resolves to `completed` | `failed` | `waiting_approval` | `cancelled`
+
+On approval decision:
+
+→ `WorkflowManager.apply_decision()`
+→ Resume `WorkflowExecutor` from the approval node
+→ Continue the step loop
+
+On crash / restart:
+
+→ `WorkflowManager.resume(run_id)` rehydrates `WorkflowRun` + completed `WorkflowNodeExecution` rows
+→ `WorkflowExecutor` recomputes ready nodes and continues
+
+---
+
+## End-to-End Sequence
+
+```text
+Client / Agent
+ │
+ │ Start workflow (definition_id, input)
+ ▼
+WorkflowManager
+ │
+ ├── Load WorkflowDefinition (validated at creation time)
+ │
+ ├── Create WorkflowRun (status=running, context=trigger_input)
+ │
+ ▼
+WorkflowExecutor.step()  ◄────────────────────────────┐
+ │                                                     │
+ ├── Resolve ready node(s) from graph + node statuses  │
+ │                                                     │
+ ├── Execute node (Task / LLM / Agent / Router /       │
+ │    Fork / Join / Approval)                          │
+ │                                                     │
+ ├── On failure: apply RetryPolicy (retry or fail run)  │
+ │                                                     │
+ ├── Persist WorkflowNodeExecution + checkpoint run     │
+ │                                                     │
+ └── More ready nodes? ─────────────yes────────────────┘
+     │ no
+     ▼
+WorkflowRun status = completed | failed | waiting_approval | cancelled
+ │
+ ▼
+Publish Workflow Events
+ │
+ ▼
+Result returned to caller (REST response or ToolResult)
+```
+
+**Approval Timing**
+
+When execution reaches an `approval` node, the run transitions to `waiting_approval` and the step loop stops. The pending `WorkflowNodeExecution` remains `waiting_approval` until a caller submits an approve/reject decision through the REST API. Approval does not time out automatically in v1 (`workflow_approval_timeout_hours=0` means indefinite).
+
+---
+
+## Storage Architecture
+
+```text
+WorkflowManager
+      │
+ ┌────┼────────────────┬──────────────────┐
+ ▼    ▼                ▼                  ▼
+Definitions        Runs            Node Executions
+      │                │                  │
+      └────────┬───────┴──────────────────┘
+               ▼
+         WorkflowStore
+               ▼
+      PostgresWorkflowStore
+               ▼
+          PostgreSQL
+```
+
+---
+
+## Workflow Store Contract
+
+All persistence goes through one interface.
+
+Responsibilities include:
+
+- Store/update `WorkflowDefinition`; retrieve by id and by owner
+- Create `WorkflowRun`; atomically checkpoint run status + context
+- Append `WorkflowNodeExecution` rows (one row per node attempt)
+- Retrieve a run with its full node execution history
+- List runs by owner, definition, and status
+- Record approval decisions
+
+Initial implementation:
+
+- `PostgresWorkflowStore`
+
+Future implementations:
+
+- Redis-backed hot-state cache (performance)
+- Distributed store (Temporal-like backend)
+
+The remainder of the platform depends only on the `WorkflowStore` interface.
+
+---
+
+## Execution Pipeline
+
+```text
+WorkflowRun (context)
+        │
+GraphValidator (definition-time only — not re-run per step)
+        │
+WorkflowExecutor
+        │
+ Ready Node Resolver (topological + fork/join aware)
+        │
+ ├─ TaskNodeExecutor      → ToolExecutor
+ ├─ LLMNodeExecutor       → LLMProvider / PromptManager
+ ├─ AgentNodeExecutor     → DefaultAgent
+ ├─ RouterNodeExecutor    → ConditionEvaluator
+ ├─ ForkNodeExecutor      → asyncio.gather (branches)
+ ├─ JoinNodeExecutor      → branch result merge (join policy)
+ └─ ApprovalNodeExecutor  → pause (waiting_approval)
+        │
+ Node Result
+        │
+ RetryPolicy (on failure — retry, or fail the run)
+        │
+ Checkpoint (WorkflowStore)
+        │
+ Next ready nodes?
+```
+
+---
+
+## Canonical Workflow Representation
+
+```text
+WorkflowDefinition
+------------------
+id
+owner_id
+name
+description
+version
+status              (draft | active | archived)
+entry_node_id
+nodes[]             -> WorkflowNode
+edges[]             -> WorkflowEdge
+metadata
+created_at
+updated_at
+```
+
+```text
+WorkflowNode
+------------
+id
+type                (task | llm | agent | router | fork | join | approval | terminal)
+config              (type-specific — tool name/args, prompt template, agent goal, join policy, etc.)
+retry_policy        (max_retries, base_delay_seconds)
+timeout_seconds
+```
+
+```text
+WorkflowEdge
+------------
+id
+from_node_id
+to_node_id
+condition           (optional Condition DSL — omitted edges are unconditional)
+```
+
+```text
+WorkflowRun
+-----------
+id
+workflow_definition_id
+owner_id
+session_id          (optional — set when triggered from a chat session via the tool)
+status              (pending | running | waiting_approval | paused | completed | failed | cancelled)
+context             (accumulated node outputs + trigger input)
+current_node_ids[]  (supports parallel branches)
+error
+created_at
+updated_at
+started_at
+completed_at
+```
+
+```text
+WorkflowNodeExecution
+---------------------
+id
+run_id
+node_id
+node_type
+attempt
+status              (pending | running | waiting_approval | succeeded | failed | skipped | cancelled)
+input
+output
+error
+decided_by          (user id — approval nodes only)
+decided_at
+decision            (approved | rejected)
+started_at
+completed_at
+```
+
+All execution, persistence, retrieval, and REST responses operate on these canonical models. No parallel or provider-specific representations exist.
+
+---
+
+## WorkflowContext
+
+Everything a running workflow needs is normalized into one context object.
+
+```text
+WorkflowContext
+---------------
+trigger_input       (initial input provided at run start)
+variables           (node_id -> output, accumulated as nodes complete)
+metadata            (owner_id, session_id, correlation id)
+```
+
+Node executors read from and write to `WorkflowContext`; `ConditionEvaluator` reads from it only. Node executors never access `WorkflowStore` directly — persistence is the executor's responsibility, not the node's.
+
+---
+
+## Package Structure
+
+```text
+app/
+└── ai/
+    └── workflow/
+        ├── __init__.py
+        ├── interfaces/
+        │   └── workflow_store.py
+        ├── providers/
+        │   └── postgres.py
+        ├── models/
+        │   ├── definition.py        # WorkflowDefinition, WorkflowNode, WorkflowEdge, NodeType
+        │   ├── run.py               # WorkflowRun, WorkflowNodeExecution, RunStatus, NodeStatus
+        │   └── context.py           # WorkflowContext
+        ├── graph/
+        │   ├── validator.py         # GraphValidator
+        │   └── traversal.py         # topological / ready-node helpers
+        ├── conditions/
+        │   └── evaluator.py         # ConditionEvaluator (declarative DSL)
+        ├── nodes/
+        │   ├── base.py              # NodeExecutor Protocol
+        │   ├── task_node.py
+        │   ├── llm_node.py
+        │   ├── agent_node.py
+        │   ├── router_node.py
+        │   └── parallel_node.py     # Fork + Join
+        ├── retry/
+        │   └── policy.py            # wraps app/core/retry.py
+        ├── engine/
+        │   └── executor.py          # WorkflowExecutor
+        ├── manager.py                # WorkflowManager
+        ├── events.py                 # WorkflowEvent domain events
+        └── exceptions.py
+
+app/routers/workflows.py                        # NEW — authenticated Workflow REST API
+app/schemas/workflow.py                         # NEW — request/response schemas
+app/ai/tools/implementations/workflow_tool.py   # NEW — WorkflowExecutionTool
+app/ai/prompts/workflow/                        # NEW — LLM node prompt templates
+app/ai/deps.py                                  # extend — Workflow DI factories
+app/db/models.py                                # modify — WorkflowDefinition/Run/NodeExecution ORM
+alembic/versions/0007_workflow_tables.py        # NEW — workflow_definitions, workflow_runs, workflow_node_executions
+```
+
+---
+
+## Core Components
+
+- WorkflowManager
+- GraphValidator
+- WorkflowExecutor
+- ConditionEvaluator
+- TaskNodeExecutor
+- LLMNodeExecutor
+- AgentNodeExecutor
+- RouterNodeExecutor
+- ForkNodeExecutor / JoinNodeExecutor
+- ApprovalNodeExecutor
+- WorkflowStore
+- Workflow Event Hooks
+- WorkflowExecutionTool
+
+---
+
+## Component Responsibilities
+
+| Component               | Responsibility                                                                                            | Inputs                          | Outputs                     | Dependencies                          |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ | -------------------------------- | ----------------------------- | --------------------------------------- |
+| WorkflowManager          | Entry point for all workflow operations: create/validate definitions, start/resume/cancel runs, apply decisions | Workflow requests               | WorkflowRun / definitions   | WorkflowStore, WorkflowExecutor        |
+| GraphValidator           | Validates a definition's graph structure before it can be activated                                        | WorkflowDefinition              | Validation result            | —                                      |
+| WorkflowExecutor         | Advances a run: resolves ready nodes, dispatches to node executors, checkpoints, resolves fan-out/fan-in    | WorkflowRun, WorkflowContext     | Updated run, node results   | Node executors, WorkflowStore, RetryPolicy |
+| ConditionEvaluator       | Evaluates declarative edge conditions against `WorkflowContext`                                             | Condition DSL, context           | bool                          | —                                      |
+| TaskNodeExecutor         | Executes a tool call through the existing tool platform                                                    | Node config, context             | Node output                  | ToolExecutor                           |
+| LLMNodeExecutor          | Executes a direct LLM call through the existing provider/prompt platform                                    | Node config, context             | Node output                  | LLMProvider, PromptManager             |
+| AgentNodeExecutor        | Delegates a bounded sub-task to the Agent Framework                                                          | Node config, context             | Node output                  | DefaultAgent                           |
+| RouterNodeExecutor       | Selects the next edge(s) using `ConditionEvaluator`                                                          | Node config, context             | Selected edge(s)             | ConditionEvaluator                     |
+| ForkNodeExecutor         | Spawns concurrent branches                                                                                  | Node config, context             | Branch execution handles     | asyncio                                |
+| JoinNodeExecutor         | Waits for and merges branch results per join policy                                                        | Branch results                   | Merged context                | asyncio                                |
+| ApprovalNodeExecutor     | Pauses the run pending a human decision                                                                     | Node config                      | `waiting_approval` state     | WorkflowStore                          |
+| RetryPolicy              | Classifies retryable node failures and applies backoff                                                     | Node error                       | Retry decision                | `app/core/retry.py`                    |
+| WorkflowStore            | Abstract persistence interface for definitions, runs, and node executions                                  | CRUD / checkpoint requests       | Persisted records            | PostgresWorkflowStore (initial)        |
+| EventPublisher           | Publishes workflow lifecycle events for future platform integrations                                       | Workflow events                  | Event notifications          | Event subscribers (future)             |
+| WorkflowExecutionTool    | Agent-invocable tool to start a workflow or check a run's status                                            | Tool call args                   | ToolResult                    | WorkflowManager, ToolExecutor          |
+
+---
+
+## Node Types
+
+### Task Node
+
+Executes a single registered tool call via the existing `ToolExecutor` (validation, authorization, execution, normalization unchanged). Node config: `{tool_name, arguments_template}`.
+
+### LLM Node
+
+Executes a direct, non-agentic LLM call through the existing `LLMProvider` / `PromptManager` for simple transform/classify/summarize steps that do not need multi-step reasoning or tools. Node config: `{prompt_template, model_override?}`.
+
+### Agent Node
+
+Delegates a bounded sub-task to the Epic 01 `DefaultAgent` (its own ReAct loop, tools, and iteration limit) and maps the resulting `AgentResponse` into node output. Requires `AGENT_RUNTIME_ENABLED=true`; if disabled, agent nodes fail with a clear configuration error at run start (not at definition time, since the flag can change independently).
+
+### Router Node
+
+Evaluates its outgoing edges' conditions via `ConditionEvaluator` and selects exactly one (or, for `any`-style branching, all matching) outgoing edge(s) to activate.
+
+### Fork / Join Node
+
+A `fork` node activates all of its outgoing edges concurrently. The matching `join` node (declared in node config) waits for its incoming branches according to a join policy — `all`, `any`, or `count(n)` — before merging their outputs into `WorkflowContext` and continuing.
+
+### Approval Node
+
+Pauses the run (`status=waiting_approval`) and creates a pending `WorkflowNodeExecution`. A human decision (`approve` / `reject`) submitted through the REST API resumes execution — following the "approved" edge or the "rejected" edge if one is declared, otherwise failing the run on rejection.
+
+### Terminal Node
+
+Implicit `start` (the definition's `entry_node_id`) and any node with no outgoing edges act as terminals; reaching a terminal with no other pending branches completes the run.
+
+---
+
+## Existing V1/V2 Assets (reuse, do not duplicate)
+
+| Asset                                              | Location                              | Epic 06 role                                              |
+| --------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------ |
+| `ToolExecutor`, registry, validator, `ToolAuthorizer` | `app/ai/tools/`                      | Task node execution; guest denial already enforced platform-wide |
+| `DefaultAgent`, `AgentRequest`/`AgentResponse`      | `app/ai/agent/`                        | Agent node sub-task execution                                |
+| `LLMProvider`, `ProviderFactory`                    | `app/providers/`                       | LLM node execution                                            |
+| `PromptManager`, prompt templates                   | `app/ai/prompts/`                      | LLM node prompt rendering                                     |
+| `retry_async`, `is_retryable_exception`             | `app/core/retry.py`                    | Node-level retry policy                                       |
+| `MemoryProvider` / `MemoryManager` pattern          | `app/ai/memory/`                       | Reference pattern for the `WorkflowStore` abstraction (not reused directly — separate tables/domain) |
+| Feature flag infrastructure                         | `app/core/config.py`                   | `WORKFLOW_ENGINE_ENABLED`                                     |
+| DI factories                                        | `app/ai/deps.py`                       | Workflow DI wiring                                             |
+| `get_current_caller`, `CallerContext`               | `app/core/caller.py` / routers/auth    | Authenticated, owner-scoped REST API                          |
+
+Workflow Engine is additive. Existing chat, RAG, agent runtime, MCP, memory, voice, and streaming paths must remain unchanged when `WORKFLOW_ENGINE_ENABLED=false`.
+
+---
+
+## Chat & Agent Integration Strategy
+
+Unlike Memory (which injects context into every chat turn), the Workflow Engine is an **on-demand** capability. It is deliberately **not** wired into `ChatService` / `UnifiedChatService` orchestration:
+
+- **REST API** — primary interface for defining workflows and triggering/inspecting/approving runs, independent of any chat session.
+- **`WorkflowExecutionTool`** — registered in the existing tool registry only when `WORKFLOW_ENGINE_ENABLED=true`. Lets an agent (Epic 01) start a workflow (`action=start`) or check a run's status (`action=status`) as an ordinary tool call, authorized by the existing `ToolAuthorizer` (guests already denied for all tools). No changes to `ChatService`, `UnifiedChatService`, or `ToolExecutor` internals — only additive tool registration.
+- **Optional `session_id` linkage** — when triggered via the tool from within a chat session, `WorkflowRun.session_id` records the originating session for traceability only; the workflow itself continues to run independently of that chat turn's lifecycle (it can outlive the request, e.g. while `waiting_approval`).
+
+**Flag off:** `WorkflowExecutionTool` is not registered; Workflow REST routes return `503 feature_disabled`; no workflow UI. All other platform behaviour unchanged.
+
+**Flag on:** Authenticated users can define/run workflows via REST; agents can start/check workflows via the tool when tools are enabled for that request.
+
+---
+
+## Persistence Schema
+
+Alembic migration **`0007_workflow_tables`** (Phase 1). Independent of `memory_records`, `document_chunks`, and all other epic tables.
+
+### `workflow_definitions`
+
+| Column                     | Type                  | Notes                                                |
+| --------------------------- | ---------------------- | ------------------------------------------------------ |
+| `id`                        | uuid PK                |                                                        |
+| `owner_id`                  | uuid FK → `users.id`   | Required; owner isolation                             |
+| `name`                      | text                    |                                                        |
+| `description`               | text NULL              |                                                        |
+| `version`                   | int                     | Starts at 1; new versions on edit after first run     |
+| `status`                    | text CHECK              | `draft` \| `active` \| `archived`                     |
+| `entry_node_id`             | text                    |                                                        |
+| `graph`                     | jsonb                   | `{nodes: [...], edges: [...]}`                        |
+| `metadata`                  | jsonb                   |                                                        |
+| `created_at`, `updated_at`  | timestamptz             |                                                        |
+
+**Indexes:** `(owner_id, status)`; **Unique:** `(owner_id, name, version)`.
+
+### `workflow_runs`
+
+| Column                       | Type                                      | Notes                                                     |
+| ----------------------------- | ------------------------------------------ | ------------------------------------------------------------ |
+| `id`                          | uuid PK                                    |                                                              |
+| `workflow_definition_id`      | uuid FK → `workflow_definitions.id`        |                                                              |
+| `owner_id`                    | uuid FK → `users.id`                       | Required; owner isolation                                   |
+| `session_id`                  | uuid FK → `chat_sessions.id` NULL          | Set when triggered via `WorkflowExecutionTool` from a chat session |
+| `status`                      | text CHECK                                 | `pending` \| `running` \| `waiting_approval` \| `paused` \| `completed` \| `failed` \| `cancelled` |
+| `context`                     | jsonb                                       | `WorkflowContext` snapshot                                   |
+| `current_node_ids`            | jsonb                                       | List — supports parallel branches                           |
+| `error`                       | text NULL                                   |                                                              |
+| `created_at`, `updated_at`    | timestamptz                                 |                                                              |
+| `started_at`, `completed_at`  | timestamptz NULL                            |                                                              |
+
+**Indexes:** `(owner_id, status)`; `(workflow_definition_id)`.
+
+### `workflow_node_executions`
+
+| Column                       | Type                                | Notes                                                |
+| ----------------------------- | ------------------------------------ | ------------------------------------------------------- |
+| `id`                          | uuid PK                              |                                                        |
+| `run_id`                      | uuid FK → `workflow_runs.id`         |                                                        |
+| `node_id`                     | text                                  | Matches the graph node id                             |
+| `node_type`                   | text CHECK                            | `task` \| `llm` \| `agent` \| `router` \| `fork` \| `join` \| `approval` \| `terminal` |
+| `attempt`                     | int                                    | 1-based; increments on retry                           |
+| `status`                      | text CHECK                            | `pending` \| `running` \| `waiting_approval` \| `succeeded` \| `failed` \| `skipped` \| `cancelled` |
+| `input`                       | jsonb                                  |                                                        |
+| `output`                      | jsonb NULL                            |                                                        |
+| `error`                       | text NULL                             |                                                        |
+| `decided_by`                  | uuid FK → `users.id` NULL             | Approval nodes only                                   |
+| `decided_at`                  | timestamptz NULL                      |                                                        |
+| `decision`                    | text CHECK NULL                       | `approved` \| `rejected`                              |
+| `started_at`, `completed_at`  | timestamptz NULL                      |                                                        |
+
+**Indexes:** `(run_id, node_id, attempt)` unique; `(run_id, status)`.
+
+---
+
+## Workflow REST API
+
+Authenticated-only (`Depends(get_current_caller)`). Router: `app/routers/workflows.py`. Always mounted in `app/main.py`; each route enforces `WORKFLOW_ENGINE_ENABLED` and returns `503 feature_disabled` when the flag is off.
+
+| Method   | Path                                                       | Purpose                                                             |
+| -------- | ----------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `POST`   | `/api/workflows`                                            | Create a workflow definition (validated graph)                     |
+| `GET`    | `/api/workflows`                                             | List caller's workflow definitions                                  |
+| `GET`    | `/api/workflows/{id}`                                        | Get one definition (owner check)                                    |
+| `PUT`    | `/api/workflows/{id}`                                        | Update definition — creates a new version if the current one has runs |
+| `DELETE` | `/api/workflows/{id}`                                        | Archive a definition (owner check)                                  |
+| `POST`   | `/api/workflows/{id}/runs`                                   | Start a new run (`trigger_input` body)                              |
+| `GET`    | `/api/workflows/{id}/runs`                                   | List runs for a definition                                          |
+| `GET`    | `/api/workflow-runs`                                          | List caller's runs across all definitions                           |
+| `GET`    | `/api/workflow-runs/{run_id}`                                 | Get a run's status and node execution history                       |
+| `POST`   | `/api/workflow-runs/{run_id}/cancel`                          | Cancel a running/paused/waiting run                                  |
+| `POST`   | `/api/workflow-runs/{run_id}/resume`                          | Resume a paused or crashed run                                      |
+| `POST`   | `/api/workflow-runs/{run_id}/nodes/{node_execution_id}/approve` | Approve a pending approval node                                     |
+| `POST`   | `/api/workflow-runs/{run_id}/nodes/{node_execution_id}/reject`  | Reject a pending approval node                                      |
+
+**Health:** extend `GET /api/health` with `workflow_engine_enabled: bool` (frontend gate, same pattern as `memory_enabled`).
+
+**Response rules:** Never expose internal retry counters, condition DSL internals, or other owners' data — human-facing definition/run/node fields plus timestamps and status only.
+
+---
+
+## Public APIs (stable after Phase 1)
+
+| API                                                                                          | Kind                                |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `WorkflowStore`                                                                                 | Protocol                              |
+| `WorkflowManager`                                                                               | Class (public orchestration entry)    |
+| `WorkflowDefinition`, `WorkflowNode`, `WorkflowEdge`, `NodeType`                                | Model / enum                          |
+| `WorkflowRun`, `WorkflowNodeExecution`, `RunStatus`, `NodeStatus`, `WorkflowContext`            | Model / enum                          |
+| `WorkflowExecutor`, `GraphValidator`, `ConditionEvaluator`                                       | Class                                  |
+| `WorkflowEvent` (domain event base)                                                              | Model                                  |
+| `WorkflowError`, `WorkflowNotFoundError`, `WorkflowAccessDeniedError`, `WorkflowValidationError` | Exception                              |
+| `WorkflowExecutionTool`                                                                          | Tool (registered when flag on)        |
+| Workflow REST router export                                                                     | FastAPI router                        |
+
+Internal (may evolve): `PostgresWorkflowStore`, individual `NodeExecutor` implementations, DI wiring, ready-node scheduling internals.
+
+---
+
+## Configuration defaults
+
+| Setting                                    | Default    |
+| -------------------------------------------- | ------------ |
+| `WORKFLOW_ENGINE_ENABLED`                    | **`false`** |
+| `workflow_max_nodes_per_definition`          | `50`        |
+| `workflow_max_parallel_branches`             | `8`         |
+| `workflow_node_timeout_seconds`              | `120`       |
+| `workflow_max_node_retries`                  | `3`         |
+| `workflow_node_retry_base_delay_seconds`     | `1.0`       |
+| `workflow_max_run_duration_minutes`          | `60`        |
+| `workflow_approval_timeout_hours`            | `0` (no timeout — indefinite) |
+| `workflow_run_retention_days`                | `90`        |
+
+---
+
+## Dependencies
+
+| Requires                                          | Provides to downstream                                             |
+| ---------------------------------------------------- | ---------------------------------------------------------------------- |
+| Epic 05 Memory (stable chat/memory/voice pipeline)   | `WorkflowManager`, `WorkflowRun`, `WORKFLOW_ENGINE_ENABLED`         |
+| Epic 01 Agent Framework (`DefaultAgent`)             | Agent node execution                                                |
+| Epic 01 / V1.1 Tool platform (`ToolExecutor`)        | Task node execution; `WorkflowExecutionTool` registration           |
+| `LLMProvider`, `PromptManager`                       | LLM node execution                                                  |
+| PostgreSQL                                            | Workflow definition/run/node-execution persistence                 |
+
+**Future consumers:** Epic 07 Observability (workflow spans/metrics); Epic 08 Plugin Architecture (workflow plugin SDK, externally loaded node types); Epic 09 Human-in-the-Loop (full approval audit trail, editable tool arguments); Epic 10 Background Jobs (scheduled triggers, distributed execution worker).
+
+---
+
+## Design acceptance
+
+- Flag off: workflow REST routes return `503 feature_disabled`; `WorkflowExecutionTool` not registered; no workflow UI; all other platform paths unchanged
+- Flag on, authenticated: users can define, validate, run, inspect, cancel, resume, and approve/reject workflows via REST; agents can start/check workflows via the tool
+- Graphs are validated before activation — no cycles, unreachable nodes, or dangling edges
+- Sequential and parallel execution both checkpoint after every node transition
+- Approval nodes pause indefinitely until a decision is recorded; decisions resume execution deterministically
+- A crashed/restarted process can resume any `running`/`waiting_approval` run from its last checkpoint with no duplicate side effects on already-succeeded nodes
+- Task/LLM/Agent nodes reuse existing platform components with no reimplementation
+- Coverage ≥80% on `app/` and `app/ai/workflow/`
+- No workflow input/output content in structured logs beyond identifiers and status by default
+
+---
+
+## Architectural Invariants
+
+These rules must remain true throughout this epic. Violations require explicit user approval and Part I update.
+
+- **Orchestration boundary** — Workflow execution is invoked only through `WorkflowManager`; never directly against `WorkflowStore` or node executors from routers or the tool layer.
+- **No chat pipeline coupling** — Workflows are never wired into `ChatService` or `UnifiedChatService`; the only chat-facing surface is the additive `WorkflowExecutionTool`.
+- **Reuse, don't reimplement** — Task nodes use `ToolExecutor`; Agent nodes use `DefaultAgent`; LLM nodes use `LLMProvider`/`PromptManager`; retry wraps `app/core/retry.py`.
+- **Deterministic conditions** — `ConditionEvaluator` supports only the declarative DSL; no `eval()`, `exec()`, or arbitrary code execution.
+- **Checkpoint-per-transition** — `WorkflowStore` persists run + node-execution state after every node transition; no in-memory-only execution state.
+- **Idempotent resume** — Resuming a run never re-executes an already-`succeeded` `WorkflowNodeExecution`.
+- **Definition immutability post-run** — A `WorkflowDefinition` version referenced by any `WorkflowRun` is never mutated in place; edits create a new version.
+- **Provider replaceability** — All persistence goes through the `WorkflowStore` Protocol; Postgres is one adapter.
+- **Auth-only workflows** — Guests cannot create, run, or inspect workflows (tool calls already denied to guests platform-wide; REST routes require an authenticated caller).
+- **Flag-off parity** — `WORKFLOW_ENGINE_ENABLED=false` preserves Epic 05 behaviour on all hot paths.
+- **Public APIs stable after Phase 1** — Protocol/model changes require user approval.
+- **No Epic 07+ behaviour early** — Scheduled triggers, distributed workers, plugin-loaded nodes, full HITL audit UI, OTel spans — `TODO(epic-N):` only.
+
+---
+
+## Acceptance Criteria
+
+- Multi-step tasks can be modeled and executed as explicit graphs, independent of any single chat turn.
+- Conditional branches and parallel branches both execute deterministically and are individually inspectable.
+- Human approval can pause a run indefinitely and resume it exactly where it left off.
+- A failed or interrupted run can be retried or resumed without duplicating completed work.
+- The existing platform is unaffected when the Workflow Engine is disabled.
+
+# Part II — Execution
+
+> **Agents:** Read [\_program-v2-execution-guide.md](./_program-v2-execution-guide.md). Implement Part II phase-by-phase. Part I is frozen and is the architectural source of truth. Do not redesign architecture during implementation.
+
+## Phase integration rules
+
+Early phases build **subsystems in isolation** (unit/integration tests with fakes). Agent/Tool integration and the REST API are deferred until the execution engine itself is proven.
+
+| Phase | Builds                                                         | Agent/Chat wiring        |
+| ----- | ----------------------------------------------------------------- | -------------------------- |
+| 1     | Models, `WorkflowStore` scaffold, migration                       | None                       |
+| 2     | Graph model + `GraphValidator`                                    | None                       |
+| 3     | Sequential execution engine + Task node                           | None (manager API only)   |
+| 4     | Conditional routing + Router node                                 | None                       |
+| 5     | Parallel execution (Fork/Join)                                    | None                       |
+| 6     | LLM node + Agent node                                             | None                       |
+| 7     | Approval node, pause/resume                                       | None                       |
+| 8     | Node retry + crash recovery                                       | None                       |
+| 9     | Workflow REST API                                                 | REST only                 |
+| 10    | `WorkflowExecutionTool`                                           | **Complete** (tool-only)   |
+| 11–12 | Frontend + release                                                | —                          |
+
+## Reuse Existing Components
+
+**DO NOT REIMPLEMENT**
+
+| Component                                            | Location                              |
+| ------------------------------------------------------ | --------------------------------------- |
+| `ToolExecutor`, registry, validator, `ToolAuthorizer` | `app/ai/tools/`                        |
+| `DefaultAgent`, `AgentRequest`/`AgentResponse`        | `app/ai/agent/`                        |
+| `LLMProvider`, `ProviderFactory`                      | `app/providers/`                       |
+| `PromptManager`, prompt templates                     | `app/ai/prompts/`                      |
+| `retry_async`, `is_retryable_exception`               | `app/core/retry.py`                    |
+| `get_current_caller`, `CallerContext`                 | `app/core/caller.py` / `app/routers/auth.py` |
+| Feature flag infrastructure                           | `app/core/config.py`                   |
+| DI factories                                          | `app/ai/deps.py`                       |
+| `ChatService`, `UnifiedChatService`                   | `app/services/`                        |
+
+Workflow Engine is additive. Existing chat, RAG, agent runtime, MCP, memory, voice, and streaming paths must remain unchanged when `WORKFLOW_ENGINE_ENABLED=false`.
+
+---
+
+## Not Allowed
+
+- Bypass `WorkflowManager` for workflow orchestration
+- Wire workflow execution into `ChatService` or `UnifiedChatService`
+- Reimplement tool execution, agent execution, LLM calls, or retry/backoff outside their existing platform abstractions
+- Allow `ConditionEvaluator` to execute arbitrary code
+- Allow node executors to access `WorkflowStore` directly
+- Implement scheduled/cron triggers, distributed execution, plugin-loaded node types, or full HITL audit/editable-args UX
+- Break feature-flag parity
+
+---
+
+## Baseline
+
+_Carried from Epic 05 Phase 10 completion record — to be reverified in Phase 0 audit._
+
+| Area                      | State                                                             |
+| --------------------------- | -------------------------------------------------------------------- |
+| Backend tests / coverage   | 1305 passed, 89.68% `app/` (Epic 05)                              |
+| Frontend tests             | 251 passed (41 files); build pass                                 |
+| Eval CLI                   | 5/5 passed                                                          |
+| Chat pipeline              | Stable — `ChatService` + `UnifiedChatService`, Memory fully wired |
+| Agent Framework            | Completed (Epic 01); `AGENT_RUNTIME_ENABLED` behind flag           |
+| Memory subsystem           | Completed (Epic 05); `MEMORY_ENABLED` behind flag                 |
+| Workflow Engine            | None                                                                |
+
+---
+
+## Phase Status
+
+| Phase | Name                                          | Effort | Status      |
+| ----- | ----------------------------------------------- | ------ | ----------- |
+| 0     | Baseline Audit                                  | XS     | Completed   |
+| 1     | Models, Interfaces & Migration                  | L      | Not Started |
+| 2     | Graph Definition & Validation                   | M      | Not Started |
+| 3     | Sequential Execution Engine                     | L      | Not Started |
+| 4     | Conditional Routing                             | M      | Not Started |
+| 5     | Parallel Execution (Fork/Join)                  | M      | Not Started |
+| 6     | LLM & Agent Node Integration                    | M      | Not Started |
+| 7     | Human Approval Nodes, Pause & Resume            | L      | Not Started |
+| 8     | Node Retry & Crash Recovery                     | M      | Not Started |
+| 9     | Workflow REST API                               | L      | Not Started |
+| 10    | Agent Tool Integration                          | M      | Not Started |
+| 11    | Frontend Controls                               | S      | Not Started |
+| 12    | Validation & Release                            | M      | Not Started |
+
+---
+
+# Phase 0 — Baseline Audit
+
+**Effort:** XS
+
+**Objective**
+
+Establish a verified implementation baseline before introducing the Workflow Engine. Confirm that the existing platform is stable, all architectural dependencies are understood, and the execution environment satisfies the assumptions defined in Part I.
+
+**Deliverables**
+
+- `docs/audits/post-mvp-v2-epic6-phase-0-baseline-audit.md`
+- Architecture inventory
+- Dependency verification
+- Feature flag verification
+- Platform readiness assessment
+- Baseline quality metrics
+- Implementation readiness checklist
+
+**Steps**
+
+### Platform Verification
+
+- [ ] Confirm Epic 05 Phase 10 complete / authorized for Epic 06
+- [ ] Inventory `ToolExecutor`, `ToolAuthorizer`, registry, validator
+- [ ] Inventory Agent Framework (`DefaultAgent`, `AgentRequest`/`AgentResponse`, `AGENT_RUNTIME_ENABLED`)
+- [ ] Inventory `LLMProvider`, `ProviderFactory`, `PromptManager`
+- [ ] Verify Memory integration remains operational.
+- [ ] Verify Voice integration remains operational.
+- [ ] Verify RAG integration remains operational.
+- [ ] Verify MCP integration remains operational.
+- [ ] Verify Agent Framework remains operational.
+- [ ] Verify streaming responses remain operational.
+
+### Architecture Review
+
+- [ ] Review the frozen Part I architecture.
+- [ ] Verify all architectural invariants.
+- [ ] Identify all Workflow Engine integration points.
+- [ ] Identify existing extension points (tool registry, DI factories).
+- [ ] Confirm no Workflow Engine implementation already exists.
+- [ ] Record implementation assumptions.
+
+### Dependency Verification
+
+- [ ] Verify PostgreSQL configuration.
+- [ ] Verify `app/core/retry.py` availability.
+- [ ] Verify existing provider abstractions.
+- [ ] Verify dependency injection configuration.
+- [ ] Verify feature flag infrastructure.
+
+### Codebase Inventory
+
+- [ ] Inventory existing chat services.
+- [ ] Inventory tool platform implementation.
+- [ ] Inventory Agent Framework implementation.
+- [ ] Inventory provider implementations.
+- [ ] Inventory existing Alembic migrations and numbering.
+- [ ] Record components to be reused.
+
+### Baseline Quality Validation
+
+- [ ] Execute lint.
+- [ ] Execute type checking.
+- [ ] Execute unit tests.
+- [ ] Execute integration tests.
+- [ ] Execute evaluation suite.
+- [ ] Record baseline quality metrics.
+
+### Implementation Readiness
+
+- [ ] Confirm all required dependencies are available.
+- [ ] Confirm implementation order matches Part II.
+- [ ] Confirm no architectural conflicts exist.
+- [ ] Publish baseline audit document.
+- [ ] Freeze implementation baseline.
+
+**Verify**
+
+- `make lint`
+- `make typecheck`
+- `make test-cov`
+- `make eval`
+
+Additional verification:
+
+- [ ] Chat functionality verified.
+- [ ] Agent functionality verified.
+- [ ] Memory functionality verified.
+- [ ] Tool execution verified.
+- [ ] Streaming functionality verified.
+- [ ] All quality gates pass.
+
+**Acceptance**
+
+- Existing platform is fully operational.
+- All architectural assumptions have been verified.
+- Required dependencies are available.
+- Existing extension points have been identified.
+- No implementation blockers remain.
+- Baseline metrics have been recorded.
+- Repository is ready for Workflow Engine implementation.
+
+**Exit Criteria**
+
+- Baseline audit completed.
+- Platform readiness confirmed.
+- Quality gates passed.
+- Architecture verified.
+- Implementation baseline frozen.
+- User confirmation pending to proceed to Phase 1.
+
+**Rollback**
+
+- [ ] No rollback required.
+- [ ] This phase introduces no functional code changes.
+
+**Completion Record**
+
+| Metric                     | Result                          |
+| ---------------------------- | ------------------------------- |
+| Lint                        | ✅ PASS                         |
+| Typecheck                   | ✅ PASS                         |
+| Unit Tests                  | ✅ 1305 passed                  |
+| Integration Tests           | ✅ (included in backend suite)  |
+| Evaluation Suite            | ✅ 5/5 passed                   |
+| Platform Readiness          | ✅ Confirmed                    |
+| Baseline Audit Published    | ✅ `docs/audits/post-mvp-v2-epic6-phase-0-baseline-audit.md` |
+
+---
+
+# Phase 1 — Models, Interfaces & Migration
+
+**Effort:** L
+
+**Objective**
+
+Establish the complete Workflow domain foundation: canonical data models, the `WorkflowStore` provider contract, and the **Alembic migration** defined in Part I. This phase freezes the public Workflow API and provides the stable foundation for all subsequent phases.
+
+**Deliverables**
+
+- Canonical `WorkflowDefinition`, `WorkflowNode`, `WorkflowEdge`
+- Canonical `WorkflowRun`, `WorkflowNodeExecution`, `WorkflowContext`
+- `WorkflowStore` interface
+- `PostgresWorkflowStore` implementation scaffold
+- `WorkflowManager` skeleton
+- **`workflow_definitions` + `workflow_runs` + `workflow_node_executions` Alembic migration**
+- ORM models
+- Status/state enums
+- Shared model validation
+- Initial public API freeze
+- Unit test suite
+
+**Steps**
+
+### Package Structure
+
+- [ ] Create the `app/ai/workflow/` package.
+- [ ] Create the package layout defined in Part I.
+- [ ] Add package exports through `__init__.py`.
+- [ ] Verify package imports are dependency-cycle free.
+
+### Canonical Models
+
+- [ ] Implement `WorkflowDefinition`, `WorkflowNode`, `WorkflowEdge`.
+- [ ] Implement `WorkflowRun`, `WorkflowNodeExecution`, `WorkflowContext`.
+- [ ] Implement `NodeType`, `RunStatus`, `NodeStatus` enums.
+- [ ] Add schema validation.
+- [ ] Add serialization/deserialization support.
+- [ ] Add comprehensive model documentation.
+
+### Provider Contract
+
+- [ ] Create the `WorkflowStore` abstraction.
+- [ ] Define definition CRUD operations.
+- [ ] Define run + node-execution checkpoint operations.
+- [ ] Define listing/query operations (by owner, definition, status).
+- [ ] Ensure interface remains storage-agnostic.
+
+### PostgreSQL Store Scaffold
+
+- [ ] Create `PostgresWorkflowStore`.
+- [ ] Implement constructor and dependency injection.
+- [ ] Define placeholder implementations for provider methods.
+- [ ] Do not implement graph validation yet (Phase 2).
+- [ ] Do not implement execution logic yet (Phase 3).
+
+### Workflow Manager
+
+- [ ] Implement `WorkflowManager` skeleton.
+- [ ] Inject `WorkflowStore`.
+- [ ] Define orchestration entry points (create/get definition; start/get run).
+- [ ] Ensure business logic remains outside the storage provider.
+
+### Database Migration
+
+- [ ] Add `WorkflowDefinition`, `WorkflowRun`, `WorkflowNodeExecution` ORM models to `app/db/models.py`.
+- [ ] Create Alembic migration `0007_workflow_tables` per Part I schema.
+- [ ] Verify migration is independent of `memory_records` and `document_chunks`.
+- [ ] Add migration rollback test in CI (upgrade/downgrade smoke).
+
+### Configuration
+
+- [ ] Add `WORKFLOW_ENGINE_ENABLED` feature flag.
+- [ ] Add Workflow configuration section (Part I § Configuration defaults).
+- [ ] Register provider configuration.
+- [ ] Preserve backward compatibility when disabled.
+
+### Testing
+
+- [ ] Add model validation tests.
+- [ ] Add serialization tests.
+- [ ] Add provider contract tests.
+- [ ] Add dependency injection tests.
+- [ ] Add package import tests.
+
+**Verify**
+
+- `make lint`
+- `make typecheck`
+- `make test-cov`
+
+Additional verification:
+
+- [ ] All Workflow models serialize correctly.
+- [ ] `WorkflowStore` interface compiles successfully.
+- [ ] Dependency injection resolves successfully.
+- [ ] No circular imports detected.
+- [ ] Feature flag defaults to disabled.
+
+**Acceptance**
+
+- Canonical models exactly match the frozen Part I architecture.
+- Public APIs are stable and storage-independent.
+- Storage implementation details remain hidden behind `WorkflowStore`.
+- `WorkflowManager` becomes the single orchestration entry point.
+- No graph validation or execution logic is implemented before their respective phases.
+- Existing application behaviour remains unchanged with `WORKFLOW_ENGINE_ENABLED=false`.
+
+**Exit Criteria**
+
+- All model tests pass.
+- All interface tests pass.
+- All quality gates pass.
+- Public APIs frozen.
+- Ready to begin Phase 2 without further structural changes.
+
+**Rollback**
+
+- [ ] Remove `app/ai/workflow/` package.
+- [ ] Remove feature flag additions.
+- [ ] Remove dependency registration.
+- [ ] Verify application builds successfully without Workflow components.
+
+**Completion Record**
+
+| Metric                | Result  |
+| ------------------------ | ------- |
+| Models implemented      | Pending |
+| Provider interfaces     | Pending |
+| Unit tests               | Pending |
+| Coverage                 | Pending |
+| API freeze completed     | Pending |
+
+---
+
+# Phase 2 — Graph Definition & Validation
+
+**Effort:** M
+
+**Objective**
+
+Implement `GraphValidator`, the definition-time structural checks that every `WorkflowDefinition` must pass before it can be activated, and wire definition CRUD through `WorkflowManager`/`WorkflowStore`.
+
+**Deliverables**
+
+- `GraphValidator`
+- Definition CRUD (`create`, `get`, `list`, `update` → new version, `archive`)
+- Cycle detection
+- Reachability / dangling-edge checks
+- Node/edge integrity checks (fork/join pairing, single entry node)
+- Integration test suite
+
+**Steps**
+
+### Graph Validation
+
+- [ ] Implement `GraphValidator.validate(definition)`.
+- [ ] Detect cycles (reject unless explicitly modeled as retry edges — none allowed in v1).
+- [ ] Detect unreachable nodes from `entry_node_id`.
+- [ ] Detect dangling edges (edges referencing missing nodes).
+- [ ] Validate every `fork` node has a matching `join` node reference.
+- [ ] Validate node `type` against the supported `NodeType` set.
+- [ ] Validate `condition` DSL shape on edges (without evaluating it).
+
+### Definition CRUD
+
+- [ ] Implement `WorkflowManager.create_definition()` (runs `GraphValidator` before persisting).
+- [ ] Implement `WorkflowManager.get_definition()` / `list_definitions()` (owner-scoped).
+- [ ] Implement `WorkflowManager.update_definition()` — creates a new version once any run references the current version.
+- [ ] Implement `WorkflowManager.archive_definition()`.
+- [ ] Persist via `PostgresWorkflowStore`.
+
+### Error Handling
+
+- [ ] Raise `WorkflowValidationError` with actionable messages for each failure class.
+- [ ] Raise `WorkflowNotFoundError` / `WorkflowAccessDeniedError` for CRUD lookups.
+- [ ] Ensure invalid definitions are never persisted as `active`.
+
+### Testing
+
+- [ ] Add cycle detection tests.
+- [ ] Add reachability tests.
+- [ ] Add fork/join pairing tests.
+- [ ] Add definition CRUD tests.
+- [ ] Add versioning tests (edit after run vs. before run).
+- [ ] Add owner-isolation tests.
+
+**Verify**
+
+- `pytest tests/ai/workflow/test_graph_validator.py tests/ai/workflow/test_manager_definitions.py`
+
+Additional verification:
+
+- [ ] Valid graphs pass validation.
+- [ ] Invalid graphs are rejected with clear errors.
+- [ ] Definitions version correctly after being referenced by a run.
+- [ ] Owner isolation holds for all CRUD operations.
+
+**Acceptance**
+
+- No invalid graph can be activated.
+- Definitions are versioned, never mutated in place once run.
+- CRUD operates entirely through `WorkflowManager`/`WorkflowStore`.
+
+**Exit Criteria**
+
+- Validation and CRUD tests pass.
+- Ready for the execution engine (Phase 3).
+
+---
+
+# Phase 3 — Sequential Execution Engine
+
+**Effort:** L
+
+**Objective**
+
+Implement `WorkflowExecutor` for the simple case: a linear or branching (but non-parallel, non-approval) graph of `task` nodes, executed to completion with a checkpoint persisted after every node transition.
+
+**Deliverables**
+
+- `WorkflowExecutor` core step loop
+- Ready-node resolver (topological, sequential-only)
+- `TaskNodeExecutor`
+- `NodeExecutor` Protocol
+- `WorkflowManager.start_run()` / `get_run()`
+- Checkpointing after every node transition
+- Integration test suite
+
+**Steps**
+
+### Execution Engine
+
+- [ ] Implement `NodeExecutor` Protocol.
+- [ ] Implement `WorkflowExecutor.step()` — resolve ready nodes, execute, advance.
+- [ ] Implement the ready-node resolver for sequential/branching (non-parallel) graphs.
+- [ ] Implement run completion detection (no more ready nodes, no pending branches).
+
+### Task Node
+
+- [ ] Implement `TaskNodeExecutor` calling `ToolExecutor.execute()`.
+- [ ] Map node `config` (`tool_name`, `arguments_template`) against `WorkflowContext`.
+- [ ] Map `ToolResult` into `WorkflowNodeExecution.output`.
+- [ ] Handle tool authorization failures as node failures (not run crashes).
+
+### Run Lifecycle
+
+- [ ] Implement `WorkflowManager.start_run(definition_id, trigger_input)`.
+- [ ] Create `WorkflowRun` (`status=running`) and drive `WorkflowExecutor` to completion or first pause.
+- [ ] Implement `WorkflowManager.get_run(run_id)` with full node execution history.
+- [ ] Implement `WorkflowManager.list_runs()` (owner-scoped).
+
+### Checkpointing
+
+- [ ] Persist a `WorkflowNodeExecution` row before executing a node (`status=running`).
+- [ ] Persist the node result and updated `WorkflowRun.context` after execution.
+- [ ] Ensure checkpoint writes are atomic (run + node execution together).
+
+### Error Handling
+
+- [ ] Handle node execution failures — mark node `failed`, fail the run (retry arrives in Phase 8).
+- [ ] Handle tool timeouts.
+- [ ] Log operational failures without exposing node input/output content.
+
+### Testing
+
+- [ ] Add single-node run tests.
+- [ ] Add multi-node sequential run tests.
+- [ ] Add branching (non-parallel) run tests.
+- [ ] Add checkpoint persistence tests.
+- [ ] Add failure propagation tests.
+- [ ] Add owner-isolation tests for runs.
+
+**Verify**
+
+- `pytest tests/ai/workflow/test_executor_sequential.py tests/ai/workflow/test_task_node.py`
+
+Additional verification:
+
+- [ ] Sequential workflows execute to completion.
+- [ ] Task nodes correctly invoke `ToolExecutor`.
+- [ ] Every node transition is checkpointed.
+- [ ] Failures mark the run `failed` without crashing the process.
+
+**Acceptance**
+
+- `WorkflowExecutor` drives a run from `pending` to `completed`/`failed` for sequential/branching (non-parallel) graphs.
+- Task nodes reuse `ToolExecutor` with no duplicated validation/authorization logic.
+- Every transition is durably checkpointed.
+
+**Exit Criteria**
+
+- Sequential execution tests pass.
+- Ready for conditional routing (Phase 4).
+
+---
+
+# Phase 4 — Conditional Routing
+
+**Effort:** M
+
+**Objective**
+
+Implement the declarative condition DSL and `RouterNodeExecutor` so a workflow can branch deterministically based on accumulated `WorkflowContext` state.
+
+**Deliverables**
+
+- `ConditionEvaluator`
+- Condition DSL (`field`, `operator`, `value`; `all`/`any` composition)
+- `RouterNodeExecutor`
+- Edge condition evaluation in the ready-node resolver
+- Integration test suite
+
+**Steps**
+
+### Condition DSL
+
+- [ ] Define the `Condition` model (`field`, `operator`, `value`).
+- [ ] Support operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `exists`.
+- [ ] Support `all`/`any` composition of conditions.
+- [ ] Implement dot-path field resolution against `WorkflowContext.variables`.
+- [ ] Reject any non-declarative condition input at validation time (Phase 2 hook).
+
+### Condition Evaluator
+
+- [ ] Implement `ConditionEvaluator.evaluate(condition, context) -> bool`.
+- [ ] Ensure no code execution path exists (no `eval`/`exec`/`getattr` on arbitrary objects).
+- [ ] Handle missing fields deterministically (`exists` semantics; other operators treat missing as non-matching).
+
+### Router Node
+
+- [ ] Implement `RouterNodeExecutor` — evaluates each outgoing edge's condition in declaration order.
+- [ ] Select the first matching edge for exclusive routing; support multi-match "activate all matching" mode via node config.
+- [ ] Fail the node deterministically if no edge matches and no default edge is declared.
+
+### Ready-Node Resolver
+
+- [ ] Extend the Phase 3 resolver to only activate nodes reached by a selected edge.
+- [ ] Skip (not fail) nodes on unselected branches; mark their `WorkflowNodeExecution` as `skipped`.
+
+### Testing
+
+- [ ] Add condition DSL unit tests (each operator).
+- [ ] Add `all`/`any` composition tests.
+- [ ] Add router node branching tests.
+- [ ] Add default-edge and no-match-failure tests.
+- [ ] Add skipped-node tests.
+
+**Verify**
+
+- `pytest tests/ai/workflow/test_condition_evaluator.py tests/ai/workflow/test_router_node.py`
+
+Additional verification:
+
+- [ ] Conditions evaluate deterministically against `WorkflowContext`.
+- [ ] Router nodes select the correct branch(es).
+- [ ] Unselected branches are marked `skipped`, not executed.
+
+**Acceptance**
+
+- Conditional routing is fully declarative — no arbitrary code execution.
+- Branching is deterministic and explainable from persisted node execution history.
+
+**Exit Criteria**
+
+- Conditional routing tests pass.
+- Ready for parallel execution (Phase 5).
+
+---
+
+# Phase 5 — Parallel Execution (Fork/Join)
+
+**Effort:** M
+
+**Objective**
+
+Implement `ForkNodeExecutor` and `JoinNodeExecutor` so independent branches of a workflow can execute concurrently and be merged back into a single `WorkflowContext`.
+
+**Deliverables**
+
+- `ForkNodeExecutor`
+- `JoinNodeExecutor`
+- Join policies: `all`, `any`, `count(n)`
+- Branch isolation and result merge strategy
+- `workflow_max_parallel_branches` enforcement
+- Integration test suite
+
+**Steps**
+
+### Fork Node
+
+- [ ] Implement `ForkNodeExecutor` — activates all outgoing edges concurrently via `asyncio.gather`.
+- [ ] Enforce `workflow_max_parallel_branches` at validation time (Phase 2 hook) and at execution time.
+- [ ] Track `current_node_ids` for all active branches on the `WorkflowRun`.
+
+### Join Node
+
+- [ ] Implement `JoinNodeExecutor` — waits for its declared incoming branches.
+- [ ] Support join policy `all` (wait for every branch).
+- [ ] Support join policy `any` (continue on first completion; cancel or ignore the rest per config).
+- [ ] Support join policy `count(n)` (continue once `n` branches complete).
+- [ ] Merge branch outputs into `WorkflowContext.variables` under their originating node ids.
+
+### Branch Isolation
+
+- [ ] Ensure branch execution failures do not corrupt sibling branches' state.
+- [ ] Ensure branch-local retries (Phase 8) do not block sibling branches.
+- [ ] Ensure checkpointing captures per-branch node execution independently.
+
+### Ready-Node Resolver
+
+- [ ] Extend the resolver to track multiple concurrently `running` node ids.
+- [ ] Extend completion detection to require all branches (or per join policy) resolved before advancing past a join.
+
+### Testing
+
+- [ ] Add fork/join `all` policy tests.
+- [ ] Add fork/join `any` policy tests.
+- [ ] Add fork/join `count(n)` policy tests.
+- [ ] Add branch failure isolation tests.
+- [ ] Add `workflow_max_parallel_branches` enforcement tests.
+- [ ] Add concurrent checkpoint consistency tests.
+
+**Verify**
+
+- `pytest tests/ai/workflow/test_fork_join.py`
+
+Additional verification:
+
+- [ ] Parallel branches execute concurrently, not sequentially.
+- [ ] Join policies behave per specification.
+- [ ] Branch failures are isolated appropriately per policy.
+- [ ] Checkpoints remain consistent under concurrent branch execution.
+
+**Acceptance**
+
+- Independent workflow branches execute in parallel with correct isolation and merge semantics.
+- Join policies are deterministic and configuration-driven.
+
+**Exit Criteria**
+
+- Parallel execution tests pass.
+- Ready for LLM/Agent node integration (Phase 6).
+
+---
+
+# Phase 6 — LLM & Agent Node Integration
+
+**Effort:** M
+
+**Objective**
+
+Implement `LLMNodeExecutor` and `AgentNodeExecutor`, letting workflow nodes perform direct LLM calls or delegate bounded sub-tasks to the Agent Framework, reusing existing platform abstractions without modification.
+
+**Deliverables**
+
+- `LLMNodeExecutor`
+- `AgentNodeExecutor`
+- `app/ai/prompts/workflow/` LLM node prompt template(s)
+- Node config schemas for `llm` and `agent` node types
+- Integration test suite
+
+**Steps**
+
+### LLM Node
+
+- [ ] Implement `LLMNodeExecutor` using `PromptManager` + `LLMProvider`/`ProviderFactory`.
+- [ ] Render node `prompt_template` against `WorkflowContext.variables`.
+- [ ] Support optional `model_override` in node config.
+- [ ] Map the LLM response into `WorkflowNodeExecution.output`.
+- [ ] Handle provider errors as node failures (not run crashes).
+
+### Agent Node
+
+- [ ] Implement `AgentNodeExecutor` using `DefaultAgent`.
+- [ ] Map node `config` (goal/instructions, tool allowlist, iteration limit) into an `AgentRequest`.
+- [ ] Map `AgentResponse` into `WorkflowNodeExecution.output`.
+- [ ] Fail agent nodes with a clear configuration error at run time if `AGENT_RUNTIME_ENABLED=false`.
+- [ ] Respect the Agent Framework's own retry/iteration limits (no double-wrapping).
+
+### Node Config Schemas
+
+- [ ] Define and validate `llm` node config shape.
+- [ ] Define and validate `agent` node config shape.
+- [ ] Extend `GraphValidator` (Phase 2) to validate these shapes at definition time.
+
+### Testing
+
+- [ ] Add LLM node execution tests (fake provider).
+- [ ] Add prompt rendering tests.
+- [ ] Add agent node execution tests (fake agent).
+- [ ] Add `AGENT_RUNTIME_ENABLED=false` failure tests.
+- [ ] Add node config validation tests.
+
+**Verify**
+
+- `pytest tests/ai/workflow/test_llm_node.py tests/ai/workflow/test_agent_node.py`
+
+Additional verification:
+
+- [ ] LLM nodes execute through the existing provider abstraction.
+- [ ] Agent nodes execute through the existing Agent Framework.
+- [ ] No duplicated retry/iteration logic between Workflow and Agent Framework.
+
+**Acceptance**
+
+- Workflows can perform direct LLM calls and delegate bounded reasoning to the Agent Framework without reimplementing either.
+- Both node types degrade to a clear node failure (not a process crash) on misconfiguration or provider error.
+
+**Exit Criteria**
+
+- LLM/Agent node tests pass.
+- Ready for approval nodes (Phase 7).
+
+---
+
+# Phase 7 — Human Approval Nodes, Pause & Resume
+
+**Effort:** L
+
+**Objective**
+
+Implement `ApprovalNodeExecutor` and the pause/decision/resume lifecycle: a run can stop indefinitely at an approval node and later resume — following the approved or rejected edge — from an explicit human decision.
+
+**Deliverables**
+
+- `ApprovalNodeExecutor`
+- `WorkflowRun.status = waiting_approval`
+- `WorkflowManager.apply_decision(run_id, node_execution_id, decision)`
+- Approved/rejected edge routing
+- Integration test suite
+
+**Steps**
+
+### Approval Node
+
+- [ ] Implement `ApprovalNodeExecutor` — creates a `waiting_approval` `WorkflowNodeExecution` and stops the step loop.
+- [ ] Set `WorkflowRun.status = waiting_approval` and persist `current_node_ids` pointing at the approval node.
+- [ ] Support optional `workflow_approval_timeout_hours` (default `0` = no timeout) as a documented future extension point (`TODO(epic-10):` for actual timeout enforcement via background jobs).
+
+### Decision Handling
+
+- [ ] Implement `WorkflowManager.apply_decision()` — validates the node is `waiting_approval` and the caller is the run owner.
+- [ ] Record `decided_by`, `decided_at`, `decision` on the `WorkflowNodeExecution`.
+- [ ] On `approve`: mark the node `succeeded`; resume `WorkflowExecutor` along the "approved" edge (or the single outgoing edge if unconditional).
+- [ ] On `reject`: mark the node `failed`/`rejected`; follow a declared "rejected" edge if present, otherwise fail the run.
+
+### Resume Semantics
+
+- [ ] Implement `WorkflowManager.resume(run_id)` to rehydrate a paused run and re-enter `WorkflowExecutor.step()`.
+- [ ] Ensure resume never re-executes an already-`succeeded` node.
+- [ ] Ensure resume correctly restores `current_node_ids` and parallel-branch state (Phase 5) if the run was paused mid-fan-out.
+
+### Error Handling
+
+- [ ] Reject decisions on nodes that are not `waiting_approval` (idempotency guard against double-decision).
+- [ ] Reject decisions from non-owners.
+- [ ] Handle resume-of-already-completed-run as a no-op with a clear response.
+
+### Testing
+
+- [ ] Add approval-pause tests.
+- [ ] Add approve-and-resume tests.
+- [ ] Add reject-with-rejected-edge tests.
+- [ ] Add reject-without-rejected-edge (run fails) tests.
+- [ ] Add double-decision idempotency tests.
+- [ ] Add non-owner decision rejection tests.
+- [ ] Add pause/resume-with-parallel-branches tests.
+
+**Verify**
+
+- `pytest tests/ai/workflow/test_approval_node.py tests/ai/workflow/test_resume.py`
+
+Additional verification:
+
+- [ ] Runs pause deterministically at approval nodes.
+- [ ] Approve/reject decisions resume execution correctly.
+- [ ] Resume never duplicates already-succeeded node side effects.
+- [ ] Only the run owner can decide a pending approval.
+
+**Acceptance**
+
+- Human approval nodes pause a run indefinitely and resume it exactly where it left off based on an explicit decision.
+- Decision handling is idempotent and owner-scoped.
+- Full approval audit trail / editable tool arguments remain explicitly deferred to Epic 09.
+
+**Exit Criteria**
+
+- Approval/resume tests pass.
+- Ready for node retry and crash recovery (Phase 8).
+
+---
+
+# Phase 8 — Node Retry & Crash Recovery
+
+**Effort:** M
+
+**Objective**
+
+Implement per-node retry policy (wrapping `app/core/retry.py`) and run-level crash recovery so a process restart or transient node failure does not lose workflow progress.
+
+**Deliverables**
+
+- Workflow `RetryPolicy` wrapping `app/core/retry.py`
+- Retry classification per node type
+- `attempt` tracking on `WorkflowNodeExecution`
+- `WorkflowManager.resume(run_id)` crash-recovery path (distinct from Phase 7's approval-resume, same API)
+- Integration test suite
+
+**Steps**
+
+### Node Retry
+
+- [ ] Implement workflow `RetryPolicy` wrapping `retry_async`/`is_retryable_exception`.
+- [ ] Classify retryable failures (timeout, connection, provider 429) vs. non-retryable (validation, auth, not found).
+- [ ] Apply `workflow_max_node_retries` / `workflow_node_retry_base_delay_seconds` per node.
+- [ ] Increment `WorkflowNodeExecution.attempt` on each retry; persist one row per attempt.
+- [ ] Fail the run once retries are exhausted.
+
+### Crash Recovery
+
+- [ ] Implement startup/administrative reconciliation: identify `running`/`waiting_approval` runs with no active in-process executor.
+- [ ] Implement `WorkflowManager.resume(run_id)` to rehydrate `WorkflowContext` from the latest checkpoint and continue.
+- [ ] Ensure rehydration correctly restores `current_node_ids`, including mid-fork/join state.
+- [ ] Ensure a node marked `running` at crash time is safely retried (treated as a failed attempt) rather than assumed complete.
+
+### Run Duration Guard
+
+- [ ] Enforce `workflow_max_run_duration_minutes` — fail runs that exceed the configured wall-clock budget.
+
+### Error Handling
+
+- [ ] Log retry attempts and crash-recovery actions without exposing node input/output content.
+- [ ] Ensure retry/resume failures never corrupt previously checkpointed state.
+
+### Testing
+
+- [ ] Add retryable-vs-non-retryable classification tests.
+- [ ] Add retry exhaustion tests.
+- [ ] Add attempt-tracking tests.
+- [ ] Add crash-recovery rehydration tests (simulated process restart).
+- [ ] Add mid-fork/join crash-recovery tests.
+- [ ] Add `workflow_max_run_duration_minutes` enforcement tests.
+
+**Verify**
+
+- `pytest tests/ai/workflow/test_retry.py tests/ai/workflow/test_crash_recovery.py`
+
+Additional verification:
+
+- [ ] Retryable node failures recover automatically within policy limits.
+- [ ] Non-retryable failures fail fast.
+- [ ] A simulated crash mid-run resumes without duplicating side effects.
+- [ ] Runs exceeding the duration guard fail cleanly.
+
+**Acceptance**
+
+- Node-level retry and run-level crash recovery are both provided without a background job queue (in-process, checkpoint-driven).
+- No completed node is ever re-executed on resume.
+
+**Exit Criteria**
+
+- Retry and crash-recovery tests pass.
+- Ready for the Workflow REST API (Phase 9).
+
+---
+
+# Phase 9 — Workflow REST API
+
+**Effort:** L
+
+**Objective**
+
+Expose the Workflow Engine through an authenticated, owner-scoped REST API per Part I, always mounted and gated per-route by `WORKFLOW_ENGINE_ENABLED`.
+
+**Deliverables**
+
+- `app/schemas/workflow.py`
+- `app/routers/workflows.py`
+- `GET /api/health` extended with `workflow_engine_enabled`
+- Full endpoint set per Part I § Workflow REST API
+- Integration test suite
+
+**Steps**
+
+### Schemas
+
+- [ ] Define request/response schemas for definitions (create/update/list/get).
+- [ ] Define request/response schemas for runs (start/list/get/cancel/resume).
+- [ ] Define request/response schemas for approval decisions.
+- [ ] Ensure schemas never expose internal-only fields (Part I § Response rules).
+
+### Router
+
+- [ ] Implement `POST /api/workflows`, `GET /api/workflows`, `GET /api/workflows/{id}`, `PUT /api/workflows/{id}`, `DELETE /api/workflows/{id}`.
+- [ ] Implement `POST /api/workflows/{id}/runs`, `GET /api/workflows/{id}/runs`.
+- [ ] Implement `GET /api/workflow-runs`, `GET /api/workflow-runs/{run_id}`.
+- [ ] Implement `POST /api/workflow-runs/{run_id}/cancel`, `/resume`.
+- [ ] Implement `POST /api/workflow-runs/{run_id}/nodes/{node_execution_id}/approve`, `/reject`.
+- [ ] Enforce `Depends(get_current_caller)` and owner checks on every route.
+- [ ] Return `503 feature_disabled` per-route when `WORKFLOW_ENGINE_ENABLED=false`.
+- [ ] Mount the router in `app/main.py`.
+
+### Health
+
+- [ ] Extend `app/routers/health.py` with `workflow_engine_enabled`.
+
+### Error Handling
+
+- [ ] Map `WorkflowNotFoundError` → `404`.
+- [ ] Map `WorkflowAccessDeniedError` → `403`.
+- [ ] Map `WorkflowValidationError` → `422`.
+- [ ] Map generic `WorkflowError` → `500` with a safe message.
+
+### Testing
+
+- [ ] Add router tests for every endpoint (happy path).
+- [ ] Add owner-isolation tests (cross-owner 403/404).
+- [ ] Add feature-flag-off tests (`503` on every route).
+- [ ] Add validation-error response tests.
+- [ ] Add health endpoint tests.
+
+**Verify**
+
+- `pytest tests/test_workflow_router.py`
+
+Additional verification:
+
+- [ ] All endpoints function per Part I contract.
+- [ ] Feature flag gates every route independently.
+- [ ] Owner isolation holds across all endpoints.
+- [ ] Health endpoint reports `workflow_engine_enabled` correctly.
+
+**Acceptance**
+
+- The Workflow Engine is fully controllable via REST without any other client integration.
+- API responses never leak cross-owner data or internal-only fields.
+- Flag-off behaviour matches Memory's `503 feature_disabled` convention.
+
+**Exit Criteria**
+
+- REST API tests pass.
+- Ready for agent tool integration (Phase 10).
+
+---
+
+# Phase 10 — Agent Tool Integration
+
+**Effort:** M
+
+**Objective**
+
+Register `WorkflowExecutionTool` in the existing tool platform so an agent can start a workflow or check a run's status as an ordinary tool call, with zero changes to `ChatService`, `UnifiedChatService`, or `ToolExecutor` internals.
+
+**Deliverables**
+
+- `app/ai/tools/implementations/workflow_tool.py`
+- Conditional registration in `app/ai/tools/registration.py` (only when `WORKFLOW_ENGINE_ENABLED=true`)
+- Integration test suite
+
+**Steps**
+
+### Tool Implementation
+
+- [ ] Implement `WorkflowExecutionTool` with actions `start` (definition_id, input) and `status` (run_id).
+- [ ] Map `WorkflowManager.start_run()` / `get_run()` results into `ToolResult`.
+- [ ] Set `WorkflowRun.session_id` from `ToolExecutionContext` when available.
+- [ ] Ensure tool failures return a normalized `ToolResult(success=False, ...)`, never raise past `ToolExecutor`.
+
+### Registration
+
+- [ ] Register `WorkflowExecutionTool` in `app/ai/tools/registration.py` guarded by `settings.workflow_engine_enabled`.
+- [ ] Verify `ToolAuthorizer` already denies guests (no new authorization logic needed).
+- [ ] Verify the tool's JSON schema (`ToolDefinition.parameters`) is well-formed for LLM function-calling.
+
+### Testing
+
+- [ ] Add tool `start` action tests.
+- [ ] Add tool `status` action tests.
+- [ ] Add tool registration-gating tests (flag on/off).
+- [ ] Add guest-denial tests (via existing `ToolAuthorizer`).
+- [ ] Add end-to-end test: agent invokes the tool via `ToolExecutor` (fake provider/agent).
+
+**Verify**
+
+- `pytest tests/test_workflow_tool.py`
+
+Additional verification:
+
+- [ ] The tool is registered only when the flag is on.
+- [ ] Agents can start and check workflows through the existing tool-calling path.
+- [ ] No `ChatService`/`UnifiedChatService` code paths were modified.
+
+**Acceptance**
+
+- Workflows are reachable from chat/agent contexts exclusively through the additive tool registration.
+- Existing chat, tool, and agent behaviour is unchanged when the flag is off.
+
+**Exit Criteria**
+
+- Tool integration tests pass.
+- Ready for frontend controls (Phase 11).
+
+**Rollback**
+
+- [ ] Disable `WORKFLOW_ENGINE_ENABLED`.
+- [ ] Remove `WorkflowExecutionTool` registration.
+- [ ] Verify existing tool-calling behaviour is unchanged.
+
+---
+
+# Phase 11 — Frontend Controls
+
+**Effort:** S
+
+**Objective**
+
+Implement a frontend dashboard for defining, triggering, inspecting, and deciding on workflows. No visual graph builder — definitions are authored as JSON in v1; the UI focuses on run visibility and approval decisions.
+
+**Deliverables**
+
+- Workflow dashboard UI
+- Run inspection (status, node execution history)
+- Approval decision UI
+- Frontend API integration
+- Integration test suite
+
+**Steps**
+
+### Dashboard UI
+
+- [ ] Add a Workflows section to the authenticated app.
+- [ ] Display Workflow feature availability (via `workflow_engine_enabled`).
+- [ ] List the caller's workflow definitions.
+- [ ] Support creating a definition from a JSON graph payload.
+
+### Run Inspection
+
+- [ ] List runs for a definition and across all definitions.
+- [ ] Display a run's status and full node execution history.
+- [ ] Display node input/output for completed nodes.
+- [ ] Support cancelling a running/paused run.
+- [ ] Support resuming a paused/failed run.
+
+### Approval Decisions
+
+- [ ] Highlight runs in `waiting_approval` status.
+- [ ] Display the pending approval node's context.
+- [ ] Provide approve/reject actions.
+- [ ] Confirm rejection before submission.
+- [ ] Refresh run status after a decision.
+
+### API Integration
+
+- [ ] Create `frontend/src/api/workflowClient.ts`.
+- [ ] Create `frontend/src/types/workflow.ts`.
+- [ ] Create `frontend/src/pages/WorkflowsPage.tsx` (authenticated route).
+- [ ] Extend `frontend/src/api/healthClient.ts` with `workflow_engine_enabled`.
+- [ ] Wire navigation link in the authenticated app shell.
+
+### Feature Flag Integration
+
+- [ ] Hide Workflow controls when `WORKFLOW_ENGINE_ENABLED=false`.
+- [ ] Preserve existing authenticated user experience.
+- [ ] Preserve guest user experience.
+
+### Error Handling
+
+- [ ] Handle API failures gracefully.
+- [ ] Handle validation failures (invalid graph JSON) with clear messages.
+- [ ] Preserve existing application behaviour during frontend failures.
+
+### Testing
+
+- [ ] Add component tests.
+- [ ] Add API integration tests.
+- [ ] Add approval-decision tests.
+- [ ] Add feature flag tests.
+- [ ] Add accessibility tests.
+
+**Verify**
+
+- Frontend lint
+- Frontend tests
+- Production build
+
+Additional verification:
+
+- [ ] Workflows page renders successfully.
+- [ ] Definitions and runs load correctly.
+- [ ] Approve/reject actions succeed and refresh state.
+- [ ] Feature flag regression passes.
+
+**Acceptance**
+
+- Authenticated users can define, trigger, inspect, and decide on workflows entirely through the public Workflow API.
+- Frontend remains fully functional when the Workflow Engine is disabled.
+- Guest users continue to experience the existing application unchanged.
+
+**Exit Criteria**
+
+- Workflow dashboard operational.
+- API integration validated.
+- Ready for production validation.
+
+**Rollback**
+
+- [ ] Hide Workflows navigation and page.
+- [ ] Disable frontend Workflow API integration.
+- [ ] Verify existing application behaviour is unchanged.
+
+---
+
+# Phase 12 — Validation & Release
+
+**Effort:** M
+
+**Objective**
+
+Perform comprehensive validation of the completed Workflow Engine, ensuring all Part I architectural invariants have been preserved, all phases are correctly integrated, and the platform remains fully functional with the Workflow Engine both enabled and disabled. This phase certifies the Workflow Engine as production-ready.
+
+**Deliverables**
+
+- End-to-end validation report
+- Regression test report
+- Performance validation report
+- Production readiness assessment
+- Release summary
+- Completion metrics
+- Epic completion sign-off
+
+**Steps**
+
+### Functional Validation
+
+- [ ] Verify all implementation phases have been completed.
+- [ ] Verify all Part I architectural invariants.
+- [ ] Verify sequential execution.
+- [ ] Verify conditional routing.
+- [ ] Verify parallel execution (fork/join).
+- [ ] Verify LLM and Agent node execution.
+- [ ] Verify approval pause/resume.
+- [ ] Verify node retry and crash recovery.
+
+### Integration Validation
+
+- [ ] Verify `WorkflowManager` orchestration.
+- [ ] Verify `WorkflowStore` abstraction.
+- [ ] Verify `WorkflowExecutionTool` registration and execution.
+- [ ] Verify Workflow REST API functionality.
+- [ ] Verify Agent Framework integration.
+- [ ] Verify Tool platform integration.
+
+### Regression Testing
+
+- [ ] Execute full backend regression suite.
+- [ ] Execute full frontend regression suite.
+- [ ] Verify chat functionality.
+- [ ] Verify Memory functionality.
+- [ ] Verify Voice functionality.
+- [ ] Verify RAG functionality.
+- [ ] Verify MCP functionality.
+- [ ] Verify Agent Framework functionality.
+- [ ] Verify Tool execution.
+- [ ] Verify streaming responses.
+
+### Feature Flag Validation
+
+- [ ] Validate `WORKFLOW_ENGINE_ENABLED=true`.
+- [ ] Validate `WORKFLOW_ENGINE_ENABLED=false`.
+- [ ] Verify identical platform behaviour when disabled.
+- [ ] Verify graceful feature enablement.
+
+### Performance Validation
+
+- [ ] Measure node execution overhead (checkpoint write latency).
+- [ ] Measure parallel branch execution speedup vs. sequential.
+- [ ] Measure crash-recovery rehydration latency.
+- [ ] Verify acceptable production performance.
+
+### Quality Validation
+
+- [ ] Validate graph validation coverage.
+- [ ] Validate retry classification.
+- [ ] Validate idempotent resume (no duplicate side effects).
+- [ ] Validate owner isolation across definitions, runs, and decisions.
+
+### Production Readiness
+
+- [ ] Review observability metrics.
+- [ ] Review structured logging.
+- [ ] Verify error handling.
+- [ ] Verify failure recovery.
+- [ ] Verify deployment configuration (migration applied).
+- [ ] Publish production readiness report.
+
+### Documentation
+
+- [ ] Update implementation documentation.
+- [ ] Update architecture documentation where required.
+- [ ] Publish release summary.
+- [ ] Record implementation metrics.
+- [ ] Update Epic status.
+
+### Testing
+
+- [ ] Execute complete backend test suite.
+- [ ] Execute complete frontend test suite.
+- [ ] Execute integration tests.
+- [ ] Execute end-to-end tests.
+- [ ] Execute evaluation suite.
+- [ ] Execute performance validation.
+
+**Verify**
+
+- `make lint`
+- `make typecheck`
+- `make test-cov`
+- `make eval`
+- Frontend lint
+- Frontend tests
+- Frontend production build
+
+Additional verification:
+
+- [ ] All architectural invariants preserved.
+- [ ] All implementation phases validated.
+- [ ] Workflow execution operational (sequential, parallel, approval).
+- [ ] Frontend Workflow dashboard operational.
+- [ ] Existing platform functionality unchanged.
+- [ ] Production deployment ready.
+
+**Acceptance**
+
+- All Part I architectural constraints have been preserved.
+- All implementation phases have been successfully completed.
+- The Workflow Engine integrates seamlessly into the existing platform architecture.
+- Existing chat, Memory, Voice, RAG, MCP, Agent, Tool execution, and streaming behaviour remain unchanged when `WORKFLOW_ENGINE_ENABLED=false`.
+- Performance remains within acceptable production limits.
+- All quality gates pass.
+- The Workflow Engine is approved for production deployment.
+
+**Exit Criteria**
+
+- All validation activities completed.
+- Regression suite passed.
+- Performance validation approved.
+- Production readiness confirmed.
+- Epic formally completed.
+
+**Rollback**
+
+- [ ] Disable `WORKFLOW_ENGINE_ENABLED`.
+- [ ] Redeploy the previous stable release if required.
+- [ ] Verify platform functionality without the Workflow Engine.
+- [ ] Confirm rollback validation passes.
+- [ ] Record rollback outcome if executed.
+
+**Completion Record**
+
+| Metric                    | Result  |
+| --------------------------- | ------- |
+| Backend Tests               | Pending |
+| Frontend Tests               | Pending |
+| Integration Tests            | Pending |
+| End-to-End Tests             | Pending |
+| Performance Validation        | Pending |
+| Feature Flag Regression       | Pending |
+| Production Readiness          | Pending |
+| Release Summary Published     | Pending |
+| Epic Status                  | Pending |
+
+---
+
+# PR Map
+
+One PR per phase.
+
+- v2/epic-06/phase-00-baseline
+- v2/epic-06/phase-01-models-migration
+- v2/epic-06/phase-02-graph-validation
+- v2/epic-06/phase-03-sequential-engine
+- v2/epic-06/phase-04-conditional-routing
+- v2/epic-06/phase-05-parallel-execution
+- v2/epic-06/phase-06-llm-agent-nodes
+- v2/epic-06/phase-07-approval-resume
+- v2/epic-06/phase-08-retry-crash-recovery
+- v2/epic-06/phase-09-rest-api
+- v2/epic-06/phase-10-agent-tool
+- v2/epic-06/phase-11-frontend
+- v2/epic-06/phase-12-release
+
+---
+
+# Risks
+
+| Risk                          | Mitigation                                                                 |
+| -------------------------------- | ------------------------------------------------------------------------- |
+| Graph misconfiguration           | `GraphValidator` rejects invalid definitions before activation            |
+| Runaway/looping graphs           | Cycle detection at validation time; `workflow_max_run_duration_minutes`  |
+| Condition DSL abuse              | Declarative-only DSL; no `eval`/`exec`                                    |
+| Duplicate side effects on resume | Checkpoint-per-transition; idempotent resume; attempt tracking            |
+| Cross-owner data leakage         | Owner isolation on every `WorkflowStore`/REST operation                   |
+| Provider/backend coupling        | `WorkflowStore` abstraction                                                |
+| Parallel execution races         | Isolated branch state; atomic checkpoint writes                           |
+| Indefinite approval pauses       | `workflow_approval_timeout_hours` config surface (enforcement deferred — `TODO(epic-10)`) |
+| Feature regression               | `WORKFLOW_ENGINE_ENABLED` flag-off parity                                 |
+| Excessive run/history growth     | `workflow_run_retention_days` (cleanup mechanism deferred — `TODO(epic-10)`) |
+| Agent/Tool coupling              | Reuse existing `DefaultAgent`/`ToolExecutor`; no reimplementation          |
+
+---
+
+# Observability
+
+Structured metrics only.
+
+| Field                          | Purpose                    |
+| --------------------------------- | ----------------------------- |
+| workflow_engine_enabled           | Feature flag state           |
+| workflow_runs_started              | Trigger volume                |
+| workflow_runs_completed            | Completion volume             |
+| workflow_runs_failed               | Failure volume                |
+| workflow_node_execution_latency_ms | Per-node execution latency    |
+| workflow_checkpoint_latency_ms     | Persistence latency           |
+| workflow_retry_count               | Retry volume                  |
+| workflow_approval_pending_count    | Pending approvals             |
+| workflow_parallel_branch_count     | Fan-out width distribution    |
+
+No workflow input/output content or personally identifiable information should be logged by default.
+
+---
+
+# Definition of Done
+
+- [ ] All Part I architectural invariants preserved.
+- [ ] Public APIs frozen after Phase 1.
+- [ ] Workflow execution invoked only through `WorkflowManager`.
+- [ ] No `ChatService`/`UnifiedChatService` coupling — tool-only chat/agent surface.
+- [ ] Task/LLM/Agent nodes reuse existing platform components with no reimplementation.
+- [ ] `WORKFLOW_ENGINE_ENABLED=false` preserves Epic 05 behaviour (full flag-off parity validated in Phase 12).
+- [ ] Conditional routing, parallel execution, approval pause/resume, retry, and crash recovery operational.
+- [ ] Workflow REST API and frontend dashboard complete.
+- [ ] Backend and frontend tests pass; coverage ≥80% on `app/ai/workflow/`.
+- [ ] Release summary published.
+- [ ] User authorizes Epic 07.
+
+---
+
+## Files index
+
+| Path                                                       | Action  | Owner    | Phase |
+| ------------------------------------------------------------- | ------- | -------- | ----- |
+| `docs/audits/post-mvp-v2-epic6-phase-0-baseline-audit.md`   | create  | Docs     | 0     |
+| `app/ai/workflow/**`                                        | create  | Core     | 1–8   |
+| `app/ai/prompts/workflow/**`                                 | create  | Core     | 6     |
+| `app/db/models.py`                                          | modify  | Core     | 1     |
+| `alembic/versions/0007_workflow_tables.py`                  | create  | Core     | 1     |
+| `app/core/config.py`                                        | modify  | Core     | 1     |
+| `backend-python/.env.example`                                | modify  | Docs     | 1     |
+| `app/schemas/workflow.py`                                    | create  | Core     | 9     |
+| `app/routers/workflows.py`                                   | create  | Adapter  | 9     |
+| `app/routers/health.py`                                       | modify  | Adapter  | 9     |
+| `app/main.py`                                                 | modify  | Adapter  | 9     |
+| `app/ai/deps.py`                                              | modify  | Adapter  | 1, 9, 10 |
+| `app/ai/tools/implementations/workflow_tool.py`               | create  | Adapter  | 10    |
+| `app/ai/tools/registration.py`                                | modify  | Adapter  | 10    |
+| `tests/ai/workflow/**`                                        | create  | Tests    | 1–8   |
+| `tests/test_workflow_router.py`                               | create  | Tests    | 9     |
+| `tests/test_workflow_tool.py`                                 | create  | Tests    | 10    |
+| `tests/fakes.py`                                              | modify  | Tests    | 1–8   |
+| `frontend/src/api/workflowClient.ts`                          | create  | Frontend | 11    |
+| `frontend/src/types/workflow.ts`                              | create  | Frontend | 11    |
+| `frontend/src/pages/WorkflowsPage.tsx`                        | create  | Frontend | 11    |
+| `frontend/src/api/healthClient.ts`                             | modify  | Frontend | 11    |
+| `docs/releases/post-mvp-v2-epic6-release-summary.md`          | create  | Docs     | 12    |
+
+---
+
+## Changelog
+
+| Version | Date       | Changes            |
+| ------- | ---------- | -------------------- |
+| 1       | 2026-08-04 | Initial epic draft |
+| 1.1     | 2026-08-04 | Phase 0 complete: baseline audit published; quality gates verified (1305 tests, 89.66% cov, eval 5/5, frontend 251 tests). Part II only. |
+
+---
