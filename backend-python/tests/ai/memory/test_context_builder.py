@@ -1,4 +1,4 @@
-"""Tests for MemoryContextBuilder (Phase 4 preferences)."""
+"""Tests for MemoryContextBuilder (Phase 4 preferences, Phase 6 retrieval)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ import pytest
 
 from app.ai.memory.context_builder import MemoryContextBuilder
 from app.ai.memory.models import MemoryContext, MemoryRecord, MemoryScope, MemoryType
+from app.ai.memory.semantic_retriever import RetrievalResult
+from app.core.config import Settings
 from tests.ai.memory.test_manager import FakeMemoryProvider, _NOW
 
 
@@ -195,3 +197,98 @@ class TestMemoryContextBuilder:
 
         assert context.conversation_summary == "Keep me."
         assert context.project_memories == []
+
+
+class TestMemoryContextBuilderRetrieval:
+    def test_build_from_retrieval_applies_token_budget(self) -> None:
+        owner_id = uuid.uuid4()
+        user_record = MemoryRecord(
+            id=uuid.uuid4(),
+            memory_type=MemoryType.USER,
+            scope=MemoryScope.USER,
+            owner_id=owner_id,
+            content="A" * 100,
+            created_at=_NOW,
+            updated_at=_NOW,
+            source="test",
+        )
+        project_record = MemoryRecord(
+            id=uuid.uuid4(),
+            memory_type=MemoryType.PROJECT,
+            scope=MemoryScope.PROJECT,
+            owner_id=owner_id,
+            project_id=uuid.uuid4(),
+            content="B" * 100,
+            created_at=_NOW,
+            updated_at=_NOW,
+            source="test",
+        )
+        retrieval = RetrievalResult(
+            user_memories=[user_record],
+            project_memories=[project_record],
+            metadata={"memories_ranked": 2},
+        )
+        builder = MemoryContextBuilder(
+            FakeMemoryProvider(),  # type: ignore[arg-type]
+            settings=Settings(openai_api_key="test-key", memory_token_budget=150),
+        )
+
+        context = builder.build_from_retrieval(retrieval)
+
+        assert len(context.user_memories) == 1
+        assert context.project_memories == []
+        assert context.metadata["memory_truncated"] is True
+        assert context.token_usage == 100
+
+    def test_build_from_retrieval_preserves_conversation_summary(self) -> None:
+        retrieval = RetrievalResult(
+            user_memories=[],
+            project_memories=[],
+            metadata={},
+        )
+        builder = MemoryContextBuilder(
+            FakeMemoryProvider(),  # type: ignore[arg-type]
+            settings=Settings(openai_api_key="test-key"),
+        )
+
+        context = builder.build_from_retrieval(
+            retrieval,
+            conversation_summary="Earlier discussion.",
+        )
+
+        assert context.conversation_summary == "Earlier discussion."
+
+    @pytest.mark.anyio
+    async def test_build_from_retrieval_keeps_preferences_separate(self) -> None:
+        provider = FakeMemoryProvider()
+        owner_id = uuid.uuid4()
+        await provider.set_preference(
+            user_id=owner_id,
+            key="response_tone",
+            value={"tone": "formal"},
+        )
+        user_record = MemoryRecord(
+            id=uuid.uuid4(),
+            memory_type=MemoryType.USER,
+            scope=MemoryScope.USER,
+            owner_id=owner_id,
+            content="Semantic fact.",
+            created_at=_NOW,
+            updated_at=_NOW,
+            source="test",
+        )
+        retrieval = RetrievalResult(
+            user_memories=[user_record],
+            project_memories=[],
+            metadata={},
+        )
+        builder = MemoryContextBuilder(
+            provider,  # type: ignore[arg-type]
+            settings=Settings(openai_api_key="test-key"),
+        )
+
+        context = builder.build_from_retrieval(retrieval)
+        context = await builder.with_preferences(owner_id, context=context)
+
+        assert len(context.user_memories) == 1
+        assert context.preferences == {"response_tone": {"tone": "formal"}}

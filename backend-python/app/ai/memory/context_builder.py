@@ -1,14 +1,14 @@
 """Build canonical ``MemoryContext`` from retrieved memory subsystems.
 
 Phase 4 loads structured user preferences. Phase 5 loads session-scoped project
-memories. Semantic ranking and token budgeting are added in Phase 6.
+memories. Phase 6 adds semantic retrieval ranking and token budgeting.
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from app.ai.memory.interfaces.memory_provider import MemoryProvider
 from app.ai.memory.models import MemoryContext, MemoryRecord, MemoryType
@@ -18,7 +18,12 @@ from app.ai.memory.project import (
     normalize_project_memories,
     validate_project_id,
 )
+from app.ai.memory.semantic_retriever import RetrievalResult
+from app.ai.memory.token_budget import TokenBudgetAllocator
 from app.core.logging import get_logger
+
+if TYPE_CHECKING:
+    from app.core.config import Settings
 
 logger = get_logger(__name__)
 
@@ -28,8 +33,75 @@ ListActiveRecords = Callable[..., Awaitable[list[MemoryRecord]]]
 class MemoryContextBuilder:
     """Combines retrieved memory inputs into a normalized ``MemoryContext``."""
 
-    def __init__(self, provider: MemoryProvider) -> None:
+    def __init__(
+        self,
+        provider: MemoryProvider,
+        *,
+        settings: Settings | None = None,
+    ) -> None:
         self._provider = provider
+        self._settings = settings
+        self._budget_allocator = (
+            TokenBudgetAllocator(settings) if settings is not None else None
+        )
+
+    def build_from_retrieval(
+        self,
+        retrieval: RetrievalResult,
+        *,
+        context: MemoryContext | None = None,
+        conversation_summary: str | None = None,
+    ) -> MemoryContext:
+        """Apply token budgeting and assemble a canonical ``MemoryContext``."""
+        base = context or MemoryContext()
+        if conversation_summary is not None:
+            base = base.model_copy(
+                update={"conversation_summary": conversation_summary}
+            )
+
+        ranked = list(retrieval.user_memories) + list(retrieval.project_memories)
+        if not ranked:
+            metadata = dict(base.metadata)
+            metadata.update(retrieval.metadata)
+            return base.model_copy(update={"metadata": metadata})
+
+        if self._budget_allocator is None:
+            user_memories = [
+                record for record in ranked if record.memory_type is MemoryType.USER
+            ]
+            project_memories = [
+                record for record in ranked if record.memory_type is MemoryType.PROJECT
+            ]
+            char_usage = sum(len(record.content) for record in ranked)
+            truncated = False
+        else:
+            allocation = self._budget_allocator.allocate(ranked)
+            user_memories = [
+                record
+                for record in allocation.records
+                if record.memory_type is MemoryType.USER
+            ]
+            project_memories = [
+                record
+                for record in allocation.records
+                if record.memory_type is MemoryType.PROJECT
+            ]
+            char_usage = allocation.char_usage
+            truncated = allocation.truncated
+
+        metadata = dict(base.metadata)
+        metadata.update(retrieval.metadata)
+        metadata["memory_char_usage"] = char_usage
+        metadata["memory_truncated"] = truncated
+
+        return base.model_copy(
+            update={
+                "user_memories": user_memories,
+                "project_memories": project_memories,
+                "metadata": metadata,
+                "token_usage": char_usage,
+            }
+        )
 
     async def with_preferences(
         self,

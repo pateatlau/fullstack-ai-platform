@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from app.ai.memory.context_builder import MemoryContextBuilder
     from app.ai.memory.manager import MemoryManager
     from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
+    from app.ai.memory.semantic_retriever import SemanticRetriever
     from app.ai.memory.summarizer import ConversationSummaryService
     from app.ai.voice.config import VoiceConfig
     from app.ai.voice.interfaces import SttProvider, TtsProvider
@@ -444,11 +445,33 @@ def get_memory_manager(
 
 def get_memory_context_builder(
     provider: "PgVectorMemoryProvider" = Depends(get_memory_provider),
+    settings: Settings = Depends(get_ai_settings),
 ) -> "MemoryContextBuilder":
     """Return a request-scoped ``MemoryContextBuilder`` wired to the provider."""
     from app.ai.memory.context_builder import MemoryContextBuilder
 
-    return MemoryContextBuilder(provider)
+    return MemoryContextBuilder(provider, settings=settings)
+
+
+def get_semantic_retriever(
+    provider: "PgVectorMemoryProvider" = Depends(get_memory_provider),
+    settings: Settings = Depends(get_ai_settings),
+    embedding_provider: EmbeddingProvider = Depends(get_embedding_provider),
+    session: AsyncSession = Depends(get_db_session),
+) -> "SemanticRetriever":
+    """Return a request-scoped ``SemanticRetriever`` wired to the provider."""
+    from app.ai.memory.project import ChatStoreSessionOwnershipChecker
+    from app.ai.memory.semantic_retriever import SemanticRetriever
+    from app.db.chat import SqlChatStore
+
+    return SemanticRetriever(
+        provider,
+        embedding_provider,
+        settings,
+        session_ownership_checker=ChatStoreSessionOwnershipChecker(
+            SqlChatStore(session)
+        ),
+    )
 
 
 def get_conversation_summary_service(
