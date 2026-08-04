@@ -36,3 +36,4 @@ async def test_get_memory_manager_wires_the_resolved_provider() -> None:
 
     assert isinstance(manager, MemoryManager)
     assert manager.get_record is not None
+    assert manager._background_provider_factory is not None

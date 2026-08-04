@@ -11,7 +11,7 @@ import uuid
 from enum import StrEnum
 from typing import Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.ai.memory.lifecycle import LifecycleState
 
@@ -20,6 +20,14 @@ class MemoryEventType(StrEnum):
     """Canonical memory lifecycle event types."""
 
     CREATED = "memory.created"
+
+
+class MemoryEventMetadata(BaseModel):
+    """Allowlisted operational fields — no memory content or embeddings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str | None = None
 
 
 class MemoryEvent(BaseModel):
@@ -33,7 +41,7 @@ class MemoryEvent(BaseModel):
     occurred_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
-    metadata: dict[str, object] = Field(default_factory=dict)
+    metadata: MemoryEventMetadata = Field(default_factory=MemoryEventMetadata)
 
 
 class MemoryEventPublisher(Protocol):

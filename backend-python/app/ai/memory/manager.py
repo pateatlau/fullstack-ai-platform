@@ -13,9 +13,14 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.ai.memory.background_tasks import schedule_extraction_task
+
 from app.ai.memory.events import (
     LoggingMemoryEventPublisher,
     MemoryEvent,
+    MemoryEventMetadata,
     MemoryEventPublisher,
     MemoryEventType,
 )
@@ -32,6 +37,8 @@ if TYPE_CHECKING:
     from app.ai.prompts.manager import PromptManager
     from app.core.config import Settings
     from app.providers.base import LLMProvider
+
+BackgroundProviderFactory = Callable[[AsyncSession], MemoryProvider]
 
 logger = get_logger(__name__)
 
@@ -50,13 +57,14 @@ class MemoryManager:
         embedding_provider: EmbeddingProvider | None = None,
         prompt_manager: PromptManager | None = None,
         event_publisher: MemoryEventPublisher | None = None,
+        background_provider_factory: BackgroundProviderFactory | None = None,
     ) -> None:
         self._provider = provider
         self._settings = settings
         self._embedding_provider = embedding_provider
         self._prompt_manager = prompt_manager
         self._event_publisher = event_publisher or LoggingMemoryEventPublisher()
-        self._background_tasks: set[asyncio.Task[None]] = set()
+        self._background_provider_factory = background_provider_factory
 
     async def get_record(
         self, record_id: uuid.UUID, *, owner_id: uuid.UUID
@@ -98,7 +106,7 @@ class MemoryManager:
         if not self._extraction_enabled():
             return
 
-        task = asyncio.create_task(
+        schedule_extraction_task(
             self._run_extraction_pipeline(
                 owner_id=owner_id,
                 session_id=session_id,
@@ -108,8 +116,6 @@ class MemoryManager:
                 model=model,
             )
         )
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
 
     async def _run_extraction_pipeline(
         self,
@@ -146,28 +152,15 @@ class MemoryManager:
                 return
 
             embeddings = await self._embed_with_retry([c.content for c in filtered])
-            existing_records = await self._load_existing_records(
+            extraction_model = self._settings.memory_extraction_model.strip() or model
+            await self._persist_approved_candidates(
                 owner_id=owner_id,
                 session_id=session_id,
+                filtered=filtered,
+                embeddings=embeddings,
+                provider_name=provider_name,
+                extraction_model=extraction_model,
             )
-            approved = evaluator.dedupe_by_embedding(
-                filtered,
-                embeddings,
-                existing_records,
-            )
-            if not approved:
-                return
-
-            extraction_model = self._settings.memory_extraction_model.strip() or model
-            for candidate, embedding in approved:
-                await self._persist_candidate(
-                    candidate=candidate,
-                    embedding=embedding,
-                    owner_id=owner_id,
-                    session_id=session_id,
-                    provider_name=provider_name,
-                    extraction_model=extraction_model,
-                )
         except Exception:  # noqa: BLE001 - extraction must never affect chat callers
             logger.warning(
                 "Durable memory extraction pipeline failed",
@@ -176,8 +169,79 @@ class MemoryManager:
                 exc_info=True,
             )
 
+    async def _persist_approved_candidates(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        session_id: uuid.UUID | None,
+        filtered: list[CandidateMemory],
+        embeddings: list[list[float] | None],
+        provider_name: ProviderName,
+        extraction_model: str,
+    ) -> None:
+        assert self._settings is not None
+
+        evaluator = MemoryQualityEvaluator(self._settings)
+        if self._background_provider_factory is not None:
+            from app.db.engine import get_sessionmaker
+
+            sessionmaker = get_sessionmaker()
+            async with sessionmaker() as session:
+                try:
+                    bg_provider = self._background_provider_factory(session)
+                    existing_records = await self._load_existing_records(
+                        bg_provider,
+                        owner_id=owner_id,
+                        session_id=session_id,
+                    )
+                    approved = evaluator.dedupe_by_embedding(
+                        filtered,
+                        embeddings,
+                        existing_records,
+                    )
+                    if not approved:
+                        return
+
+                    for candidate, embedding in approved:
+                        await self._persist_candidate(
+                            bg_provider,
+                            candidate=candidate,
+                            embedding=embedding,
+                            owner_id=owner_id,
+                            session_id=session_id,
+                            provider_name=provider_name,
+                            extraction_model=extraction_model,
+                        )
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    raise
+            return
+
+        existing_records = await self._load_existing_records(
+            self._provider,
+            owner_id=owner_id,
+            session_id=session_id,
+        )
+        approved = evaluator.dedupe_by_embedding(
+            filtered,
+            embeddings,
+            existing_records,
+        )
+        for candidate, embedding in approved:
+            await self._persist_candidate(
+                self._provider,
+                candidate=candidate,
+                embedding=embedding,
+                owner_id=owner_id,
+                session_id=session_id,
+                provider_name=provider_name,
+                extraction_model=extraction_model,
+            )
+
     async def _persist_candidate(
         self,
+        provider: MemoryProvider,
         *,
         candidate: CandidateMemory,
         embedding: list[float],
@@ -224,8 +288,9 @@ class MemoryManager:
 
         for attempt in range(_MAX_PERSIST_ATTEMPTS):
             try:
-                persisted = await self._provider.create_record(record)
+                persisted = await provider.create_record(record)
             except Exception:  # noqa: BLE001 - retryable provider failures
+                await self._rollback_provider_session(provider)
                 if attempt + 1 >= _MAX_PERSIST_ATTEMPTS:
                     logger.warning(
                         "Memory persistence failed",
@@ -244,7 +309,7 @@ class MemoryManager:
                     owner_id=persisted.owner_id,
                     memory_type=persisted.memory_type.value,
                     lifecycle_state=persisted.lifecycle_state,
-                    metadata={"source": persisted.source},
+                    metadata=MemoryEventMetadata(source=persisted.source),
                 )
             )
             logger.info(
@@ -254,6 +319,12 @@ class MemoryManager:
                 memory_type=persisted.memory_type.value,
             )
             return
+
+    @staticmethod
+    async def _rollback_provider_session(provider: MemoryProvider) -> None:
+        session = getattr(provider, "_session", None)
+        if session is not None:
+            await session.rollback()
 
     async def _embed_with_retry(self, texts: list[str]) -> list[list[float] | None]:
         assert self._embedding_provider is not None
@@ -275,11 +346,12 @@ class MemoryManager:
 
     async def _load_existing_records(
         self,
+        provider: MemoryProvider,
         *,
         owner_id: uuid.UUID,
         session_id: uuid.UUID | None,
     ) -> list[MemoryRecord]:
-        list_active = getattr(self._provider, "list_active_records", None)
+        list_active = getattr(provider, "list_active_records", None)
         if list_active is not None:
             loader = cast(
                 Callable[..., Awaitable[list[MemoryRecord]]],
@@ -297,6 +369,4 @@ class MemoryManager:
             return False
         if not self._settings.memory_extraction_enabled:
             return False
-        if self._embedding_provider is None or self._prompt_manager is None:
-            return False
-        return True
+        return self._embedding_provider is not None and self._prompt_manager is not None

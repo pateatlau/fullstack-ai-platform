@@ -421,12 +421,17 @@ def get_memory_manager(
 ) -> "MemoryManager":
     """Return a request-scoped ``MemoryManager`` wired to the configured provider."""
     from app.ai.memory.manager import MemoryManager
+    from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
+
+    def background_provider_factory(session: AsyncSession) -> PgVectorMemoryProvider:
+        return PgVectorMemoryProvider(session=session, settings=settings)
 
     return MemoryManager(
         provider=provider,
         settings=settings,
         embedding_provider=embedding_provider,
         prompt_manager=prompt_manager,
+        background_provider_factory=background_provider_factory,
     )
 
 

@@ -9,20 +9,22 @@ from app.ai.memory.models import MemoryRecord
 from app.core.config import Settings
 
 _EPHEMERAL_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bin this (conversation|session|chat|thread|message)\b", re.I),
-    re.compile(r"\bright now\b", re.I),
+    re.compile(
+        r"\bin this (conversation|session|chat|thread|message)\b", re.IGNORECASE
+    ),
+    re.compile(r"\bright now\b", re.IGNORECASE),
     re.compile(
         r"\bcurrently (discussing|talking|working on|looking at|exploring)\b",
-        re.I,
+        re.IGNORECASE,
     ),
-    re.compile(r"\bat the moment\b", re.I),
-    re.compile(r"\bfor now\b", re.I),
-    re.compile(r"\bjust (said|mentioned|asked|noted)\b", re.I),
+    re.compile(r"\bat the moment\b", re.IGNORECASE),
+    re.compile(r"\bfor now\b", re.IGNORECASE),
+    re.compile(r"\bjust (said|mentioned|asked|noted)\b", re.IGNORECASE),
     re.compile(
         r"\bas I (just )?(said|mentioned) (earlier )?(in this|above|before)\b",
-        re.I,
+        re.IGNORECASE,
     ),
-    re.compile(r"\bthis (question|request|query|turn|topic)\b", re.I),
+    re.compile(r"\bthis (question|request|query|turn|topic)\b", re.IGNORECASE),
 )
 
 

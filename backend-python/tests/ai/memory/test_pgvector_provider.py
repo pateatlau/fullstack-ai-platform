@@ -25,6 +25,19 @@ def _embedding(seed: float = 0.1) -> list[float]:
     return [seed] * DIMENSIONS
 
 
+def _vector_at(index: int, value: float) -> list[float]:
+    vector = [0.0] * DIMENSIONS
+    vector[index] = value
+    return vector
+
+
+def _vector_at_two(first: float, second: float) -> list[float]:
+    vector = [0.0] * DIMENSIONS
+    vector[0] = first
+    vector[1] = second
+    return vector
+
+
 def _domain_record(
     *,
     owner_id: uuid.UUID,
@@ -154,20 +167,30 @@ async def test_update_record_missing_raises_not_found(db_session) -> None:
 async def test_search_records_returns_similar_vectors(db_session) -> None:
     owner_id = await _make_user(db_session)
     provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+    query = _vector_at(0, 1.0)
     await provider.create_record(
-        _domain_record(owner_id=owner_id, content="Alpha", embedding=_embedding(0.2))
+        _domain_record(
+            owner_id=owner_id,
+            content="Alpha",
+            embedding=_vector_at(1, 1.0),
+        )
     )
     target = await provider.create_record(
-        _domain_record(owner_id=owner_id, content="Beta", embedding=_embedding(0.21))
+        _domain_record(
+            owner_id=owner_id,
+            content="Beta",
+            embedding=_vector_at_two(0.99, 0.01),
+        )
     )
 
     results = await provider.search_records(
-        _embedding(0.2),
+        query,
         owner_id=owner_id,
-        top_k=5,
+        top_k=1,
     )
 
-    assert any(record.id == target.id for record in results)
+    assert len(results) == 1
+    assert results[0].id == target.id
 
 
 @pytest.mark.anyio

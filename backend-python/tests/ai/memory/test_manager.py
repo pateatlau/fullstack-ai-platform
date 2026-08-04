@@ -111,9 +111,15 @@ class _FakeEmbeddingProvider:
 class _RecordingPublisher:
     def __init__(self) -> None:
         self.events: list[MemoryEvent] = []
+        self.completed = asyncio.Event()
 
     async def publish(self, event: MemoryEvent) -> None:
         self.events.append(event)
+        self.completed.set()
+
+
+async def _await_extraction(event: asyncio.Event, *, timeout: float = 2.0) -> None:
+    await asyncio.wait_for(event.wait(), timeout=timeout)
 
 
 def _record(owner_id: uuid.UUID) -> MemoryRecord:
@@ -228,7 +234,7 @@ class TestMemoryManagerExtraction:
             provider_name="openai",
             model="gpt-4o-mini",
         )
-        await asyncio.sleep(0.05)
+        await _await_extraction(publisher.completed)
 
         assert len(provider.created_records) == 1
         assert provider.created_records[0].content == "User prefers TypeScript."
@@ -276,12 +282,19 @@ class TestMemoryManagerExtraction:
     @pytest.mark.anyio
     async def test_extract_and_persist_async_isolates_embedding_failures(self) -> None:
         provider = FakeMemoryProvider()
+        embedding_complete = asyncio.Event()
 
         class _FailingEmbeddingProvider:
             dimensions = DIMENSIONS
 
+            def __init__(self) -> None:
+                self._attempts = 0
+
             async def embed_texts(self, texts: list[str]) -> list[list[float]]:
                 del texts
+                self._attempts += 1
+                if self._attempts >= 3:
+                    embedding_complete.set()
                 raise RuntimeError("embedding unavailable")
 
         manager = MemoryManager(
@@ -315,7 +328,7 @@ class TestMemoryManagerExtraction:
             provider_name="openai",
             model="gpt-4o-mini",
         )
-        await asyncio.sleep(0.1)
+        await _await_extraction(embedding_complete)
 
         assert provider.created_records == []
 
@@ -323,12 +336,14 @@ class TestMemoryManagerExtraction:
     async def test_extract_and_persist_async_retries_provider_failures(self) -> None:
         provider = FakeMemoryProvider()
         calls = {"count": 0}
+        persistence_complete = asyncio.Event()
 
         async def flaky_create(record: MemoryRecord) -> MemoryRecord:
             calls["count"] += 1
             if calls["count"] == 1:
                 raise RuntimeError("temporary db error")
             provider.created_records.append(record)
+            persistence_complete.set()
             return record
 
         provider.create_record = flaky_create  # type: ignore[method-assign]
@@ -353,7 +368,24 @@ class TestMemoryManagerExtraction:
             provider_name="openai",
             model="gpt-4o-mini",
         )
-        await asyncio.sleep(0.6)
+        await _await_extraction(persistence_complete)
 
         assert calls["count"] == 2
         assert len(provider.created_records) == 1
+
+    @pytest.mark.anyio
+    async def test_rollback_provider_session_rolls_back_when_available(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from app.ai.memory.interfaces import MemoryProvider
+
+        session = AsyncMock()
+
+        class ProviderWithSession:
+            _session = session
+
+        await MemoryManager._rollback_provider_session(
+            cast(MemoryProvider, ProviderWithSession())
+        )
+
+        session.rollback.assert_awaited_once()
