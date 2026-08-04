@@ -291,15 +291,15 @@ def test_memory_enabled_with_valid_configuration() -> None:
 
 def test_memory_configuration_defaults() -> None:
     """Memory settings default to the frozen Part I configuration defaults."""
-    settings = Settings(llm_provider="openai", openai_api_key="sk-placeholder")
+    fields = Settings.model_fields
 
-    assert settings.memory_enabled is False
-    assert settings.memory_provider == "pgvector"
-    assert settings.memory_retrieval_top_k == 8
-    assert settings.memory_min_quality_score == 0.4
-    assert settings.memory_min_confidence == 0.5
-    assert settings.memory_dedupe_similarity_threshold == 0.92
-    assert settings.memory_token_budget == 1500
-    assert settings.memory_extraction_enabled is True
-    assert settings.memory_extraction_model == ""
-    assert settings.memory_archived_retention_days == 90
+    assert fields["memory_enabled"].default is False
+    assert fields["memory_provider"].default == "pgvector"
+    assert fields["memory_retrieval_top_k"].default == 8
+    assert fields["memory_min_quality_score"].default == 0.4
+    assert fields["memory_min_confidence"].default == 0.5
+    assert fields["memory_dedupe_similarity_threshold"].default == 0.92
+    assert fields["memory_token_budget"].default == 1500
+    assert fields["memory_extraction_enabled"].default is True
+    assert fields["memory_extraction_model"].default == ""
+    assert fields["memory_archived_retention_days"].default == 90

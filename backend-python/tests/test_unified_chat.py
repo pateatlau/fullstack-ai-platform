@@ -58,8 +58,9 @@ class _FakeEmbeddingProvider:
     dimensions = DIMENSIONS
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        # Non-zero norm vectors — pgvector cosine distance is undefined at 0.
         return [
-            [float(index % DIMENSIONS), 0.0] + [0.0] * (DIMENSIONS - 2)
+            [float((index % (DIMENSIONS - 1)) + 1), 0.01] + [0.0] * (DIMENSIONS - 2)
             for index, _ in enumerate(texts)
         ]
 
@@ -100,6 +101,7 @@ def _clear_settings_and_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[No
     # V1 document-path HTTP tests must not pick up process ADVANCED_RAG_ENABLED=true
     # (Phase 12). Advanced parity uses explicit Settings(advanced_rag_enabled=True).
     monkeypatch.setenv("ADVANCED_RAG_ENABLED", "false")
+    monkeypatch.setenv("RAG_ENABLED", "true")
     get_settings.cache_clear()
     get_tool_registry.cache_clear()
     yield
