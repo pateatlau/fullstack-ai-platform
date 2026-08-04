@@ -29,6 +29,7 @@ def _isolate_rate_limit_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]
     # Force flag-off chat/memory paths even when CI or local `.env` enables them.
     monkeypatch.setenv("CHAT_PERSISTENCE_ENABLED", "false")
     monkeypatch.setenv("MEMORY_ENABLED", "false")
+    monkeypatch.setenv("WORKFLOW_ENGINE_ENABLED", "false")
     reset_rate_limiter()
     get_settings.cache_clear()
     yield

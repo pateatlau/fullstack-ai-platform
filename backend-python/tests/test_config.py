@@ -303,3 +303,44 @@ def test_memory_configuration_defaults() -> None:
     assert fields["memory_extraction_enabled"].default is True
     assert fields["memory_extraction_model"].default == ""
     assert fields["memory_archived_retention_days"].default == 90
+
+
+def test_workflow_configuration_defaults() -> None:
+    """Workflow settings default to the frozen Part I configuration defaults."""
+    fields = Settings.model_fields
+
+    assert fields["workflow_engine_enabled"].default is False
+    assert fields["workflow_provider"].default == "postgres"
+    assert fields["workflow_max_nodes_per_definition"].default == 50
+    assert fields["workflow_max_parallel_branches"].default == 8
+    assert fields["workflow_node_timeout_seconds"].default == 120
+    assert fields["workflow_max_node_retries"].default == 3
+    assert fields["workflow_node_retry_base_delay_seconds"].default == 1.0
+    assert fields["workflow_max_run_duration_minutes"].default == 60
+    assert fields["workflow_approval_timeout_hours"].default == 0
+    assert fields["workflow_run_retention_days"].default == 90
+
+
+def test_workflow_enabled_with_unsupported_provider_raises() -> None:
+    with pytest.raises(ValueError, match="Unsupported WORKFLOW_PROVIDER"):
+        Settings(
+            openai_api_key="test-key",
+            workflow_engine_enabled=True,
+            workflow_provider="redis",
+        ).validate_startup()
+
+
+def test_workflow_enabled_with_valid_configuration() -> None:
+    Settings(
+        openai_api_key="test-key",
+        workflow_engine_enabled=True,
+        workflow_provider="postgres",
+    ).validate_startup()
+
+
+def test_workflow_validation_skipped_when_disabled() -> None:
+    Settings(
+        openai_api_key="test-key",
+        workflow_engine_enabled=False,
+        workflow_provider="redis",
+    ).validate_startup()

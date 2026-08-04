@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     from app.ai.voice.interrupt import InterruptController
     from app.ai.voice.providers.openai_voice import OpenAiVoiceAdapter
     from app.ai.voice.session import VoiceSessionManager
+    from app.ai.workflow.manager import WorkflowManager
+    from app.ai.workflow.providers.postgres import PostgresWorkflowStore
 
 from app.ai.agent.runtime.default_agent import DefaultAgent
 from app.ai.agent.runtime.factory import create_default_agent
@@ -514,3 +516,28 @@ def get_conversation_summary_service(
         chat_store=SqlChatStore(session),
         prompt_manager=prompt_manager,
     )
+
+
+# ============================================================================
+# Workflow Engine (Epic 06)
+# ============================================================================
+
+
+def get_workflow_store(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_ai_settings),
+) -> "PostgresWorkflowStore":
+    """Return a request-scoped postgres-backed Workflow store."""
+    from app.ai.workflow.providers.postgres import PostgresWorkflowStore
+
+    return PostgresWorkflowStore(session=session, settings=settings)
+
+
+def get_workflow_manager(
+    store: "PostgresWorkflowStore" = Depends(get_workflow_store),
+    settings: Settings = Depends(get_ai_settings),
+) -> "WorkflowManager":
+    """Return a request-scoped ``WorkflowManager`` wired to the configured store."""
+    from app.ai.workflow.manager import WorkflowManager
+
+    return WorkflowManager(store=store, settings=settings)

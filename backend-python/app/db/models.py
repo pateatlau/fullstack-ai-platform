@@ -502,3 +502,177 @@ class UserPreference(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "key", name="uq_user_preferences_user_key"),
     )
+
+
+class WorkflowDefinitionRecord(Base):
+    """Durable workflow graph definition (Epic 06 Phase 1).
+
+    Graph structure is stored as JSONB ``{nodes, edges}``; independent of
+    ``memory_records`` and ``document_chunks`` (Part I § Persistence Schema).
+    """
+
+    __tablename__ = "workflow_definitions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(nullable=False)
+    description: Mapped[str | None] = mapped_column(nullable=True)
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    status: Mapped[str] = mapped_column(nullable=False)
+    entry_node_id: Mapped[str] = mapped_column(nullable=False)
+    graph: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    metadata_json: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=_NOW,
+        onupdate=_NOW,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'active', 'archived')",
+            name="workflow_definition_status_valid",
+        ),
+        UniqueConstraint(
+            "owner_id",
+            "name",
+            "version",
+            name="uq_workflow_definitions_owner_name_version",
+        ),
+        Index("ix_workflow_definitions_owner_status", "owner_id", "status"),
+    )
+
+
+class WorkflowRunRecord(Base):
+    """A single workflow execution instance (Epic 06 Phase 1)."""
+
+    __tablename__ = "workflow_runs"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    workflow_definition_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workflow_definitions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(nullable=False)
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(nullable=False)
+    context: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    current_node_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'")
+    )
+    checkpoint_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    error: Mapped[str | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=_NOW,
+        onupdate=_NOW,
+    )
+    started_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'running', 'waiting_approval', 'completed', "
+            "'failed', 'cancelled')",
+            name="workflow_run_status_valid",
+        ),
+        UniqueConstraint(
+            "owner_id",
+            "workflow_definition_id",
+            "idempotency_key",
+            name="uq_workflow_runs_owner_definition_idempotency",
+        ),
+        Index("ix_workflow_runs_owner_status", "owner_id", "status"),
+        Index("ix_workflow_runs_workflow_definition_id", "workflow_definition_id"),
+    )
+
+
+class WorkflowNodeExecutionRecord(Base):
+    """Persisted node attempt within a workflow run (Epic 06 Phase 1)."""
+
+    __tablename__ = "workflow_node_executions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workflow_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    node_id: Mapped[str] = mapped_column(nullable=False)
+    node_type: Mapped[str] = mapped_column(nullable=False)
+    attempt: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    status: Mapped[str] = mapped_column(nullable=False)
+    input: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    output: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    error: Mapped[str | None] = mapped_column(nullable=True)
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    decided_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    decision: Mapped[str | None] = mapped_column(nullable=True)
+    started_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "node_type IN ('task', 'llm', 'agent', 'router', 'fork', 'join', "
+            "'approval', 'terminal')",
+            name="workflow_node_execution_type_valid",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'waiting_approval', 'succeeded', "
+            "'failed', 'skipped', 'cancelled')",
+            name="workflow_node_execution_status_valid",
+        ),
+        CheckConstraint(
+            "decision IS NULL OR decision IN ('approved', 'rejected')",
+            name="workflow_node_execution_decision_valid",
+        ),
+        UniqueConstraint(
+            "run_id",
+            "node_id",
+            "attempt",
+            name="uq_workflow_node_executions_run_node_attempt",
+        ),
+        Index("ix_workflow_node_executions_run_status", "run_id", "status"),
+    )
