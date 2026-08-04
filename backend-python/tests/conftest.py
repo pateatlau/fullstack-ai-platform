@@ -26,6 +26,9 @@ def _isolate_rate_limit_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]
     # Prevent the shared test client IP bucket from tripping default limits.
     monkeypatch.setenv("RATE_LIMIT_ANONYMOUS_PER_MINUTE", "100000")
     monkeypatch.setenv("RATE_LIMIT_AUTHENTICATED_PER_MINUTE", "100000")
+    # Force flag-off chat/memory paths even when CI or local `.env` enables them.
+    monkeypatch.setenv("CHAT_PERSISTENCE_ENABLED", "false")
+    monkeypatch.setenv("MEMORY_ENABLED", "false")
     reset_rate_limiter()
     get_settings.cache_clear()
     yield
