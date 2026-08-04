@@ -29,7 +29,11 @@ class WorkflowStore(Protocol):
     ) -> WorkflowDefinition: ...
 
     async def update_definition(
-        self, definition: WorkflowDefinition
+        self,
+        definition: WorkflowDefinition,
+        *,
+        expected_version: int | None = None,
+        require_no_runs: bool = False,
     ) -> WorkflowDefinition: ...
 
     async def get_definition(

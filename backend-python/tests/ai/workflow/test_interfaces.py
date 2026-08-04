@@ -7,6 +7,7 @@ import uuid
 
 import pytest
 
+from app.ai.workflow.exceptions import WorkflowNotFoundError, WorkflowValidationError
 from app.ai.workflow.interfaces import WorkflowStore
 from app.ai.workflow.models import (
     ApprovalDecision,
@@ -65,8 +66,33 @@ class FakeWorkflowStore:
         return definition
 
     async def update_definition(
-        self, definition: WorkflowDefinition
+        self,
+        definition: WorkflowDefinition,
+        *,
+        expected_version: int | None = None,
+        require_no_runs: bool = False,
     ) -> WorkflowDefinition:
+        existing = self._definitions.get(definition.id)
+        if existing is None or existing.owner_id != definition.owner_id:
+            raise WorkflowNotFoundError(
+                f"Workflow definition {definition.id} not found."
+            )
+        if expected_version is not None:
+            if existing.version != expected_version:
+                raise WorkflowValidationError(
+                    "Workflow definition was modified concurrently; retry the update."
+                )
+            if require_no_runs:
+                has_runs = any(
+                    run.workflow_definition_id == definition.id
+                    and run.owner_id == definition.owner_id
+                    for run in self._runs.values()
+                )
+                if has_runs:
+                    raise WorkflowValidationError(
+                        "Workflow definition has runs and cannot be updated in place; "
+                        "create a new version instead."
+                    )
         self._definitions[definition.id] = definition
         return definition
 
