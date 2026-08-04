@@ -1145,7 +1145,7 @@ Implement `GraphValidator`, the definition-time structural checks that every `Wo
 ### Error Handling
 
 - [x] Raise `WorkflowValidationError` with actionable messages for each failure class.
-- [x] Raise `WorkflowNotFoundError` / `WorkflowAccessDeniedError` for CRUD lookups.
+- [x] Owner-scoped CRUD lookups return `None` or raise `WorkflowNotFoundError` when a definition is missing or owned by another user (intentional — avoids existence leakage); `WorkflowAccessDeniedError` is reserved for explicit cross-owner actions in later phases (REST Phase 9).
 - [x] Ensure invalid definitions are never persisted as `active`.
 
 ### Testing

@@ -136,6 +136,100 @@ async def test_update_definition_in_place_when_no_runs() -> None:
 
 
 @pytest.mark.anyio
+async def test_update_definition_preserves_immutable_fields() -> None:
+    store = FakeWorkflowStore()
+    manager = WorkflowManager(store)
+    owner_id = uuid.uuid4()
+    definition = _valid_definition(owner_id=owner_id)
+    await store.create_definition(definition)
+
+    tampered = definition.model_copy(
+        update={
+            "name": "Renamed Workflow",
+            "version": 99,
+            "created_at": datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC),
+            "updated_at": datetime.datetime.now(datetime.UTC),
+        }
+    )
+    result = await manager.update_definition(tampered, owner_id=owner_id)
+
+    assert result.version == 1
+    assert result.created_at == definition.created_at
+    assert result.name == "Renamed Workflow"
+
+
+@pytest.mark.anyio
+async def test_update_definition_rejects_in_place_when_runs_exist_at_store() -> None:
+    store = FakeWorkflowStore()
+    owner_id = uuid.uuid4()
+    definition = _valid_definition(owner_id=owner_id)
+    await store.create_definition(definition)
+    await store.create_run(
+        WorkflowRun(
+            id=uuid.uuid4(),
+            workflow_definition_id=definition.id,
+            owner_id=owner_id,
+            idempotency_key="run-race",
+            status=RunStatus.COMPLETED,
+            context=WorkflowContext(),
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+    )
+
+    with pytest.raises(WorkflowValidationError, match="cannot be updated in place"):
+        await store.update_definition(
+            definition.model_copy(
+                update={
+                    "name": "Too Late",
+                    "updated_at": datetime.datetime.now(datetime.UTC),
+                }
+            ),
+            expected_version=definition.version,
+            require_no_runs=True,
+        )
+
+
+@pytest.mark.anyio
+async def test_update_definition_rejects_stale_version() -> None:
+    store = FakeWorkflowStore()
+    owner_id = uuid.uuid4()
+    definition = _valid_definition(owner_id=owner_id)
+    await store.create_definition(definition)
+
+    with pytest.raises(WorkflowValidationError, match="modified concurrently"):
+        await store.update_definition(
+            definition.model_copy(update={"name": "Stale"}),
+            expected_version=definition.version + 1,
+        )
+
+
+@pytest.mark.anyio
+async def test_archive_definition_with_existing_runs() -> None:
+    store = FakeWorkflowStore()
+    manager = WorkflowManager(store)
+    owner_id = uuid.uuid4()
+    definition = _valid_definition(owner_id=owner_id)
+    await store.create_definition(definition)
+    await store.create_run(
+        WorkflowRun(
+            id=uuid.uuid4(),
+            workflow_definition_id=definition.id,
+            owner_id=owner_id,
+            idempotency_key="run-1",
+            status=RunStatus.COMPLETED,
+            context=WorkflowContext(),
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+    )
+
+    archived = await manager.archive_definition(definition.id, owner_id=owner_id)
+
+    assert archived.status is DefinitionStatus.ARCHIVED
+
+
+@pytest.mark.anyio
 async def test_update_definition_creates_new_version_when_runs_exist() -> None:
     store = FakeWorkflowStore()
     manager = WorkflowManager(store)

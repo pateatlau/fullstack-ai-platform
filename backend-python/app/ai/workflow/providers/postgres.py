@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from pydantic import ValidationError
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.workflow.exceptions import WorkflowNotFoundError
+from app.ai.workflow.exceptions import WorkflowNotFoundError, WorkflowValidationError
 from app.ai.workflow.models import (
     ApprovalDecision,
     DefinitionStatus,
@@ -24,10 +25,13 @@ from app.ai.workflow.models import (
     WorkflowRun,
 )
 from app.core.config import Settings
-from app.db.models import WorkflowDefinitionRecord
+from app.db.models import WorkflowDefinitionRecord, WorkflowRunRecord
 
 _RUN_METHODS_MSG = (
     "PostgresWorkflowStore run persistence is not implemented until Phase 3+."
+)
+_CONCURRENT_UPDATE_MSG = (
+    "Workflow definition was modified concurrently; retry the update."
 )
 
 
@@ -48,8 +52,53 @@ class PostgresWorkflowStore:
         return _definition_to_domain(row)
 
     async def update_definition(
-        self, definition: WorkflowDefinition
+        self,
+        definition: WorkflowDefinition,
+        *,
+        expected_version: int | None = None,
+        require_no_runs: bool = False,
     ) -> WorkflowDefinition:
+        if expected_version is not None:
+            if require_no_runs:
+                run_count = await self._session.scalar(
+                    select(func.count())
+                    .select_from(WorkflowRunRecord)
+                    .where(
+                        WorkflowRunRecord.workflow_definition_id == definition.id,
+                        WorkflowRunRecord.owner_id == definition.owner_id,
+                    )
+                )
+                if run_count:
+                    raise WorkflowValidationError(
+                        "Workflow definition has runs and cannot be updated in place; "
+                        "create a new version instead."
+                    )
+
+            stmt = (
+                update(WorkflowDefinitionRecord)
+                .where(
+                    WorkflowDefinitionRecord.id == definition.id,
+                    WorkflowDefinitionRecord.owner_id == definition.owner_id,
+                    WorkflowDefinitionRecord.version == expected_version,
+                )
+                .values(
+                    name=definition.name,
+                    description=definition.description,
+                    status=definition.status.value,
+                    entry_node_id=definition.entry_node_id,
+                    graph=_graph_to_json(definition),
+                    metadata_json=definition.metadata,
+                    updated_at=definition.updated_at,
+                )
+                .returning(WorkflowDefinitionRecord)
+            )
+            row = (await self._session.execute(stmt)).scalar_one_or_none()
+            if row is None:
+                raise WorkflowValidationError(_CONCURRENT_UPDATE_MSG)
+            await self._session.flush()
+            await self._session.refresh(row)
+            return _definition_to_domain(row)
+
         existing = await self._session.scalar(
             select(WorkflowDefinitionRecord).where(
                 WorkflowDefinitionRecord.id == definition.id,
@@ -63,7 +112,6 @@ class PostgresWorkflowStore:
 
         existing.name = definition.name
         existing.description = definition.description
-        existing.version = definition.version
         existing.status = definition.status.value
         existing.entry_node_id = definition.entry_node_id
         existing.graph = _graph_to_json(definition)
@@ -185,20 +233,19 @@ def _definition_to_domain(row: WorkflowDefinitionRecord) -> WorkflowDefinition:
     graph = row.graph
     raw_nodes = graph.get("nodes", [])
     raw_edges = graph.get("edges", [])
-    nodes: list[WorkflowNode] = []
-    if isinstance(raw_nodes, list):
-        nodes = [
-            WorkflowNode.model_validate(node)
-            for node in raw_nodes
-            if isinstance(node, dict)
-        ]
-    edges: list[WorkflowEdge] = []
-    if isinstance(raw_edges, list):
-        edges = [
-            WorkflowEdge.model_validate(edge)
-            for edge in raw_edges
-            if isinstance(edge, dict)
-        ]
+    try:
+        if not isinstance(raw_nodes, list):
+            raise WorkflowValidationError(
+                f"Persisted graph nodes must be a list for definition {row.id}."
+            )
+        if not isinstance(raw_edges, list):
+            raise WorkflowValidationError(
+                f"Persisted graph edges must be a list for definition {row.id}."
+            )
+        nodes = [WorkflowNode.model_validate(node) for node in raw_nodes]
+        edges = [WorkflowEdge.model_validate(edge) for edge in raw_edges]
+    except ValidationError as exc:
+        raise WorkflowValidationError(str(exc)) from exc
     return WorkflowDefinition(
         id=row.id,
         owner_id=row.owner_id,

@@ -87,11 +87,12 @@ class WorkflowManager:
             owner_id=owner_id,
             workflow_definition_id=definition.id,
         )
+        now = datetime.datetime.now(datetime.UTC)
         if runs:
-            now = datetime.datetime.now(datetime.timezone.utc)
             versioned = definition.model_copy(
                 update={
                     "id": uuid.uuid4(),
+                    "owner_id": existing.owner_id,
                     "version": existing.version + 1,
                     "created_at": now,
                     "updated_at": now,
@@ -99,7 +100,20 @@ class WorkflowManager:
             )
             return await self._store.create_definition(versioned)
 
-        return await self._store.update_definition(definition)
+        in_place = definition.model_copy(
+            update={
+                "id": existing.id,
+                "owner_id": existing.owner_id,
+                "version": existing.version,
+                "created_at": existing.created_at,
+                "updated_at": now,
+            }
+        )
+        return await self._store.update_definition(
+            in_place,
+            expected_version=existing.version,
+            require_no_runs=True,
+        )
 
     async def archive_definition(
         self, definition_id: uuid.UUID, *, owner_id: uuid.UUID
@@ -114,10 +128,12 @@ class WorkflowManager:
         archived = existing.model_copy(
             update={
                 "status": DefinitionStatus.ARCHIVED,
-                "updated_at": datetime.datetime.now(datetime.timezone.utc),
+                "updated_at": datetime.datetime.now(datetime.UTC),
             }
         )
-        return await self._store.update_definition(archived)
+        return await self._store.update_definition(
+            archived, expected_version=existing.version
+        )
 
     async def get_run(
         self, run_id: uuid.UUID, *, owner_id: uuid.UUID

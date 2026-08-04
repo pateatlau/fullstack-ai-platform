@@ -70,9 +70,16 @@ class TestGraphValidatorAcceptance:
         _VALIDATOR.validate(_definition())
 
     def test_active_status_still_requires_valid_graph(self) -> None:
-        definition = _definition()
+        definition = _definition(
+            edges=[
+                _edge("e1", "start", "end"),
+                _edge("e2", "end", "start"),
+            ],
+        )
         definition.status = DefinitionStatus.ACTIVE
-        _VALIDATOR.validate(definition)
+
+        with pytest.raises(WorkflowValidationError, match="Cycle detected"):
+            _VALIDATOR.validate(definition)
 
 
 class TestGraphValidatorCycles:
