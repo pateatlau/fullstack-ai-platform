@@ -415,19 +415,27 @@ def get_memory_provider(
     return PgVectorMemoryProvider(session=session, settings=settings)
 
 
-def get_memory_manager(
-    provider: "PgVectorMemoryProvider" = Depends(get_memory_provider),
-    settings: Settings = Depends(get_ai_settings),
-    embedding_provider: EmbeddingProvider = Depends(get_embedding_provider),
-    prompt_manager: PromptManager = Depends(get_prompt_manager),
-    session: AsyncSession = Depends(get_db_session),
+def build_memory_manager(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    embedding_provider: EmbeddingProvider,
+    prompt_manager: PromptManager,
 ) -> "MemoryManager":
-    """Return a request-scoped ``MemoryManager`` wired to the configured provider."""
+    """Construct a ``MemoryManager`` bound to an already-resolved DB session.
+
+    Shared by the ``get_memory_manager`` FastAPI dependency and by
+    ``app/routers/chat.py`` chat-service wiring (Phase 8), so chat
+    orchestration reuses the request's existing session instead of opening a
+    second one via ``Depends(get_db_session)``.
+    """
     from app.ai.memory.lifecycle_manager import LifecycleManager
     from app.ai.memory.manager import MemoryManager
     from app.ai.memory.project import ChatStoreSessionOwnershipChecker
     from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
     from app.db.chat import SqlChatStore
+
+    provider = PgVectorMemoryProvider(session=session, settings=settings)
 
     def background_provider_factory(db_session: AsyncSession) -> PgVectorMemoryProvider:
         return PgVectorMemoryProvider(session=db_session, settings=settings)
@@ -445,6 +453,21 @@ def get_memory_manager(
         session_ownership_checker=ChatStoreSessionOwnershipChecker(
             SqlChatStore(session)
         ),
+    )
+
+
+def get_memory_manager(
+    settings: Settings = Depends(get_ai_settings),
+    embedding_provider: EmbeddingProvider = Depends(get_embedding_provider),
+    prompt_manager: PromptManager = Depends(get_prompt_manager),
+    session: AsyncSession = Depends(get_db_session),
+) -> "MemoryManager":
+    """Return a request-scoped ``MemoryManager`` wired to the configured provider."""
+    return build_memory_manager(
+        session=session,
+        settings=settings,
+        embedding_provider=embedding_provider,
+        prompt_manager=prompt_manager,
     )
 
 

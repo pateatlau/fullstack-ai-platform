@@ -26,10 +26,8 @@ def test_get_memory_provider_returns_pgvector_provider() -> None:
 async def test_get_memory_manager_wires_the_resolved_provider() -> None:
     session = AsyncMock()
     settings = Settings(openai_api_key="test-key")
-    provider = get_memory_provider(session=session, settings=settings)
 
     manager = get_memory_manager(
-        provider=provider,
         settings=settings,
         embedding_provider=AsyncMock(),
         prompt_manager=AsyncMock(),
