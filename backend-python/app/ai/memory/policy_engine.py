@@ -19,7 +19,6 @@ _CONSOLIDATION_STATES: frozenset[LifecycleState] = frozenset(
     {
         LifecycleState.CREATED,
         LifecycleState.ACTIVE,
-        LifecycleState.CONSOLIDATED,
     }
 )
 

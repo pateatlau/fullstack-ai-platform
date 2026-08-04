@@ -6,13 +6,14 @@ import asyncio
 import datetime
 import json
 import uuid
-from typing import cast
+from typing import Callable, cast
 
 import pytest
 
 from app.ai.memory.events import MemoryEvent, MemoryEventType
 from app.ai.memory.exceptions import MemoryAccessDeniedError, MemoryNotFoundError
 from app.ai.memory.lifecycle import LifecycleState
+from app.ai.memory.lifecycle_manager import LifecycleManager
 from app.ai.memory.manager import MemoryManager
 from app.ai.memory.models import MemoryContext, MemoryRecord, MemoryScope, MemoryType
 from app.ai.prompts.manager import create_prompt_manager
@@ -626,6 +627,91 @@ class TestMemoryManagerExtraction:
         assert provider.created_records[0].project_id == session_id
         assert len(publisher.events) == 2
         assert publisher.events[0].event_type is MemoryEventType.CREATED
+        assert publisher.events[1].event_type is MemoryEventType.ACTIVATED
+
+    @pytest.mark.anyio
+    async def test_background_persist_activates_on_background_provider(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        request_provider = FakeMemoryProvider()
+        bg_provider = FakeMemoryProvider()
+        publisher = _RecordingPublisher()
+
+        class _FakeDbSession:
+            async def commit(self) -> None:
+                pass
+
+            async def rollback(self) -> None:
+                pass
+
+        class _FakeSessionContext:
+            async def __aenter__(self) -> _FakeDbSession:
+                return _FakeDbSession()
+
+            async def __aexit__(self, *args: object) -> None:
+                pass
+
+        def fake_get_sessionmaker() -> Callable[[], _FakeSessionContext]:
+            return _FakeSessionContext
+
+        monkeypatch.setattr("app.db.engine.get_sessionmaker", fake_get_sessionmaker)
+
+        settings = Settings(
+            openai_api_key="test-key",
+            memory_enabled=True,
+            memory_extraction_enabled=True,
+            embedding_dimensions=DIMENSIONS,
+        )
+        lifecycle_manager = LifecycleManager(
+            request_provider,  # type: ignore[arg-type]
+            settings=settings,
+            event_publisher=publisher,
+        )
+        manager = MemoryManager(
+            provider=request_provider,  # type: ignore[arg-type]
+            settings=settings,
+            embedding_provider=_FakeEmbeddingProvider(),
+            prompt_manager=create_prompt_manager(),
+            event_publisher=publisher,
+            lifecycle_manager=lifecycle_manager,
+            background_provider_factory=lambda _session: bg_provider,  # type: ignore[arg-type]
+        )
+        owner_id = uuid.uuid4()
+        payload = {
+            "memories": [
+                {
+                    "memory_type": "user",
+                    "content": "User prefers TypeScript.",
+                    "confidence": 0.95,
+                    "importance": 0.9,
+                }
+            ]
+        }
+        llm = FakeLLMProvider(response=json.dumps(payload))
+
+        manager.extract_and_persist_async(
+            owner_id=owner_id,
+            session_id=None,
+            messages=[ChatMessageSchema(role="user", content="I prefer TypeScript.")],
+            provider=cast(LLMProvider, llm),
+            provider_name="openai",
+            model="gpt-4o-mini",
+        )
+        await _await_extraction(publisher.completed)
+
+        assert len(bg_provider.created_records) == 1
+        assert request_provider.created_records == []
+        request_lifecycle_calls = [
+            call
+            for call in request_provider.calls
+            if call[0] == "update_lifecycle_state"
+        ]
+        bg_lifecycle_calls = [
+            call for call in bg_provider.calls if call[0] == "update_lifecycle_state"
+        ]
+        assert request_lifecycle_calls == []
+        assert len(bg_lifecycle_calls) == 1
+        assert bg_lifecycle_calls[0][1]["state"] is LifecycleState.ACTIVE
         assert publisher.events[1].event_type is MemoryEventType.ACTIVATED
 
     @pytest.mark.anyio

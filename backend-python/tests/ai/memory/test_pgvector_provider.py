@@ -122,6 +122,27 @@ async def test_delete_record_soft_deletes(db_session) -> None:
 
 
 @pytest.mark.anyio
+async def test_delete_record_is_idempotent(db_session) -> None:
+    owner_id = await _make_user(db_session)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+    created = await provider.create_record(_domain_record(owner_id=owner_id))
+
+    await provider.delete_record(created.id, owner_id=owner_id)
+    first = await provider.get_record(created.id, owner_id=owner_id)
+    assert first is not None
+    assert first.lifecycle_state is LifecycleState.DELETED
+    deleted_at = first.metadata.get("deleted_at")
+    assert isinstance(deleted_at, str)
+
+    await provider.delete_record(created.id, owner_id=owner_id)
+    second = await provider.get_record(created.id, owner_id=owner_id)
+
+    assert second is not None
+    assert second.lifecycle_state is LifecycleState.DELETED
+    assert second.metadata.get("deleted_at") == deleted_at
+
+
+@pytest.mark.anyio
 async def test_search_records_excludes_archived(db_session) -> None:
     owner_id = await _make_user(db_session)
     provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))

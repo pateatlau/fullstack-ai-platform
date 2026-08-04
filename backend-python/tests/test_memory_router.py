@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from collections.abc import Iterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -72,6 +73,7 @@ def _memory_settings() -> Settings:
 
 
 def _build_test_app() -> FastAPI:
+    """Isolated app mirroring main.py: memory router always mounted."""
     test_app = FastAPI()
     test_app.include_router(memory_router.router)
     register_exception_handlers(test_app)
@@ -96,16 +98,25 @@ async def memory_db_session(db_session):
 
 
 @pytest.fixture
-def memory_api_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
+def memory_api_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:
     monkeypatch.setenv("MEMORY_ENABLED", "true")
     get_settings.cache_clear()
-    return _build_test_app()
+    yield _build_test_app()
+    get_settings.cache_clear()
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/memory/preferences",
+        "/api/memory/records?memory_type=user",
+    ],
+)
 async def test_memory_api_disabled_returns_503(
     db_session,
     monkeypatch: pytest.MonkeyPatch,
+    path: str,
 ) -> None:
     user_id = await _make_user(db_session)
     headers = _auth_headers(user_id)
@@ -118,14 +129,14 @@ async def test_memory_api_disabled_returns_503(
         transport=ASGITransport(app=test_app),
         base_url="http://testserver",
     ) as client:
-        response = await client.get(
-            "/api/memory/preferences",
-            headers=headers,
-        )
+        response = await client.get(path, headers=headers)
 
     get_settings.cache_clear()
     assert response.status_code == 503
-    assert response.json()["error"]["code"] == "feature_disabled"
+    assert response.status_code != 404
+    body = response.json()
+    assert body["error"]["code"] == "feature_disabled"
+    assert body["error"]["message"] == "Memory is not enabled on this server."
 
 
 @pytest.mark.anyio
@@ -145,6 +156,39 @@ async def test_memory_api_requires_authentication(
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "authentication_required"
+
+
+@pytest.mark.anyio
+async def test_list_project_records_rejects_missing_or_nil_session_id(
+    db_session,
+    memory_api_app: FastAPI,
+) -> None:
+    user_id = await _make_user(db_session)
+    _bind_db_session(memory_api_app, db_session)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=memory_api_app),
+            base_url="http://testserver",
+        ) as client:
+            missing_session = await client.get(
+                "/api/memory/records?memory_type=project",
+                headers=_auth_headers(user_id),
+            )
+            nil_session = await client.get(
+                "/api/memory/records",
+                params={
+                    "memory_type": "project",
+                    "session_id": str(uuid.UUID(int=0)),
+                },
+                headers=_auth_headers(user_id),
+            )
+    finally:
+        _clear_router_overrides(memory_api_app)
+
+    assert missing_session.status_code == 422
+    assert missing_session.json()["error"]["code"] == "validation_error"
+    assert nil_session.status_code == 422
+    assert nil_session.json()["error"]["code"] == "validation_error"
 
 
 @pytest.mark.anyio

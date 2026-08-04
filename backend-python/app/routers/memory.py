@@ -9,8 +9,10 @@ from fastapi import APIRouter, Depends, Query
 
 from app.ai.deps import get_conversation_summary_service, get_memory_manager
 from app.ai.memory.exceptions import MemoryAccessDeniedError, MemoryNotFoundError
+from app.ai.memory.lifecycle import LifecycleState
 from app.ai.memory.manager import MemoryManager
 from app.ai.memory.models import MemoryType, UserPreferenceUpsert
+from app.ai.memory.project import validate_project_id
 from app.ai.memory.summarizer import ConversationSummaryService
 from app.core.caller import CallerContext, require_authenticated_caller
 from app.core.config import Settings, get_settings
@@ -48,6 +50,24 @@ def _to_record_response(record) -> MemoryRecordResponse:  # noqa: ANN001
     )
 
 
+def _require_project_session_id(session_id: uuid.UUID | None) -> uuid.UUID:
+    """Reject missing or nil project session identifiers with 422."""
+    if session_id is None:
+        raise AppError(
+            code="validation_error",
+            message="session_id is required when memory_type is 'project'.",
+            status_code=422,
+        )
+    try:
+        return validate_project_id(session_id)
+    except ValueError as exc:
+        raise AppError(
+            code="validation_error",
+            message=str(exc),
+            status_code=422,
+        ) from exc
+
+
 @router.get("/api/memory/records", response_model=MemoryRecordListResponse)
 async def list_memory_records(
     memory_type: MemoryType = Query(...),
@@ -60,17 +80,14 @@ async def list_memory_records(
     bind_context(user_id=str(caller.user_id))
     _require_memory_enabled(settings)
 
-    if memory_type is MemoryType.PROJECT and session_id is None:
-        raise AppError(
-            code="validation_error",
-            message="session_id is required when memory_type is 'project'.",
-            status_code=422,
-        )
+    validated_session_id = session_id
+    if memory_type is MemoryType.PROJECT:
+        validated_session_id = _require_project_session_id(session_id)
 
     records = await memory_manager.list_records(
         owner_id=caller.user_id,
         memory_type=memory_type,
-        session_id=session_id,
+        session_id=validated_session_id,
     )
     return MemoryRecordListResponse(
         records=[_to_record_response(record) for record in records]
@@ -89,7 +106,7 @@ async def get_memory_record(
     _require_memory_enabled(settings)
 
     record = await memory_manager.get_record(record_id, owner_id=caller.user_id)
-    if record is None or record.lifecycle_state.value == "deleted":
+    if record is None or record.lifecycle_state is LifecycleState.DELETED:
         raise AppError(
             code="memory_not_found",
             message=f"Memory record {record_id} not found.",

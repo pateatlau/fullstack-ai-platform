@@ -495,6 +495,7 @@ class MemoryManager:
             from app.db.engine import get_sessionmaker
 
             sessionmaker = get_sessionmaker()
+            bg_provider: MemoryProvider | None = None
             async with sessionmaker() as session:
                 try:
                     bg_provider = self._background_provider_factory(session)
@@ -521,15 +522,16 @@ class MemoryManager:
                             provider_name=provider_name,
                             extraction_model=extraction_model,
                         )
-                    await self._schedule_lifecycle_processing(
-                        provider=bg_provider,
-                        owner_id=owner_id,
-                        session_id=session_id,
-                    )
                     await session.commit()
                 except Exception:
                     await session.rollback()
                     raise
+            assert bg_provider is not None
+            await self._schedule_lifecycle_processing(
+                provider=bg_provider,
+                owner_id=owner_id,
+                session_id=session_id,
+            )
             return
 
         existing_records = await self._load_existing_records(
@@ -645,13 +647,7 @@ class MemoryManager:
         provider: MemoryProvider,
         record: MemoryRecord,
     ) -> MemoryRecord:
-        manager = self._lifecycle_manager
-        if manager is None and self._settings is not None:
-            manager = LifecycleManager(
-                provider,
-                settings=self._settings,
-                event_publisher=self._event_publisher,
-            )
+        manager = self._lifecycle_manager_for(provider)
         if manager is None:
             return record
         return await manager.activate_record(record)
@@ -690,17 +686,25 @@ class MemoryManager:
                         raise
                 return
 
-            manager = self._lifecycle_manager or LifecycleManager(
-                provider,
-                settings=settings,
-                event_publisher=self._event_publisher,
-            )
-            await manager.process_owner_memories(
-                owner_id=owner_id,
-                session_id=session_id,
-            )
+            manager = self._lifecycle_manager_for(provider)
+            if manager is not None:
+                await manager.process_owner_memories(
+                    owner_id=owner_id,
+                    session_id=session_id,
+                )
 
         schedule_lifecycle_task(_run())
+
+    def _lifecycle_manager_for(
+        self, provider: MemoryProvider
+    ) -> LifecycleManager | None:
+        if self._settings is None:
+            return None
+        return LifecycleManager(
+            provider,
+            settings=self._settings,
+            event_publisher=self._event_publisher,
+        )
 
     def _require_lifecycle_manager(self) -> LifecycleManager:
         if self._lifecycle_manager is not None:

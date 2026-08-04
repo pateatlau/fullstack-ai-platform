@@ -70,6 +70,18 @@ class PgVectorMemoryProvider:
         return _to_domain(existing)
 
     async def delete_record(self, record_id: uuid.UUID, *, owner_id: uuid.UUID) -> None:
+        existing = await self._session.scalar(
+            select(DbMemoryRecord).where(
+                DbMemoryRecord.id == record_id,
+                DbMemoryRecord.owner_id == owner_id,
+            )
+        )
+        if existing is None:
+            raise MemoryNotFoundError(
+                f"Memory record {record_id} not found for owner {owner_id}."
+            )
+        if LifecycleState(existing.lifecycle_state) is LifecycleState.DELETED:
+            return
         await self.update_lifecycle_state(
             record_id,
             owner_id=owner_id,

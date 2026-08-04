@@ -95,6 +95,41 @@ class TestMemoryPolicyEngine:
         assert outcomes[0].decision is LifecycleDecision.CONSOLIDATE
         assert outcomes[0].target_state is LifecycleState.CONSOLIDATED
 
+    def test_consolidated_record_does_not_win_canonical_selection(self) -> None:
+        engine = _engine()
+        consolidated = _record(
+            content="Already consolidated duplicate",
+            quality=0.99,
+            lifecycle_state=LifecycleState.CONSOLIDATED,
+            embedding=_vector(1.0),
+        )
+        active = _record(
+            content="Eligible active duplicate",
+            quality=0.5,
+            lifecycle_state=LifecycleState.ACTIVE,
+            embedding=_vector(0.99),
+        )
+        created = _record(
+            content="Eligible created duplicate",
+            quality=0.4,
+            lifecycle_state=LifecycleState.CREATED,
+            embedding=_vector(0.98),
+        )
+
+        groups = engine.find_consolidation_groups([consolidated, active, created])
+
+        assert len(groups) == 1
+        assert groups[0].winner.id == active.id
+        redundant_ids = {record.id for record in groups[0].redundant}
+        assert consolidated.id not in redundant_ids
+        assert created.id in redundant_ids
+
+        outcomes = engine.consolidation_targets(groups[0])
+        outcome_ids = {outcome.record_id for outcome in outcomes}
+        assert str(active.id) not in outcome_ids
+        assert str(created.id) in outcome_ids
+        assert not engine.should_archive(active)
+
     def test_should_archive_consolidated_only(self) -> None:
         engine = _engine()
         assert engine.should_archive(

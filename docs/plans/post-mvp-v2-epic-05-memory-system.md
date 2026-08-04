@@ -559,7 +559,7 @@ Alembic migration **`0006_memory_tables`** (Phase 1). Separate from RAG `documen
 
 ## Memory REST API
 
-Authenticated-only (`Depends(get_current_caller)`). Router: `app/routers/memory.py`. Mounted when `MEMORY_ENABLED=true`; returns `503 feature_disabled` when flag off (same pattern as voice).
+Authenticated-only (`Depends(get_current_caller)`). Router: `app/routers/memory.py`. Always mounted in `app/main.py`; each route enforces `MEMORY_ENABLED` and returns `503 feature_disabled` when the flag is off.
 
 | Method   | Path                                        | Purpose                                                                                                    |
 | -------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -640,7 +640,7 @@ Internal (may evolve): `PgVectorMemoryProvider`, extraction pipeline, `TokenBudg
 
 ## Design acceptance
 
-- Flag off: no memory router; no memory UI; chat/RAG/voice/MCP/agent paths unchanged from Epic 04
+- Flag off: memory REST routes return `503 feature_disabled`; no memory UI; chat/RAG/voice/MCP/agent paths unchanged from Epic 04 (full memory chat orchestration is Phase 8)
 - Flag on, authenticated: chat retrieves/injects memory; durable memories persist async; management API + Settings UI work
 - Rolling summaries use existing `session_summaries`; `build_context_messages` wired for persisted sessions
 - Project memory isolated per `chat_session_id`; no cross-session project retrieval
@@ -1822,11 +1822,11 @@ Consolidation heuristics (similarity thresholds, duplicate detection, merge stra
 
 - [x] Create `app/schemas/memory.py` request/response models (no embeddings/scores exposed).
 - [x] Create `app/routers/memory.py` with Part I endpoints.
-- [x] Gate router on `MEMORY_ENABLED`; return `503 feature_disabled` when off.
+- [x] Enforce `MEMORY_ENABLED` on each route; return `503 feature_disabled` when off.
 - [x] Enforce authenticated caller on all routes; deny guests.
 - [x] Add `DELETE /api/memory/sessions/{session_id}/summary` (clear rolling summary).
 - [x] Extend `GET /api/health` with `memory_enabled`.
-- [x] Register router in `app/main.py` when flag on.
+- [x] Register memory router in `app/main.py` (always mounted; route-level flag gate).
 
 ### Lifecycle Integration
 
@@ -1863,14 +1863,14 @@ Consolidation heuristics (similarity thresholds, duplicate detection, merge stra
 
 Additional verification:
 
-- [x] All lifecycle transitions execute correctly.
+- [x] All lifecycle transitions execute correctly (`test_lifecycle_manager.py`, `test_lifecycle.py`).
 - [x] Invalid transitions are rejected.
-- [x] Consolidated memories remain retrievable.
-- [x] Archived memories are excluded from retrieval.
-- [x] Deleted memories are never returned.
+- [x] Consolidated memories remain retrievable until archived (search excludes `archived`/`deleted` only).
+- [x] Archived memories are excluded from retrieval (`test_search_records_excludes_archived`).
+- [x] Deleted memories are never returned (`test_delete_record_*`, router soft-delete tests).
 - [x] MemoryQualityEvaluator behaves deterministically.
-- [x] Existing chat behaviour remains unchanged.
-- [x] Feature flag regression passes.
+- [x] Existing chat behaviour remains unchanged (Phase 7 adds no chat hooks; pipeline integration is Phase 8).
+- [x] Feature flag / memory-disabled parity passes (`test_memory_api_disabled_returns_503`; router always mounted, route-level `503 feature_disabled`).
 
 **Acceptance**
 
@@ -1904,10 +1904,11 @@ Additional verification:
 | Policy evaluation       | ✅ `MemoryPolicyEngine` (consolidation, archival, retention)        |
 | Memory consolidation    | ✅ Dedupe clusters; highest-quality winner retained                 |
 | Archival validation     | ✅ Consolidated → archived; excluded from semantic search           |
-| Deletion validation     | ✅ REST soft-delete + retention-driven permanent deletion          |
+| Deletion validation     | ✅ REST soft-delete + retention-driven permanent deletion; idempotent repeat delete |
 | Provider integration    | ✅ `update_lifecycle_state`, `delete_record`, `list_records`        |
-| Feature flag regression | ✅ Router mounted when flag on; `503 feature_disabled` when off   |
-| Coverage                | ✅ 1278 tests passed, 89.31% `app/`; lint + typecheck clean         |
+| Feature flag regression | ✅ Router always mounted; route-level `503 feature_disabled` when off (`test_memory_router.py`) |
+| Chat parity (Phase 7)   | ✅ No new chat hooks; flag-off chat/RAG/voice paths unchanged (Phase 8 owns orchestration) |
+| Coverage                | ✅ 1278+ tests passed, 89.31% `app/`; lint + typecheck clean         |
 
 ---
 
@@ -2390,7 +2391,7 @@ Additional verification:
 | Feature Flag Regression   |           |
 | Production Readiness      |           |
 | Release Summary Published |           |
-| Epic Status               | Completed |
+| Epic Status               | Not Started |
 
 ---
 
@@ -2457,8 +2458,8 @@ No memory content, embeddings, or personally identifiable information should be 
 - [ ] Memory fully orchestrated through `ChatService` and `UnifiedChatService`.
 - [ ] Memory injected via `MemoryPromptInjector` (not direct storage access).
 - [ ] RAG and Memory remain independent.
-- [ ] `MEMORY_ENABLED=false` preserves Epic 04 behaviour.
-- [ ] Lifecycle management and REST API operational.
+- [ ] `MEMORY_ENABLED=false` preserves Epic 04 behaviour (full flag-off parity validated in Phase 10).
+- [x] Lifecycle management and REST API operational.
 - [ ] Retrieval deterministic.
 - [ ] Frontend memory management complete.
 - [ ] Backend and frontend tests pass; coverage ≥80% on `app/ai/memory/`.
@@ -2511,5 +2512,6 @@ No memory content, embeddings, or personally identifiable information should be 
 | 2.6     | 2026-08-04 | Phase 5 complete: session-scoped project memory (`project.py`), provider CRUD/search isolation, `MemoryManager` project APIs, `MemoryContextBuilder.with_project_memories`.                                                                                                                                                                                               |
 | 2.7     | 2026-08-04 | Phase 6 complete: `SemanticRetriever` multi-domain retrieval, ranking/dedupe/quality filtering, token budgeting, `MemoryManager.retrieve_context`.                                                                                                                                                                                                                        |
 | 2.8     | 2026-08-04 | Phase 7 complete: `LifecycleManager`, `MemoryPolicyEngine`, lifecycle integration in `MemoryManager`, Memory REST API (`app/routers/memory.py`), `memory_enabled` health field. 1278 tests, 89.31% coverage.                                                                                                                                                             |
+| 2.9     | 2026-08-04 | Phase 7 doc sync: aligned Part I / Phase 7 router contract (always mounted, route-level `503`); verification gates documented with test evidence; epic-level flag-off parity deferred to Phase 10; PR review fixes (lifecycle provider binding, post-commit scheduling, consolidation eligibility, idempotent delete, fixture teardown). |
 
 ---
