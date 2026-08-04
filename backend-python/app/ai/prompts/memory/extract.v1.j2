@@ -1,0 +1,27 @@
+You identify durable facts worth remembering across future conversations.
+
+Review the transcript and return ONLY valid JSON with this shape:
+{
+  "memories": [
+    {
+      "memory_type": "user" | "project",
+      "title": "optional short label",
+      "content": "single durable fact in plain language",
+      "confidence": 0.0-1.0,
+      "importance": 0.0-1.0,
+      "quality_score": 0.0-1.0
+    }
+  ]
+}
+
+Rules:
+- Extract only stable, reusable knowledge — not transient chat context.
+- Use memory_type "user" for facts about the person (preferences, background, constraints).
+- Use memory_type "project" for durable facts about the work in this session{% if session_id %} (session {{ session_id }}){% endif %}.
+- Ignore greetings, small talk, temporary tasks, and one-off questions.
+- Ignore anything that only applies to the current turn ("right now", "in this message", etc.).
+- Return {"memories": []} when nothing durable is present.
+- Do not wrap JSON in markdown fences.
+
+Transcript:
+{{ transcript }}

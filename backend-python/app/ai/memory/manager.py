@@ -1,23 +1,62 @@
 """``MemoryManager`` — single orchestration entry point for the Memory subsystem.
 
-Public API (stable after Phase 1). Retrieval (``retrieve_context``) and async
-extraction (``extract_and_persist_async``) are added in Phase 2/3/6; Phase 1
-wires dependency injection and pass-through record/preference accessors only.
+Public API (stable after Phase 1). Phase 3 adds async durable memory extraction
+via ``extract_and_persist_async``; retrieval (``retrieve_context``) lands in
+Phase 6; full chat wiring in Phase 8.
 """
 
 from __future__ import annotations
 
+import asyncio
+import datetime
 import uuid
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, cast
 
+from app.ai.memory.events import (
+    LoggingMemoryEventPublisher,
+    MemoryEvent,
+    MemoryEventPublisher,
+    MemoryEventType,
+)
+from app.ai.memory.extraction import CandidateMemory, MemoryExtractor
 from app.ai.memory.interfaces.memory_provider import MemoryProvider
-from app.ai.memory.models import MemoryRecord
+from app.ai.memory.lifecycle import LifecycleState
+from app.ai.memory.models import MemoryRecord, MemoryScope, MemoryType
+from app.ai.memory.quality import MemoryQualityEvaluator
+from app.core.logging import get_logger
+from app.schemas.chat import ChatMessageSchema, ProviderName
+
+if TYPE_CHECKING:
+    from app.ai.interfaces.embedding_provider import EmbeddingProvider
+    from app.ai.prompts.manager import PromptManager
+    from app.core.config import Settings
+    from app.providers.base import LLMProvider
+
+logger = get_logger(__name__)
+
+_MAX_EMBED_ATTEMPTS = 3
+_MAX_PERSIST_ATTEMPTS = 2
 
 
 class MemoryManager:
     """Coordinates retrieval, persistence, and lifecycle via a ``MemoryProvider``."""
 
-    def __init__(self, provider: MemoryProvider) -> None:
+    def __init__(
+        self,
+        provider: MemoryProvider,
+        *,
+        settings: Settings | None = None,
+        embedding_provider: EmbeddingProvider | None = None,
+        prompt_manager: PromptManager | None = None,
+        event_publisher: MemoryEventPublisher | None = None,
+    ) -> None:
         self._provider = provider
+        self._settings = settings
+        self._embedding_provider = embedding_provider
+        self._prompt_manager = prompt_manager
+        self._event_publisher = event_publisher or LoggingMemoryEventPublisher()
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     async def get_record(
         self, record_id: uuid.UUID, *, owner_id: uuid.UUID
@@ -44,3 +83,220 @@ class MemoryManager:
     async def delete_preference(self, *, user_id: uuid.UUID, key: str) -> None:
         """Remove a caller's structured preference value."""
         await self._provider.delete_preference(user_id=user_id, key=key)
+
+    def extract_and_persist_async(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        session_id: uuid.UUID | None,
+        messages: list[ChatMessageSchema],
+        provider: LLMProvider,
+        provider_name: ProviderName,
+        model: str,
+    ) -> None:
+        """Schedule durable memory extraction without blocking the caller."""
+        if not self._extraction_enabled():
+            return
+
+        task = asyncio.create_task(
+            self._run_extraction_pipeline(
+                owner_id=owner_id,
+                session_id=session_id,
+                messages=messages,
+                provider=provider,
+                provider_name=provider_name,
+                model=model,
+            )
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _run_extraction_pipeline(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        session_id: uuid.UUID | None,
+        messages: list[ChatMessageSchema],
+        provider: LLMProvider,
+        provider_name: ProviderName,
+        model: str,
+    ) -> None:
+        assert self._settings is not None
+        assert self._prompt_manager is not None
+        assert self._embedding_provider is not None
+
+        try:
+            extractor = MemoryExtractor(
+                prompt_manager=self._prompt_manager,
+                settings=self._settings,
+            )
+            candidates = await extractor.extract_candidates(
+                messages=messages,
+                provider=provider,
+                provider_name=provider_name,
+                model=model,
+                session_id=session_id,
+            )
+            if not candidates:
+                return
+
+            evaluator = MemoryQualityEvaluator(self._settings)
+            filtered = evaluator.filter_preliminary(candidates)
+            if not filtered:
+                return
+
+            embeddings = await self._embed_with_retry([c.content for c in filtered])
+            existing_records = await self._load_existing_records(
+                owner_id=owner_id,
+                session_id=session_id,
+            )
+            approved = evaluator.dedupe_by_embedding(
+                filtered,
+                embeddings,
+                existing_records,
+            )
+            if not approved:
+                return
+
+            extraction_model = self._settings.memory_extraction_model.strip() or model
+            for candidate, embedding in approved:
+                await self._persist_candidate(
+                    candidate=candidate,
+                    embedding=embedding,
+                    owner_id=owner_id,
+                    session_id=session_id,
+                    provider_name=provider_name,
+                    extraction_model=extraction_model,
+                )
+        except Exception:  # noqa: BLE001 - extraction must never affect chat callers
+            logger.warning(
+                "Durable memory extraction pipeline failed",
+                owner_id=str(owner_id),
+                session_id=str(session_id) if session_id is not None else None,
+                exc_info=True,
+            )
+
+    async def _persist_candidate(
+        self,
+        *,
+        candidate: CandidateMemory,
+        embedding: list[float],
+        owner_id: uuid.UUID,
+        session_id: uuid.UUID | None,
+        provider_name: ProviderName,
+        extraction_model: str,
+    ) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        project_id = session_id if candidate.memory_type is MemoryType.PROJECT else None
+        if candidate.memory_type is MemoryType.PROJECT and project_id is None:
+            logger.warning(
+                "Skipping project memory without session scope",
+                owner_id=str(owner_id),
+            )
+            return
+
+        record = MemoryRecord(
+            id=uuid.uuid4(),
+            memory_type=candidate.memory_type,
+            scope=(
+                MemoryScope.PROJECT
+                if candidate.memory_type is MemoryType.PROJECT
+                else MemoryScope.USER
+            ),
+            owner_id=owner_id,
+            project_id=project_id,
+            title=candidate.title,
+            content=candidate.content,
+            embedding=embedding,
+            metadata={
+                "provider": provider_name,
+                "extraction_model": extraction_model,
+                "session_id": str(session_id) if session_id is not None else None,
+            },
+            importance=candidate.importance,
+            confidence=candidate.confidence,
+            quality_score=candidate.quality_score,
+            created_at=now,
+            updated_at=now,
+            lifecycle_state=LifecycleState.CREATED,
+            source="extraction_v1",
+        )
+
+        for attempt in range(_MAX_PERSIST_ATTEMPTS):
+            try:
+                persisted = await self._provider.create_record(record)
+            except Exception:  # noqa: BLE001 - retryable provider failures
+                if attempt + 1 >= _MAX_PERSIST_ATTEMPTS:
+                    logger.warning(
+                        "Memory persistence failed",
+                        record_id=str(record.id),
+                        owner_id=str(owner_id),
+                        exc_info=True,
+                    )
+                    return
+                await asyncio.sleep(0.25 * (attempt + 1))
+                continue
+
+            await self._event_publisher.publish(
+                MemoryEvent(
+                    event_type=MemoryEventType.CREATED,
+                    record_id=persisted.id,
+                    owner_id=persisted.owner_id,
+                    memory_type=persisted.memory_type.value,
+                    lifecycle_state=persisted.lifecycle_state,
+                    metadata={"source": persisted.source},
+                )
+            )
+            logger.info(
+                "Durable memory persisted",
+                record_id=str(persisted.id),
+                owner_id=str(persisted.owner_id),
+                memory_type=persisted.memory_type.value,
+            )
+            return
+
+    async def _embed_with_retry(self, texts: list[str]) -> list[list[float] | None]:
+        assert self._embedding_provider is not None
+
+        for attempt in range(_MAX_EMBED_ATTEMPTS):
+            try:
+                vectors = await self._embedding_provider.embed_texts(texts)
+                return cast(list[list[float] | None], vectors)
+            except Exception:  # noqa: BLE001 - embedding failures are recoverable
+                if attempt + 1 >= _MAX_EMBED_ATTEMPTS:
+                    logger.warning(
+                        "Memory embedding generation failed",
+                        candidate_count=len(texts),
+                        exc_info=True,
+                    )
+                    return [None] * len(texts)
+                await asyncio.sleep(0.25 * (attempt + 1))
+        return [None] * len(texts)
+
+    async def _load_existing_records(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        session_id: uuid.UUID | None,
+    ) -> list[MemoryRecord]:
+        list_active = getattr(self._provider, "list_active_records", None)
+        if list_active is not None:
+            loader = cast(
+                Callable[..., Awaitable[list[MemoryRecord]]],
+                list_active,
+            )
+            return await loader(owner_id=owner_id, session_id=session_id)
+
+        # Fakes without the package-internal helper skip cross-record dedupe.
+        return []
+
+    def _extraction_enabled(self) -> bool:
+        if self._settings is None:
+            return False
+        if not self._settings.memory_enabled:
+            return False
+        if not self._settings.memory_extraction_enabled:
+            return False
+        if self._embedding_provider is None or self._prompt_manager is None:
+            return False
+        return True

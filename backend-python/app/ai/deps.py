@@ -415,11 +415,19 @@ def get_memory_provider(
 
 def get_memory_manager(
     provider: "PgVectorMemoryProvider" = Depends(get_memory_provider),
+    settings: Settings = Depends(get_ai_settings),
+    embedding_provider: EmbeddingProvider = Depends(get_embedding_provider),
+    prompt_manager: PromptManager = Depends(get_prompt_manager),
 ) -> "MemoryManager":
     """Return a request-scoped ``MemoryManager`` wired to the configured provider."""
     from app.ai.memory.manager import MemoryManager
 
-    return MemoryManager(provider=provider)
+    return MemoryManager(
+        provider=provider,
+        settings=settings,
+        embedding_provider=embedding_provider,
+        prompt_manager=prompt_manager,
+    )
 
 
 def get_conversation_summary_service(
