@@ -11,7 +11,7 @@ from typing import cast
 import pytest
 
 from app.ai.memory.events import MemoryEvent, MemoryEventType
-from app.ai.memory.exceptions import MemoryAccessDeniedError
+from app.ai.memory.exceptions import MemoryAccessDeniedError, MemoryNotFoundError
 from app.ai.memory.lifecycle import LifecycleState
 from app.ai.memory.manager import MemoryManager
 from app.ai.memory.models import MemoryContext, MemoryRecord, MemoryScope, MemoryType
@@ -93,8 +93,34 @@ class FakeMemoryProvider:
             and (session_id is None or r.project_id == session_id)
         ]
 
-    async def update_lifecycle_state(self, *args, **kwargs):  # noqa: ANN002, ANN003
-        raise NotImplementedError
+    async def update_lifecycle_state(
+        self,
+        record_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        state: LifecycleState,
+        metadata: dict[str, object] | None = None,
+    ) -> MemoryRecord:
+        self.calls.append(
+            (
+                "update_lifecycle_state",
+                {
+                    "record_id": record_id,
+                    "owner_id": owner_id,
+                    "state": state,
+                },
+            )
+        )
+        if self.record is None or self.record.id != record_id:
+            raise MemoryNotFoundError()
+        updated = self.record.model_copy(
+            update={
+                "lifecycle_state": state,
+                "metadata": metadata or self.record.metadata,
+            }
+        )
+        self.record = updated
+        return updated
 
     async def get_preference(
         self, *, user_id: uuid.UUID, key: str
@@ -214,17 +240,27 @@ class TestMemoryManager:
         ]
 
     @pytest.mark.anyio
-    async def test_delete_record_delegates_to_provider(self) -> None:
+    async def test_delete_record_delegates_to_lifecycle_manager(self) -> None:
         provider = FakeMemoryProvider()
         owner_id = uuid.uuid4()
-        record_id = uuid.uuid4()
-        manager = _manager(provider)
+        record = MemoryRecord(
+            id=uuid.uuid4(),
+            memory_type=MemoryType.USER,
+            scope=MemoryScope.USER,
+            owner_id=owner_id,
+            content="Delete me.",
+            created_at=_NOW,
+            updated_at=_NOW,
+            lifecycle_state=LifecycleState.ACTIVE,
+            source="test",
+        )
+        provider.record = record
+        manager = _manager(provider, settings=Settings(openai_api_key="test-key"))
 
-        await manager.delete_record(record_id, owner_id=owner_id)
+        await manager.delete_record(record.id, owner_id=owner_id)
 
-        assert provider.calls == [
-            ("delete_record", {"record_id": record_id, "owner_id": owner_id})
-        ]
+        assert provider.record is not None
+        assert provider.record.lifecycle_state is LifecycleState.DELETED
 
     @pytest.mark.anyio
     async def test_preference_round_trip_delegates_to_provider(self) -> None:
@@ -548,8 +584,9 @@ class TestMemoryManagerExtraction:
         assert provider.created_records[0].content == "User prefers TypeScript."
         assert provider.created_records[0].source == "extraction_v1"
         assert provider.created_records[0].embedding is not None
-        assert len(publisher.events) == 1
+        assert len(publisher.events) == 2
         assert publisher.events[0].event_type is MemoryEventType.CREATED
+        assert publisher.events[1].event_type is MemoryEventType.ACTIVATED
 
     @pytest.mark.anyio
     async def test_extract_and_persist_async_persists_project_memories(self) -> None:
@@ -587,8 +624,9 @@ class TestMemoryManagerExtraction:
         assert len(provider.created_records) == 1
         assert provider.created_records[0].memory_type is MemoryType.PROJECT
         assert provider.created_records[0].project_id == session_id
-        assert provider.created_records[0].lifecycle_state is LifecycleState.CREATED
+        assert len(publisher.events) == 2
         assert publisher.events[0].event_type is MemoryEventType.CREATED
+        assert publisher.events[1].event_type is MemoryEventType.ACTIVATED
 
     @pytest.mark.anyio
     async def test_extract_and_persist_async_noops_when_flag_disabled(self) -> None:

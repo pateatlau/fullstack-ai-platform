@@ -19,6 +19,7 @@ def test_public_api_surface_matches_phase_1_scope() -> None:
     assert set(module.__all__) == {
         "CandidateMemory",
         "ConversationSummaryService",
+        "LifecycleManager",
         "LifecycleState",
         "MemoryAccessDeniedError",
         "MemoryContext",
@@ -29,6 +30,7 @@ def test_public_api_surface_matches_phase_1_scope() -> None:
         "MemoryExtractor",
         "MemoryManager",
         "MemoryNotFoundError",
+        "MemoryPolicyEngine",
         "MemoryProvider",
         "MemoryQualityEvaluator",
         "MemoryRecord",

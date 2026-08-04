@@ -45,6 +45,7 @@ class MemoryProvider(Protocol):
         *,
         owner_id: uuid.UUID,
         state: LifecycleState,
+        metadata: dict[str, object] | None = None,
     ) -> MemoryRecord: ...
 
     async def get_preference(

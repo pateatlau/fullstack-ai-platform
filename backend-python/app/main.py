@@ -79,6 +79,11 @@ if settings.voice_enabled:
 
     app.include_router(create_voice_router(settings))
 
+if settings.memory_enabled:
+    from app.routers import memory
+
+    app.include_router(memory.router)
+
 register_exception_handlers(app)
 
 

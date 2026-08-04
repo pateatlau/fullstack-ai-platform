@@ -15,3 +15,8 @@ def schedule_extraction_task(coro: Coroutine[Any, Any, None]) -> asyncio.Task[An
     _EXTRACTION_TASKS.add(task)
     task.add_done_callback(_EXTRACTION_TASKS.discard)
     return task
+
+
+def schedule_lifecycle_task(coro: Coroutine[Any, Any, None]) -> asyncio.Task[Any]:
+    """Schedule lifecycle processing without blocking chat callers."""
+    return schedule_extraction_task(coro)

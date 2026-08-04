@@ -44,6 +44,7 @@ def _domain_record(
     project_id: uuid.UUID | None = None,
     content: str = "User prefers concise answers.",
     embedding: list[float] | None = None,
+    lifecycle_state: LifecycleState = LifecycleState.CREATED,
 ) -> MemoryRecord:
     memory_type = MemoryType.PROJECT if project_id is not None else MemoryType.USER
     return MemoryRecord(
@@ -58,7 +59,7 @@ def _domain_record(
         embedding=embedding if embedding is not None else _embedding(),
         created_at=_NOW,
         updated_at=_NOW,
-        lifecycle_state=LifecycleState.CREATED,
+        lifecycle_state=lifecycle_state,
         source="extraction_v1",
     )
 
@@ -89,21 +90,66 @@ class TestPgVectorMemoryProviderScaffold:
         typed: MemoryProvider = provider
         assert typed is provider
 
-    @pytest.mark.anyio
-    async def test_delete_record_not_implemented(
-        self, provider: PgVectorMemoryProvider
-    ) -> None:
-        with pytest.raises(NotImplementedError, match="Phase 7"):
-            await provider.delete_record(uuid.uuid4(), owner_id=uuid.uuid4())
 
-    @pytest.mark.anyio
-    async def test_update_lifecycle_state_not_implemented(
-        self, provider: PgVectorMemoryProvider
-    ) -> None:
-        with pytest.raises(NotImplementedError, match="Phase 7"):
-            await provider.update_lifecycle_state(
-                uuid.uuid4(), owner_id=uuid.uuid4(), state=LifecycleState.ACTIVE
-            )
+@pytest.mark.anyio
+async def test_update_lifecycle_state_persists_transition(db_session) -> None:
+    owner_id = await _make_user(db_session)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+    created = await provider.create_record(_domain_record(owner_id=owner_id))
+
+    updated = await provider.update_lifecycle_state(
+        created.id,
+        owner_id=owner_id,
+        state=LifecycleState.ACTIVE,
+        metadata={"lifecycle_reason": "test"},
+    )
+
+    assert updated.lifecycle_state is LifecycleState.ACTIVE
+    assert updated.metadata["lifecycle_reason"] == "test"
+
+
+@pytest.mark.anyio
+async def test_delete_record_soft_deletes(db_session) -> None:
+    owner_id = await _make_user(db_session)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+    created = await provider.create_record(_domain_record(owner_id=owner_id))
+
+    await provider.delete_record(created.id, owner_id=owner_id)
+    fetched = await provider.get_record(created.id, owner_id=owner_id)
+
+    assert fetched is not None
+    assert fetched.lifecycle_state is LifecycleState.DELETED
+
+
+@pytest.mark.anyio
+async def test_search_records_excludes_archived(db_session) -> None:
+    owner_id = await _make_user(db_session)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+    query = _vector_at(0, 1.0)
+    active = await provider.create_record(
+        _domain_record(
+            owner_id=owner_id,
+            content="Active",
+            embedding=_vector_at_two(0.99, 0.01),
+        )
+    )
+    archived = await provider.create_record(
+        _domain_record(
+            owner_id=owner_id,
+            content="Archived",
+            embedding=_vector_at_two(0.98, 0.02),
+            lifecycle_state=LifecycleState.ACTIVE,
+        )
+    )
+    await provider.update_lifecycle_state(
+        archived.id,
+        owner_id=owner_id,
+        state=LifecycleState.ARCHIVED,
+    )
+
+    results = await provider.search_records(query, owner_id=owner_id, top_k=5)
+
+    assert {record.id for record in results} == {active.id}
 
 
 @pytest.mark.anyio

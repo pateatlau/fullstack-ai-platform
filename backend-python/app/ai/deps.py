@@ -423,6 +423,7 @@ def get_memory_manager(
     session: AsyncSession = Depends(get_db_session),
 ) -> "MemoryManager":
     """Return a request-scoped ``MemoryManager`` wired to the configured provider."""
+    from app.ai.memory.lifecycle_manager import LifecycleManager
     from app.ai.memory.manager import MemoryManager
     from app.ai.memory.project import ChatStoreSessionOwnershipChecker
     from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
@@ -436,6 +437,10 @@ def get_memory_manager(
         settings=settings,
         embedding_provider=embedding_provider,
         prompt_manager=prompt_manager,
+        lifecycle_manager=LifecycleManager(
+            provider,
+            settings=settings,
+        ),
         background_provider_factory=background_provider_factory,
         session_ownership_checker=ChatStoreSessionOwnershipChecker(
             SqlChatStore(session)
