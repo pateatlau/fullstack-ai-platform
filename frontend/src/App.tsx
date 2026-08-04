@@ -3,6 +3,7 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 import { AuthProvider } from './context/AuthContext'
 import { ChatPage } from './pages/ChatPage'
 import { DocumentsPage } from './pages/DocumentsPage'
+import { MemorySettingsPage } from './pages/MemorySettingsPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 
 function App() {
@@ -17,6 +18,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <DocumentsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/settings/memory"
+              element={
+                <ProtectedRoute>
+                  <MemorySettingsPage />
                 </ProtectedRoute>
               }
             />

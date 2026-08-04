@@ -1,37 +1,42 @@
 import { Link } from 'react-router-dom'
 import { useAuthContext } from '../context/AuthContext'
+import { useChatStreamingEnabled } from '../hooks/useChatStreamingEnabled'
 
 interface AppNavProps {
-  current: 'chat' | 'documents'
+  current: 'chat' | 'documents' | 'memory'
 }
 
+const NAV_LINK_CLASS =
+  'rounded-lg border border-shell-800/20 px-3 py-2 text-sm font-medium text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500'
+
 /**
- * Authenticated-only cross-links between chat and documents routes.
+ * Authenticated-only cross-links between chat, documents, and memory routes.
  */
 export function AppNav({ current }: AppNavProps) {
   const { status } = useAuthContext()
+  const { memoryEnabled, healthLoading } = useChatStreamingEnabled()
 
   if (status !== 'authenticated') {
     return null
   }
 
-  if (current === 'chat') {
-    return (
-      <Link
-        to="/documents"
-        className="rounded-lg border border-shell-800/20 px-3 py-2 text-sm font-medium text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-      >
-        Documents
-      </Link>
-    )
-  }
-
   return (
-    <Link
-      to="/"
-      className="rounded-lg border border-shell-800/20 px-3 py-2 text-sm font-medium text-shell-900 transition hover:bg-shell-900/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-    >
-      Chat
-    </Link>
+    <nav className="flex flex-wrap items-center gap-2" aria-label="App sections">
+      {current !== 'chat' ? (
+        <Link to="/" className={NAV_LINK_CLASS}>
+          Chat
+        </Link>
+      ) : null}
+      {current !== 'documents' ? (
+        <Link to="/documents" className={NAV_LINK_CLASS}>
+          Documents
+        </Link>
+      ) : null}
+      {!healthLoading && memoryEnabled && current !== 'memory' ? (
+        <Link to="/settings/memory" className={NAV_LINK_CLASS}>
+          Memory
+        </Link>
+      ) : null}
+    </nav>
   )
 }

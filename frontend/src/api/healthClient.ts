@@ -8,6 +8,7 @@ export interface HealthResponse {
   tools_enabled: boolean
   rag_enabled: boolean
   voice_enabled: boolean
+  memory_enabled: boolean
   capabilities?: {
     by_provider: Record<
       string,
