@@ -2,7 +2,7 @@
 epic: v2-06
 title: Workflow Engine
 status: in_progress
-version: 1.1
+version: 1.8
 depends_on: [v2-05]
 provides:
   [
@@ -50,7 +50,7 @@ test_paths:
 
 Introduce a reusable, provider-agnostic Workflow Engine that lets the platform define, execute, pause, resume, and audit multi-step graphs of tasks, LLM calls, agent sub-tasks, and human approvals — independent of any single chat turn.
 
-The Agent Framework (Epic 01) executes one bounded ReAct loop per request. The Workflow Engine is a distinct, longer-lived orchestration layer: an explicit graph of nodes and edges whose execution can span multiple processes, pause indefinitely for human approval, survive process restarts, and fan work out into parallel branches. A workflow may call into the Agent Framework or the Tool platform for individual node execution, but the two subsystems remain independently addressable.
+The Agent Framework (Epic 01) executes one bounded ReAct loop per request. The Workflow Engine is a distinct, longer-lived orchestration layer: an explicit graph of nodes and edges whose execution can outlive the triggering HTTP or tool request, pause indefinitely for human approval, survive process restarts via checkpoint resume (single-process — not distributed), and fan work out into parallel branches. A workflow may call into the Agent Framework or the Tool platform for individual node execution, but the two subsystems remain independently addressable.
 
 **Delivers:** A durable workflow graph model (nodes, edges, conditional routing), a checkpointing execution engine (sequential, parallel fan-out/fan-in), task/LLM/agent node types, human approval nodes with pause/resume, node-level retry and run-level crash recovery, an authenticated Workflow REST API, an agent-invocable `WorkflowExecutionTool`, and a frontend workflow dashboard — all behind `WORKFLOW_ENGINE_ENABLED=false` (default).
 
@@ -153,14 +153,16 @@ TaskNode  LLMNode    AgentNode   RouterNode  Fork/JoinNode
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | Graph model              | Directed graph; cycles are rejected at validation time (no implicit loop nodes in v1)                                                | Explicit loop/iteration node type → future           |
 | Execution model          | Single-process, in-process `asyncio` scheduler with a DB checkpoint after every node transition — not a distributed workflow engine | Distributed execution (Temporal-like) → future epic  |
+| Run launch contract      | `start_run()` persists the run, schedules `WorkflowExecutor` on an in-process `asyncio.Task`, and returns `run_id` + current status immediately — never blocks until terminal completion; callers poll via run APIs or tool `action=status`. Requires caller-supplied `idempotency_key` (owner-scoped); retries with the same `(owner_id, workflow_definition_id, idempotency_key)` return the existing run and do not start duplicate work | Synchronous wait-for-completion API → future          |
 | Storage                  | PostgreSQL only (`workflow_definitions`, `workflow_runs`, `workflow_node_executions`); no vector/embedding columns                   | Alternate backends (Redis hot-state) → future        |
 | Agent/Tool integration   | Workflows invoke Tools via existing `ToolExecutor` and Agent Framework via existing `DefaultAgent` — never reimplemented             | —                                                    |
 | Chat/agent invocation    | Workflows are triggered via REST API or a registered `WorkflowExecutionTool`; never via direct `ChatService`/`UnifiedChatService` hooks | Agent-authored workflow graphs → V3                  |
-| Approval nodes           | Pause execution; persist `waiting_approval`; resume via REST decision endpoint. Full audit trail / editable args UX deferred          | HITL audit trail, editable tool arguments → Epic 09  |
+| Approval nodes           | Pause execution; persist `waiting_approval`; decisions applied via atomic CAS (`status=waiting_approval` → terminal) in one transaction with run transition; on decision set `decision=approved\|rejected` and node `status=succeeded\|failed`; resume via REST decision endpoint | HITL audit trail, editable tool arguments → Epic 09  |
 | Conditional routing      | Deterministic declarative condition DSL evaluated against `WorkflowContext`; no `eval()` / arbitrary code                            | Richer expression language → future                  |
-| Parallel execution       | Explicit Fork/Join node pair; branches run concurrently via `asyncio.gather`; join policy `all` \| `any` \| `count(n)`               | —                                                    |
+| Parallel execution       | Explicit Fork/Join node pair; branches run concurrently via `asyncio.gather`; join policy `all` \| `any` \| `count(n)`. Parallel branch checkpoints merge via optimistic `checkpoint_version` on `WorkflowRun` (retry on conflict) — no last-writer-wins over `context` or `current_node_ids` | —                                                    |
 | Retry                    | Per-node retry policy wraps `app/core/retry.py`; workflow-level resume is a distinct concern from node-level retry                    | —                                                    |
-| Background execution     | In-process `asyncio` execution; manual/API-triggered resume — no dedicated worker or queue                                           | Background Jobs queue → Epic 10                     |
+| Crash-safe `running`     | A node left `status=running` after crash is never assumed complete. Re-execute side-effecting nodes (task/llm/agent) only with a stable per-attempt `execution_receipt_id` (`{run_id}:{node_id}:{attempt}`); router/fork/join are safe to re-run; otherwise fail the run rather than duplicate external effects | Platform-wide durable tool/LLM receipt store → future |
+| Background execution     | Same in-process `asyncio` scheduler as run launch; checkpoints continue progress while the process is up; after process restart, `resume()` rehydrates from DB — no dedicated worker or queue | Background Jobs queue → Epic 10                     |
 | Auth                     | Workflow definitions and runs are owner-scoped; authenticated users only (no guest workflows)                                        | Shared/organization workflows → future               |
 | Versioning               | Definitions are immutable once referenced by a run; edits create a new version                                                       | Full version diff/rollback UI → Epic 08 plugin SDK   |
 
@@ -171,7 +173,9 @@ TaskNode  LLMNode    AgentNode   RouterNode  Fork/JoinNode
 Trigger (REST API or `WorkflowExecutionTool`)
 → Load & Validate Definition
 → Create WorkflowRun (`status=running`)
-→ WorkflowExecutor step loop
+→ Schedule in-process `WorkflowExecutor` (`asyncio.Task`)
+→ Return `run_id` + status snapshot to caller (non-blocking)
+→ [background] WorkflowExecutor step loop
 → Execute ready node(s): task | llm | agent | router | fork | join | approval
 → Persist WorkflowNodeExecution + checkpoint WorkflowRun
 → Repeat while ready nodes remain
@@ -179,13 +183,16 @@ Trigger (REST API or `WorkflowExecutionTool`)
 
 On approval decision:
 
-→ `WorkflowManager.apply_decision()`
-→ Resume `WorkflowExecutor` from the approval node
+→ `WorkflowManager.apply_decision()` — atomic CAS on `WorkflowNodeExecution` (`WHERE status=waiting_approval`)
+→ In one transaction: record decision, terminal node status, and run transition (`waiting_approval` → `running` or terminal)
+→ After commit: schedule `WorkflowExecutor` continuation from the approval node
 → Continue the step loop
 
 On crash / restart:
 
 → `WorkflowManager.resume(run_id)` rehydrates `WorkflowRun` + completed `WorkflowNodeExecution` rows
+→ Any node still `status=running` is treated as interrupted (never promoted to `succeeded`)
+→ Side-effecting nodes re-execute only with the same per-attempt `execution_receipt_id`; deterministic nodes (router/fork/join) may re-run directly
 → `WorkflowExecutor` recomputes ready nodes and continues
 
 ---
@@ -197,12 +204,17 @@ Client / Agent
  │
  │ Start workflow (definition_id, input)
  ▼
-WorkflowManager
+WorkflowManager.start_run()
  │
  ├── Load WorkflowDefinition (validated at creation time)
  │
  ├── Create WorkflowRun (status=running, context=trigger_input)
  │
+ ├── Schedule WorkflowExecutor on in-process asyncio.Task
+ │
+ └── Return run_id + status snapshot to caller ◄── does not wait for completion
+ │
+ │ (background task)
  ▼
 WorkflowExecutor.step()  ◄────────────────────────────┐
  │                                                     │
@@ -222,9 +234,9 @@ WorkflowRun status = completed | failed | waiting_approval | cancelled
  │
  ▼
 Publish Workflow Events
- │
- ▼
-Result returned to caller (REST response or ToolResult)
+
+Caller observes progress via GET /api/workflow-runs/{run_id}
+or WorkflowExecutionTool action=status (poll as needed)
 ```
 
 **Approval Timing**
@@ -261,10 +273,12 @@ Responsibilities include:
 
 - Store/update `WorkflowDefinition`; retrieve by id and by owner
 - Create `WorkflowRun`; atomically checkpoint run status + context
+- Look up an existing run by `(owner_id, workflow_definition_id, idempotency_key)` for start deduplication
 - Append `WorkflowNodeExecution` rows (one row per node attempt)
+- Atomically merge run checkpoints under parallel branches: append node execution + merge `context`/`current_node_ids` in one transaction with optimistic `checkpoint_version` check and retry on conflict (never blind overwrite)
 - Retrieve a run with its full node execution history
 - List runs by owner, definition, and status
-- Record approval decisions
+- Record approval decisions via conditional update (`WHERE status='waiting_approval'`) or row lock; transition `WorkflowRun` in the same transaction; no-op or reject when already decided
 
 Initial implementation:
 
@@ -353,10 +367,12 @@ WorkflowRun
 id
 workflow_definition_id
 owner_id
+idempotency_key     (required at start; unique per owner + definition — dedupes retries)
 session_id          (optional — set when triggered from a chat session via the tool)
-status              (pending | running | waiting_approval | paused | completed | failed | cancelled)
+status              (pending | running | waiting_approval | completed | failed | cancelled)
 context             (accumulated node outputs + trigger input)
 current_node_ids[]  (supports parallel branches)
+checkpoint_version  (monotonic int; optimistic merge for concurrent branch checkpoints)
 error
 created_at
 updated_at
@@ -372,13 +388,13 @@ run_id
 node_id
 node_type
 attempt
-status              (pending | running | waiting_approval | succeeded | failed | skipped | cancelled)
+status              (pending | running | waiting_approval | succeeded | failed | skipped | cancelled)  — NodeStatus only; no separate rejected status
 input
 output
 error
 decided_by          (user id — approval nodes only)
 decided_at
-decision            (approved | rejected)
+decision            (approved | rejected — approval nodes only; reject sets status=failed, not status=rejected)
 started_at
 completed_at
 ```
@@ -493,7 +509,7 @@ alembic/versions/0007_workflow_tables.py        # NEW — workflow_definitions, 
 
 ### Task Node
 
-Executes a single registered tool call via the existing `ToolExecutor` (validation, authorization, execution, normalization unchanged). Node config: `{tool_name, arguments_template}`.
+Executes a single registered tool call via the existing `ToolExecutor` (validation, authorization, execution, normalization unchanged). Node config: `{tool_name, arguments_template}`. Passes a stable per-attempt `execution_receipt_id` (`{run_id}:{node_id}:{attempt}`) through `ToolExecutionContext` so crash recovery can retry without duplicating side effects when the underlying tool is receipt-aware; v1 tools that are not receipt-aware are treated as non-idempotent (see crash-safe protocol).
 
 ### LLM Node
 
@@ -513,7 +529,7 @@ A `fork` node activates all of its outgoing edges concurrently. The matching `jo
 
 ### Approval Node
 
-Pauses the run (`status=waiting_approval`) and creates a pending `WorkflowNodeExecution`. A human decision (`approve` / `reject`) submitted through the REST API resumes execution — following the "approved" edge or the "rejected" edge if one is declared, otherwise failing the run on rejection.
+Pauses the run (`status=waiting_approval`) and creates a pending `WorkflowNodeExecution` (`status=waiting_approval`). On approve: set `decision=approved`, node `status=succeeded`, and follow the approved edge. On reject: set `decision=rejected`, node `status=failed` (not a separate rejected status), then follow a declared rejected edge if present; otherwise fail the run.
 
 ### Terminal Node
 
@@ -544,8 +560,8 @@ Workflow Engine is additive. Existing chat, RAG, agent runtime, MCP, memory, voi
 Unlike Memory (which injects context into every chat turn), the Workflow Engine is an **on-demand** capability. It is deliberately **not** wired into `ChatService` / `UnifiedChatService` orchestration:
 
 - **REST API** — primary interface for defining workflows and triggering/inspecting/approving runs, independent of any chat session.
-- **`WorkflowExecutionTool`** — registered in the existing tool registry only when `WORKFLOW_ENGINE_ENABLED=true`. Lets an agent (Epic 01) start a workflow (`action=start`) or check a run's status (`action=status`) as an ordinary tool call, authorized by the existing `ToolAuthorizer` (guests already denied for all tools). No changes to `ChatService`, `UnifiedChatService`, or `ToolExecutor` internals — only additive tool registration.
-- **Optional `session_id` linkage** — when triggered via the tool from within a chat session, `WorkflowRun.session_id` records the originating session for traceability only; the workflow itself continues to run independently of that chat turn's lifecycle (it can outlive the request, e.g. while `waiting_approval`).
+- **`WorkflowExecutionTool`** — registered in the existing tool registry only when `WORKFLOW_ENGINE_ENABLED=true`. Lets an agent (Epic 01) start a workflow (`action=start`) or check a run's status (`action=status`) as an ordinary tool call, authorized by the existing `ToolAuthorizer` (guests already denied for all tools). No changes to `ChatService`, `UnifiedChatService`, or `ToolExecutor` internals — only additive tool registration. `action=start` requires `definition_id`, `idempotency_key`, and optional `input`; uses the same async launch + idempotency contract as REST (`start_run()` dedupes on owner + definition + key); returns `run_id` + current status immediately. `action=status` polls persisted run state.
+- **Optional `session_id` linkage** — when triggered via the tool from within a chat session, `WorkflowRun.session_id` records the originating session for traceability only; the in-process background executor continues independently of that chat turn (e.g. through `waiting_approval` until a decision or cancel).
 
 **Flag off:** `WorkflowExecutionTool` is not registered; Workflow REST routes return `503 feature_disabled`; no workflow UI. All other platform behaviour unchanged.
 
@@ -581,15 +597,17 @@ Alembic migration **`0007_workflow_tables`** (Phase 1). Independent of `memory_r
 | `id`                          | uuid PK                                    |                                                              |
 | `workflow_definition_id`      | uuid FK → `workflow_definitions.id`        |                                                              |
 | `owner_id`                    | uuid FK → `users.id`                       | Required; owner isolation                                   |
+| `idempotency_key`             | text                                       | Required; caller-supplied; unique with `(owner_id, workflow_definition_id)` |
 | `session_id`                  | uuid FK → `chat_sessions.id` NULL          | Set when triggered via `WorkflowExecutionTool` from a chat session |
-| `status`                      | text CHECK                                 | `pending` \| `running` \| `waiting_approval` \| `paused` \| `completed` \| `failed` \| `cancelled` |
+| `status`                      | text CHECK                                 | `pending` \| `running` \| `waiting_approval` \| `completed` \| `failed` \| `cancelled` |
 | `context`                     | jsonb                                       | `WorkflowContext` snapshot                                   |
 | `current_node_ids`            | jsonb                                       | List — supports parallel branches                           |
+| `checkpoint_version`          | int                                         | Starts at 0; incremented on each merged run checkpoint       |
 | `error`                       | text NULL                                   |                                                              |
 | `created_at`, `updated_at`    | timestamptz                                 |                                                              |
 | `started_at`, `completed_at`  | timestamptz NULL                            |                                                              |
 
-**Indexes:** `(owner_id, status)`; `(workflow_definition_id)`.
+**Indexes:** `(owner_id, status)`; `(workflow_definition_id)`; **Unique:** `(owner_id, workflow_definition_id, idempotency_key)`.
 
 ### `workflow_node_executions`
 
@@ -624,14 +642,14 @@ Authenticated-only (`Depends(get_current_caller)`). Router: `app/routers/workflo
 | `GET`    | `/api/workflows/{id}`                                        | Get one definition (owner check)                                    |
 | `PUT`    | `/api/workflows/{id}`                                        | Update definition — creates a new version if the current one has runs |
 | `DELETE` | `/api/workflows/{id}`                                        | Archive a definition (owner check)                                  |
-| `POST`   | `/api/workflows/{id}/runs`                                   | Start a new run (`trigger_input` body)                              |
+| `POST`   | `/api/workflows/{id}/runs`                                   | Start a new run (`idempotency_key` + `trigger_input` body, both required); returns `run_id` + status snapshot. Retries with the same owner + definition + `idempotency_key` return the existing run (no duplicate executor). Poll `GET /api/workflow-runs/{run_id}` for progress. |
 | `GET`    | `/api/workflows/{id}/runs`                                   | List runs for a definition                                          |
 | `GET`    | `/api/workflow-runs`                                          | List caller's runs across all definitions                           |
 | `GET`    | `/api/workflow-runs/{run_id}`                                 | Get a run's status and node execution history                       |
-| `POST`   | `/api/workflow-runs/{run_id}/cancel`                          | Cancel a running/paused/waiting run                                  |
-| `POST`   | `/api/workflow-runs/{run_id}/resume`                          | Resume a paused or crashed run                                      |
-| `POST`   | `/api/workflow-runs/{run_id}/nodes/{node_execution_id}/approve` | Approve a pending approval node                                     |
-| `POST`   | `/api/workflow-runs/{run_id}/nodes/{node_execution_id}/reject`  | Reject a pending approval node                                      |
+| `POST`   | `/api/workflow-runs/{run_id}/cancel`                          | Cancel a `running` or `waiting_approval` run                         |
+| `POST`   | `/api/workflow-runs/{run_id}/resume`                          | Reattach executor and continue a crashed `running` run from its last checkpoint (`waiting_approval` runs use approve/reject, not `/resume`) |
+| `POST`   | `/api/workflow-runs/{run_id}/nodes/{node_execution_id}/approve` | Approve a pending approval node (atomic CAS; duplicate/conflicting decisions no-op or 409) |
+| `POST`   | `/api/workflow-runs/{run_id}/nodes/{node_execution_id}/reject`  | Reject a pending approval node (atomic CAS; duplicate/conflicting decisions no-op or 409) |
 
 **Health:** extend `GET /api/health` with `workflow_engine_enabled: bool` (frontend gate, same pattern as `memory_enabled`).
 
@@ -695,6 +713,7 @@ Internal (may evolve): `PostgresWorkflowStore`, individual `NodeExecutor` implem
 - Sequential and parallel execution both checkpoint after every node transition
 - Approval nodes pause indefinitely until a decision is recorded; decisions resume execution deterministically
 - A crashed/restarted process can resume any `running`/`waiting_approval` run from its last checkpoint with no duplicate side effects on already-succeeded nodes
+- Retries with the same owner + definition + `idempotency_key` return the existing run without duplicate side effects
 - Task/LLM/Agent nodes reuse existing platform components with no reimplementation
 - Coverage ≥80% on `app/` and `app/ai/workflow/`
 - No workflow input/output content in structured logs beyond identifiers and status by default
@@ -709,8 +728,10 @@ These rules must remain true throughout this epic. Violations require explicit u
 - **No chat pipeline coupling** — Workflows are never wired into `ChatService` or `UnifiedChatService`; the only chat-facing surface is the additive `WorkflowExecutionTool`.
 - **Reuse, don't reimplement** — Task nodes use `ToolExecutor`; Agent nodes use `DefaultAgent`; LLM nodes use `LLMProvider`/`PromptManager`; retry wraps `app/core/retry.py`.
 - **Deterministic conditions** — `ConditionEvaluator` supports only the declarative DSL; no `eval()`, `exec()`, or arbitrary code execution.
-- **Checkpoint-per-transition** — `WorkflowStore` persists run + node-execution state after every node transition; no in-memory-only execution state.
-- **Idempotent resume** — Resuming a run never re-executes an already-`succeeded` `WorkflowNodeExecution`.
+- **Checkpoint-per-transition** — `WorkflowStore` persists run + node-execution state after every node transition; no in-memory-only execution state. Parallel branches use optimistic merged checkpoints (`checkpoint_version`), not independent run overwrites.
+- **Async run launch** — `start_run()` schedules an in-process `asyncio.Task` and returns `run_id` + current status immediately; it never blocks until terminal completion. Callers observe progress via run APIs or tool `action=status`.
+- **Idempotent run start** — `start_run()` requires `idempotency_key`; `(owner_id, workflow_definition_id, idempotency_key)` lookups return an existing run instead of scheduling duplicate work.
+- **Idempotent resume** — Resuming a run never re-executes an already-`succeeded` `WorkflowNodeExecution`. A node left `status=running` after crash is never assumed complete; side-effecting retries require the same per-attempt `execution_receipt_id` or the run fails closed.
 - **Definition immutability post-run** — A `WorkflowDefinition` version referenced by any `WorkflowRun` is never mutated in place; edits create a new version.
 - **Provider replaceability** — All persistence goes through the `WorkflowStore` Protocol; Postgres is one adapter.
 - **Auth-only workflows** — Guests cannot create, run, or inspect workflows (tool calls already denied to guests platform-wide; REST routes require an authenticated caller).
@@ -1191,20 +1212,22 @@ Implement `WorkflowExecutor` for the simple case: a linear or branching (but non
 - [ ] Implement `TaskNodeExecutor` calling `ToolExecutor.execute()`.
 - [ ] Map node `config` (`tool_name`, `arguments_template`) against `WorkflowContext`.
 - [ ] Map `ToolResult` into `WorkflowNodeExecution.output`.
+- [ ] Pass `execution_receipt_id` via `ToolExecutionContext` (crash-safe protocol; Phase 8).
 - [ ] Handle tool authorization failures as node failures (not run crashes).
 
 ### Run Lifecycle
 
-- [ ] Implement `WorkflowManager.start_run(definition_id, trigger_input)`.
-- [ ] Create `WorkflowRun` (`status=running`) and drive `WorkflowExecutor` to completion or first pause.
+- [ ] Implement `WorkflowManager.start_run(definition_id, trigger_input, idempotency_key, owner_id)`.
+- [ ] Create `WorkflowRun` (`status=running`) when no run exists for `(owner_id, definition_id, idempotency_key)`; otherwise return the existing run without scheduling a duplicate executor.
+- [ ] Schedule `WorkflowExecutor` on an in-process `asyncio.Task`, and return `run_id` + status snapshot immediately (do not block until terminal completion).
 - [ ] Implement `WorkflowManager.get_run(run_id)` with full node execution history.
 - [ ] Implement `WorkflowManager.list_runs()` (owner-scoped).
 
 ### Checkpointing
 
-- [ ] Persist a `WorkflowNodeExecution` row before executing a node (`status=running`).
-- [ ] Persist the node result and updated `WorkflowRun.context` after execution.
-- [ ] Ensure checkpoint writes are atomic (run + node execution together).
+- [ ] Persist a `WorkflowNodeExecution` row before executing a node (`status=running`), including a stable per-attempt `execution_receipt_id` (`{run_id}:{node_id}:{attempt}`) in the checkpointed `input`.
+- [ ] Persist the node result and updated `WorkflowRun.context` after execution in the same atomic write as the terminal node status (`succeeded`/`failed`).
+- [ ] Ensure checkpoint writes are atomic (run + node execution together) so a crash after an external side effect but before the result checkpoint leaves the node in `running`, not `succeeded`.
 
 ### Error Handling
 
@@ -1219,6 +1242,7 @@ Implement `WorkflowExecutor` for the simple case: a linear or branching (but non
 - [ ] Add branching (non-parallel) run tests.
 - [ ] Add checkpoint persistence tests.
 - [ ] Add failure propagation tests.
+- [ ] Add idempotent start tests (same owner + definition + key returns existing run).
 - [ ] Add owner-isolation tests for runs.
 
 **Verify**
@@ -1341,7 +1365,7 @@ Implement `ForkNodeExecutor` and `JoinNodeExecutor` so independent branches of a
 
 - [ ] Implement `ForkNodeExecutor` — activates all outgoing edges concurrently via `asyncio.gather`.
 - [ ] Enforce `workflow_max_parallel_branches` at validation time (Phase 2 hook) and at execution time.
-- [ ] Track `current_node_ids` for all active branches on the `WorkflowRun`.
+- [ ] Track `current_node_ids` for all active branches on the `WorkflowRun` (updated via merged checkpoints, not per-branch overwrites).
 
 ### Join Node
 
@@ -1355,7 +1379,9 @@ Implement `ForkNodeExecutor` and `JoinNodeExecutor` so independent branches of a
 
 - [ ] Ensure branch execution failures do not corrupt sibling branches' state.
 - [ ] Ensure branch-local retries (Phase 8) do not block sibling branches.
-- [ ] Ensure checkpointing captures per-branch node execution independently.
+- [ ] Merge parallel branch checkpoints in a single DB transaction: append the branch's `WorkflowNodeExecution`, deep-merge its outputs into `context.variables`, and update `current_node_ids` atomically.
+- [ ] Use optimistic concurrency on `WorkflowRun.checkpoint_version` (`UPDATE … WHERE checkpoint_version = :expected`); on conflict, re-read run state and retry the merge (prevent last-writer-wins data loss).
+- [ ] Add concurrent checkpoint consistency tests (parallel branches completing near-simultaneously preserve all branch outputs and active node ids).
 
 ### Ready-Node Resolver
 
@@ -1369,7 +1395,7 @@ Implement `ForkNodeExecutor` and `JoinNodeExecutor` so independent branches of a
 - [ ] Add fork/join `count(n)` policy tests.
 - [ ] Add branch failure isolation tests.
 - [ ] Add `workflow_max_parallel_branches` enforcement tests.
-- [ ] Add concurrent checkpoint consistency tests.
+- [ ] Add concurrent checkpoint merge tests (optimistic retry; no lost `context`/`current_node_ids` updates).
 
 **Verify**
 
@@ -1418,6 +1444,7 @@ Implement `LLMNodeExecutor` and `AgentNodeExecutor`, letting workflow nodes perf
 - [ ] Render node `prompt_template` against `WorkflowContext.variables`.
 - [ ] Support optional `model_override` in node config.
 - [ ] Map the LLM response into `WorkflowNodeExecution.output`.
+- [ ] Pass `execution_receipt_id` to provider calls (crash-safe protocol; Phase 8).
 - [ ] Handle provider errors as node failures (not run crashes).
 
 ### Agent Node
@@ -1425,6 +1452,7 @@ Implement `LLMNodeExecutor` and `AgentNodeExecutor`, letting workflow nodes perf
 - [ ] Implement `AgentNodeExecutor` using `DefaultAgent`.
 - [ ] Map node `config` (goal/instructions, tool allowlist, iteration limit) into an `AgentRequest`.
 - [ ] Map `AgentResponse` into `WorkflowNodeExecution.output`.
+- [ ] Pass `execution_receipt_id` into `AgentRequest` metadata (crash-safe protocol; Phase 8).
 - [ ] Fail agent nodes with a clear configuration error at run time if `AGENT_RUNTIME_ENABLED=false`.
 - [ ] Respect the Agent Framework's own retry/iteration limits (no double-wrapping).
 
@@ -1490,21 +1518,24 @@ Implement `ApprovalNodeExecutor` and the pause/decision/resume lifecycle: a run 
 
 ### Decision Handling
 
-- [ ] Implement `WorkflowManager.apply_decision()` — validates the node is `waiting_approval` and the caller is the run owner.
-- [ ] Record `decided_by`, `decided_at`, `decision` on the `WorkflowNodeExecution`.
-- [ ] On `approve`: mark the node `succeeded`; resume `WorkflowExecutor` along the "approved" edge (or the single outgoing edge if unconditional).
-- [ ] On `reject`: mark the node `failed`/`rejected`; follow a declared "rejected" edge if present, otherwise fail the run.
+- [ ] Implement `WorkflowManager.apply_decision()` — owner-scoped; validates run + node belong to caller.
+- [ ] **Atomic CAS:** apply decision only when `WorkflowNodeExecution.status` is still `waiting_approval` via conditional update (`UPDATE … WHERE id=:id AND status='waiting_approval'`) or equivalent row lock.
+- [ ] In the **same DB transaction:** record `decided_by`, `decided_at`, `decision`, terminal node status (`succeeded` on approve / `failed` on reject), and transition `WorkflowRun` (`waiting_approval` → `running`, or `failed` when reject ends the run).
+- [ ] If CAS affects 0 rows, another decision already landed: **no-op** when the stored decision matches the request; **reject** (409/conflict) when it differs.
+- [ ] After successful commit, schedule `WorkflowExecutor` continuation (approve → follow approved edge; reject → rejected edge or fail run) — never double-schedule on losing CAS.
+- [ ] On `approve`: set `decision=approved`, node `status=succeeded`; continue along the "approved" edge (or the single outgoing edge if unconditional).
+- [ ] On `reject`: set `decision=rejected`, node `status=failed`; follow a declared "rejected" edge if present, otherwise fail the run.
 
 ### Resume Semantics
 
-- [ ] Implement `WorkflowManager.resume(run_id)` to rehydrate a paused run and re-enter `WorkflowExecutor.step()`.
+- [ ] Implement `WorkflowManager.resume(run_id)` to rehydrate a crashed `running` run and re-enter `WorkflowExecutor.step()` (approval continuation uses `apply_decision`, not `/resume`).
 - [ ] Ensure resume never re-executes an already-`succeeded` node.
-- [ ] Ensure resume correctly restores `current_node_ids` and parallel-branch state (Phase 5) if the run was paused mid-fan-out.
+- [ ] Ensure resume correctly restores `current_node_ids` and parallel-branch state (Phase 5) if the run was interrupted mid-fan-out.
 
 ### Error Handling
 
-- [ ] Reject decisions on nodes that are not `waiting_approval` (idempotency guard against double-decision).
 - [ ] Reject decisions from non-owners.
+- [ ] On CAS miss: return existing decision (no-op) if request matches; return conflict if a different decision is already recorded.
 - [ ] Handle resume-of-already-completed-run as a no-op with a clear response.
 
 ### Testing
@@ -1513,7 +1544,7 @@ Implement `ApprovalNodeExecutor` and the pause/decision/resume lifecycle: a run 
 - [ ] Add approve-and-resume tests.
 - [ ] Add reject-with-rejected-edge tests.
 - [ ] Add reject-without-rejected-edge (run fails) tests.
-- [ ] Add double-decision idempotency tests.
+- [ ] Add double-decision idempotency tests (concurrent approve/reject; only one wins; loser no-ops or conflicts).
 - [ ] Add non-owner decision rejection tests.
 - [ ] Add pause/resume-with-parallel-branches tests.
 
@@ -1530,8 +1561,8 @@ Additional verification:
 
 **Acceptance**
 
-- Human approval nodes pause a run indefinitely and resume it exactly where it left off based on an explicit decision.
-- Decision handling is idempotent and owner-scoped.
+- Human approval nodes pause a run indefinitely and resume it exactly where it left off based on an explicit decision; rejected approvals are recorded as `decision=rejected` with node `status=failed`.
+- Decision handling is atomic, idempotent, and owner-scoped (CAS on `waiting_approval`).
 - Full approval audit trail / editable tool arguments remain explicitly deferred to Epic 09.
 
 **Exit Criteria**
@@ -1572,7 +1603,9 @@ Implement per-node retry policy (wrapping `app/core/retry.py`) and run-level cra
 - [ ] Implement startup/administrative reconciliation: identify `running`/`waiting_approval` runs with no active in-process executor.
 - [ ] Implement `WorkflowManager.resume(run_id)` to rehydrate `WorkflowContext` from the latest checkpoint and continue.
 - [ ] Ensure rehydration correctly restores `current_node_ids`, including mid-fork/join state.
-- [ ] Ensure a node marked `running` at crash time is safely retried (treated as a failed attempt) rather than assumed complete.
+- [ ] **Crash-safe `running` protocol:** never treat `status=running` as complete; mark the interrupted attempt `failed` (`execution_interrupted`) and increment `attempt` before retrying side-effecting nodes.
+- [ ] Re-execute **task/llm/agent** nodes only with the same `execution_receipt_id` for that attempt (pass through to `ToolExecutor` / provider calls); if idempotency cannot be guaranteed, fail the run with a clear error instead of duplicating side effects.
+- [ ] Re-execute **router/fork/join** nodes directly (no external side effects).
 
 ### Run Duration Guard
 
@@ -1589,6 +1622,7 @@ Implement per-node retry policy (wrapping `app/core/retry.py`) and run-level cra
 - [ ] Add retry exhaustion tests.
 - [ ] Add attempt-tracking tests.
 - [ ] Add crash-recovery rehydration tests (simulated process restart).
+- [ ] Add crash-mid-task-node tests proving no duplicate side effects (receipt/idempotency or fail-closed).
 - [ ] Add mid-fork/join crash-recovery tests.
 - [ ] Add `workflow_max_run_duration_minutes` enforcement tests.
 
@@ -1606,7 +1640,7 @@ Additional verification:
 **Acceptance**
 
 - Node-level retry and run-level crash recovery are both provided without a background job queue (in-process, checkpoint-driven).
-- No completed node is ever re-executed on resume.
+- No completed node is ever re-executed on resume; interrupted `running` nodes follow the crash-safe receipt protocol.
 
 **Exit Criteria**
 
@@ -1636,14 +1670,14 @@ Expose the Workflow Engine through an authenticated, owner-scoped REST API per P
 ### Schemas
 
 - [ ] Define request/response schemas for definitions (create/update/list/get).
-- [ ] Define request/response schemas for runs (start/list/get/cancel/resume).
+- [ ] Define request/response schemas for runs (start requires `idempotency_key` + `trigger_input`; list/get/cancel/resume).
 - [ ] Define request/response schemas for approval decisions.
 - [ ] Ensure schemas never expose internal-only fields (Part I § Response rules).
 
 ### Router
 
 - [ ] Implement `POST /api/workflows`, `GET /api/workflows`, `GET /api/workflows/{id}`, `PUT /api/workflows/{id}`, `DELETE /api/workflows/{id}`.
-- [ ] Implement `POST /api/workflows/{id}/runs`, `GET /api/workflows/{id}/runs`.
+- [ ] Implement `POST /api/workflows/{id}/runs`, `GET /api/workflows/{id}/runs` (start route enforces required `idempotency_key` and idempotent dedupe).
 - [ ] Implement `GET /api/workflow-runs`, `GET /api/workflow-runs/{run_id}`.
 - [ ] Implement `POST /api/workflow-runs/{run_id}/cancel`, `/resume`.
 - [ ] Implement `POST /api/workflow-runs/{run_id}/nodes/{node_execution_id}/approve`, `/reject`.
@@ -1667,6 +1701,7 @@ Expose the Workflow Engine through an authenticated, owner-scoped REST API per P
 - [ ] Add router tests for every endpoint (happy path).
 - [ ] Add owner-isolation tests (cross-owner 403/404).
 - [ ] Add feature-flag-off tests (`503` on every route).
+- [ ] Add router idempotency tests (retry same key returns existing run, no duplicate side effects).
 - [ ] Add validation-error response tests.
 - [ ] Add health endpoint tests.
 
@@ -1712,8 +1747,8 @@ Register `WorkflowExecutionTool` in the existing tool platform so an agent can s
 
 ### Tool Implementation
 
-- [ ] Implement `WorkflowExecutionTool` with actions `start` (definition_id, input) and `status` (run_id).
-- [ ] Map `WorkflowManager.start_run()` / `get_run()` results into `ToolResult`.
+- [ ] Implement `WorkflowExecutionTool` with actions `start` (definition_id, idempotency_key, input) and `status` (run_id).
+- [ ] Map `WorkflowManager.start_run()` → `run_id` + status snapshot (idempotent on owner + definition + key); map `get_run()` → full run state for `action=status`.
 - [ ] Set `WorkflowRun.session_id` from `ToolExecutionContext` when available.
 - [ ] Ensure tool failures return a normalized `ToolResult(success=False, ...)`, never raise past `ToolExecutor`.
 
@@ -1725,6 +1760,7 @@ Register `WorkflowExecutionTool` in the existing tool platform so an agent can s
 
 ### Testing
 
+- [ ] Add tool start idempotency tests (same key returns existing run).
 - [ ] Add tool `start` action tests.
 - [ ] Add tool `status` action tests.
 - [ ] Add tool registration-gating tests (flag on/off).
@@ -1789,8 +1825,8 @@ Implement a frontend dashboard for defining, triggering, inspecting, and decidin
 - [ ] List runs for a definition and across all definitions.
 - [ ] Display a run's status and full node execution history.
 - [ ] Display node input/output for completed nodes.
-- [ ] Support cancelling a running/paused run.
-- [ ] Support resuming a paused/failed run.
+- [ ] Support cancelling a `running` or `waiting_approval` run.
+- [ ] Support resuming a crashed `running` run via `/resume`.
 
 ### Approval Decisions
 
@@ -2049,10 +2085,11 @@ One PR per phase.
 | Graph misconfiguration           | `GraphValidator` rejects invalid definitions before activation            |
 | Runaway/looping graphs           | Cycle detection at validation time; `workflow_max_run_duration_minutes`  |
 | Condition DSL abuse              | Declarative-only DSL; no `eval`/`exec`                                    |
-| Duplicate side effects on resume | Checkpoint-per-transition; idempotent resume; attempt tracking            |
+| Duplicate side effects on start  | Required `idempotency_key`; unique `(owner_id, workflow_definition_id, idempotency_key)` |
+| Duplicate side effects on resume | Checkpoint-per-transition; never assume `running`=complete; per-attempt `execution_receipt_id` for task/llm/agent; fail-closed when not idempotent |
 | Cross-owner data leakage         | Owner isolation on every `WorkflowStore`/REST operation                   |
 | Provider/backend coupling        | `WorkflowStore` abstraction                                                |
-| Parallel execution races         | Isolated branch state; atomic checkpoint writes                           |
+| Parallel execution races         | Per-run optimistic `checkpoint_version` merge + retry; single-transaction append/merge of node execution + run state |
 | Indefinite approval pauses       | `workflow_approval_timeout_hours` config surface (enforcement deferred — `TODO(epic-10)`) |
 | Feature regression               | `WORKFLOW_ENGINE_ENABLED` flag-off parity                                 |
 | Excessive run/history growth     | `workflow_run_retention_days` (cleanup mechanism deferred — `TODO(epic-10)`) |
@@ -2132,5 +2169,12 @@ No workflow input/output content or personally identifiable information should b
 | ------- | ---------- | -------------------- |
 | 1       | 2026-08-04 | Initial epic draft |
 | 1.1     | 2026-08-04 | Phase 0 complete: baseline audit published; quality gates verified (1305 tests, 89.66% cov, eval 5/5, frontend 251 tests). Part II only. |
+| 1.2     | 2026-08-04 | Clarify run launch contract: async in-process `start_run()` returns before completion; remove multi-process wording; align scheduler, REST, tool, and Phase 3/10 steps. Part I only. |
+| 1.3     | 2026-08-04 | Remove orphan `paused` run status; human approval uses `waiting_approval`; `/resume` is crash-recovery for `running` runs only. Part I + Part II doc sync. |
+| 1.4     | 2026-08-04 | Align approval reject semantics: node `status=failed` + `decision=rejected` (NodeStatus only; no rejected status value). Part I + Phase 7 sync. |
+| 1.5     | 2026-08-04 | Require owner-scoped `idempotency_key` on run start (REST + tool); dedupe `(owner_id, workflow_definition_id, idempotency_key)`. Part I + Phases 1/3/9/10 sync. |
+| 1.6     | 2026-08-04 | Define crash-safe protocol for interrupted `status=running` nodes: execution receipts + fail-closed for non-idempotent side effects. Part I + Phases 3/8 sync. |
+| 1.7     | 2026-08-04 | Parallel branch checkpoints: optimistic `checkpoint_version` merge + retry; prevent last-writer-wins on `context`/`current_node_ids`. Part I + Phase 5 sync. |
+| 1.8     | 2026-08-04 | `apply_decision()` atomic CAS on `waiting_approval` + same-transaction run transition; no-op/conflict on duplicate decisions. Phase 7 sync. |
 
 ---
