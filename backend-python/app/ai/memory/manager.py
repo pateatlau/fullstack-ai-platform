@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.memory.background_tasks import schedule_extraction_task
-
+from app.ai.memory.context_builder import MemoryContextBuilder
 from app.ai.memory.events import (
     LoggingMemoryEventPublisher,
     MemoryEvent,
@@ -27,7 +27,12 @@ from app.ai.memory.events import (
 from app.ai.memory.extraction import CandidateMemory, MemoryExtractor
 from app.ai.memory.interfaces.memory_provider import MemoryProvider
 from app.ai.memory.lifecycle import LifecycleState
-from app.ai.memory.models import MemoryRecord, MemoryScope, MemoryType
+from app.ai.memory.models import MemoryContext, MemoryRecord, MemoryScope, MemoryType
+from app.ai.memory.preferences import (
+    normalize_preferences,
+    validate_preference_key,
+    validate_preference_value,
+)
 from app.ai.memory.quality import MemoryQualityEvaluator
 from app.core.logging import get_logger
 from app.schemas.chat import ChatMessageSchema, ProviderName
@@ -80,17 +85,53 @@ class MemoryManager:
         self, *, user_id: uuid.UUID, key: str
     ) -> dict[str, object] | None:
         """Return a caller's structured preference value, if set."""
-        return await self._provider.get_preference(user_id=user_id, key=key)
+        validated_key = validate_preference_key(key)
+        try:
+            return await self._provider.get_preference(
+                user_id=user_id, key=validated_key
+            )
+        except Exception:  # noqa: BLE001 - retrieval must not block callers
+            logger.warning(
+                "User preference retrieval failed",
+                user_id=str(user_id),
+                exc_info=True,
+            )
+            return None
+
+    async def list_preferences(self, *, user_id: uuid.UUID) -> dict[str, object]:
+        """Return normalized preferences for the active user."""
+        try:
+            raw = await self._provider.list_preferences(user_id=user_id)
+            return normalize_preferences(raw)
+        except Exception:  # noqa: BLE001 - retrieval must not block callers
+            logger.warning(
+                "User preference list retrieval failed",
+                user_id=str(user_id),
+                exc_info=True,
+            )
+            return {}
 
     async def set_preference(
         self, *, user_id: uuid.UUID, key: str, value: dict[str, object]
     ) -> None:
         """Upsert a caller's structured preference value."""
-        await self._provider.set_preference(user_id=user_id, key=key, value=value)
+        validated_key = validate_preference_key(key)
+        validated_value = validate_preference_value(value)
+        await self._provider.set_preference(
+            user_id=user_id, key=validated_key, value=validated_value
+        )
 
     async def delete_preference(self, *, user_id: uuid.UUID, key: str) -> None:
         """Remove a caller's structured preference value."""
-        await self._provider.delete_preference(user_id=user_id, key=key)
+        validated_key = validate_preference_key(key)
+        await self._provider.delete_preference(user_id=user_id, key=validated_key)
+
+    async def retrieve_preferences_context(
+        self, *, user_id: uuid.UUID, context: MemoryContext | None = None
+    ) -> MemoryContext:
+        """Load normalized preferences into a ``MemoryContext``."""
+        builder = MemoryContextBuilder(self._provider)
+        return await builder.with_preferences(user_id, context=context)
 
     def extract_and_persist_async(
         self,

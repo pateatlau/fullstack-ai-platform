@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
     from app.ai.mcp.registry import McpServerRegistry
+    from app.ai.memory.context_builder import MemoryContextBuilder
     from app.ai.memory.manager import MemoryManager
     from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
     from app.ai.memory.summarizer import ConversationSummaryService
@@ -433,6 +434,15 @@ def get_memory_manager(
         prompt_manager=prompt_manager,
         background_provider_factory=background_provider_factory,
     )
+
+
+def get_memory_context_builder(
+    provider: "PgVectorMemoryProvider" = Depends(get_memory_provider),
+) -> "MemoryContextBuilder":
+    """Return a request-scoped ``MemoryContextBuilder`` wired to the provider."""
+    from app.ai.memory.context_builder import MemoryContextBuilder
+
+    return MemoryContextBuilder(provider)
 
 
 def get_conversation_summary_service(

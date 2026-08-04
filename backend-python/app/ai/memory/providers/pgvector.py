@@ -1,7 +1,8 @@
 """pgvector-backed ``MemoryProvider`` (Epic 05).
 
 Phase 3 implements durable record CRUD and similarity search for dedupe.
-Preference persistence lands in Phase 4; lifecycle updates in Phase 7.
+Phase 4 implements structured preference persistence. Lifecycle updates land
+in Phase 7.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from app.ai.memory.lifecycle import LifecycleState
 from app.ai.memory.models import MemoryRecord, MemoryScope, MemoryType
 from app.core.config import Settings
 from app.db.models import MemoryRecord as DbMemoryRecord
+from app.db.models import UserPreference as DbUserPreference
 
 _NOT_IMPLEMENTED = "PgVectorMemoryProvider.{method}() is implemented in {phase}."
 
@@ -159,28 +161,57 @@ class PgVectorMemoryProvider:
     async def get_preference(
         self, *, user_id: uuid.UUID, key: str
     ) -> dict[str, object] | None:
-        raise NotImplementedError(
-            _NOT_IMPLEMENTED.format(method="get_preference", phase="Phase 4")
+        row = await self._session.scalar(
+            select(DbUserPreference).where(
+                DbUserPreference.user_id == user_id,
+                DbUserPreference.key == key,
+            )
         )
+        if row is None:
+            return None
+        return dict(row.value)
 
     async def list_preferences(
         self, *, user_id: uuid.UUID
     ) -> dict[str, dict[str, object]]:
-        raise NotImplementedError(
-            _NOT_IMPLEMENTED.format(method="list_preferences", phase="Phase 4")
+        rows = (
+            (
+                await self._session.execute(
+                    select(DbUserPreference)
+                    .where(DbUserPreference.user_id == user_id)
+                    .order_by(DbUserPreference.key)
+                )
+            )
+            .scalars()
+            .all()
         )
+        return {row.key: dict(row.value) for row in rows}
 
     async def set_preference(
         self, *, user_id: uuid.UUID, key: str, value: dict[str, object]
     ) -> None:
-        raise NotImplementedError(
-            _NOT_IMPLEMENTED.format(method="set_preference", phase="Phase 4")
+        existing = await self._session.scalar(
+            select(DbUserPreference).where(
+                DbUserPreference.user_id == user_id,
+                DbUserPreference.key == key,
+            )
         )
+        if existing is None:
+            self._session.add(DbUserPreference(user_id=user_id, key=key, value=value))
+        else:
+            existing.value = value
+        await self._session.flush()
 
     async def delete_preference(self, *, user_id: uuid.UUID, key: str) -> None:
-        raise NotImplementedError(
-            _NOT_IMPLEMENTED.format(method="delete_preference", phase="Phase 4")
+        row = await self._session.scalar(
+            select(DbUserPreference).where(
+                DbUserPreference.user_id == user_id,
+                DbUserPreference.key == key,
+            )
         )
+        if row is not None:
+            await self._session.delete(row)
+            await self._session.flush()
 
 
 def _to_domain(row: DbMemoryRecord) -> MemoryRecord:

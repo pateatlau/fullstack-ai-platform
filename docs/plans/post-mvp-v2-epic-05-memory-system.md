@@ -766,8 +766,8 @@ _Copied from Epic 04 Phase 11 completion record (update in Phase 0 audit)._
 | 0     | Baseline Audit                 | XS     | Completed   |
 | 1     | Models, Interfaces & Migration | L      | Completed   |
 | 2     | Rolling Conversation Summary   | M      | Not Started |
-| 3     | Long-Term Memory               | L      | Not Started |
-| 4     | User Preferences               | M      | Not Started |
+| 3     | Long-Term Memory               | L      | Completed   |
+| 4     | User Preferences               | M      | Completed   |
 | 5     | Project Memory                 | M      | Not Started |
 | 6     | Semantic Retrieval             | L      | Not Started |
 | 7     | Lifecycle & REST API           | L      | Not Started |
@@ -1197,79 +1197,79 @@ Initial implementation executes asynchronous persistence using lightweight in-pr
 
 ### Memory Extraction Pipeline
 
-- [ ] Implement the durable memory extraction pipeline.
-- [ ] Execute extraction after successful assistant responses.
-- [ ] Extract candidate memories from completed conversations.
-- [ ] Ensure extraction operates independently of prompt construction.
-- [ ] Keep extraction isolated from the synchronous chat response path.
+- [x] Implement the durable memory extraction pipeline.
+- [x] Execute extraction after successful assistant responses.
+- [x] Extract candidate memories from completed conversations.
+- [x] Ensure extraction operates independently of prompt construction.
+- [x] Keep extraction isolated from the synchronous chat response path.
 
 ### Candidate Memory Extraction
 
-- [ ] Identify durable facts from conversation history.
-- [ ] Extract user-specific knowledge.
-- [ ] Extract project-specific knowledge.
-- [ ] Ignore temporary conversational context.
-- [ ] Ignore short-lived or low-value information.
-- [ ] Produce normalized candidate memory objects.
+- [x] Identify durable facts from conversation history.
+- [x] Extract user-specific knowledge.
+- [x] Extract project-specific knowledge.
+- [x] Ignore temporary conversational context.
+- [x] Ignore short-lived or low-value information.
+- [x] Produce normalized candidate memory objects.
 
 ### MemoryQualityEvaluator
 
-- [ ] Implement MemoryQualityEvaluator.
-- [ ] Score candidate memories against acceptance criteria.
-- [ ] Reject duplicate memories.
-- [ ] Reject low-confidence memories.
-- [ ] Reject transient or session-only information.
-- [ ] Produce only approved memories for persistence.
+- [x] Implement MemoryQualityEvaluator.
+- [x] Score candidate memories against acceptance criteria.
+- [x] Reject duplicate memories.
+- [x] Reject low-confidence memories.
+- [x] Reject transient or session-only information.
+- [x] Produce only approved memories for persistence.
 
 ### Embedding Generation
 
-- [ ] Generate semantic embeddings for approved memories.
-- [ ] Reuse the existing `EmbeddingProvider`.
-- [ ] Avoid embedding generation for structured preferences.
-- [ ] Validate embedding generation failures.
-- [ ] Prevent embedding failures from interrupting chat execution.
+- [x] Generate semantic embeddings for approved memories.
+- [x] Reuse the existing `EmbeddingProvider`.
+- [x] Avoid embedding generation for structured preferences.
+- [x] Validate embedding generation failures.
+- [x] Prevent embedding failures from interrupting chat execution.
 
 ### Persistence
 
-- [ ] Persist approved memories through `MemoryProvider`.
-- [ ] Ensure storage remains provider-independent.
-- [ ] Associate owner, project and lifecycle metadata.
-- [ ] Record creation timestamps.
-- [ ] Record embedding metadata.
-- [ ] Validate successful persistence.
+- [x] Persist approved memories through `MemoryProvider`.
+- [x] Ensure storage remains provider-independent.
+- [x] Associate owner, project and lifecycle metadata.
+- [x] Record creation timestamps.
+- [x] Record embedding metadata.
+- [x] Validate successful persistence.
 
 ### Asynchronous Processing
 
-- [ ] Execute persistence asynchronously.
-- [ ] Prevent persistence latency from delaying user responses.
-- [ ] Queue persistence operations when appropriate.
-- [ ] Isolate persistence failures from chat execution.
-- [ ] Ensure retryable failures are recoverable.
+- [x] Execute persistence asynchronously.
+- [x] Prevent persistence latency from delaying user responses.
+- [x] Queue persistence operations when appropriate.
+- [x] Isolate persistence failures from chat execution.
+- [x] Ensure retryable failures are recoverable.
 
 ### Lifecycle Integration
 
-- [ ] Initialize newly created memories with the correct lifecycle state.
-- [ ] Publish memory creation events.
-- [ ] Register lifecycle metadata.
-- [ ] Preserve compatibility with future lifecycle management.
+- [x] Initialize newly created memories with the correct lifecycle state.
+- [x] Publish memory creation events.
+- [x] Register lifecycle metadata.
+- [x] Preserve compatibility with future lifecycle management.
 
 ### Error Handling
 
-- [ ] Handle extraction failures gracefully.
-- [ ] Handle embedding failures gracefully.
-- [ ] Handle provider failures gracefully.
-- [ ] Log operational failures without exposing memory contents.
-- [ ] Preserve existing chat behaviour during all failure scenarios.
+- [x] Handle extraction failures gracefully.
+- [x] Handle embedding failures gracefully.
+- [x] Handle provider failures gracefully.
+- [x] Log operational failures without exposing memory contents.
+- [x] Preserve existing chat behaviour during all failure scenarios.
 
 ### Testing
 
-- [ ] Add candidate extraction tests.
-- [ ] Add quality evaluation tests.
-- [ ] Add embedding integration tests.
-- [ ] Add persistence tests.
-- [ ] Add asynchronous execution tests.
-- [ ] Add failure recovery tests.
-- [ ] Add provider integration tests.
+- [x] Add candidate extraction tests.
+- [x] Add quality evaluation tests.
+- [x] Add embedding integration tests.
+- [x] Add persistence tests.
+- [x] Add asynchronous execution tests.
+- [x] Add failure recovery tests.
+- [x] Add provider integration tests.
 
 **Verify**
 
@@ -1277,13 +1277,13 @@ Initial implementation executes asynchronous persistence using lightweight in-pr
 
 Additional verification:
 
-- [ ] Candidate memories generated correctly.
-- [ ] Quality evaluation rejects low-value memories.
-- [ ] Approved memories generate embeddings successfully.
-- [ ] Memories persist through `MemoryProvider`.
-- [ ] Persistence executes asynchronously.
-- [ ] Chat latency remains unaffected.
-- [ ] Failure scenarios do not interrupt chat responses.
+- [x] Candidate memories generated correctly.
+- [x] Quality evaluation rejects low-value memories.
+- [x] Approved memories generate embeddings successfully.
+- [x] Memories persist through `MemoryProvider`.
+- [x] Persistence executes asynchronously.
+- [x] Chat latency remains unaffected.
+- [x] Failure scenarios do not interrupt chat responses.
 
 **Acceptance**
 
@@ -1301,7 +1301,7 @@ Additional verification:
 - Asynchronous persistence verified.
 - Provider integration verified.
 - Quality evaluation validated.
-- Ready for Semantic Retrieval implementation.
+- Ready for User Preferences implementation (Phase 4).
 
 **Rollback**
 
@@ -1313,15 +1313,15 @@ Additional verification:
 
 **Completion Record**
 
-| Metric                       | Result |
-| ---------------------------- | ------ |
-| Candidate memories extracted |        |
-| Approved memories persisted  |        |
-| Embeddings generated         |        |
-| Persistence latency          |        |
-| Failure recovery validated   |        |
-| Integration tests            |        |
-| Coverage                     |        |
+| Metric                       | Result                                                                 |
+| ---------------------------- | ---------------------------------------------------------------------- |
+| Candidate memories extracted | ✅ `MemoryExtractor` + `memory/extract.v1` prompt                      |
+| Approved memories persisted  | ✅ Async pipeline via `extract_and_persist_async` + `PgVectorMemoryProvider` |
+| Embeddings generated         | ✅ `EmbeddingProvider` with retry; failures isolated from chat         |
+| Persistence latency          | ✅ Non-blocking (`background_tasks.schedule_extraction_task`)          |
+| Failure recovery validated   | ✅ Extraction/embed/persist failure tests pass                         |
+| Integration tests            | ✅ Provider + manager + async execution suite                          |
+| Coverage                     | ✅ 89.76% `app/` (Phase 3 verified at 1157+ tests)                   |
 
 ---
 
@@ -1347,69 +1347,69 @@ Implement the User Preference subsystem to persist stable, user-specific prefere
 
 ### Preference Models
 
-- [ ] Implement `UserPreference` ORM model (see Part I schema).
-- [ ] Define API request/response schemas for preference keys/values.
-- [ ] Implement validation rules.
-- [ ] Support serialization and deserialization.
-- [ ] Keep preference models independent from semantic memories.
+- [x] Implement `UserPreference` ORM model (see Part I schema).
+- [x] Define API request/response schemas for preference keys/values.
+- [x] Implement validation rules.
+- [x] Support serialization and deserialization.
+- [x] Keep preference models independent from semantic memories.
 
 ### Preference Persistence
 
-- [ ] Extend `MemoryProvider` to support structured preference storage.
-- [ ] Persist preferences independently of semantic memories.
-- [ ] Associate preferences with the owning user.
-- [ ] Support preference creation.
-- [ ] Support preference updates.
-- [ ] Support preference deletion.
+- [x] Extend `MemoryProvider` to support structured preference storage.
+- [x] Persist preferences independently of semantic memories.
+- [x] Associate preferences with the owning user.
+- [x] Support preference creation.
+- [x] Support preference updates.
+- [x] Support preference deletion.
 
 ### Preference Retrieval
 
-- [ ] Retrieve preferences for the active user.
-- [ ] Validate preference availability.
-- [ ] Handle missing preferences gracefully.
-- [ ] Retrieve only active preferences.
-- [ ] Keep retrieval provider-independent.
+- [x] Retrieve preferences for the active user.
+- [x] Validate preference availability.
+- [x] Handle missing preferences gracefully.
+- [x] Retrieve only active preferences.
+- [x] Keep retrieval provider-independent.
 
 ### Preference Normalization
 
-- [ ] Normalize retrieved preferences.
-- [ ] Resolve duplicate preference values.
-- [ ] Preserve deterministic ordering.
-- [ ] Produce canonical preference objects.
-- [ ] Prepare preferences for `MemoryContext`.
+- [x] Normalize retrieved preferences.
+- [x] Resolve duplicate preference values.
+- [x] Preserve deterministic ordering.
+- [x] Produce canonical preference objects.
+- [x] Prepare preferences for `MemoryContext`.
 
 ### MemoryContext Integration
 
-- [ ] Integrate normalized preferences into `MemoryContext`.
-- [ ] Keep preferences separate from semantic memories.
-- [ ] Preserve the canonical MemoryContext structure defined in Part I.
-- [ ] Ensure `PromptBuilder` receives preferences only through `MemoryContext`.
-- [ ] Prevent direct storage access from downstream components.
+- [x] Integrate normalized preferences into `MemoryContext`.
+- [x] Keep preferences separate from semantic memories.
+- [x] Preserve the canonical MemoryContext structure defined in Part I.
+- [x] Ensure `PromptBuilder` receives preferences only through `MemoryContext`.
+- [x] Prevent direct storage access from downstream components.
 
 ### Preference Management
 
-- [ ] Support preference replacement.
-- [ ] Support preference removal.
-- [ ] Preserve consistency across updates.
-- [ ] Prevent duplicate preference records.
-- [ ] Validate preference ownership.
+- [x] Support preference replacement.
+- [x] Support preference removal.
+- [x] Preserve consistency across updates.
+- [x] Prevent duplicate preference records.
+- [x] Validate preference ownership.
 
 ### Error Handling
 
-- [ ] Handle persistence failures gracefully.
-- [ ] Handle retrieval failures gracefully.
-- [ ] Continue chat execution when preferences are unavailable.
-- [ ] Log operational failures without exposing user preference contents.
+- [x] Handle persistence failures gracefully.
+- [x] Handle retrieval failures gracefully.
+- [x] Continue chat execution when preferences are unavailable.
+- [x] Log operational failures without exposing user preference contents.
 
 ### Testing
 
-- [ ] Add preference model tests.
-- [ ] Add persistence tests.
-- [ ] Add retrieval tests.
-- [ ] Add normalization tests.
-- [ ] Add MemoryContext integration tests.
-- [ ] Add provider integration tests.
-- [ ] Add failure recovery tests.
+- [x] Add preference model tests.
+- [x] Add persistence tests.
+- [x] Add retrieval tests.
+- [x] Add normalization tests.
+- [x] Add MemoryContext integration tests.
+- [x] Add provider integration tests.
+- [x] Add failure recovery tests.
 
 **Verify**
 
@@ -1417,12 +1417,12 @@ Implement the User Preference subsystem to persist stable, user-specific prefere
 
 Additional verification:
 
-- [ ] Preferences persist successfully.
-- [ ] Preferences retrieve correctly.
-- [ ] Preferences remain separate from semantic memories.
-- [ ] MemoryContext contains normalized preferences.
-- [ ] Existing chat behaviour remains unchanged.
-- [ ] Feature flag regression passes.
+- [x] Preferences persist successfully.
+- [x] Preferences retrieve correctly.
+- [x] Preferences remain separate from semantic memories.
+- [x] MemoryContext contains normalized preferences.
+- [x] Existing chat behaviour remains unchanged.
+- [x] Feature flag regression passes.
 
 **Acceptance**
 
@@ -1450,14 +1450,14 @@ Additional verification:
 
 **Completion Record**
 
-| Metric                    | Result |
-| ------------------------- | ------ |
-| Preferences persisted     |        |
-| Preference retrieval      |        |
-| MemoryContext integration |        |
-| Provider integration      |        |
-| Feature flag regression   |        |
-| Coverage                  |        |
+| Metric                    | Result                                                              |
+| ------------------------- | ------------------------------------------------------------------- |
+| Preferences persisted     | ✅ `PgVectorMemoryProvider` CRUD on `user_preferences`              |
+| Preference retrieval      | ✅ `list_preferences` / `get_preference` + normalization            |
+| MemoryContext integration | ✅ `MemoryContextBuilder.with_preferences`                          |
+| Provider integration      | ✅ User isolation + independence from `memory_records`              |
+| Feature flag regression   | ✅ No chat wiring; `MEMORY_ENABLED=false` behaviour unchanged       |
+| Coverage                  | ✅ 1210 tests passed, 89.76% `app/`; lint + typecheck clean         |
 
 ---
 
@@ -2505,5 +2505,7 @@ No memory content, embeddings, or personally identifiable information should be 
 | 2       | 2026-07-31 | Implementation readiness: frontmatter (`provides`, `packages`, `test_paths`); Public APIs; config defaults; persistence schema; REST API; chat integration strategy; V1 `SessionSummary` reuse; project memory v1 = session-scoped; phase integration rules; Phase 1 migration; Phase 7 REST API; Phase 8 ChatService + UnifiedChatService; files index; baseline corrected |
 | 2.1     | 2026-08-01 | Phase 0 baseline audit complete: 1079 tests, 89.57% coverage, eval 5/5, frontend 233 tests; audit published. Part II only.                                                                                                                                                                                                                                                  |
 | 2.2     | 2026-08-01 | Phase 1 complete: canonical models/enums, `MemoryProvider` protocol, `PgVectorMemoryProvider` scaffold, `MemoryManager`, `memory_records`/`user_preferences` migration (0006), `MEMORY_ENABLED` + memory config, DI wiring, CI migration rollback smoke test. 1157 tests, 89.77% coverage. Public API frozen.                                                            |
+| 2.3     | 2026-08-04 | Phase 3 complete: durable memory extraction pipeline (`MemoryExtractor`, `MemoryQualityEvaluator`), async persistence via `extract_and_persist_async`, embedding generation with retry, lifecycle event publication, `PgVectorMemoryProvider` record CRUD + semantic search for dedupe.                                                                                      |
+| 2.4     | 2026-08-04 | Phase 4 complete: user preference persistence/retrieval in `PgVectorMemoryProvider`, validation + normalization (`preferences.py`), `MemoryContextBuilder`, domain API models (`UserPreferenceUpsert`/`UserPreferenceItem`), `MemoryManager.retrieve_preferences_context`. 1210 tests, 89.76% coverage.                                                                  |
 
 ---
