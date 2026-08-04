@@ -7,7 +7,7 @@
       "error": null,
       "faithfulness": null,
       "hallucination": null,
-      "latency_ms": 1,
+      "latency_ms": 4,
       "latency_warning": null,
       "level": "prompt",
       "passed": true,
@@ -23,7 +23,7 @@
       "error": null,
       "faithfulness": null,
       "hallucination": null,
-      "latency_ms": 0,
+      "latency_ms": 1,
       "latency_warning": null,
       "level": "prompt",
       "passed": true,
@@ -39,8 +39,8 @@
       "error": null,
       "faithfulness": null,
       "hallucination": null,
-      "latency_ms": 66,
-      "latency_warning": null,
+      "latency_ms": 215,
+      "latency_warning": "retrieval latency 215ms exceeds 150ms",
       "level": "retrieval",
       "passed": true,
       "precision": 1.0,
@@ -55,7 +55,7 @@
       "error": null,
       "faithfulness": null,
       "hallucination": null,
-      "latency_ms": 2,
+      "latency_ms": 8,
       "latency_warning": null,
       "level": "retrieval",
       "passed": true,
@@ -71,7 +71,7 @@
       "error": null,
       "faithfulness": 1.0,
       "hallucination": false,
-      "latency_ms": 153,
+      "latency_ms": 937,
       "latency_warning": null,
       "level": "e2e",
       "passed": true,
@@ -98,9 +98,9 @@
   "summary": {
     "failed": 0,
     "mean_latency_ms": {
-      "e2e": 153.0,
-      "prompt": 0.5,
-      "retrieval": 34.0
+      "e2e": 937.0,
+      "prompt": 2.5,
+      "retrieval": 111.5
     },
     "passed": 5,
     "retrieval": {
@@ -109,5 +109,5 @@
     },
     "skipped": 0
   },
-  "timestamp": "2026-08-04T13:47:53.044763+00:00"
+  "timestamp": "2026-08-04T15:57:39.972706+00:00"
 }
