@@ -1,7 +1,7 @@
 ---
 epic: v2-05
 title: Memory System
-status: in_progress
+status: completed
 version: 2
 depends_on: [v2-04]
 provides:
@@ -771,9 +771,9 @@ _Copied from Epic 04 Phase 11 completion record (update in Phase 0 audit)._
 | 5     | Project Memory                 | M      | Completed   |
 | 6     | Semantic Retrieval             | L      | Completed   |
 | 7     | Lifecycle & REST API           | L      | Completed   |
-| 8     | Chat Pipeline Integration      | XL     | Not Started |
-| 9     | Frontend Controls              | S      | Not Started |
-| 10    | Validation & Release           | M      | Not Started |
+| 8     | Chat Pipeline Integration      | XL     | Completed   |
+| 9     | Frontend Controls              | S      | Completed   |
+| 10    | Validation & Release           | M      | Completed   |
 
 ---
 
@@ -2209,14 +2209,14 @@ Additional verification:
 
 | Metric                   | Result |
 | ------------------------ | ------ |
-| Memory Settings UI       |        |
-| Preference management    |        |
-| Memory management        |        |
-| API integration          |        |
-| Accessibility validation |        |
-| Feature flag regression  |        |
-| Frontend tests           |        |
-| Coverage                 |        |
+| Memory Settings UI       | ✅ `/settings/memory` — preferences, long-term/project memories, summary clear |
+| Preference management    | ✅ CRUD via `memoryClient`; validation + refresh |
+| Memory management        | ✅ List/delete individual + bulk long-term memories |
+| API integration          | ✅ `memoryClient.ts`, `types/memory.ts`, `healthClient.memory_enabled` |
+| Accessibility validation | ✅ Semantic headings, labels, confirmation dialogs |
+| Feature flag regression  | ✅ Nav/page hidden when off; API `503`; guest redirect |
+| Frontend tests           | ✅ 20 memory-related tests across 3 files |
+| Coverage                 | ✅ 251 frontend tests; lint + build pass |
 
 ---
 
@@ -2381,17 +2381,17 @@ Additional verification:
 
 | Metric                    | Result    |
 | ------------------------- | --------- |
-| Backend Tests             |           |
-| Frontend Tests            |           |
-| Integration Tests         |           |
-| End-to-End Tests          |           |
-| Retrieval Validation      |           |
-| Lifecycle Validation      |           |
-| Performance Validation    |           |
-| Feature Flag Regression   |           |
-| Production Readiness      |           |
-| Release Summary Published |           |
-| Epic Status               | Not Started |
+| Backend Tests             | ✅ 1305 passed, 89.68% `app/` |
+| Frontend Tests            | ✅ 251 passed (41 files) |
+| Integration Tests         | ✅ Chat + unified memory integration (14 tests) |
+| End-to-End Tests          | ✅ Chat memory inject/extract + frontend page flows |
+| Retrieval Validation      | ✅ Semantic retriever + context builder suite |
+| Lifecycle Validation      | ✅ Lifecycle manager + policy engine + REST API |
+| Performance Validation    | ✅ Pre-provider retrieval bounded; async persistence fire-and-forget |
+| Feature Flag Regression   | ✅ Flag-off 1305 passed (89.66%); spot checks 8/8 |
+| Production Readiness      | ✅ Lint, typecheck, eval 5/5, build pass |
+| Release Summary Published | ✅ [post-mvp-v2-epic5-release-summary.md](../releases/post-mvp-v2-epic5-release-summary.md) |
+| Epic Status               | Completed (awaiting user sign-off) |
 
 ---
 
@@ -2453,17 +2453,17 @@ No memory content, embeddings, or personally identifiable information should be 
 
 # Definition of Done
 
-- [ ] All Part I architectural invariants preserved.
+- [x] All Part I architectural invariants preserved.
 - [x] Public APIs frozen after Phase 1.
-- [ ] Memory fully orchestrated through `ChatService` and `UnifiedChatService`.
-- [ ] Memory injected via `MemoryPromptInjector` (not direct storage access).
-- [ ] RAG and Memory remain independent.
-- [ ] `MEMORY_ENABLED=false` preserves Epic 04 behaviour (full flag-off parity validated in Phase 10).
+- [x] Memory fully orchestrated through `ChatService` and `UnifiedChatService`.
+- [x] Memory injected via `MemoryPromptInjector` (not direct storage access).
+- [x] RAG and Memory remain independent.
+- [x] `MEMORY_ENABLED=false` preserves Epic 04 behaviour (full flag-off parity validated in Phase 10).
 - [x] Lifecycle management and REST API operational.
-- [ ] Retrieval deterministic.
-- [ ] Frontend memory management complete.
-- [ ] Backend and frontend tests pass; coverage ≥80% on `app/ai/memory/`.
-- [ ] Release summary published.
+- [x] Retrieval deterministic.
+- [x] Frontend memory management complete.
+- [x] Backend and frontend tests pass; coverage ≥80% on `app/ai/memory/` (89%).
+- [x] Release summary published.
 - [ ] User authorizes Epic 06.
 
 ---
@@ -2517,5 +2517,7 @@ No memory content, embeddings, or personally identifiable information should be 
 | 2.8     | 2026-08-04 | Phase 7 complete: `LifecycleManager`, `MemoryPolicyEngine`, lifecycle integration in `MemoryManager`, Memory REST API (`app/routers/memory.py`), `memory_enabled` health field. 1278 tests, 89.31% coverage.                                                                                                                                                             |
 | 2.9     | 2026-08-04 | Phase 7 doc sync: aligned Part I / Phase 7 router contract (always mounted, route-level `503`); verification gates documented with test evidence; epic-level flag-off parity deferred to Phase 10; PR review fixes (lifecycle provider binding, post-commit scheduling, consolidation eligibility, idempotent delete, fixture teardown). |
 | 2.10    | 2026-08-04 | Phase 8 complete: `MemoryOrchestrator` protocol + `_apply_memory_context`/`_maybe_extract_memory` wired into `ChatService` and `UnifiedChatService` (plain, RAG/document, tool-use, streaming); `MemoryPromptInjector` + `chat/memory_context/v1` template; `bypass_summary_reconstruction` fix preserves ephemeral RAG context; RAG `PromptBuilder`/`instructions` deliverable resolved as a system-message injection instead (standalone RAG service untouched). Full regression suite, 90% coverage. |
+| 2.11    | 2026-08-04 | Phase 9 complete: `MemorySettingsPage`, `memoryClient.ts`, health/nav integration; preference and memory CRUD, summary clear, flag-off/guest UX. 251 frontend tests. |
+| 2.12    | 2026-08-04 | Phase 10 complete: full validation gates (1305 backend, 251 frontend, eval 5/5, flag-off parity); release summary published; config defaults test env-isolation fix. Part II only. |
 
 ---
