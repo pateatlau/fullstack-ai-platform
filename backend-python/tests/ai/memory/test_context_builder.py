@@ -89,3 +89,109 @@ class TestMemoryContextBuilder:
 
         assert context.conversation_summary == "Keep me."
         assert context.preferences == {}
+
+    @pytest.mark.anyio
+    async def test_with_project_memories_populates_memory_context(self) -> None:
+        provider = FakeMemoryProvider()
+        owner_id = uuid.uuid4()
+        project_id = uuid.uuid4()
+        provider.existing_records = [
+            MemoryRecord(
+                id=uuid.uuid4(),
+                memory_type=MemoryType.PROJECT,
+                scope=MemoryScope.PROJECT,
+                owner_id=owner_id,
+                project_id=project_id,
+                content="Uses FastAPI.",
+                created_at=_NOW,
+                updated_at=_NOW,
+                source="api",
+            )
+        ]
+        builder = MemoryContextBuilder(provider)  # type: ignore[arg-type]
+
+        context = await builder.with_project_memories(owner_id, project_id)
+
+        assert len(context.project_memories) == 1
+        assert context.project_memories[0].content == "Uses FastAPI."
+        assert context.preferences == {}
+
+    @pytest.mark.anyio
+    async def test_with_project_memories_preserves_existing_context_fields(
+        self,
+    ) -> None:
+        provider = FakeMemoryProvider()
+        owner_id = uuid.uuid4()
+        project_id = uuid.uuid4()
+        provider.existing_records = [
+            MemoryRecord(
+                id=uuid.uuid4(),
+                memory_type=MemoryType.PROJECT,
+                scope=MemoryScope.PROJECT,
+                owner_id=owner_id,
+                project_id=project_id,
+                content="Scoped fact.",
+                created_at=_NOW,
+                updated_at=_NOW,
+                source="api",
+            )
+        ]
+        base = MemoryContext(preferences={"response_tone": {"tone": "formal"}})
+        builder = MemoryContextBuilder(provider)  # type: ignore[arg-type]
+
+        context = await builder.with_project_memories(
+            owner_id, project_id, context=base
+        )
+
+        assert context.preferences == {"response_tone": {"tone": "formal"}}
+        assert len(context.project_memories) == 1
+
+    @pytest.mark.anyio
+    async def test_with_project_memories_keeps_project_memories_separate_from_preferences(
+        self,
+    ) -> None:
+        provider = FakeMemoryProvider()
+        owner_id = uuid.uuid4()
+        project_id = uuid.uuid4()
+        await provider.set_preference(
+            user_id=owner_id, key="response_tone", value={"tone": "formal"}
+        )
+        provider.existing_records = [
+            MemoryRecord(
+                id=uuid.uuid4(),
+                memory_type=MemoryType.PROJECT,
+                scope=MemoryScope.PROJECT,
+                owner_id=owner_id,
+                project_id=project_id,
+                content="Project-only.",
+                created_at=_NOW,
+                updated_at=_NOW,
+                source="api",
+            )
+        ]
+        builder = MemoryContextBuilder(provider)  # type: ignore[arg-type]
+
+        context = await builder.with_project_memories(owner_id, project_id)
+
+        assert context.preferences == {}
+        assert len(context.project_memories) == 1
+
+    @pytest.mark.anyio
+    async def test_with_project_memories_returns_base_context_on_provider_failure(
+        self,
+    ) -> None:
+        provider = FakeMemoryProvider()
+
+        async def failing_list(*args, **kwargs):  # noqa: ANN002, ANN003
+            raise RuntimeError("database unavailable")
+
+        provider.list_active_records = failing_list  # type: ignore[method-assign]
+        builder = MemoryContextBuilder(provider)  # type: ignore[arg-type]
+        base = MemoryContext(conversation_summary="Keep me.")
+
+        context = await builder.with_project_memories(
+            uuid.uuid4(), uuid.uuid4(), context=base
+        )
+
+        assert context.conversation_summary == "Keep me."
+        assert context.project_memories == []

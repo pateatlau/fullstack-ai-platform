@@ -54,4 +54,5 @@ def test_subpackages_import_independently() -> None:
     importlib.import_module("app.ai.memory.quality")
     importlib.import_module("app.ai.memory.summarizer")
     importlib.import_module("app.ai.memory.preferences")
+    importlib.import_module("app.ai.memory.project")
     importlib.import_module("app.ai.memory.context_builder")

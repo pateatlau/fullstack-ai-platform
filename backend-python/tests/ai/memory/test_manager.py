@@ -11,6 +11,8 @@ from typing import cast
 import pytest
 
 from app.ai.memory.events import MemoryEvent, MemoryEventType
+from app.ai.memory.exceptions import MemoryAccessDeniedError
+from app.ai.memory.lifecycle import LifecycleState
 from app.ai.memory.manager import MemoryManager
 from app.ai.memory.models import MemoryRecord, MemoryScope, MemoryType
 from app.ai.prompts.manager import create_prompt_manager
@@ -65,8 +67,14 @@ class FakeMemoryProvider:
         session_id: uuid.UUID | None = None,
         top_k: int,
     ) -> list[MemoryRecord]:
-        del query_embedding, memory_type, session_id, top_k
-        return [r for r in self.existing_records if r.owner_id == owner_id]
+        del query_embedding, top_k
+        return [
+            r
+            for r in self.existing_records
+            if r.owner_id == owner_id
+            and (memory_type is None or r.memory_type is memory_type)
+            and (session_id is None or r.project_id == session_id)
+        ]
 
     async def list_active_records(
         self,
@@ -76,8 +84,14 @@ class FakeMemoryProvider:
         session_id: uuid.UUID | None = None,
         limit: int = 100,
     ) -> list[MemoryRecord]:
-        del memory_type, session_id, limit
-        return [r for r in self.existing_records if r.owner_id == owner_id]
+        del limit
+        return [
+            r
+            for r in self.existing_records
+            if r.owner_id == owner_id
+            and (memory_type is None or r.memory_type is memory_type)
+            and (session_id is None or r.project_id == session_id)
+        ]
 
     async def update_lifecycle_state(self, *args, **kwargs):  # noqa: ANN002, ANN003
         raise NotImplementedError
@@ -150,6 +164,7 @@ def _manager(
     *,
     settings: Settings | None = None,
     publisher: _RecordingPublisher | None = None,
+    session_ownership_checker: object | None = None,
 ) -> MemoryManager:
     return MemoryManager(
         provider=provider,  # type: ignore[arg-type]
@@ -163,7 +178,24 @@ def _manager(
         embedding_provider=_FakeEmbeddingProvider(),
         prompt_manager=create_prompt_manager(),
         event_publisher=publisher,
+        session_ownership_checker=session_ownership_checker,  # type: ignore[arg-type]
     )
+
+
+class _AlwaysOwnsSessionChecker:
+    async def user_owns_session(
+        self, *, user_id: uuid.UUID, session_id: uuid.UUID
+    ) -> bool:
+        del user_id, session_id
+        return True
+
+
+class _NeverOwnsSessionChecker:
+    async def user_owns_session(
+        self, *, user_id: uuid.UUID, session_id: uuid.UUID
+    ) -> bool:
+        del user_id, session_id
+        return False
 
 
 class TestMemoryManager:
@@ -275,6 +307,214 @@ class TestMemoryManager:
         )
 
 
+class TestMemoryManagerProjectMemory:
+    @pytest.mark.anyio
+    async def test_list_project_memories_returns_session_scoped_records(self) -> None:
+        provider = FakeMemoryProvider()
+        owner_id = uuid.uuid4()
+        project_id = uuid.uuid4()
+        other_project_id = uuid.uuid4()
+        provider.existing_records = [
+            MemoryRecord(
+                id=uuid.uuid4(),
+                memory_type=MemoryType.PROJECT,
+                scope=MemoryScope.PROJECT,
+                owner_id=owner_id,
+                project_id=project_id,
+                content="In scope.",
+                created_at=_NOW,
+                updated_at=_NOW,
+                source="api",
+            ),
+            MemoryRecord(
+                id=uuid.uuid4(),
+                memory_type=MemoryType.PROJECT,
+                scope=MemoryScope.PROJECT,
+                owner_id=owner_id,
+                project_id=other_project_id,
+                content="Other session.",
+                created_at=_NOW,
+                updated_at=_NOW,
+                source="api",
+            ),
+        ]
+        manager = _manager(
+            provider, session_ownership_checker=_AlwaysOwnsSessionChecker()
+        )
+
+        records = await manager.list_project_memories(
+            owner_id=owner_id, project_id=project_id
+        )
+
+        assert len(records) == 1
+        assert records[0].content == "In scope."
+
+    @pytest.mark.anyio
+    async def test_list_project_memories_denies_unowned_session(self) -> None:
+        provider = FakeMemoryProvider()
+        manager = _manager(
+            provider, session_ownership_checker=_NeverOwnsSessionChecker()
+        )
+
+        with pytest.raises(MemoryAccessDeniedError):
+            await manager.list_project_memories(
+                owner_id=uuid.uuid4(), project_id=uuid.uuid4()
+            )
+
+    @pytest.mark.anyio
+    async def test_search_project_memories_filters_by_session(self) -> None:
+        provider = FakeMemoryProvider()
+        owner_id = uuid.uuid4()
+        project_id = uuid.uuid4()
+        provider.existing_records = [
+            MemoryRecord(
+                id=uuid.uuid4(),
+                memory_type=MemoryType.PROJECT,
+                scope=MemoryScope.PROJECT,
+                owner_id=owner_id,
+                project_id=project_id,
+                content="Match.",
+                created_at=_NOW,
+                updated_at=_NOW,
+                source="api",
+            )
+        ]
+        manager = _manager(
+            provider, session_ownership_checker=_AlwaysOwnsSessionChecker()
+        )
+
+        results = await manager.search_project_memories(
+            [0.1] * DIMENSIONS,
+            owner_id=owner_id,
+            project_id=project_id,
+            top_k=5,
+        )
+
+        assert len(results) == 1
+        assert results[0].content == "Match."
+
+    @pytest.mark.anyio
+    async def test_get_project_record_hides_cross_session_record(self) -> None:
+        provider = FakeMemoryProvider()
+        owner_id = uuid.uuid4()
+        project_id = uuid.uuid4()
+        other_project_id = uuid.uuid4()
+        record = MemoryRecord(
+            id=uuid.uuid4(),
+            memory_type=MemoryType.PROJECT,
+            scope=MemoryScope.PROJECT,
+            owner_id=owner_id,
+            project_id=other_project_id,
+            content="Other session.",
+            created_at=_NOW,
+            updated_at=_NOW,
+            source="api",
+        )
+        provider.record = record
+        manager = _manager(
+            provider, session_ownership_checker=_AlwaysOwnsSessionChecker()
+        )
+
+        assert (
+            await manager.get_project_record(
+                record.id, owner_id=owner_id, project_id=project_id
+            )
+            is None
+        )
+
+    @pytest.mark.anyio
+    async def test_update_project_record_rejects_cross_session_scope(self) -> None:
+        provider = FakeMemoryProvider()
+        owner_id = uuid.uuid4()
+        project_id = uuid.uuid4()
+        record = MemoryRecord(
+            id=uuid.uuid4(),
+            memory_type=MemoryType.PROJECT,
+            scope=MemoryScope.PROJECT,
+            owner_id=owner_id,
+            project_id=uuid.uuid4(),
+            content="Wrong session.",
+            created_at=_NOW,
+            updated_at=_NOW,
+            source="api",
+        )
+        manager = _manager(
+            provider, session_ownership_checker=_AlwaysOwnsSessionChecker()
+        )
+
+        with pytest.raises(MemoryAccessDeniedError, match="requested session"):
+            await manager.update_project_record(
+                record, owner_id=owner_id, project_id=project_id
+            )
+
+    @pytest.mark.anyio
+    async def test_retrieve_project_context_integrates_with_memory_context(
+        self,
+    ) -> None:
+        provider = FakeMemoryProvider()
+        owner_id = uuid.uuid4()
+        project_id = uuid.uuid4()
+        provider.existing_records = [
+            MemoryRecord(
+                id=uuid.uuid4(),
+                memory_type=MemoryType.PROJECT,
+                scope=MemoryScope.PROJECT,
+                owner_id=owner_id,
+                project_id=project_id,
+                content="Project context.",
+                created_at=_NOW,
+                updated_at=_NOW,
+                source="api",
+            )
+        ]
+        manager = _manager(
+            provider, session_ownership_checker=_AlwaysOwnsSessionChecker()
+        )
+
+        context = await manager.retrieve_project_context(
+            owner_id=owner_id, project_id=project_id
+        )
+
+        assert len(context.project_memories) == 1
+        assert context.project_memories[0].content == "Project context."
+        assert context.preferences == {}
+
+    @pytest.mark.anyio
+    async def test_retrieve_project_context_returns_base_on_ownership_denial(
+        self,
+    ) -> None:
+        provider = FakeMemoryProvider()
+        manager = _manager(
+            provider, session_ownership_checker=_NeverOwnsSessionChecker()
+        )
+
+        context = await manager.retrieve_project_context(
+            owner_id=uuid.uuid4(), project_id=uuid.uuid4()
+        )
+
+        assert context.project_memories == []
+
+    @pytest.mark.anyio
+    async def test_list_project_memories_returns_empty_on_provider_failure(
+        self,
+    ) -> None:
+        provider = FakeMemoryProvider()
+
+        async def failing_list(*args, **kwargs):  # noqa: ANN002, ANN003
+            raise RuntimeError("database unavailable")
+
+        provider.list_active_records = failing_list  # type: ignore[method-assign]
+        manager = _manager(
+            provider, session_ownership_checker=_AlwaysOwnsSessionChecker()
+        )
+
+        records = await manager.list_project_memories(
+            owner_id=uuid.uuid4(), project_id=uuid.uuid4()
+        )
+
+        assert records == []
+
+
 class TestMemoryManagerExtraction:
     @pytest.mark.anyio
     async def test_extract_and_persist_async_persists_approved_memories(self) -> None:
@@ -309,6 +549,45 @@ class TestMemoryManagerExtraction:
         assert provider.created_records[0].source == "extraction_v1"
         assert provider.created_records[0].embedding is not None
         assert len(publisher.events) == 1
+        assert publisher.events[0].event_type is MemoryEventType.CREATED
+
+    @pytest.mark.anyio
+    async def test_extract_and_persist_async_persists_project_memories(self) -> None:
+        provider = FakeMemoryProvider()
+        publisher = _RecordingPublisher()
+        manager = _manager(provider, publisher=publisher)
+        owner_id = uuid.uuid4()
+        session_id = uuid.uuid4()
+        payload = {
+            "memories": [
+                {
+                    "memory_type": "project",
+                    "content": "This project uses Postgres.",
+                    "confidence": 0.95,
+                    "importance": 0.9,
+                }
+            ]
+        }
+        llm = FakeLLMProvider(response=json.dumps(payload))
+
+        manager.extract_and_persist_async(
+            owner_id=owner_id,
+            session_id=session_id,
+            messages=[
+                ChatMessageSchema(
+                    role="user", content="We use Postgres in this project."
+                )
+            ],
+            provider=cast(LLMProvider, llm),
+            provider_name="openai",
+            model="gpt-4o-mini",
+        )
+        await _await_extraction(publisher.completed)
+
+        assert len(provider.created_records) == 1
+        assert provider.created_records[0].memory_type is MemoryType.PROJECT
+        assert provider.created_records[0].project_id == session_id
+        assert provider.created_records[0].lifecycle_state is LifecycleState.CREATED
         assert publisher.events[0].event_type is MemoryEventType.CREATED
 
     @pytest.mark.anyio

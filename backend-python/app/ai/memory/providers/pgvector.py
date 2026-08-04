@@ -1,8 +1,8 @@
 """pgvector-backed ``MemoryProvider`` (Epic 05).
 
 Phase 3 implements durable record CRUD and similarity search for dedupe.
-Phase 4 implements structured preference persistence. Lifecycle updates land
-in Phase 7.
+Phase 4 implements structured preference persistence. Phase 5 enforces project
+memory session isolation on updates. Lifecycle updates land in Phase 7.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.memory.exceptions import MemoryNotFoundError
+from app.ai.memory.exceptions import MemoryAccessDeniedError, MemoryNotFoundError
 from app.ai.memory.lifecycle import LifecycleState
 from app.ai.memory.models import MemoryRecord, MemoryScope, MemoryType
 from app.core.config import Settings
@@ -49,8 +49,10 @@ class PgVectorMemoryProvider:
                 f"Memory record {record.id} not found for owner {record.owner_id}."
             )
 
+        _assert_memory_type_immutable(existing, record)
+        _assert_memory_type_scope(record)
+
         existing.session_id = record.project_id
-        existing.memory_type = record.memory_type.value
         existing.title = record.title
         existing.content = record.content
         existing.summary = record.summary
@@ -254,6 +256,7 @@ def _validate_embedding(
 
 
 def _to_orm(record: MemoryRecord) -> DbMemoryRecord:
+    _assert_memory_type_scope(record)
     return DbMemoryRecord(
         id=record.id,
         owner_id=record.owner_id,
@@ -274,3 +277,34 @@ def _to_orm(record: MemoryRecord) -> DbMemoryRecord:
         last_accessed_at=record.last_accessed_at,
         expires_at=record.expires_at,
     )
+
+
+def _assert_memory_type_scope(record: MemoryRecord) -> None:
+    """Ensure memory_type and session scope stay aligned at ORM conversion."""
+    if record.memory_type is MemoryType.PROJECT:
+        if record.project_id is None:
+            raise ValueError("project_id is required for project memory.")
+        return
+    if record.project_id is not None:
+        raise MemoryAccessDeniedError(
+            "User memory cannot be associated with a session."
+        )
+
+
+def _assert_memory_type_immutable(
+    existing: DbMemoryRecord, record: MemoryRecord
+) -> None:
+    """Reject updates that change memory domain or project session ownership."""
+    existing_type = MemoryType(existing.memory_type)
+    if existing_type is MemoryType.PROJECT:
+        if record.memory_type is not MemoryType.PROJECT:
+            raise MemoryAccessDeniedError(
+                "Cannot convert project memory to user scope."
+            )
+        if record.project_id != existing.session_id:
+            raise MemoryAccessDeniedError(
+                "Cannot move project memory to a different session."
+            )
+        return
+    if record.memory_type is MemoryType.PROJECT:
+        raise MemoryAccessDeniedError("Cannot convert user memory to project scope.")
