@@ -22,6 +22,7 @@ def test_public_api_surface_matches_phase_1_scope() -> None:
         "LifecycleState",
         "MemoryAccessDeniedError",
         "MemoryContext",
+        "MemoryContextBuilder",
         "MemoryError",
         "MemoryEvent",
         "MemoryEventType",
@@ -34,6 +35,9 @@ def test_public_api_surface_matches_phase_1_scope() -> None:
         "MemoryScope",
         "MemoryType",
         "PgVectorMemoryProvider",
+        "UserPreferenceItem",
+        "UserPreferenceListResponse",
+        "UserPreferenceUpsert",
     }
 
 
@@ -49,3 +53,5 @@ def test_subpackages_import_independently() -> None:
     importlib.import_module("app.ai.memory.extraction")
     importlib.import_module("app.ai.memory.quality")
     importlib.import_module("app.ai.memory.summarizer")
+    importlib.import_module("app.ai.memory.preferences")
+    importlib.import_module("app.ai.memory.context_builder")

@@ -105,13 +105,6 @@ class TestPgVectorMemoryProviderScaffold:
                 uuid.uuid4(), owner_id=uuid.uuid4(), state=LifecycleState.ACTIVE
             )
 
-    @pytest.mark.anyio
-    async def test_get_preference_not_implemented(
-        self, provider: PgVectorMemoryProvider
-    ) -> None:
-        with pytest.raises(NotImplementedError, match="Phase 4"):
-            await provider.get_preference(user_id=uuid.uuid4(), key="response_tone")
-
 
 @pytest.mark.anyio
 async def test_create_and_get_record_round_trip(db_session) -> None:
@@ -207,3 +200,65 @@ async def test_project_record_persists_session_scope(db_session) -> None:
 
     assert created.project_id == session_id
     assert created.memory_type is MemoryType.PROJECT
+
+
+@pytest.mark.anyio
+async def test_preference_round_trip(db_session) -> None:
+    user_id = await _make_user(db_session)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+
+    assert await provider.get_preference(user_id=user_id, key="response_tone") is None
+
+    await provider.set_preference(
+        user_id=user_id, key="response_tone", value={"tone": "concise"}
+    )
+    assert await provider.get_preference(user_id=user_id, key="response_tone") == {
+        "tone": "concise"
+    }
+    assert await provider.list_preferences(user_id=user_id) == {
+        "response_tone": {"tone": "concise"}
+    }
+
+    await provider.set_preference(
+        user_id=user_id, key="response_tone", value={"tone": "formal"}
+    )
+    assert await provider.get_preference(user_id=user_id, key="response_tone") == {
+        "tone": "formal"
+    }
+
+    await provider.delete_preference(user_id=user_id, key="response_tone")
+    assert await provider.get_preference(user_id=user_id, key="response_tone") is None
+
+
+@pytest.mark.anyio
+async def test_preference_isolation_between_users(db_session) -> None:
+    user_id = await _make_user(db_session)
+    other_user = await _make_user(db_session)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+
+    await provider.set_preference(
+        user_id=user_id, key="response_tone", value={"tone": "concise"}
+    )
+
+    assert (
+        await provider.get_preference(user_id=other_user, key="response_tone") is None
+    )
+    assert await provider.list_preferences(user_id=other_user) == {}
+
+
+@pytest.mark.anyio
+async def test_preferences_remain_independent_from_memory_records(db_session) -> None:
+    owner_id = await _make_user(db_session)
+    provider = PgVectorMemoryProvider(db_session, Settings(openai_api_key="test-key"))
+
+    await provider.create_record(_domain_record(owner_id=owner_id))
+    await provider.set_preference(
+        user_id=owner_id, key="response_tone", value={"tone": "concise"}
+    )
+
+    preferences = await provider.list_preferences(user_id=owner_id)
+    records = await provider.list_active_records(owner_id=owner_id)
+
+    assert preferences == {"response_tone": {"tone": "concise"}}
+    assert len(records) == 1
+    assert records[0].content == "User prefers concise answers."

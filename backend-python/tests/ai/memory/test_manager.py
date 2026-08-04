@@ -88,6 +88,16 @@ class FakeMemoryProvider:
         self.calls.append(("get_preference", {"user_id": user_id, "key": key}))
         return self.preferences.get((user_id, key))
 
+    async def list_preferences(
+        self, *, user_id: uuid.UUID
+    ) -> dict[str, dict[str, object]]:
+        self.calls.append(("list_preferences", {"user_id": user_id}))
+        return {
+            key: value
+            for (uid, key), value in self.preferences.items()
+            if uid == user_id
+        }
+
     async def set_preference(
         self, *, user_id: uuid.UUID, key: str, value: dict[str, object]
     ) -> None:
@@ -204,6 +214,64 @@ class TestMemoryManager:
         await manager.delete_preference(user_id=user_id, key="response_tone")
         assert (
             await manager.get_preference(user_id=user_id, key="response_tone") is None
+        )
+
+    @pytest.mark.anyio
+    async def test_list_preferences_returns_normalized_preferences(self) -> None:
+        provider = FakeMemoryProvider()
+        user_id = uuid.uuid4()
+        manager = _manager(provider)
+
+        await manager.set_preference(
+            user_id=user_id, key="response_tone", value={"tone": "concise"}
+        )
+        await manager.set_preference(
+            user_id=user_id, key="preferred_units", value={"system": "metric"}
+        )
+
+        preferences = await manager.list_preferences(user_id=user_id)
+
+        assert list(preferences.keys()) == ["preferred_units", "response_tone"]
+
+    @pytest.mark.anyio
+    async def test_set_preference_rejects_invalid_key(self) -> None:
+        provider = FakeMemoryProvider()
+        manager = _manager(provider)
+
+        with pytest.raises(ValueError, match="Preference key"):
+            await manager.set_preference(
+                user_id=uuid.uuid4(), key="Bad Key", value={"tone": "concise"}
+            )
+
+    @pytest.mark.anyio
+    async def test_retrieve_preferences_context_integrates_with_memory_context(
+        self,
+    ) -> None:
+        provider = FakeMemoryProvider()
+        user_id = uuid.uuid4()
+        manager = _manager(provider)
+        await manager.set_preference(
+            user_id=user_id, key="response_tone", value={"tone": "formal"}
+        )
+
+        context = await manager.retrieve_preferences_context(user_id=user_id)
+
+        assert context.preferences == {"response_tone": {"tone": "formal"}}
+        assert context.user_memories == []
+
+    @pytest.mark.anyio
+    async def test_get_preference_returns_none_on_provider_failure(self) -> None:
+        provider = FakeMemoryProvider()
+
+        async def failing_get(*args, **kwargs):  # noqa: ANN002, ANN003
+            raise RuntimeError("database unavailable")
+
+        provider.get_preference = failing_get  # type: ignore[method-assign]
+        manager = _manager(provider)
+
+        assert (
+            await manager.get_preference(user_id=uuid.uuid4(), key="response_tone")
+            is None
         )
 
 

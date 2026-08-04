@@ -10,9 +10,10 @@ import datetime
 import uuid
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.ai.memory.lifecycle import LifecycleState
+from app.ai.memory.preferences import validate_preference_key, validate_preference_value
 
 
 class MemoryType(StrEnum):
@@ -81,6 +82,40 @@ class MemoryRecord(BaseModel):
                 "scope must match memory_type in v1 ('system' scope is reserved)."
             )
         return self
+
+
+class UserPreferenceUpsert(BaseModel):
+    """Request body for upserting a structured user preference (Phase 4 API model)."""
+
+    value: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("value")
+    @classmethod
+    def _validate_value(cls, value: object) -> dict[str, object]:
+        return validate_preference_value(value)
+
+
+class UserPreferenceItem(BaseModel):
+    """Canonical preference key/value pair for responses and ``MemoryContext``."""
+
+    key: str
+    value: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("key")
+    @classmethod
+    def _validate_key(cls, key: str) -> str:
+        return validate_preference_key(key)
+
+    @field_validator("value")
+    @classmethod
+    def _validate_value(cls, value: object) -> dict[str, object]:
+        return validate_preference_value(value)
+
+
+class UserPreferenceListResponse(BaseModel):
+    """List of caller-owned structured preferences."""
+
+    preferences: list[UserPreferenceItem] = Field(default_factory=list)
 
 
 class MemoryContext(BaseModel):
