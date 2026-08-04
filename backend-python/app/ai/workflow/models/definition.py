@@ -8,6 +8,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.ai.workflow.models.identifiers import validate_identifier
+
 
 class NodeType(StrEnum):
     """Supported workflow node types (Part I § Node Types)."""
@@ -46,6 +48,11 @@ class WorkflowNode(BaseModel):
     retry_policy: NodeRetryPolicy | None = None
     timeout_seconds: int | None = Field(default=None, ge=1)
 
+    @field_validator("id")
+    @classmethod
+    def _validate_id(cls, value: str) -> str:
+        return validate_identifier(value, field_name="node id")
+
 
 class WorkflowEdge(BaseModel):
     """A directed edge between two workflow nodes."""
@@ -54,6 +61,11 @@ class WorkflowEdge(BaseModel):
     from_node_id: str = Field(min_length=1)
     to_node_id: str = Field(min_length=1)
     condition: dict[str, object] | None = None
+
+    @field_validator("from_node_id", "to_node_id")
+    @classmethod
+    def _validate_node_reference(cls, value: str) -> str:
+        return validate_identifier(value, field_name="node id")
 
 
 class WorkflowDefinition(BaseModel):
@@ -111,3 +123,8 @@ class WorkflowDefinition(BaseModel):
         if not stripped:
             raise ValueError("name must not be blank.")
         return stripped
+
+    @field_validator("entry_node_id")
+    @classmethod
+    def _validate_entry_node_id(cls, value: str) -> str:
+        return validate_identifier(value, field_name="entry_node_id")

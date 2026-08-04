@@ -43,5 +43,10 @@ class ToolExecutionContext(BaseModel):
 
     caller: CallerContext
     request_id: str | None = None
+    # Stable per-attempt id (``{run_id}:{node_id}:{attempt}``) set by the Workflow
+    # Engine (Epic 06) so receipt-aware tools can detect and dedupe replayed
+    # invocations after crash recovery (Part I § Crash-safe running). Unused by
+    # ToolExecutor itself and ``None`` outside workflow node execution.
+    execution_receipt_id: str | None = None
 
     model_config = {"arbitrary_types_allowed": True}

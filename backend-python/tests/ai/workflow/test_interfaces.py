@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import uuid
 
@@ -58,6 +59,7 @@ class FakeWorkflowStore:
         self._definitions: dict[uuid.UUID, WorkflowDefinition] = {}
         self._runs: dict[uuid.UUID, WorkflowRun] = {}
         self._executions: dict[uuid.UUID, WorkflowNodeExecution] = {}
+        self._run_create_lock = asyncio.Lock()
 
     async def create_definition(
         self, definition: WorkflowDefinition
@@ -124,6 +126,18 @@ class FakeWorkflowStore:
     async def create_run(self, run: WorkflowRun) -> WorkflowRun:
         self._runs[run.id] = run
         return run
+
+    async def get_or_create_run(self, run: WorkflowRun) -> tuple[WorkflowRun, bool]:
+        async with self._run_create_lock:
+            existing = await self.get_run_by_idempotency_key(
+                owner_id=run.owner_id,
+                workflow_definition_id=run.workflow_definition_id,
+                idempotency_key=run.idempotency_key,
+            )
+            if existing is not None:
+                return existing, False
+            self._runs[run.id] = run
+            return run, True
 
     async def get_run(
         self, run_id: uuid.UUID, *, owner_id: uuid.UUID
@@ -194,6 +208,15 @@ class FakeWorkflowStore:
     async def append_node_execution(
         self, execution: WorkflowNodeExecution
     ) -> WorkflowNodeExecution:
+        for existing in self._executions.values():
+            if (
+                existing.run_id == execution.run_id
+                and existing.node_id == execution.node_id
+                and existing.attempt == execution.attempt
+            ):
+                updated = execution.model_copy(update={"id": existing.id})
+                self._executions[existing.id] = updated
+                return updated
         self._executions[execution.id] = execution
         return execution
 
@@ -244,8 +267,15 @@ class TestWorkflowStoreProtocol:
         assert listed == [definition]
 
         run = _run(owner_id, definition.id)
-        created_run = await store.create_run(run)
+        created_run, was_created = await store.get_or_create_run(run)
+        assert was_created is True
         assert created_run == run
+
+        existing_run, was_created = await store.get_or_create_run(
+            run.model_copy(update={"id": uuid.uuid4()})
+        )
+        assert was_created is False
+        assert existing_run == run
 
         by_key = await store.get_run_by_idempotency_key(
             owner_id=owner_id,

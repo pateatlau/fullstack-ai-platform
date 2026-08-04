@@ -1,4 +1,4 @@
-"""Tests for ``WorkflowManager`` skeleton (Phase 1)."""
+"""Tests for ``WorkflowManager`` skeleton (Phase 1). Run tests: test_manager_runs.py."""
 
 from __future__ import annotations
 
@@ -49,16 +49,4 @@ async def test_create_definition_validates_graph() -> None:
                     ],
                 }
             )
-        )
-
-
-@pytest.mark.anyio
-async def test_start_run_not_implemented_in_phase_1() -> None:
-    manager = WorkflowManager(FakeWorkflowStore())
-
-    with pytest.raises(NotImplementedError, match="Phase 3"):
-        await manager.start_run(
-            uuid.uuid4(),
-            owner_id=uuid.uuid4(),
-            idempotency_key="key-1",
         )

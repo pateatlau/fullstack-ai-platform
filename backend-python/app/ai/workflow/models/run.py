@@ -63,10 +63,15 @@ class WorkflowRun(BaseModel):
     @field_validator("idempotency_key")
     @classmethod
     def _strip_idempotency_key(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("idempotency_key must not be blank.")
-        return stripped
+        return normalize_idempotency_key(value)
+
+
+def normalize_idempotency_key(value: str) -> str:
+    """Strip and reject blank caller-supplied run idempotency keys."""
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("idempotency_key must not be blank.")
+    return stripped
 
 
 class WorkflowNodeExecution(BaseModel):

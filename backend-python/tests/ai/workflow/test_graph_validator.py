@@ -157,16 +157,16 @@ class TestGraphValidatorForkJoin:
         definition = _definition(
             nodes=[
                 _node("start"),
-                _node("fork-a", NodeType.FORK, config={"join_node_id": "join"}),
-                _node("fork-b", NodeType.FORK, config={"join_node_id": "join"}),
-                _node("join", NodeType.JOIN, config={"fork_node_id": "fork-a"}),
+                _node("fork_a", NodeType.FORK, config={"join_node_id": "join"}),
+                _node("fork_b", NodeType.FORK, config={"join_node_id": "join"}),
+                _node("join", NodeType.JOIN, config={"fork_node_id": "fork_a"}),
                 _node("end", NodeType.TERMINAL),
             ],
             edges=[
-                _edge("e1", "start", "fork-a"),
-                _edge("e2", "start", "fork-b"),
-                _edge("e3", "fork-a", "join"),
-                _edge("e4", "fork-b", "end"),
+                _edge("e1", "start", "fork_a"),
+                _edge("e2", "start", "fork_b"),
+                _edge("e3", "fork_a", "join"),
+                _edge("e4", "fork_b", "end"),
                 _edge("e5", "join", "end"),
             ],
         )

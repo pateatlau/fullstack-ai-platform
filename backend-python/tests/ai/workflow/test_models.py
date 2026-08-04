@@ -107,6 +107,17 @@ class TestWorkflowDefinition:
         with pytest.raises(ValidationError):
             _definition(name="   ")
 
+    def test_invalid_node_id_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="node id"):
+            _node("fetch-user")
+
+    def test_invalid_entry_node_id_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="entry_node_id"):
+            _definition(
+                nodes=[_node("valid_node")],
+                entry_node_id="fetch-user",
+            )
+
     def test_serialization_round_trip(self) -> None:
         definition = _definition(
             edges=[
@@ -183,6 +194,14 @@ class TestWorkflowContext:
         assert context.trigger_input == {}
         assert context.variables == {}
         assert context.metadata == {}
+
+    def test_invalid_trigger_input_key_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="trigger_input key"):
+            WorkflowContext(trigger_input={"fetch-user": "value"})
+
+    def test_nested_trigger_input_keys_validated(self) -> None:
+        with pytest.raises(ValidationError, match="trigger_input.nested key"):
+            WorkflowContext(trigger_input={"nested": {"bad-key": 1}})
 
     def test_serialization_round_trip(self) -> None:
         context = WorkflowContext(
