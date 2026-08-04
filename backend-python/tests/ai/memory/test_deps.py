@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from unittest.mock import AsyncMock
 
 import pytest
@@ -28,10 +27,13 @@ async def test_get_memory_manager_wires_the_resolved_provider() -> None:
     settings = Settings(openai_api_key="test-key")
     provider = get_memory_provider(session=session, settings=settings)
 
-    manager = get_memory_manager(provider=provider)
+    manager = get_memory_manager(
+        provider=provider,
+        settings=settings,
+        embedding_provider=AsyncMock(),
+        prompt_manager=AsyncMock(),
+    )
 
     assert isinstance(manager, MemoryManager)
-    # Phase 1 scaffold: the wired provider is not yet implemented, so
-    # delegated calls surface the same NotImplementedError as the provider.
-    with pytest.raises(NotImplementedError, match="Phase 3"):
-        await manager.get_record(uuid.uuid4(), owner_id=uuid.uuid4())
+    assert manager.get_record is not None
+    assert manager._background_provider_factory is not None
