@@ -12,6 +12,7 @@ export interface ChatHealthFlags {
   toolsEnabled: boolean
   ragEnabled: boolean
   voiceEnabled: boolean
+  memoryEnabled: boolean
   capabilitiesByProvider: Partial<Record<ProviderName, ProviderCapabilityFlags>>
 }
 
@@ -26,6 +27,7 @@ export function useChatStreamingEnabled(): ChatHealthFlags {
   const [toolsEnabled, setToolsEnabled] = useState(false)
   const [ragEnabled, setRagEnabled] = useState(false)
   const [voiceEnabled, setVoiceEnabled] = useState(false)
+  const [memoryEnabled, setMemoryEnabled] = useState(false)
   const [capabilitiesByProvider, setCapabilitiesByProvider] =
     useState<Partial<Record<ProviderName, ProviderCapabilityFlags>>>(DEFAULT_CAPABILITIES)
 
@@ -39,6 +41,7 @@ export function useChatStreamingEnabled(): ChatHealthFlags {
           setToolsEnabled(health.tools_enabled)
           setRagEnabled(health.rag_enabled)
           setVoiceEnabled(health.voice_enabled)
+          setMemoryEnabled(health.memory_enabled)
           setCapabilitiesByProvider(
             (health.capabilities?.by_provider as
               Partial<Record<ProviderName, ProviderCapabilityFlags>> | undefined) ??
@@ -60,6 +63,7 @@ export function useChatStreamingEnabled(): ChatHealthFlags {
     toolsEnabled,
     ragEnabled,
     voiceEnabled,
+    memoryEnabled,
     capabilitiesByProvider,
   }
 }
