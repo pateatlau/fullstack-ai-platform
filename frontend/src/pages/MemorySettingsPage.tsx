@@ -98,6 +98,7 @@ function MemorySettingsContent() {
   const [isBulkDeleting, setIsBulkDeleting] = useState(false)
 
   const [clearSummarySessionId, setClearSummarySessionId] = useState<string | null>(null)
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false)
   const [clearingSummarySessionId, setClearingSummarySessionId] = useState<string | null>(null)
   const [clearedSummarySessionIds, setClearedSummarySessionIds] = useState<Set<string>>(
     () => new Set(),
@@ -123,7 +124,7 @@ function MemorySettingsContent() {
     [handleInvalidAccessToken],
   )
 
-  const loadCoreData = useCallback(async () => {
+  const loadCoreData = useCallback(async (preserveSessionId?: string) => {
     const [records, prefs, sessionList] = await Promise.all([
       listMemoryRecords({ memoryType: 'user' }),
       listPreferences(),
@@ -133,7 +134,10 @@ function MemorySettingsContent() {
     setPreferences(prefs)
     setSessions(sessionList)
 
-    const nextSessionId = sessionList[0]?.id ?? ''
+    const nextSessionId =
+      preserveSessionId && sessionList.some((session) => session.id === preserveSessionId)
+        ? preserveSessionId
+        : (sessionList[0]?.id ?? '')
     setSelectedSessionId(nextSessionId)
     if (nextSessionId) {
       setIsRefreshingProject(true)
@@ -200,14 +204,11 @@ function MemorySettingsContent() {
   const refreshAll = useCallback(async () => {
     setError(null)
     try {
-      await loadCoreData()
-      if (selectedSessionId) {
-        await loadProjectMemories(selectedSessionId)
-      }
+      await loadCoreData(selectedSessionId)
     } catch (apiError) {
       handleApiError(apiError)
     }
-  }, [handleApiError, loadCoreData, loadProjectMemories, selectedSessionId])
+  }, [handleApiError, loadCoreData, selectedSessionId])
 
   const handleSavePreference = async () => {
     setPrefValidationError(null)
@@ -291,6 +292,14 @@ function MemorySettingsContent() {
       await refreshAll()
     } finally {
       setIsBulkDeleting(false)
+    }
+  }
+
+  const handleConfirmBulkDeleteUserMemories = async () => {
+    try {
+      await handleBulkDeleteUserMemories()
+    } finally {
+      setBulkDeleteConfirmOpen(false)
     }
   }
 
@@ -444,7 +453,7 @@ function MemorySettingsContent() {
             ? {
                 label: isBulkDeleting ? 'Deleting all…' : 'Delete all',
                 disabled: isBulkDeleting,
-                onClick: () => void handleBulkDeleteUserMemories(),
+                onClick: () => setBulkDeleteConfirmOpen(true),
               }
             : undefined
         }
@@ -565,6 +574,16 @@ function MemorySettingsContent() {
       </section>
 
       <ConfirmDialog
+        open={bulkDeleteConfirmOpen}
+        title="Delete all long-term memories?"
+        message="This permanently removes every stored long-term memory. This action cannot be undone."
+        confirmLabel="Delete all"
+        isDestructive
+        onConfirm={() => void handleConfirmBulkDeleteUserMemories()}
+        onCancel={() => setBulkDeleteConfirmOpen(false)}
+      />
+
+      <ConfirmDialog
         open={clearSummarySessionId !== null}
         title="Clear conversation summary?"
         message="This removes the rolling summary for the selected chat. The full message history is not deleted."
@@ -608,7 +627,7 @@ function MemoryRecordsSection({
     className ?? 'rounded-chat border border-shell-800/15 bg-white p-4 shadow-chat-card sm:p-5'
 
   return (
-    <section aria-labelledby={headingId} className={sectionClass}>
+    <section {...(hideHeading ? {} : { 'aria-labelledby': headingId })} className={sectionClass}>
       {!hideHeading ? (
         <>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -677,7 +696,7 @@ function MemoryRecordsSection({
 }
 
 export function MemorySettingsPage() {
-  const { memoryEnabled } = useChatStreamingEnabled()
+  const { memoryEnabled, healthLoading } = useChatStreamingEnabled()
 
   return (
     <div className="min-h-dvh bg-linear-to-b from-shell-50 via-shell-100 to-[#ebeff6]">
@@ -695,7 +714,15 @@ export function MemorySettingsPage() {
         </div>
       </header>
 
-      {memoryEnabled ? <MemorySettingsContent /> : <MemoryUnavailableNotice />}
+      {healthLoading ? (
+        <div className="mx-auto flex w-full max-w-3xl justify-center px-3 py-12 sm:px-4">
+          <LoadingIndicator variant="inline" label="Loading memory settings…" />
+        </div>
+      ) : memoryEnabled ? (
+        <MemorySettingsContent />
+      ) : (
+        <MemoryUnavailableNotice />
+      )}
     </div>
   )
 }

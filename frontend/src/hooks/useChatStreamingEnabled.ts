@@ -13,6 +13,7 @@ export interface ChatHealthFlags {
   ragEnabled: boolean
   voiceEnabled: boolean
   memoryEnabled: boolean
+  healthLoading: boolean
   capabilitiesByProvider: Partial<Record<ProviderName, ProviderCapabilityFlags>>
 }
 
@@ -28,6 +29,7 @@ export function useChatStreamingEnabled(): ChatHealthFlags {
   const [ragEnabled, setRagEnabled] = useState(false)
   const [voiceEnabled, setVoiceEnabled] = useState(false)
   const [memoryEnabled, setMemoryEnabled] = useState(false)
+  const [healthLoading, setHealthLoading] = useState(true)
   const [capabilitiesByProvider, setCapabilitiesByProvider] =
     useState<Partial<Record<ProviderName, ProviderCapabilityFlags>>>(DEFAULT_CAPABILITIES)
 
@@ -47,10 +49,14 @@ export function useChatStreamingEnabled(): ChatHealthFlags {
               Partial<Record<ProviderName, ProviderCapabilityFlags>> | undefined) ??
               DEFAULT_CAPABILITIES,
           )
+          setHealthLoading(false)
         }
       })
       .catch(() => {
-        // Keep defaults when health is unreachable.
+        if (!cancelled) {
+          // Keep defaults when health is unreachable.
+          setHealthLoading(false)
+        }
       })
 
     return () => {
@@ -64,6 +70,7 @@ export function useChatStreamingEnabled(): ChatHealthFlags {
     ragEnabled,
     voiceEnabled,
     memoryEnabled,
+    healthLoading,
     capabilitiesByProvider,
   }
 }

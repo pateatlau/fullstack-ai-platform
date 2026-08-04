@@ -14,7 +14,7 @@ const NAV_LINK_CLASS =
  */
 export function AppNav({ current }: AppNavProps) {
   const { status } = useAuthContext()
-  const { memoryEnabled } = useChatStreamingEnabled()
+  const { memoryEnabled, healthLoading } = useChatStreamingEnabled()
 
   if (status !== 'authenticated') {
     return null
@@ -32,7 +32,7 @@ export function AppNav({ current }: AppNavProps) {
           Documents
         </Link>
       ) : null}
-      {memoryEnabled && current !== 'memory' ? (
+      {!healthLoading && memoryEnabled && current !== 'memory' ? (
         <Link to="/settings/memory" className={NAV_LINK_CLASS}>
           Memory
         </Link>

@@ -34,12 +34,15 @@ describe('useChatStreamingEnabled', () => {
 
     const { result } = renderHook(() => useChatStreamingEnabled())
 
+    expect(result.current.healthLoading).toBe(true)
+
     await waitFor(() => {
       expect(result.current.chatStreamingEnabled).toBe(false)
       expect(result.current.toolsEnabled).toBe(true)
       expect(result.current.ragEnabled).toBe(true)
       expect(result.current.voiceEnabled).toBe(true)
       expect(result.current.memoryEnabled).toBe(false)
+      expect(result.current.healthLoading).toBe(false)
     })
   })
 })

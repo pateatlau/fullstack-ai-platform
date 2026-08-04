@@ -43,8 +43,12 @@ const sampleMemoryRecord = {
   updated_at: '2026-08-01T10:00:00.000Z',
 }
 
-function createMemoryFetchMock(options?: { memoryEnabled?: boolean }) {
+function createMemoryFetchMock(options?: {
+  memoryEnabled?: boolean
+  userRecords?: (typeof sampleMemoryRecord)[]
+}) {
   const memoryEnabled = options?.memoryEnabled ?? true
+  const userRecords = options?.userRecords ?? [sampleMemoryRecord]
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
     const method = init?.method ?? 'GET'
@@ -65,7 +69,7 @@ function createMemoryFetchMock(options?: { memoryEnabled?: boolean }) {
     }
 
     if (url.includes('/api/memory/records?memory_type=user') && method === 'GET') {
-      return jsonResponse({ records: [sampleMemoryRecord] })
+      return jsonResponse({ records: userRecords })
     }
 
     if (url.includes('/api/memory/records?memory_type=project') && method === 'GET') {
@@ -175,6 +179,7 @@ describe('MemorySettingsPage authenticated', () => {
 
     renderMemoryRoute()
 
+    expect(screen.queryByText('Memory is not available')).toBeNull()
     expect(await screen.findByText('Memory is not available')).toBeTruthy()
     expect(screen.queryByRole('heading', { name: 'User preferences' })).toBeNull()
   })
@@ -212,6 +217,56 @@ describe('MemorySettingsPage authenticated', () => {
 
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toMatch(/lowercase letters/i)
+  })
+
+  it('confirms before bulk deleting long-term memories', async () => {
+    const fetchMock = createMemoryFetchMock({
+      userRecords: [
+        sampleMemoryRecord,
+        {
+          ...sampleMemoryRecord,
+          id: 'mem-2',
+          title: 'Work location',
+          content: 'User works remotely.',
+        },
+      ],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderMemoryRoute()
+    expect(await screen.findByRole('button', { name: 'Delete all' })).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete all' }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/Delete all long-term memories/i)).toBeTruthy()
+
+    const deleteCallsBeforeCancel = fetchMock.mock.calls.filter(([url, init]) => {
+      const resolvedUrl = typeof url === 'string' ? url : url.toString()
+      return resolvedUrl.includes('/api/memory/records/') && init?.method === 'DELETE'
+    })
+    expect(deleteCallsBeforeCancel).toHaveLength(0)
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    const deleteCallsAfterCancel = fetchMock.mock.calls.filter(([url, init]) => {
+      const resolvedUrl = typeof url === 'string' ? url : url.toString()
+      return resolvedUrl.includes('/api/memory/records/') && init?.method === 'DELETE'
+    })
+    expect(deleteCallsAfterCancel).toHaveLength(0)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete all' }))
+    const confirmDialog = await screen.findByRole('dialog')
+    await userEvent.click(within(confirmDialog).getByRole('button', { name: 'Delete all' }))
+
+    await waitFor(() => {
+      const deleteCalls = fetchMock.mock.calls.filter(([url, init]) => {
+        const resolvedUrl = typeof url === 'string' ? url : url.toString()
+        return resolvedUrl.includes('/api/memory/records/') && init?.method === 'DELETE'
+      })
+      expect(deleteCalls).toHaveLength(2)
+    })
   })
 
   it('confirms before clearing a conversation summary', async () => {
@@ -276,9 +331,14 @@ describe('AppNav memory link visibility', () => {
 
   it('hides Memory nav link when memory_enabled is false', async () => {
     storeSession(makeJwt(3600), user)
-    vi.stubGlobal('fetch', createMemoryFetchMock({ memoryEnabled: false }))
+    const fetchMock = createMemoryFetchMock({ memoryEnabled: false })
+    vi.stubGlobal('fetch', fetchMock)
 
     renderWithProviders(<ChatPage />, { withChatProvider: true })
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/api/health'))).toBe(true)
+    })
 
     await waitFor(() => {
       expect(screen.queryByRole('link', { name: 'Memory' })).toBeNull()
