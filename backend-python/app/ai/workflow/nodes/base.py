@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
-from app.ai.workflow.models import WorkflowContext, WorkflowNode
+from app.ai.workflow.models import WorkflowContext, WorkflowEdge, WorkflowNode
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,7 @@ class NodeExecutionRequest:
 
     owner_id: uuid.UUID
     execution_receipt_id: str
+    outgoing_edges: tuple[WorkflowEdge, ...] = field(default_factory=tuple)
 
 
 class WorkflowNodeExecutionError(Exception):

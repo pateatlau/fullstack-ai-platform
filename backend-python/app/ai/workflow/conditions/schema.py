@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
+
 from app.ai.workflow.exceptions import WorkflowValidationError
 
 CONDITION_OPERATORS = frozenset(
@@ -9,6 +13,41 @@ CONDITION_OPERATORS = frozenset(
 )
 _COMPOSITION_KEYS = frozenset({"all", "any"})
 _LEAF_KEYS = frozenset({"field", "operator", "value"})
+
+
+class ConditionLeaf(BaseModel):
+    """Leaf condition: ``{field, operator, value?}``."""
+
+    field: str = Field(min_length=1)
+    operator: Literal["eq", "neq", "gt", "gte", "lt", "lte", "in", "contains", "exists"]
+    value: object | None = None
+
+    @model_validator(mode="after")
+    def _validate_value_required(self) -> ConditionLeaf:
+        if self.operator != "exists" and "value" not in self.model_fields_set:
+            raise ValueError(f"value is required for operator {self.operator!r}.")
+        return self
+
+
+class ConditionComposite(BaseModel):
+    """Composite condition via ``all`` or ``any`` arrays."""
+
+    model_config = {"populate_by_name": True}
+
+    all_: list["Condition"] | None = Field(default=None, alias="all")
+    any_: list["Condition"] | None = Field(default=None, alias="any")
+
+    @model_validator(mode="after")
+    def _validate_exclusive_composition(self) -> ConditionComposite:
+        if self.all_ is not None and self.any_ is not None:
+            raise ValueError("Use exactly one of 'all' or 'any' for composition.")
+        children = self.all_ if self.all_ is not None else self.any_
+        if not children:
+            raise ValueError("'all' / 'any' must be a non-empty array of conditions.")
+        return self
+
+
+Condition = ConditionLeaf | ConditionComposite
 
 
 def validate_condition_shape(
@@ -69,3 +108,6 @@ def validate_condition_shape(
         raise WorkflowValidationError(
             f"{path}.value is required for operator {operator!r}."
         )
+
+
+ConditionComposite.model_rebuild()

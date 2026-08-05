@@ -2,7 +2,7 @@
 epic: v2-06
 title: Workflow Engine
 status: in_progress
-version: 1.9
+version: 1.11
 depends_on: [v2-05]
 provides:
   [
@@ -826,8 +826,8 @@ _Reverified in Phase 0 audit (2026-08-04). See [post-mvp-v2-epic6-phase-0-baseli
 | 0     | Baseline Audit                                  | XS     | Completed   |
 | 1     | Models, Interfaces & Migration                  | L      | Completed   |
 | 2     | Graph Definition & Validation                   | M      | Completed   |
-| 3     | Sequential Execution Engine                     | L      | Not Started |
-| 4     | Conditional Routing                             | M      | Not Started |
+| 3     | Sequential Execution Engine                     | L      | Completed   |
+| 4     | Conditional Routing                             | M      | Completed   |
 | 5     | Parallel Execution (Fork/Join)                  | M      | Not Started |
 | 6     | LLM & Agent Node Integration                    | M      | Not Started |
 | 7     | Human Approval Nodes, Pause & Resume            | L      | Not Started |
@@ -1313,36 +1313,36 @@ Implement the declarative condition DSL and `RouterNodeExecutor` so a workflow c
 
 ### Condition DSL
 
-- [ ] Define the `Condition` model (`field`, `operator`, `value`).
-- [ ] Support operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `exists`.
-- [ ] Support `all`/`any` composition of conditions.
-- [ ] Implement dot-path field resolution against `WorkflowContext.variables`.
-- [ ] Reject any non-declarative condition input at validation time (Phase 2 hook).
+- [x] Define the `Condition` model (`field`, `operator`, `value`).
+- [x] Support operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `exists`.
+- [x] Support `all`/`any` composition of conditions.
+- [x] Implement dot-path field resolution against `WorkflowContext.variables`.
+- [x] Reject any non-declarative condition input at validation time (Phase 2 hook).
 
 ### Condition Evaluator
 
-- [ ] Implement `ConditionEvaluator.evaluate(condition, context) -> bool`.
-- [ ] Ensure no code execution path exists (no `eval`/`exec`/`getattr` on arbitrary objects).
-- [ ] Handle missing fields deterministically (`exists` semantics; other operators treat missing as non-matching).
+- [x] Implement `ConditionEvaluator.evaluate(condition, context) -> bool`.
+- [x] Ensure no code execution path exists (no `eval`/`exec`/`getattr` on arbitrary objects).
+- [x] Handle missing fields deterministically (`exists` semantics; other operators treat missing as non-matching).
 
 ### Router Node
 
-- [ ] Implement `RouterNodeExecutor` — evaluates each outgoing edge's condition in declaration order.
-- [ ] Select the first matching edge for exclusive routing; support multi-match "activate all matching" mode via node config.
-- [ ] Fail the node deterministically if no edge matches and no default edge is declared.
+- [x] Implement `RouterNodeExecutor` — evaluates each outgoing edge's condition in declaration order.
+- [x] Select the first matching edge for exclusive routing; support multi-match "activate all matching" mode via node config.
+- [x] Fail the node deterministically if no edge matches and no default edge is declared.
 
 ### Ready-Node Resolver
 
-- [ ] Extend the Phase 3 resolver to only activate nodes reached by a selected edge.
-- [ ] Skip (not fail) nodes on unselected branches; mark their `WorkflowNodeExecution` as `skipped`.
+- [x] Extend the Phase 3 resolver to only activate nodes reached by a selected edge.
+- [x] Skip (not fail) nodes on unselected branches; mark their `WorkflowNodeExecution` as `skipped`.
 
 ### Testing
 
-- [ ] Add condition DSL unit tests (each operator).
-- [ ] Add `all`/`any` composition tests.
-- [ ] Add router node branching tests.
-- [ ] Add default-edge and no-match-failure tests.
-- [ ] Add skipped-node tests.
+- [x] Add condition DSL unit tests (each operator).
+- [x] Add `all`/`any` composition tests.
+- [x] Add router node branching tests.
+- [x] Add default-edge and no-match-failure tests.
+- [x] Add skipped-node tests.
 
 **Verify**
 
@@ -1350,9 +1350,9 @@ Implement the declarative condition DSL and `RouterNodeExecutor` so a workflow c
 
 Additional verification:
 
-- [ ] Conditions evaluate deterministically against `WorkflowContext`.
-- [ ] Router nodes select the correct branch(es).
-- [ ] Unselected branches are marked `skipped`, not executed.
+- [x] Conditions evaluate deterministically against `WorkflowContext`.
+- [x] Router nodes select the correct branch(es).
+- [x] Unselected branches are marked `skipped`, not executed.
 
 **Acceptance**
 
@@ -1363,6 +1363,18 @@ Additional verification:
 
 - Conditional routing tests pass.
 - Ready for parallel execution (Phase 5).
+
+**Completion Record**
+
+| Metric               | Result                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------- |
+| Condition DSL        | ✅ `ConditionLeaf` / `ConditionComposite` models; `conditions/field_resolution.py` dot-path |
+| Condition evaluator  | ✅ `ConditionEvaluator` — declarative operators + `all`/`any`; dict lookup only           |
+| Router node          | ✅ `RouterNodeExecutor` — exclusive / `all_matching` modes; default (unconditional) edges   |
+| Ready-node resolver  | ✅ Router edge selection + `skipped_node_ids` in run context metadata                       |
+| Skip semantics       | ✅ Unselected branch nodes persisted as `skipped`; merge nodes proceed when selected path completes |
+| Unit tests           | ✅ 40 new tests; 128 total in `tests/ai/workflow/`                                          |
+| Backend regression   | ✅ 1437 passed; 90.00% `app/` coverage                                                      |
 
 ---
 
@@ -2202,5 +2214,6 @@ No workflow input/output content or personally identifiable information should b
 | 1.8     | 2026-08-04 | `apply_decision()` atomic CAS on `waiting_approval` + same-transaction run transition; no-op/conflict on duplicate decisions. Phase 7 sync. |
 | 1.9     | 2026-08-05 | Phase 1 complete: canonical models/enums, `WorkflowStore` protocol, `PostgresWorkflowStore` scaffold, `WorkflowManager` skeleton, `0007_workflow_tables` migration, `WORKFLOW_ENGINE_ENABLED` + workflow config, DI wiring. 39 workflow tests; 1344 total backend passed; 89.80% coverage. Public API frozen. Phase 2 complete: `GraphValidator`, condition DSL shape validation, definition CRUD via `WorkflowManager`/`PostgresWorkflowStore`, versioning on run reference. 61 workflow tests; 1370 total backend passed; 90.00% coverage. Migration rollback CI smoke test pending. |
 | 1.10    | 2026-08-05 | Phase 3 complete: `WorkflowExecutor` sequential/branching step loop, `NodeExecutor` protocol, `TaskNodeExecutor` (dot-path `arguments_template` resolution), `WorkflowManager.start_run()`/`get_run()`/`list_runs()`, per-transition checkpointing via `PostgresWorkflowStore`, background run scheduling. 88 workflow tests; 1397 total backend passed; 89.20% coverage. |
+| 1.11    | 2026-08-05 | Phase 4 complete: `ConditionEvaluator`, declarative condition DSL, `RouterNodeExecutor` (exclusive / `all_matching`), routing-aware ready-node resolver, unselected-branch skip semantics. 128 workflow tests; 1437 total backend passed; 90.00% coverage. |
 
 ---
