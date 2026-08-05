@@ -2,7 +2,7 @@
 epic: v2-06
 title: Workflow Engine
 status: in_progress
-version: 1.14
+version: 1.15
 depends_on: [v2-05]
 provides:
   [
@@ -830,7 +830,7 @@ _Reverified in Phase 0 audit (2026-08-04). See [post-mvp-v2-epic6-phase-0-baseli
 | 4     | Conditional Routing                             | M      | Completed   |
 | 5     | Parallel Execution (Fork/Join)                  | M      | Completed   |
 | 6     | LLM & Agent Node Integration                    | M      | Completed   |
-| 7     | Human Approval Nodes, Pause & Resume            | L      | Not Started |
+| 7     | Human Approval Nodes, Pause & Resume            | L      | Completed   |
 | 8     | Node Retry & Crash Recovery                     | M      | Not Started |
 | 9     | Workflow REST API                               | L      | Not Started |
 | 10    | Agent Tool Integration                          | M      | Not Started |
@@ -1576,41 +1576,41 @@ Implement `ApprovalNodeExecutor` and the pause/decision/resume lifecycle: a run 
 
 ### Approval Node
 
-- [ ] Implement `ApprovalNodeExecutor` — creates a `waiting_approval` `WorkflowNodeExecution` and stops the step loop.
-- [ ] Set `WorkflowRun.status = waiting_approval` and persist `current_node_ids` pointing at the approval node.
-- [ ] Support optional `workflow_approval_timeout_hours` (default `0` = no timeout) as a documented future extension point (`TODO(epic-10):` for actual timeout enforcement via background jobs).
+- [x] Implement `ApprovalNodeExecutor` — creates a `waiting_approval` `WorkflowNodeExecution` and stops the step loop.
+- [x] Set `WorkflowRun.status = waiting_approval` and persist `current_node_ids` pointing at the approval node.
+- [x] Support optional `workflow_approval_timeout_hours` (default `0` = no timeout) as a documented future extension point (`TODO(epic-10):` for actual timeout enforcement via background jobs).
 
 ### Decision Handling
 
-- [ ] Implement `WorkflowManager.apply_decision()` — owner-scoped; validates run + node belong to caller.
-- [ ] **Atomic CAS:** apply decision only when `WorkflowNodeExecution.status` is still `waiting_approval` via conditional update (`UPDATE … WHERE id=:id AND status='waiting_approval'`) or equivalent row lock.
-- [ ] In the **same DB transaction:** record `decided_by`, `decided_at`, `decision`, terminal node status (`succeeded` on approve / `failed` on reject), and transition `WorkflowRun` (`waiting_approval` → `running`, or `failed` when reject ends the run).
-- [ ] If CAS affects 0 rows, another decision already landed: **no-op** when the stored decision matches the request; **reject** (409/conflict) when it differs.
-- [ ] After successful commit, schedule `WorkflowExecutor` continuation (approve → follow approved edge; reject → rejected edge or fail run) — never double-schedule on losing CAS.
-- [ ] On `approve`: set `decision=approved`, node `status=succeeded`; continue along the "approved" edge (or the single outgoing edge if unconditional).
-- [ ] On `reject`: set `decision=rejected`, node `status=failed`; follow a declared "rejected" edge if present, otherwise fail the run.
+- [x] Implement `WorkflowManager.apply_decision()` — owner-scoped; validates run + node belong to caller.
+- [x] **Atomic CAS:** apply decision only when `WorkflowNodeExecution.status` is still `waiting_approval` via conditional update (`UPDATE … WHERE id=:id AND status='waiting_approval'`) or equivalent row lock.
+- [x] In the **same DB transaction:** record `decided_by`, `decided_at`, `decision`, terminal node status (`succeeded` on approve / `failed` on reject), and transition `WorkflowRun` (`waiting_approval` → `running`, or `failed` when reject ends the run).
+- [x] If CAS affects 0 rows, another decision already landed: **no-op** when the stored decision matches the request; **reject** (409/conflict) when it differs.
+- [x] After successful commit, schedule `WorkflowExecutor` continuation (approve → follow approved edge; reject → rejected edge or fail run) — never double-schedule on losing CAS.
+- [x] On `approve`: set `decision=approved`, node `status=succeeded`; continue along the "approved" edge (or the single outgoing edge if unconditional).
+- [x] On `reject`: set `decision=rejected`, node `status=failed`; follow a declared "rejected" edge if present, otherwise fail the run.
 
 ### Resume Semantics
 
-- [ ] Implement `WorkflowManager.resume(run_id)` to rehydrate a crashed `running` run and re-enter `WorkflowExecutor.step()` (approval continuation uses `apply_decision`, not `/resume`).
-- [ ] Ensure resume never re-executes an already-`succeeded` node.
-- [ ] Ensure resume correctly restores `current_node_ids` and parallel-branch state (Phase 5) if the run was interrupted mid-fan-out.
+- [x] Implement `WorkflowManager.resume(run_id)` to rehydrate a crashed `running` run and re-enter `WorkflowExecutor.step()` (approval continuation uses `apply_decision`, not `/resume`).
+- [x] Ensure resume never re-executes an already-`succeeded` node.
+- [x] Ensure resume correctly restores `current_node_ids` and parallel-branch state (Phase 5) if the run was interrupted mid-fan-out.
 
 ### Error Handling
 
-- [ ] Reject decisions from non-owners.
-- [ ] On CAS miss: return existing decision (no-op) if request matches; return conflict if a different decision is already recorded.
-- [ ] Handle resume-of-already-completed-run as a no-op with a clear response.
+- [x] Reject decisions from non-owners.
+- [x] On CAS miss: return existing decision (no-op) if request matches; return conflict if a different decision is already recorded.
+- [x] Handle resume-of-already-completed-run as a no-op with a clear response.
 
 ### Testing
 
-- [ ] Add approval-pause tests.
-- [ ] Add approve-and-resume tests.
-- [ ] Add reject-with-rejected-edge tests.
-- [ ] Add reject-without-rejected-edge (run fails) tests.
-- [ ] Add double-decision idempotency tests (concurrent approve/reject; only one wins; loser no-ops or conflicts).
-- [ ] Add non-owner decision rejection tests.
-- [ ] Add pause/resume-with-parallel-branches tests.
+- [x] Add approval-pause tests.
+- [x] Add approve-and-resume tests.
+- [x] Add reject-with-rejected-edge tests.
+- [x] Add reject-without-rejected-edge (run fails) tests.
+- [x] Add double-decision idempotency tests (concurrent approve/reject; only one wins; loser no-ops or conflicts).
+- [x] Add non-owner decision rejection tests.
+- [x] Add pause/resume-with-parallel-branches tests.
 
 **Verify**
 
@@ -1618,10 +1618,10 @@ Implement `ApprovalNodeExecutor` and the pause/decision/resume lifecycle: a run 
 
 Additional verification:
 
-- [ ] Runs pause deterministically at approval nodes.
-- [ ] Approve/reject decisions resume execution correctly.
-- [ ] Resume never duplicates already-succeeded node side effects.
-- [ ] Only the run owner can decide a pending approval.
+- [x] Runs pause deterministically at approval nodes.
+- [x] Approve/reject decisions resume execution correctly.
+- [x] Resume never duplicates already-succeeded node side effects.
+- [x] Only the run owner can decide a pending approval.
 
 **Acceptance**
 
@@ -1633,6 +1633,20 @@ Additional verification:
 
 - Approval/resume tests pass.
 - Ready for node retry and crash recovery (Phase 8).
+
+**Completion Record**
+
+| Metric               | Result                                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------------------- |
+| Approval node        | ✅ `ApprovalNodeExecutor` — pause metadata; `workflow_approval_timeout_hours` extension deferred epic-10 |
+| Decision API         | ✅ `WorkflowManager.apply_decision()` — owner-scoped CAS + same-transaction run transition          |
+| Edge routing         | ✅ `approved_edge_id` / `rejected_edge_id` config; `GraphValidator` + `resolve_approval_selected_edge_ids()` |
+| Partial approval     | ✅ Run stays `waiting_approval` while other approval nodes remain in `current_node_ids`             |
+| Crash recovery       | ✅ `WorkflowManager.resume()` re-attaches executor to `running` runs (distinct from approval resume) |
+| Concurrent safety    | ✅ `checkpoint_version` CAS on run updates; `WorkflowConcurrentUpdateError`; execution/run-id guard |
+| DI wiring            | ✅ `ApprovalNodeExecutor` registered in `get_workflow_manager`                                      |
+| Unit tests           | ✅ 25 new tests; 187 total in `tests/ai/workflow/`                                                  |
+| Backend regression   | ✅ 1496 passed                                                                                      |
 
 ---
 
@@ -2246,5 +2260,6 @@ No workflow input/output content or personally identifiable information should b
 | 1.12    | 2026-08-05 | Phase 5 complete: `ForkNodeExecutor`, `JoinNodeExecutor`, fork/join parallel execution (`asyncio.gather`), join policies (`all` / `any` / `count(n)`), optimistic checkpoint merge/retry, join-policy-aware ready-node resolver. 141 workflow tests; 1450 total backend passed; 89% coverage. |
 | 1.13    | 2026-08-05 | Phase 6 complete: `LLMNodeExecutor`, `AgentNodeExecutor`, `graph/node_config.py`, workflow prompt templates, DI wiring for LLM/Agent node types. 162 workflow tests; 1471 total backend passed. |
 | 1.14    | 2026-08-05 | Phase 6 doc sync: clarify `execution_receipt_id` is carried in node output / `AgentContext.metadata` (not `AgentRequest`); provider & tool pass-through deferred to Phase 8. |
+| 1.15    | 2026-08-05 | Phase 7 complete: `ApprovalNodeExecutor`, `WorkflowManager.apply_decision()`/`resume()`, approval edge routing, atomic CAS persistence (`checkpoint_version`), `WorkflowConcurrentUpdateError`. 187 workflow tests; 1496 total backend passed. |
 
 ---
