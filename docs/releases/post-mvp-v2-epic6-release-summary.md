@@ -117,9 +117,9 @@ Automated CI covers workflow modules, router, tool, and frontend with mocks; liv
 | Backend `make lint` + `format-check` + `typecheck` | **Clean** |
 | Flag-off `make test-cov` | **1551 passed**, **89.05%** coverage on `app/` |
 | Workflow package `app/ai/workflow/` | **85%** (gate ≥80%) |
-| Workflow test paths (`tests/ai/workflow`, router, tool) | **241 passed** |
+| Workflow test paths | **241 passed** (207 `tests/ai/workflow` + 23 router + 11 tool) |
 | Chat/Memory/Voice/RAG/MCP/Agent flag-off parity spot checks | **21 passed** (8 scenarios) |
-| `make eval` | **5/5** passed (`.eval/eval-report.json`, timestamp `2026-08-05T09:39:27Z`) |
+| `make eval` | **5/5** passed (`backend-python/.eval/eval-report.json`, timestamp `2026-08-05T09:39:27Z`) |
 | Frontend lint + format + build | **Clean** |
 | Frontend Vitest | **268** tests (43 files) — all pass |
 | Workflow frontend tests (2 files) | **17 passed** (`WorkflowsPage`, `workflowClient`) |
