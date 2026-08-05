@@ -208,8 +208,9 @@ class WorkflowExecutor:
                 refreshed = await self._store.get_run_with_executions(
                     run.id, owner_id=run.owner_id
                 )
-                if refreshed is not None:
-                    run, executions = refreshed
+                if refreshed is None:
+                    raise WorkflowNotFoundError(f"Workflow run {run.id} not found.")
+                run, executions = refreshed
 
         return run
 

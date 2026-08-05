@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import uuid
 from dataclasses import dataclass, field
@@ -10,7 +11,11 @@ import pytest
 
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolDefinition, ToolExecutionContext, ToolResult
-from app.ai.workflow.engine.background import is_run_active, reconcile_orphaned_runs
+from app.ai.workflow.engine.background import (
+    is_run_active,
+    reconcile_orphaned_runs,
+    schedule_run_task,
+)
 from app.ai.workflow.engine.executor import WorkflowExecutor
 from app.ai.workflow.manager import WorkflowManager
 from app.ai.workflow.models import (
@@ -604,6 +609,26 @@ async def test_startup_reconciliation_schedules_orphaned_running_runs() -> None:
     assert count == 1
     assert scheduled == [run.id]
     assert not is_run_active(run.id)
+
+
+@pytest.mark.anyio
+async def test_schedule_run_task_marks_active_before_coroutine_starts() -> None:
+    run_id = uuid.uuid4()
+    gate = asyncio.Event()
+
+    async def blocked() -> None:
+        gate.set()
+        await asyncio.Event().wait()
+
+    task = schedule_run_task(blocked(), run_id=run_id)
+    assert is_run_active(run_id)
+    await gate.wait()
+    assert is_run_active(run_id)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not is_run_active(run_id)
 
 
 @pytest.mark.anyio

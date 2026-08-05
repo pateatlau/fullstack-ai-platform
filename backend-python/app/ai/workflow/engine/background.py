@@ -30,27 +30,26 @@ def schedule_run_task(
     run_id: uuid.UUID,
 ) -> asyncio.Task[Any]:
     """Schedule a background workflow run execution task and retain it."""
-    task = asyncio.create_task(_track_run_execution(coro, run_id=run_id))
+    _ACTIVE_RUN_IDS.add(run_id)
+    task = asyncio.create_task(coro)
     _RUN_TASKS.add(task)
-    task.add_done_callback(_RUN_TASKS.discard)
+    task.add_done_callback(_release_run_task(run_id))
     return task
 
 
-def is_run_active(run_id: uuid.UUID) -> bool:
-    """Return True when an in-process executor is currently driving ``run_id``."""
-    return run_id in _ACTIVE_RUN_IDS
+def _release_run_task(run_id: uuid.UUID) -> Callable[[asyncio.Task[Any]], None]:
+    """Return a done-callback that clears task retention and active-run tracking."""
 
-
-async def _track_run_execution(
-    coro: Coroutine[Any, Any, None],
-    *,
-    run_id: uuid.UUID,
-) -> None:
-    _ACTIVE_RUN_IDS.add(run_id)
-    try:
-        await coro
-    finally:
+    def _on_done(task: asyncio.Task[Any]) -> None:
+        _RUN_TASKS.discard(task)
         _ACTIVE_RUN_IDS.discard(run_id)
+
+    return _on_done
+
+
+def is_run_active(run_id: uuid.UUID) -> bool:
+    """Return True when an in-process executor is scheduled or driving ``run_id``."""
+    return run_id in _ACTIVE_RUN_IDS
 
 
 async def reconcile_orphaned_runs(
