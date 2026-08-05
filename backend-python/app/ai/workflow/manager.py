@@ -35,6 +35,7 @@ from app.ai.workflow.models import (
     RunStatus,
     WorkflowContext,
     WorkflowDefinition,
+    WorkflowNodeExecution,
     WorkflowRun,
 )
 from app.ai.workflow.models.run import normalize_idempotency_key
@@ -117,9 +118,25 @@ class WorkflowManager:
         *,
         owner_id: uuid.UUID,
         status: DefinitionStatus | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[WorkflowDefinition]:
         """Return workflow definitions owned by ``owner_id``."""
-        return await self._store.list_definitions(owner_id=owner_id, status=status)
+        return await self._store.list_definitions(
+            owner_id=owner_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_definitions(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        status: DefinitionStatus | None = None,
+    ) -> int:
+        """Return the number of workflow definitions owned by ``owner_id``."""
+        return await self._store.count_definitions(owner_id=owner_id, status=status)
 
     async def create_definition(
         self, definition: WorkflowDefinition
@@ -203,15 +220,39 @@ class WorkflowManager:
         """Return an owned workflow run, or ``None`` if it does not exist."""
         return await self._store.get_run(run_id, owner_id=owner_id)
 
+    async def get_run_with_executions(
+        self, run_id: uuid.UUID, *, owner_id: uuid.UUID
+    ) -> tuple[WorkflowRun, list[WorkflowNodeExecution]] | None:
+        """Return an owned run plus its node execution history."""
+        return await self._store.get_run_with_executions(run_id, owner_id=owner_id)
+
     async def list_runs(
         self,
         *,
         owner_id: uuid.UUID,
         workflow_definition_id: uuid.UUID | None = None,
         status: RunStatus | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[WorkflowRun]:
         """Return workflow runs owned by ``owner_id``."""
         return await self._store.list_runs(
+            owner_id=owner_id,
+            workflow_definition_id=workflow_definition_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_runs(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        workflow_definition_id: uuid.UUID | None = None,
+        status: RunStatus | None = None,
+    ) -> int:
+        """Return the number of workflow runs owned by ``owner_id``."""
+        return await self._store.count_runs(
             owner_id=owner_id,
             workflow_definition_id=workflow_definition_id,
             status=status,
@@ -456,6 +497,54 @@ class WorkflowManager:
         if run_status_after_decision is RunStatus.RUNNING:
             self._schedule_run(continued.id, owner_id=owner_id)
         return continued
+
+    async def cancel_run(
+        self, run_id: uuid.UUID, *, owner_id: uuid.UUID
+    ) -> WorkflowRun:
+        """Cancel a ``running`` or ``waiting_approval`` run."""
+        for attempt in range(_MAX_APPROVAL_DECISION_RETRIES):
+            run = await self._store.get_run(run_id, owner_id=owner_id)
+            if run is None:
+                raise WorkflowNotFoundError(f"Workflow run {run_id} not found.")
+
+            if run.status in {
+                RunStatus.COMPLETED,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            }:
+                return run
+
+            if run.status not in {
+                RunStatus.RUNNING,
+                RunStatus.WAITING_APPROVAL,
+            }:
+                raise WorkflowValidationError(
+                    f"Workflow run {run_id} cannot be cancelled from status "
+                    f"{run.status.value!r}."
+                )
+
+            now = datetime.datetime.now(datetime.UTC)
+            cancelled = run.model_copy(
+                update={
+                    "status": RunStatus.CANCELLED,
+                    "completed_at": now,
+                    "updated_at": now,
+                    "checkpoint_version": run.checkpoint_version + 1,
+                }
+            )
+            try:
+                return await self._store.checkpoint_run(
+                    cancelled,
+                    expected_checkpoint_version=run.checkpoint_version,
+                )
+            except WorkflowConcurrentUpdateError:
+                if attempt < _MAX_APPROVAL_DECISION_RETRIES - 1:
+                    continue
+                raise
+
+        raise WorkflowValidationError(
+            "Workflow run cancellation exceeded concurrent retry limit."
+        )
 
     async def resume(self, run_id: uuid.UUID, *, owner_id: uuid.UUID) -> WorkflowRun:
         """Reattach an in-process executor to a crashed ``running`` run."""

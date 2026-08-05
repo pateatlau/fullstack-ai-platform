@@ -21,6 +21,7 @@ async def health(settings: Settings = Depends(get_settings)) -> dict[str, object
         "rag_enabled": settings.rag_enabled,
         "voice_enabled": settings.voice_enabled,
         "memory_enabled": settings.memory_enabled,
+        "workflow_engine_enabled": settings.workflow_engine_enabled,
         "capabilities": {
             "by_provider": capabilities_by_provider(settings),
         },

@@ -158,6 +158,8 @@ class PostgresWorkflowStore:
         *,
         owner_id: uuid.UUID,
         status: DefinitionStatus | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[WorkflowDefinition]:
         stmt = select(WorkflowDefinitionRecord).where(
             WorkflowDefinitionRecord.owner_id == owner_id
@@ -168,8 +170,25 @@ class PostgresWorkflowStore:
             WorkflowDefinitionRecord.name,
             WorkflowDefinitionRecord.version.desc(),
         )
+        if limit is not None:
+            stmt = stmt.limit(limit).offset(offset)
         rows = (await self._session.execute(stmt)).scalars().all()
         return [_definition_to_domain(row) for row in rows]
+
+    async def count_definitions(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        status: DefinitionStatus | None = None,
+    ) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(WorkflowDefinitionRecord)
+            .where(WorkflowDefinitionRecord.owner_id == owner_id)
+        )
+        if status is not None:
+            stmt = stmt.where(WorkflowDefinitionRecord.status == status.value)
+        return int(await self._session.scalar(stmt) or 0)
 
     async def create_run(self, run: WorkflowRun) -> WorkflowRun:
         persisted, _ = await self._persist_run_idempotently(run)
@@ -309,6 +328,8 @@ class PostgresWorkflowStore:
         owner_id: uuid.UUID,
         workflow_definition_id: uuid.UUID | None = None,
         status: RunStatus | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[WorkflowRun]:
         stmt = select(WorkflowRunRecord).where(WorkflowRunRecord.owner_id == owner_id)
         if workflow_definition_id is not None:
@@ -318,8 +339,30 @@ class PostgresWorkflowStore:
         if status is not None:
             stmt = stmt.where(WorkflowRunRecord.status == status.value)
         stmt = stmt.order_by(WorkflowRunRecord.created_at.desc())
+        if limit is not None:
+            stmt = stmt.limit(limit).offset(offset)
         rows = (await self._session.execute(stmt)).scalars().all()
         return [_run_to_domain(row) for row in rows]
+
+    async def count_runs(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        workflow_definition_id: uuid.UUID | None = None,
+        status: RunStatus | None = None,
+    ) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(WorkflowRunRecord)
+            .where(WorkflowRunRecord.owner_id == owner_id)
+        )
+        if workflow_definition_id is not None:
+            stmt = stmt.where(
+                WorkflowRunRecord.workflow_definition_id == workflow_definition_id
+            )
+        if status is not None:
+            stmt = stmt.where(WorkflowRunRecord.status == status.value)
+        return int(await self._session.scalar(stmt) or 0)
 
     async def list_runs_by_status(self, *, status: RunStatus) -> list[WorkflowRun]:
         stmt = (
