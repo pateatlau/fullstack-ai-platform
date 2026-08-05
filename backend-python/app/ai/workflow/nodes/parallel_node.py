@@ -75,7 +75,16 @@ class ForkNodeExecutor:
                 error_code="invalid_config",
             )
 
-        branch_count = len(outgoing_edges)
+        branch_edges = [
+            edge for edge in outgoing_edges if edge.to_node_id != join_node_id
+        ]
+        if not branch_edges:
+            raise WorkflowNodeExecutionError(
+                f"Fork node {node.id!r} has no branch outgoing edges.",
+                error_code="invalid_config",
+            )
+
+        branch_count = len(branch_edges)
         if branch_count > self._max_parallel_branches:
             raise WorkflowNodeExecutionError(
                 f"Fork node {node.id!r} fans out to {branch_count} branches; "
@@ -84,7 +93,7 @@ class ForkNodeExecutor:
                 error_code="parallel_limit_exceeded",
             )
 
-        branch_node_ids = [edge.to_node_id for edge in outgoing_edges]
+        branch_node_ids = [edge.to_node_id for edge in branch_edges]
         return {
             "join_node_id": join_node_id,
             "branch_node_ids": branch_node_ids,

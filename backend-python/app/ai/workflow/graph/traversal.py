@@ -118,21 +118,40 @@ def group_parallel_ready_nodes(
     return parallel_groups, sequential
 
 
+def _join_branch_incoming_edges(
+    definition: WorkflowDefinition, join_node: WorkflowNode
+) -> list[WorkflowEdge]:
+    """Return join incoming edges that represent branch completions.
+
+    Direct ``fork -> join`` shortcuts are excluded from join-policy counting so
+    ``any``/``count(n)`` wait for actual branch nodes, not fork success alone.
+    """
+    incoming = incoming_edges(definition, join_node.id)
+    fork_node_id = join_node.config.get("fork_node_id")
+    if not isinstance(fork_node_id, str):
+        return incoming
+
+    branch_incoming = [edge for edge in incoming if edge.from_node_id != fork_node_id]
+    return branch_incoming
+
+
 def is_join_ready(
     definition: WorkflowDefinition, run: WorkflowRun, join_node: WorkflowNode
 ) -> bool:
     """Return whether ``join_node`` satisfies its configured join policy."""
-    incoming = incoming_edges(definition, join_node.id)
-    if not incoming:
+    branch_incoming = _join_branch_incoming_edges(definition, join_node)
+    if not branch_incoming:
         return False
 
     succeeded = get_succeeded_node_ids(run)
     resolved = get_resolved_node_ids(run)
     join_policy, count, _ = parse_join_config(join_node)
 
-    succeeded_sources = sum(1 for edge in incoming if edge.from_node_id in succeeded)
+    succeeded_sources = sum(
+        1 for edge in branch_incoming if edge.from_node_id in succeeded
+    )
     if join_policy == JOIN_POLICY_ALL:
-        return all(edge.from_node_id in resolved for edge in incoming)
+        return all(edge.from_node_id in resolved for edge in branch_incoming)
     if join_policy == JOIN_POLICY_ANY:
         return succeeded_sources >= 1
     if join_policy == JOIN_POLICY_COUNT:

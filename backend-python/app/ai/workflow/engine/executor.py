@@ -381,7 +381,7 @@ class WorkflowExecutor:
             return run
 
         join_policy, _, cancel_remaining = parse_join_config(join_node)
-        if join_policy is JOIN_POLICY_ALL or not cancel_remaining:
+        if join_policy == JOIN_POLICY_ALL or not cancel_remaining:
             return run
 
         fork_node_id = join_node.config.get("fork_node_id")
@@ -551,10 +551,10 @@ class WorkflowExecutor:
                             **fresh.context.variables,
                             **incoming.variables,
                         },
-                        "metadata": {
-                            **fresh.context.metadata,
-                            **incoming.metadata,
-                        },
+                        "metadata": _merge_context_metadata(
+                            fresh.context.metadata,
+                            incoming.metadata,
+                        ),
                     }
                 )
 
@@ -590,6 +590,38 @@ def _merge_current_node_ids(
     if remove is not None and remove in result:
         result.remove(remove)
     return result
+
+
+def _merge_context_metadata(
+    fresh_metadata: dict[str, object],
+    incoming_metadata: dict[str, object],
+) -> dict[str, object]:
+    """Merge run context metadata without losing list-valued keys on retry."""
+    merged = {**fresh_metadata, **incoming_metadata}
+    if (
+        SKIPPED_NODE_IDS_KEY not in fresh_metadata
+        and SKIPPED_NODE_IDS_KEY not in incoming_metadata
+    ):
+        return merged
+
+    fresh_skipped = fresh_metadata.get(SKIPPED_NODE_IDS_KEY, [])
+    incoming_skipped = incoming_metadata.get(SKIPPED_NODE_IDS_KEY, [])
+    fresh_ids = [
+        item
+        for item in (fresh_skipped if isinstance(fresh_skipped, list) else [])
+        if isinstance(item, str)
+    ]
+    incoming_ids = [
+        item
+        for item in (incoming_skipped if isinstance(incoming_skipped, list) else [])
+        if isinstance(item, str)
+    ]
+    seen = set(fresh_ids)
+    merged[SKIPPED_NODE_IDS_KEY] = [
+        *fresh_ids,
+        *(item for item in incoming_ids if item not in seen),
+    ]
+    return merged
 
 
 def _utcnow() -> datetime.datetime:

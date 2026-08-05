@@ -9,7 +9,8 @@ import uuid
 
 import pytest
 
-from app.ai.workflow.engine.executor import WorkflowExecutor
+from app.ai.workflow.engine.executor import WorkflowExecutor, _merge_context_metadata
+from app.ai.workflow.graph.traversal import SKIPPED_NODE_IDS_KEY, is_join_ready
 from app.ai.workflow.exceptions import WorkflowValidationError
 from app.ai.workflow.models import (
     NodeStatus,
@@ -211,18 +212,28 @@ async def test_fork_join_any_policy_proceeds_on_first_branch() -> None:
     owner_id = uuid.uuid4()
     store = FakeWorkflowStore()
     definition = _fork_join_definition(
-        owner_id, join_policy="any", cancel_remaining=True
+        owner_id, join_policy="any", cancel_remaining=True, branch_count=3
     )
     run = await _seed(store, definition, owner_id)
+    # b1 completes immediately; b2/b3 fail after a short delay so join can satisfy
+    # `any` on b1 before their failures are ignored/skipped.
     task_executor = FakeNodeExecutor(error_on={"b2", "b3"}, error_delay_seconds=0.05)
     executor = _executor(store, task_executor)
 
     result = await executor.execute_run(run.id, owner_id=owner_id)
 
     assert result.status is RunStatus.COMPLETED
+    assert result.context.variables["b1"] == {"node_id": "b1"}
+    assert "b2" not in result.context.variables
+    assert "b3" not in result.context.variables
+
+    join_output = result.context.variables["join"]
+    assert isinstance(join_output, dict)
+    assert join_output.get("completed_branch_count") == 1
+
     skipped = result.context.metadata.get("skipped_node_ids", [])
     assert isinstance(skipped, list)
-    assert "b2" in skipped or "b3" in skipped
+    assert {"b2", "b3"}.issubset(set(skipped))
 
 
 @pytest.mark.anyio
@@ -233,16 +244,27 @@ async def test_fork_join_count_policy_waits_for_n_branches() -> None:
         owner_id, join_policy="count", count=2, cancel_remaining=True, branch_count=3
     )
     run = await _seed(store, definition, owner_id)
-    task_executor = FakeNodeExecutor()
+    # b1/b2 finish first; b3 fails after delay once count=2 is satisfied.
+    task_executor = FakeNodeExecutor(error_on={"b3"}, error_delay_seconds=0.05)
     executor = _executor(store, task_executor)
 
     result = await executor.execute_run(run.id, owner_id=owner_id)
 
     assert result.status is RunStatus.COMPLETED
+    assert result.context.variables["b1"] == {"node_id": "b1"}
+    assert result.context.variables["b2"] == {"node_id": "b2"}
+    assert "b3" not in result.context.variables
+    assert task_executor.calls.count("b1") == 1
+    assert task_executor.calls.count("b2") == 1
+
     join_output = result.context.variables["join"]
     assert isinstance(join_output, dict)
     completed = join_output.get("completed_branch_count")
-    assert isinstance(completed, int) and completed >= 2
+    assert completed == 2
+
+    skipped = result.context.metadata.get("skipped_node_ids", [])
+    assert isinstance(skipped, list)
+    assert "b3" in skipped
 
 
 @pytest.mark.anyio
@@ -314,6 +336,46 @@ async def test_checkpoint_merge_retries_preserve_branch_outputs() -> None:
     assert store._checkpoint_attempts > 1
 
 
+def test_merge_context_metadata_unions_skipped_node_ids() -> None:
+    merged = _merge_context_metadata(
+        {SKIPPED_NODE_IDS_KEY: ["b1"]},
+        {SKIPPED_NODE_IDS_KEY: ["b2"]},
+    )
+    assert merged[SKIPPED_NODE_IDS_KEY] == ["b1", "b2"]
+
+
+def test_is_join_ready_any_waits_for_branch_not_fork() -> None:
+    owner_id = uuid.uuid4()
+    definition = _fork_join_definition(owner_id, join_policy="any", branch_count=2)
+    join_node = next(node for node in definition.nodes if node.id == "join")
+    run = WorkflowRun(
+        id=uuid.uuid4(),
+        workflow_definition_id=definition.id,
+        owner_id=owner_id,
+        idempotency_key="key-1",
+        status=RunStatus.RUNNING,
+        context=WorkflowContext(variables={"fork": {"branch_node_ids": ["b1", "b2"]}}),
+        current_node_ids=[],
+        checkpoint_version=0,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+    assert is_join_ready(definition, run, join_node) is False
+
+    run = run.model_copy(
+        update={
+            "context": WorkflowContext(
+                variables={
+                    "fork": {"branch_node_ids": ["b1", "b2"]},
+                    "b1": {"node_id": "b1"},
+                }
+            )
+        }
+    )
+    assert is_join_ready(definition, run, join_node) is True
+
+
 class TestForkNodeExecutor:
     @pytest.mark.anyio
     async def test_returns_branch_targets(self) -> None:
@@ -330,6 +392,23 @@ class TestForkNodeExecutor:
         output = await executor.execute(node, WorkflowContext(), request)
         assert output["branch_node_ids"] == ["b1", "b2"]
         assert output["join_node_id"] == "join"
+
+    @pytest.mark.anyio
+    async def test_excludes_direct_join_edge_from_branch_targets(self) -> None:
+        executor = ForkNodeExecutor(max_parallel_branches=4)
+        node = _node("fork", NodeType.FORK, config={"join_node_id": "join"})
+        request = NodeExecutionRequest(
+            owner_id=uuid.uuid4(),
+            execution_receipt_id="r:fork:1",
+            outgoing_edges=(
+                _edge("e1", "fork", "b1"),
+                _edge("e2", "fork", "b2"),
+                _edge("e3", "fork", "join"),
+            ),
+        )
+        output = await executor.execute(node, WorkflowContext(), request)
+        assert output["branch_node_ids"] == ["b1", "b2"]
+        assert output["branch_count"] == 2
 
 
 class TestJoinNodeExecutor:
