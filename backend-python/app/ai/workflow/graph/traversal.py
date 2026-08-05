@@ -20,6 +20,12 @@ from app.ai.workflow.models import (
     WorkflowNode,
     WorkflowRun,
 )
+from app.ai.workflow.nodes.parallel_node import (
+    JOIN_POLICY_ALL,
+    JOIN_POLICY_ANY,
+    JOIN_POLICY_COUNT,
+    parse_join_config,
+)
 
 SKIPPED_NODE_IDS_KEY = "skipped_node_ids"
 
@@ -45,6 +51,108 @@ def outgoing_edges(definition: WorkflowDefinition, node_id: str) -> list[Workflo
     return [edge for edge in definition.edges if edge.from_node_id == node_id]
 
 
+def incoming_edges(definition: WorkflowDefinition, node_id: str) -> list[WorkflowEdge]:
+    """Return incoming edges for ``node_id`` in graph declaration order."""
+    return [edge for edge in definition.edges if edge.to_node_id == node_id]
+
+
+def get_fork_join_region_nodes(
+    definition: WorkflowDefinition, fork_id: str, join_id: str
+) -> set[str]:
+    """Return node ids strictly between ``fork_id`` and ``join_id`` (exclusive)."""
+    adjacency: dict[str, list[str]] = defaultdict(list)
+    for edge in definition.edges:
+        adjacency[edge.from_node_id].append(edge.to_node_id)
+
+    region: set[str] = set()
+    stack = [
+        edge.to_node_id for edge in definition.edges if edge.from_node_id == fork_id
+    ]
+    while stack:
+        node_id = stack.pop()
+        if node_id == join_id or node_id in region:
+            continue
+        region.add(node_id)
+        for neighbor in adjacency[node_id]:
+            if neighbor != join_id:
+                stack.append(neighbor)
+    return region
+
+
+def find_fork_join_region(
+    definition: WorkflowDefinition, node_id: str
+) -> tuple[str, str] | None:
+    """Return ``(fork_id, join_id)`` when ``node_id`` lies in a fork/join region."""
+    for node in definition.nodes:
+        if node.type is not NodeType.FORK:
+            continue
+        join_node_id = node.config.get("join_node_id")
+        if not isinstance(join_node_id, str):
+            continue
+        if node_id in get_fork_join_region_nodes(definition, node.id, join_node_id):
+            return node.id, join_node_id
+    return None
+
+
+def group_parallel_ready_nodes(
+    definition: WorkflowDefinition, ready_node_ids: list[str]
+) -> tuple[list[list[str]], list[str]]:
+    """Split ready ids into fork-region parallel groups and sequential ids."""
+    region_groups: dict[tuple[str, str], list[str]] = defaultdict(list)
+    sequential: list[str] = []
+
+    for node_id in ready_node_ids:
+        region = find_fork_join_region(definition, node_id)
+        if region is not None:
+            region_groups[region].append(node_id)
+        else:
+            sequential.append(node_id)
+
+    parallel_groups: list[list[str]] = []
+    for group in region_groups.values():
+        if len(group) > 1:
+            parallel_groups.append(group)
+        else:
+            sequential.extend(group)
+
+    return parallel_groups, sequential
+
+
+def is_join_ready(
+    definition: WorkflowDefinition, run: WorkflowRun, join_node: WorkflowNode
+) -> bool:
+    """Return whether ``join_node`` satisfies its configured join policy."""
+    incoming = incoming_edges(definition, join_node.id)
+    if not incoming:
+        return False
+
+    succeeded = get_succeeded_node_ids(run)
+    resolved = get_resolved_node_ids(run)
+    join_policy, count, _ = parse_join_config(join_node)
+
+    succeeded_sources = sum(1 for edge in incoming if edge.from_node_id in succeeded)
+    if join_policy == JOIN_POLICY_ALL:
+        return all(edge.from_node_id in resolved for edge in incoming)
+    if join_policy == JOIN_POLICY_ANY:
+        return succeeded_sources >= 1
+    if join_policy == JOIN_POLICY_COUNT:
+        return succeeded_sources >= count
+    return False
+
+
+def collect_incomplete_fork_branch_nodes_to_skip(
+    definition: WorkflowDefinition,
+    *,
+    fork_node_id: str,
+    join_node_id: str,
+    run: WorkflowRun,
+) -> list[str]:
+    """Return branch-region nodes to skip after an ``any``/``count`` join fires."""
+    region = get_fork_join_region_nodes(definition, fork_node_id, join_node_id)
+    resolved = get_resolved_node_ids(run) | set(run.current_node_ids)
+    return sorted(node_id for node_id in region if node_id not in resolved)
+
+
 def resolve_ready_nodes(definition: WorkflowDefinition, run: WorkflowRun) -> list[str]:
     """Return node ids ready for execution, in graph declaration order."""
     nodes_by_id = {node.id: node for node in definition.nodes}
@@ -65,6 +173,10 @@ def resolve_ready_nodes(definition: WorkflowDefinition, run: WorkflowRun) -> lis
             continue
         if node.id == definition.entry_node_id:
             ready.append(node.id)
+            continue
+        if node.type is NodeType.JOIN:
+            if is_join_ready(definition, run, node):
+                ready.append(node.id)
             continue
         incoming = incoming_by_node.get(node.id)
         if incoming and all(source_id in resolved for source_id in incoming):
@@ -121,12 +233,12 @@ def collect_nodes_to_skip(
 
 
 def _incoming_router_edges_selected(
-    incoming_edges: list[WorkflowEdge],
+    incoming_edges_list: list[WorkflowEdge],
     nodes_by_id: dict[str, WorkflowNode],
     run: WorkflowRun,
 ) -> bool:
     router_edges_by_source: dict[str, list[WorkflowEdge]] = defaultdict(list)
-    for edge in incoming_edges:
+    for edge in incoming_edges_list:
         source = nodes_by_id.get(edge.from_node_id)
         if source is None or source.type is not NodeType.ROUTER:
             continue
