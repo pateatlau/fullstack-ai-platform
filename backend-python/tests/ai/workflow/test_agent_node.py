@@ -130,6 +130,23 @@ async def test_missing_goal_raises_node_execution_error() -> None:
 
 
 @pytest.mark.anyio
+async def test_invalid_max_iterations_raises_node_execution_error() -> None:
+    agent = FakeAgent()
+    node = WorkflowNode(
+        id="agent",
+        type=NodeType.AGENT,
+        config={"goal": "Do work", "max_iterations": 0},
+    )
+    executor = AgentNodeExecutor(agent, settings=_settings())
+
+    with pytest.raises(WorkflowNodeExecutionError, match="max_iterations") as exc:
+        await executor.execute(node, WorkflowContext(), _request())
+
+    assert exc.value.error_code == "invalid_config"
+    assert agent.last_request is None
+
+
+@pytest.mark.anyio
 async def test_agent_failure_becomes_node_failure_not_crash() -> None:
     agent = FakeAgent(error=RuntimeError("agent loop failed"))
     node = WorkflowNode(

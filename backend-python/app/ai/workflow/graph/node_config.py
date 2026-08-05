@@ -44,6 +44,7 @@ def _validate_agent_node_config(node_id: str, config: dict[str, object]) -> None
         raise WorkflowValidationError(
             f"Agent node {node_id!r} requires config.goal (non-empty string)."
         )
+    _reject_file_template_ref(goal, node_id=node_id, field_name="goal")
 
     instructions = config.get("instructions")
     if instructions is not None and (
@@ -51,6 +52,10 @@ def _validate_agent_node_config(node_id: str, config: dict[str, object]) -> None
     ):
         raise WorkflowValidationError(
             f"Agent node {node_id!r} config.instructions must be a non-empty string."
+        )
+    if isinstance(instructions, str):
+        _reject_file_template_ref(
+            instructions, node_id=node_id, field_name="instructions"
         )
 
     tool_names = config.get("tool_names")
@@ -79,6 +84,15 @@ def _validate_agent_node_config(node_id: str, config: dict[str, object]) -> None
     ):
         raise WorkflowValidationError(
             f"Agent node {node_id!r} config.model_override must be a non-empty string."
+        )
+
+
+def _reject_file_template_ref(value: str, *, node_id: str, field_name: str) -> None:
+    """Agent inline fields must not use ``@`` file template references."""
+    if value.startswith(_FILE_TEMPLATE_PREFIX):
+        raise WorkflowValidationError(
+            f"Agent node {node_id!r} config.{field_name} does not support "
+            "@ file template references."
         )
 
 

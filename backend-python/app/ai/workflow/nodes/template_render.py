@@ -7,6 +7,7 @@ from jinja2.exceptions import UndefinedError
 
 from app.ai.prompts.exceptions import PromptRenderError
 from app.ai.prompts.manager import PromptManager
+from app.ai.workflow.exceptions import WorkflowValidationError
 from app.ai.workflow.graph.node_config import _parse_file_template_ref
 from app.ai.workflow.models import WorkflowContext
 from app.ai.workflow.nodes.base import WorkflowNodeExecutionError
@@ -25,9 +26,14 @@ def render_prompt_template(
     """Render an inline or file-backed prompt template against workflow context."""
     render_variables = _prompt_render_scope(context)
     if prompt_template.startswith(_FILE_TEMPLATE_PREFIX):
-        category, name, version = _parse_file_template_ref(
-            prompt_template, node_id=node_id, node_type="LLM"
-        )
+        try:
+            category, name, version = _parse_file_template_ref(
+                prompt_template, node_id=node_id, node_type="LLM"
+            )
+        except WorkflowValidationError as exc:
+            raise WorkflowNodeExecutionError(
+                str(exc), error_code="invalid_config"
+            ) from exc
         try:
             return prompt_manager.render(category, name, version, render_variables)
         except PromptRenderError as exc:

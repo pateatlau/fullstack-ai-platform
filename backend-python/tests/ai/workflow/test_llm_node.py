@@ -153,6 +153,54 @@ async def test_provider_error_becomes_node_failure() -> None:
 
 
 @pytest.mark.anyio
+async def test_invalid_file_template_reference_raises_node_execution_error() -> None:
+    node = WorkflowNode(
+        id="llm",
+        type=NodeType.LLM,
+        config={"prompt_template": "@workflow/only-two"},
+    )
+    executor = _executor(FakeProvider())
+
+    with pytest.raises(
+        WorkflowNodeExecutionError, match="@category/name/version"
+    ) as exc:
+        await executor.execute(node, WorkflowContext(), _request())
+
+    assert exc.value.error_code == "invalid_config"
+
+
+@pytest.mark.anyio
+async def test_unsupported_provider_becomes_node_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.providers.factory import ProviderFactory, UnsupportedProviderError
+
+    node = WorkflowNode(
+        id="llm",
+        type=NodeType.LLM,
+        config={"prompt_template": "Hello"},
+    )
+    executor = LLMNodeExecutor(
+        prompt_manager=create_prompt_manager(),
+        settings=Settings(openai_api_key="test-key"),
+    )
+
+    def _raise_unsupported(_name: object, _settings: object) -> object:
+        raise UnsupportedProviderError("Unsupported provider: 'unknown'")
+
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        staticmethod(_raise_unsupported),
+    )
+
+    with pytest.raises(WorkflowNodeExecutionError, match="Unsupported provider") as exc:
+        await executor.execute(node, WorkflowContext(), _request())
+
+    assert exc.value.error_code == "invalid_config"
+
+
+@pytest.mark.anyio
 async def test_missing_prompt_template_raises_node_execution_error() -> None:
     node = WorkflowNode(id="llm", type=NodeType.LLM, config={})
     executor = _executor(FakeProvider())

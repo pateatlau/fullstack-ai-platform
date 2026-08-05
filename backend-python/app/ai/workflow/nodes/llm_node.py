@@ -52,12 +52,11 @@ class LLMNodeExecutor:
             node_id=node.id,
         )
         model = _resolve_model(node.config, self._settings)
-        provider = self._provider or ProviderFactory.get_provider(
-            self._settings.llm_provider, self._settings
-        )
-
         messages = [ChatMessageSchema.model_construct(role="user", content=prompt)]
         try:
+            provider = self._provider or ProviderFactory.get_provider(
+                self._settings.llm_provider, self._settings
+            )
             completion = await provider.complete_chat(
                 messages,
                 model,

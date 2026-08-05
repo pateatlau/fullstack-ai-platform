@@ -2,7 +2,7 @@
 epic: v2-06
 title: Workflow Engine
 status: in_progress
-version: 1.13
+version: 1.14
 depends_on: [v2-05]
 provides:
   [
@@ -1493,7 +1493,8 @@ Implement `LLMNodeExecutor` and `AgentNodeExecutor`, letting workflow nodes perf
 - [x] Render node `prompt_template` against `WorkflowContext.variables`.
 - [x] Support optional `model_override` in node config.
 - [x] Map the LLM response into `WorkflowNodeExecution.output`.
-- [x] Pass `execution_receipt_id` to provider calls (crash-safe protocol; Phase 8).
+- [x] Include `execution_receipt_id` in LLM node output for checkpoint tracking.
+- [ ] Pass `execution_receipt_id` to provider calls (crash-safe protocol; **deferred to Phase 8** — `LLMProvider.complete_chat()` has no receipt parameter in v1).
 - [x] Handle provider errors as node failures (not run crashes).
 
 ### Agent Node
@@ -1501,7 +1502,8 @@ Implement `LLMNodeExecutor` and `AgentNodeExecutor`, letting workflow nodes perf
 - [x] Implement `AgentNodeExecutor` using `DefaultAgent`.
 - [x] Map node `config` (goal/instructions, tool allowlist, iteration limit) into an `AgentRequest`.
 - [x] Map `AgentResponse` into `WorkflowNodeExecution.output`.
-- [x] Pass `execution_receipt_id` into `AgentRequest` metadata (crash-safe protocol; Phase 8).
+- [x] Pass `execution_receipt_id` via `AgentContext.metadata` (`AgentRequest` has no metadata field; checkpoint tracking only).
+- [ ] Pass `execution_receipt_id` through to agent tool calls (crash-safe protocol; **deferred to Phase 8** — `DefaultAgent` does not yet propagate metadata to `ToolExecutionContext`).
 - [x] Fail agent nodes with a clear configuration error at run time if `AGENT_RUNTIME_ENABLED=false`.
 - [x] Respect the Agent Framework's own retry/iteration limits (no double-wrapping).
 
@@ -1548,6 +1550,7 @@ Additional verification:
 | Node config schemas  | ✅ `graph/node_config.py`; `GraphValidator` validates `llm`/`agent` shapes at definition time |
 | Prompt templates     | ✅ `app/ai/prompts/workflow/transform.v1.j2`                                                 |
 | DI wiring            | ✅ `get_workflow_manager` registers `NodeType.LLM` and `NodeType.AGENT` executors           |
+| Crash-safe receipts    | ⏳ Receipt ID in node output / `AgentContext.metadata`; provider & tool pass-through deferred to Phase 8 |
 | Unit tests           | ✅ 21 new tests; 162 total in `tests/ai/workflow/`                                          |
 | Backend regression   | ✅ 1471 passed                                                                              |
 
@@ -2242,5 +2245,6 @@ No workflow input/output content or personally identifiable information should b
 | 1.11    | 2026-08-05 | Phase 4 complete: `ConditionEvaluator`, declarative condition DSL, `RouterNodeExecutor` (exclusive / `all_matching`), routing-aware ready-node resolver, unselected-branch skip semantics. 128 workflow tests; 1437 total backend passed; 90.00% coverage. |
 | 1.12    | 2026-08-05 | Phase 5 complete: `ForkNodeExecutor`, `JoinNodeExecutor`, fork/join parallel execution (`asyncio.gather`), join policies (`all` / `any` / `count(n)`), optimistic checkpoint merge/retry, join-policy-aware ready-node resolver. 141 workflow tests; 1450 total backend passed; 89% coverage. |
 | 1.13    | 2026-08-05 | Phase 6 complete: `LLMNodeExecutor`, `AgentNodeExecutor`, `graph/node_config.py`, workflow prompt templates, DI wiring for LLM/Agent node types. 162 workflow tests; 1471 total backend passed. |
+| 1.14    | 2026-08-05 | Phase 6 doc sync: clarify `execution_receipt_id` is carried in node output / `AgentContext.metadata` (not `AgentRequest`); provider & tool pass-through deferred to Phase 8. |
 
 ---

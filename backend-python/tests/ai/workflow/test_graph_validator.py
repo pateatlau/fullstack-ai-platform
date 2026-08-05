@@ -378,3 +378,34 @@ class TestGraphValidatorNodeConfigs:
         )
         with pytest.raises(WorkflowValidationError, match="tool_names"):
             _VALIDATOR.validate(definition)
+
+    def test_agent_node_file_template_goal_is_rejected(self) -> None:
+        definition = _definition(
+            nodes=[
+                _node(
+                    "start",
+                    NodeType.AGENT,
+                    config={"goal": "@workflow/transform/1"},
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+        )
+        with pytest.raises(WorkflowValidationError, match="goal"):
+            _VALIDATOR.validate(definition)
+
+    def test_agent_node_file_template_instructions_is_rejected(self) -> None:
+        definition = _definition(
+            nodes=[
+                _node(
+                    "start",
+                    NodeType.AGENT,
+                    config={
+                        "goal": "Do work",
+                        "instructions": "@workflow/transform/1",
+                    },
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+        )
+        with pytest.raises(WorkflowValidationError, match="instructions"):
+            _VALIDATOR.validate(definition)

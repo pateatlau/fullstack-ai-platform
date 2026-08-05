@@ -112,8 +112,13 @@ class AgentNodeExecutor:
 
 def _build_agent_config(config: dict[str, object]) -> AgentConfig | None:
     max_iterations = config.get("max_iterations")
-    if not isinstance(max_iterations, int):
+    if max_iterations is None:
         return None
+    if not isinstance(max_iterations, int) or max_iterations < 1:
+        raise WorkflowNodeExecutionError(
+            "Agent node config.max_iterations must be an integer >= 1.",
+            error_code="invalid_config",
+        )
     return AgentConfig(max_iterations=max_iterations)
 
 
