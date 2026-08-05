@@ -96,6 +96,7 @@ class WorkflowManager:
         #: Most recently scheduled background run task — test-observability seam
         #: only (production callers poll run state via ``get_run()``).
         self._last_scheduled_run_task: asyncio.Task[None] | None = None
+        self._deferred_run_schedules: list[tuple[uuid.UUID, uuid.UUID]] = []
         self._validator = GraphValidator(
             max_nodes_per_definition=(
                 settings.workflow_max_nodes_per_definition
@@ -266,6 +267,7 @@ class WorkflowManager:
         idempotency_key: str,
         trigger_input: dict[str, object] | None = None,
         session_id: uuid.UUID | None = None,
+        defer_schedule: bool = False,
     ) -> WorkflowRun:
         """Create (or return the existing) run and schedule it asynchronously.
 
@@ -273,6 +275,10 @@ class WorkflowManager:
         ``(owner_id, definition_id, idempotency_key)`` return the existing run
         instead of scheduling duplicate work (Part I § Run launch contract).
         Never blocks until terminal completion — callers poll ``get_run()``.
+
+        When ``defer_schedule`` is true, background execution is queued until
+        ``flush_deferred_run_schedules()`` — use when the run row must be
+        committed before ``WorkflowExecutor`` loads it from the store.
         """
         try:
             normalized_key = normalize_idempotency_key(idempotency_key)
@@ -310,8 +316,22 @@ class WorkflowManager:
         )
         result, created = await self._store.get_or_create_run(run)
         if created:
-            self._schedule_run(result.id, owner_id=owner_id)
+            if defer_schedule:
+                self._deferred_run_schedules.append((result.id, owner_id))
+            else:
+                self._schedule_run(result.id, owner_id=owner_id)
         return result
+
+    def flush_deferred_run_schedules(self) -> None:
+        """Schedule runs deferred by ``start_run(..., defer_schedule=True)``."""
+        pending = self._deferred_run_schedules
+        self._deferred_run_schedules = []
+        for run_id, owner_id in pending:
+            self._schedule_run(run_id, owner_id=owner_id)
+
+    def discard_deferred_run_schedules(self) -> None:
+        """Drop deferred schedules after a failed commit or setup."""
+        self._deferred_run_schedules.clear()
 
     async def apply_decision(
         self,

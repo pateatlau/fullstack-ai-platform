@@ -141,6 +141,7 @@ class WorkflowExecutionToolHandler:
                     idempotency_key=idempotency_key.strip(),
                     trigger_input=trigger_input,
                     session_id=context.session_id,
+                    defer_schedule=True,
                 )
         except WorkflowNotFoundError as exc:
             return ToolResult(
@@ -217,7 +218,13 @@ class WorkflowExecutionToolHandler:
     @asynccontextmanager
     async def _manager_scope(self) -> AsyncIterator[WorkflowManager]:
         if self._manager_factory is not None:
-            yield await self._manager_factory()
+            manager = await self._manager_factory()
+            try:
+                yield manager
+                manager.flush_deferred_run_schedules()
+            except Exception:
+                manager.discard_deferred_run_schedules()
+                raise
             return
 
         from app.db.engine import get_sessionmaker
@@ -230,8 +237,10 @@ class WorkflowExecutionToolHandler:
             try:
                 yield manager
                 await session.commit()
+                manager.flush_deferred_run_schedules()
             except Exception:
                 await session.rollback()
+                manager.discard_deferred_run_schedules()
                 raise
 
 
