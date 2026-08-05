@@ -7,7 +7,11 @@ from fastapi.responses import Response
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import Message
 
-from app.ai.deps import get_mcp_server_registry, get_tool_registry
+from app.ai.deps import (
+    get_mcp_server_registry,
+    get_tool_registry,
+    reconcile_workflow_runs_at_startup,
+)
 from app.ai.tools.registration import register_mcp_tools, register_production_tools
 from app.core.config import get_settings
 from app.core.cors import CORS_EXPOSE_HEADER_NAMES, DEV_ORIGIN_REGEX
@@ -44,6 +48,21 @@ async def lifespan(_: FastAPI):
         except Exception as exc:
             logger.error(
                 "Failed to register MCP tools; continuing with V1 tools only",
+                error=str(exc),
+                exc_info=True,
+            )
+
+    if settings.workflow_engine_enabled:
+        try:
+            reconciled = await reconcile_workflow_runs_at_startup(settings)
+            if reconciled:
+                logger.info(
+                    "Workflow startup reconciliation complete",
+                    reconciled_runs=reconciled,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Workflow startup reconciliation failed",
                 error=str(exc),
                 exc_info=True,
             )

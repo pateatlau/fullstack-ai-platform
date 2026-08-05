@@ -211,6 +211,9 @@ class FakeWorkflowStore:
             results = [run for run in results if run.status is status]
         return results
 
+    async def list_runs_by_status(self, *, status: RunStatus) -> list[WorkflowRun]:
+        return [run for run in self._runs.values() if run.status is status]
+
     async def append_node_execution(
         self, execution: WorkflowNodeExecution
     ) -> WorkflowNodeExecution:

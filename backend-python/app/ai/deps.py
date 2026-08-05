@@ -11,7 +11,7 @@ request-scoped dependencies follow the same pattern as ``app/db/deps.py``.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -547,19 +547,39 @@ def get_workflow_manager(
     ``WorkflowExecutor`` task (Part I § Background execution), never the
     request-scoped ``session`` above.
     """
-    from app.ai.workflow.conditions.evaluator import ConditionEvaluator
-    from app.ai.workflow.manager import WorkflowManager
-    from app.ai.workflow.models import NodeType
-    from app.ai.workflow.nodes.approval_node import ApprovalNodeExecutor
-    from app.ai.workflow.nodes.llm_node import LLMNodeExecutor
-    from app.ai.workflow.nodes.agent_node import AgentNodeExecutor
-    from app.ai.workflow.nodes.parallel_node import ForkNodeExecutor, JoinNodeExecutor
-    from app.ai.workflow.nodes.router_node import RouterNodeExecutor
-    from app.ai.workflow.nodes.task_node import TaskNodeExecutor
     from app.ai.workflow.providers.postgres import PostgresWorkflowStore
 
     def background_store_factory(session: AsyncSession) -> "PostgresWorkflowStore":
         return PostgresWorkflowStore(session=session, settings=settings)
+
+    return _create_workflow_manager(
+        store=store,
+        settings=settings,
+        tool_executor=tool_executor,
+        prompt_manager=prompt_manager,
+        agent_runtime=agent_runtime,
+        background_store_factory=background_store_factory,
+    )
+
+
+def _create_workflow_manager(
+    *,
+    store: "PostgresWorkflowStore",
+    settings: Settings,
+    tool_executor: ToolExecutor,
+    prompt_manager: PromptManager,
+    agent_runtime: DefaultAgent,
+    background_store_factory: Callable[[AsyncSession], "PostgresWorkflowStore"],
+) -> "WorkflowManager":
+    from app.ai.workflow.conditions.evaluator import ConditionEvaluator
+    from app.ai.workflow.manager import WorkflowManager
+    from app.ai.workflow.models import NodeType
+    from app.ai.workflow.nodes.approval_node import ApprovalNodeExecutor
+    from app.ai.workflow.nodes.agent_node import AgentNodeExecutor
+    from app.ai.workflow.nodes.llm_node import LLMNodeExecutor
+    from app.ai.workflow.nodes.parallel_node import ForkNodeExecutor, JoinNodeExecutor
+    from app.ai.workflow.nodes.router_node import RouterNodeExecutor
+    from app.ai.workflow.nodes.task_node import TaskNodeExecutor
 
     return WorkflowManager(
         store=store,
@@ -579,4 +599,40 @@ def get_workflow_manager(
             NodeType.APPROVAL: ApprovalNodeExecutor(),
         },
         background_store_factory=background_store_factory,
+        tool_registry=get_tool_registry(),
     )
+
+
+async def reconcile_workflow_runs_at_startup(settings: Settings) -> int:
+    """Reattach executors to orphaned ``running`` runs after process restart."""
+    from app.ai.workflow.providers.postgres import PostgresWorkflowStore
+    from app.db.engine import get_sessionmaker
+
+    registry = get_tool_registry()
+    prompt_manager = get_prompt_manager()
+    tool_executor = ToolExecutor(registry=registry, settings=settings)
+    agent_runtime = create_default_agent(
+        settings=settings,
+        tool_registry=registry,
+        prompt_manager=prompt_manager,
+        tool_executor=tool_executor,
+    )
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        store = PostgresWorkflowStore(session=session, settings=settings)
+
+        def background_store_factory(
+            bg_session: AsyncSession,
+        ) -> "PostgresWorkflowStore":
+            return PostgresWorkflowStore(session=bg_session, settings=settings)
+
+        manager = _create_workflow_manager(
+            store=store,
+            settings=settings,
+            tool_executor=tool_executor,
+            prompt_manager=prompt_manager,
+            agent_runtime=agent_runtime,
+            background_store_factory=background_store_factory,
+        )
+        return await manager.reconcile_orphaned_runs()
