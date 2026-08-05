@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.workflow.engine.background import schedule_run_task
+from app.ai.workflow.engine.background import reconcile_orphaned_runs, schedule_run_task
 from app.ai.workflow.engine.executor import WorkflowExecutor
 from app.ai.workflow.exceptions import (
     WorkflowApprovalCasMissError,
@@ -45,6 +45,7 @@ from app.ai.workflow.nodes.approval_node import (
 from app.core.logging import get_logger
 
 if TYPE_CHECKING:
+    from app.ai.tools.registry import ToolRegistry
     from app.ai.workflow.nodes.base import NodeExecutor
     from app.core.config import Settings
 
@@ -84,11 +85,13 @@ class WorkflowManager:
         settings: Settings | None = None,
         node_executors: Mapping[NodeType, "NodeExecutor"] | None = None,
         background_store_factory: BackgroundStoreFactory | None = None,
+        tool_registry: "ToolRegistry | None" = None,
     ) -> None:
         self._store = store
         self._settings = settings
         self._node_executors: Mapping[NodeType, "NodeExecutor"] = node_executors or {}
         self._background_store_factory = background_store_factory
+        self._tool_registry = tool_registry
         #: Most recently scheduled background run task — test-observability seam
         #: only (production callers poll run state via ``get_run()``).
         self._last_scheduled_run_task: asyncio.Task[None] | None = None
@@ -439,7 +442,10 @@ class WorkflowManager:
             return updated_run
 
         executor = WorkflowExecutor(
-            self._store, self._node_executors, settings=self._settings
+            self._store,
+            self._node_executors,
+            settings=self._settings,
+            tool_registry=self._tool_registry,
         )
         continued = await executor.continue_from_approval(
             updated_run,
@@ -481,9 +487,20 @@ class WorkflowManager:
     def _schedule_run(
         self, run_id: uuid.UUID, *, owner_id: uuid.UUID
     ) -> asyncio.Task[None]:
-        task = schedule_run_task(self._execute_run(run_id, owner_id=owner_id))
+        task = schedule_run_task(
+            self._execute_run(run_id, owner_id=owner_id),
+            run_id=run_id,
+        )
         self._last_scheduled_run_task = task
         return task
+
+    async def reconcile_orphaned_runs(self) -> int:
+        """Reattach in-process executors to persisted ``running`` runs."""
+
+        async def _schedule(run_id: uuid.UUID, owner_id: uuid.UUID) -> None:
+            self._schedule_run(run_id, owner_id=owner_id)
+
+        return await reconcile_orphaned_runs(self._store, schedule_run=_schedule)
 
     async def _execute_run(self, run_id: uuid.UUID, *, owner_id: uuid.UUID) -> None:
         if self._background_store_factory is None:
@@ -501,7 +518,10 @@ class WorkflowManager:
         self, store: WorkflowStore, run_id: uuid.UUID, *, owner_id: uuid.UUID
     ) -> None:
         executor = WorkflowExecutor(
-            store, self._node_executors, settings=self._settings
+            store,
+            self._node_executors,
+            settings=self._settings,
+            tool_registry=self._tool_registry,
         )
         try:
             await executor.execute_run(run_id, owner_id=owner_id)

@@ -2,7 +2,7 @@
 epic: v2-06
 title: Workflow Engine
 status: in_progress
-version: 1.15
+version: 1.16
 depends_on: [v2-05]
 provides:
   [
@@ -831,7 +831,7 @@ _Reverified in Phase 0 audit (2026-08-04). See [post-mvp-v2-epic6-phase-0-baseli
 | 5     | Parallel Execution (Fork/Join)                  | M      | Completed   |
 | 6     | LLM & Agent Node Integration                    | M      | Completed   |
 | 7     | Human Approval Nodes, Pause & Resume            | L      | Completed   |
-| 8     | Node Retry & Crash Recovery                     | M      | Not Started |
+| 8     | Node Retry & Crash Recovery                     | M      | Completed   |
 | 9     | Workflow REST API                               | L      | Not Started |
 | 10    | Agent Tool Integration                          | M      | Not Started |
 | 11    | Frontend Controls                               | S      | Not Started |
@@ -1494,7 +1494,7 @@ Implement `LLMNodeExecutor` and `AgentNodeExecutor`, letting workflow nodes perf
 - [x] Support optional `model_override` in node config.
 - [x] Map the LLM response into `WorkflowNodeExecution.output`.
 - [x] Include `execution_receipt_id` in LLM node output for checkpoint tracking.
-- [ ] Pass `execution_receipt_id` to provider calls (crash-safe protocol; **deferred to Phase 8** — `LLMProvider.complete_chat()` has no receipt parameter in v1).
+- [ ] Pass `execution_receipt_id` to provider calls (crash-safe protocol; **deferred** — `LLMProvider.complete_chat()` has no receipt parameter in v1; LLM nodes fail-closed on crash recovery).
 - [x] Handle provider errors as node failures (not run crashes).
 
 ### Agent Node
@@ -1503,7 +1503,7 @@ Implement `LLMNodeExecutor` and `AgentNodeExecutor`, letting workflow nodes perf
 - [x] Map node `config` (goal/instructions, tool allowlist, iteration limit) into an `AgentRequest`.
 - [x] Map `AgentResponse` into `WorkflowNodeExecution.output`.
 - [x] Pass `execution_receipt_id` via `AgentContext.metadata` (`AgentRequest` has no metadata field; checkpoint tracking only).
-- [ ] Pass `execution_receipt_id` through to agent tool calls (crash-safe protocol; **deferred to Phase 8** — `DefaultAgent` does not yet propagate metadata to `ToolExecutionContext`).
+- [x] Pass `execution_receipt_id` through to agent tool calls (crash-safe protocol; `DefaultAgent._resolve_tool_context()` propagates metadata to `ToolExecutionContext`).
 - [x] Fail agent nodes with a clear configuration error at run time if `AGENT_RUNTIME_ENABLED=false`.
 - [x] Respect the Agent Framework's own retry/iteration limits (no double-wrapping).
 
@@ -1550,7 +1550,7 @@ Additional verification:
 | Node config schemas  | ✅ `graph/node_config.py`; `GraphValidator` validates `llm`/`agent` shapes at definition time |
 | Prompt templates     | ✅ `app/ai/prompts/workflow/transform.v1.j2`                                                 |
 | DI wiring            | ✅ `get_workflow_manager` registers `NodeType.LLM` and `NodeType.AGENT` executors           |
-| Crash-safe receipts    | ⏳ Receipt ID in node output / `AgentContext.metadata`; provider & tool pass-through deferred to Phase 8 |
+| Crash-safe receipts    | ✅ Receipt ID in node output / `AgentContext.metadata`; task + agent tool pass-through; LLM provider receipt deferred (fail-closed on crash recovery) |
 | Unit tests           | ✅ 21 new tests; 162 total in `tests/ai/workflow/`                                          |
 | Backend regression   | ✅ 1471 passed                                                                              |
 
@@ -1670,39 +1670,39 @@ Implement per-node retry policy (wrapping `app/core/retry.py`) and run-level cra
 
 ### Node Retry
 
-- [ ] Implement workflow `RetryPolicy` wrapping `retry_async`/`is_retryable_exception`.
-- [ ] Classify retryable failures (timeout, connection, provider 429) vs. non-retryable (validation, auth, not found).
-- [ ] Apply `workflow_max_node_retries` / `workflow_node_retry_base_delay_seconds` per node.
-- [ ] Increment `WorkflowNodeExecution.attempt` on each retry; persist one row per attempt.
-- [ ] Fail the run once retries are exhausted.
+- [x] Implement workflow `RetryPolicy` wrapping `retry_async`/`is_retryable_exception`.
+- [x] Classify retryable failures (timeout, connection, provider 429) vs. non-retryable (validation, auth, not found).
+- [x] Apply `workflow_max_node_retries` / `workflow_node_retry_base_delay_seconds` per node.
+- [x] Increment `WorkflowNodeExecution.attempt` on each retry; persist one row per attempt.
+- [x] Fail the run once retries are exhausted.
 
 ### Crash Recovery
 
-- [ ] Implement startup/administrative reconciliation: identify `running`/`waiting_approval` runs with no active in-process executor.
-- [ ] Implement `WorkflowManager.resume(run_id)` to rehydrate `WorkflowContext` from the latest checkpoint and continue.
-- [ ] Ensure rehydration correctly restores `current_node_ids`, including mid-fork/join state.
-- [ ] **Crash-safe `running` protocol:** never treat `status=running` as complete; mark the interrupted attempt `failed` (`execution_interrupted`) and increment `attempt` before retrying side-effecting nodes.
-- [ ] Re-execute **task/llm/agent** nodes only with the same `execution_receipt_id` for that attempt (pass through to `ToolExecutor` / provider calls); if idempotency cannot be guaranteed, fail the run with a clear error instead of duplicating side effects.
-- [ ] Re-execute **router/fork/join** nodes directly (no external side effects).
+- [x] Implement startup/administrative reconciliation: identify `running`/`waiting_approval` runs with no active in-process executor.
+- [x] Implement `WorkflowManager.resume(run_id)` to rehydrate `WorkflowContext` from the latest checkpoint and continue.
+- [x] Ensure rehydration correctly restores `current_node_ids`, including mid-fork/join state.
+- [x] **Crash-safe `running` protocol:** never treat `status=running` as complete; mark the interrupted attempt `failed` (`execution_interrupted`) and increment `attempt` before retrying side-effecting nodes.
+- [x] Re-execute **task/llm/agent** nodes only with the same `execution_receipt_id` for that attempt (pass through to `ToolExecutor` / provider calls); if idempotency cannot be guaranteed, fail the run with a clear error instead of duplicating side effects.
+- [x] Re-execute **router/fork/join** nodes directly (no external side effects).
 
 ### Run Duration Guard
 
-- [ ] Enforce `workflow_max_run_duration_minutes` — fail runs that exceed the configured wall-clock budget.
+- [x] Enforce `workflow_max_run_duration_minutes` — fail runs that exceed the configured wall-clock budget.
 
 ### Error Handling
 
-- [ ] Log retry attempts and crash-recovery actions without exposing node input/output content.
-- [ ] Ensure retry/resume failures never corrupt previously checkpointed state.
+- [x] Log retry attempts and crash-recovery actions without exposing node input/output content.
+- [x] Ensure retry/resume failures never corrupt previously checkpointed state.
 
 ### Testing
 
-- [ ] Add retryable-vs-non-retryable classification tests.
-- [ ] Add retry exhaustion tests.
-- [ ] Add attempt-tracking tests.
-- [ ] Add crash-recovery rehydration tests (simulated process restart).
-- [ ] Add crash-mid-task-node tests proving no duplicate side effects (receipt/idempotency or fail-closed).
-- [ ] Add mid-fork/join crash-recovery tests.
-- [ ] Add `workflow_max_run_duration_minutes` enforcement tests.
+- [x] Add retryable-vs-non-retryable classification tests.
+- [x] Add retry exhaustion tests.
+- [x] Add attempt-tracking tests.
+- [x] Add crash-recovery rehydration tests (simulated process restart).
+- [x] Add crash-mid-task-node tests proving no duplicate side effects (receipt/idempotency or fail-closed).
+- [x] Add mid-fork/join crash-recovery tests.
+- [x] Add `workflow_max_run_duration_minutes` enforcement tests.
 
 **Verify**
 
@@ -1710,10 +1710,10 @@ Implement per-node retry policy (wrapping `app/core/retry.py`) and run-level cra
 
 Additional verification:
 
-- [ ] Retryable node failures recover automatically within policy limits.
-- [ ] Non-retryable failures fail fast.
-- [ ] A simulated crash mid-run resumes without duplicating side effects.
-- [ ] Runs exceeding the duration guard fail cleanly.
+- [x] Retryable node failures recover automatically within policy limits.
+- [x] Non-retryable failures fail fast.
+- [x] A simulated crash mid-run resumes without duplicating side effects.
+- [x] Runs exceeding the duration guard fail cleanly.
 
 **Acceptance**
 
@@ -1724,6 +1724,20 @@ Additional verification:
 
 - Retry and crash-recovery tests pass.
 - Ready for the Workflow REST API (Phase 9).
+
+**Completion Record**
+
+| Metric               | Result                                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------------------- |
+| Retry policy         | ✅ `RetryPolicy` + `retry/classifier.py` wrapping `app/core/retry.py`; per-node `NodeRetryPolicy` override |
+| Attempt tracking     | ✅ One `WorkflowNodeExecution` row per attempt; retry exhaustion fails the run                      |
+| Crash recovery       | ✅ Interrupted `running` nodes marked `execution_interrupted`; receipt-aware task retry / fail-closed |
+| Duration guard       | ✅ `workflow_max_run_duration_minutes` enforced in `WorkflowExecutor`                                 |
+| Startup reconcile    | ✅ `reconcile_orphaned_runs()` on app startup when flag on; active run tracking in `background.py`    |
+| Agent receipt pass   | ✅ `DefaultAgent._resolve_tool_context()` propagates `execution_receipt_id` to tool calls           |
+| Store API            | ✅ `list_runs_by_status()` for administrative reconciliation                                        |
+| Unit tests           | ✅ 16 new tests; 203 total in `tests/ai/workflow/`                                                  |
+| Backend regression   | ✅ 1513 passed                                                                                      |
 
 ---
 
@@ -2261,5 +2275,6 @@ No workflow input/output content or personally identifiable information should b
 | 1.13    | 2026-08-05 | Phase 6 complete: `LLMNodeExecutor`, `AgentNodeExecutor`, `graph/node_config.py`, workflow prompt templates, DI wiring for LLM/Agent node types. 162 workflow tests; 1471 total backend passed. |
 | 1.14    | 2026-08-05 | Phase 6 doc sync: clarify `execution_receipt_id` is carried in node output / `AgentContext.metadata` (not `AgentRequest`); provider & tool pass-through deferred to Phase 8. |
 | 1.15    | 2026-08-05 | Phase 7 complete: `ApprovalNodeExecutor`, `WorkflowManager.apply_decision()`/`resume()`, approval edge routing, atomic CAS persistence (`checkpoint_version`), `WorkflowConcurrentUpdateError`. 187 workflow tests; 1496 total backend passed. |
+| 1.16    | 2026-08-05 | Phase 8 complete: `RetryPolicy` + crash recovery (`retry/classifier.py`, `retry/recovery.py`), attempt tracking, duration guard, startup reconciliation, agent tool receipt pass-through. 203 workflow tests; 1513 total backend passed. Part II only. |
 
 ---

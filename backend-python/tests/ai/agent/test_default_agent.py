@@ -377,3 +377,14 @@ def test_runtime_modules_have_no_transport_or_domain_imports() -> None:
                 module == forbidden or module.startswith(f"{forbidden}.")
                 for module in imported_modules
             ), f"{module_path.name} must not import {forbidden}"
+
+
+def test_resolve_tool_context_propagates_execution_receipt_id() -> None:
+    context = AgentContext(
+        caller=CallerContext.for_user(uuid.uuid4()),
+        metadata={"execution_receipt_id": "run-1:agent:1"},
+    )
+
+    tool_context = DefaultAgent._resolve_tool_context(context)
+
+    assert tool_context.execution_receipt_id == "run-1:agent:1"

@@ -321,6 +321,15 @@ class PostgresWorkflowStore:
         rows = (await self._session.execute(stmt)).scalars().all()
         return [_run_to_domain(row) for row in rows]
 
+    async def list_runs_by_status(self, *, status: RunStatus) -> list[WorkflowRun]:
+        stmt = (
+            select(WorkflowRunRecord)
+            .where(WorkflowRunRecord.status == status.value)
+            .order_by(WorkflowRunRecord.created_at.desc())
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [_run_to_domain(row) for row in rows]
+
     async def append_node_execution(
         self, execution: WorkflowNodeExecution
     ) -> WorkflowNodeExecution:

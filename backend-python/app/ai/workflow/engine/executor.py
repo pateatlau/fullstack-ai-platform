@@ -47,15 +47,26 @@ from app.ai.workflow.nodes.parallel_node import (
     JOIN_POLICY_ALL,
     parse_join_config,
 )
+from app.ai.workflow.retry.policy import RetryPolicy
+from app.ai.workflow.retry.recovery import (
+    build_execution_receipt_id,
+    crash_recovery_allowed,
+    execution_interrupted_error,
+    extract_execution_receipt_id,
+    find_interrupted_executions,
+    next_attempt_number,
+)
 from app.core.logging import get_logger
 
 if TYPE_CHECKING:
+    from app.ai.tools.registry import ToolRegistry
     from app.ai.workflow.interfaces.workflow_store import WorkflowStore
     from app.core.config import Settings
 
 _logger = get_logger(__name__)
 _DEFAULT_NODE_TIMEOUT_SECONDS = 120
 _MAX_CHECKPOINT_RETRIES = 25
+_RUN_DURATION_EXCEEDED = "Workflow run exceeded the configured duration limit."
 
 
 class _TerminalNodeExecutor:
@@ -80,14 +91,20 @@ class WorkflowExecutor:
         node_executors: Mapping[NodeType, NodeExecutor],
         *,
         settings: Settings | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self._store = store
         self._node_executors: dict[NodeType, NodeExecutor] = dict(node_executors)
         self._node_executors.setdefault(NodeType.TERMINAL, _TerminalNodeExecutor())
+        self._settings = settings
+        self._tool_registry = tool_registry
         self._default_node_timeout_seconds = (
             settings.workflow_node_timeout_seconds
             if settings is not None
             else _DEFAULT_NODE_TIMEOUT_SECONDS
+        )
+        self._max_run_duration_minutes = (
+            settings.workflow_max_run_duration_minutes if settings is not None else 60
         )
 
     async def execute_run(
@@ -108,7 +125,51 @@ class WorkflowExecutor:
 
         nodes_by_id = {node.id: node for node in definition.nodes}
 
+        with_executions = await self._store.get_run_with_executions(
+            run_id, owner_id=owner_id
+        )
+        if with_executions is None:
+            raise WorkflowNotFoundError(f"Workflow run {run_id} not found.")
+        run, executions = with_executions
+
+        if self._run_exceeded_duration(run):
+            return await self._fail_run_duration(run)
+
         while run.status is RunStatus.RUNNING:
+            if self._run_exceeded_duration(run):
+                return await self._fail_run_duration(run)
+
+            interrupted = find_interrupted_executions(
+                current_node_ids=run.current_node_ids,
+                executions=executions,
+            )
+            if interrupted:
+                for execution in interrupted:
+                    node = nodes_by_id.get(execution.node_id)
+                    if node is None:
+                        return await self._fail_run(
+                            run,
+                            error=(
+                                f"Interrupted node {execution.node_id!r} is missing "
+                                "from the workflow definition."
+                            ),
+                        )
+                    run = await self._resume_interrupted_node(
+                        run,
+                        node,
+                        execution,
+                        definition=definition,
+                    )
+                    if run.status is not RunStatus.RUNNING:
+                        return run
+                    refreshed = await self._store.get_run_with_executions(
+                        run.id, owner_id=run.owner_id
+                    )
+                    if refreshed is None:
+                        raise WorkflowNotFoundError(f"Workflow run {run.id} not found.")
+                    run, executions = refreshed
+                continue
+
             ready_node_ids = resolve_ready_nodes(definition, run)
             if not ready_node_ids:
                 if run.current_node_ids:
@@ -127,7 +188,11 @@ class WorkflowExecutor:
             if parallel_groups:
                 for group in parallel_groups:
                     run = await self._execute_nodes_parallel(
-                        run, group, nodes_by_id, definition=definition
+                        run,
+                        group,
+                        nodes_by_id,
+                        definition=definition,
+                        executions=executions,
                     )
                     if run.status is not RunStatus.RUNNING:
                         break
@@ -135,10 +200,223 @@ class WorkflowExecutor:
 
             if sequential:
                 run = await self._execute_node(
-                    run, nodes_by_id[sequential[0]], definition=definition
+                    run,
+                    nodes_by_id[sequential[0]],
+                    definition=definition,
+                    executions=executions,
                 )
+                refreshed = await self._store.get_run_with_executions(
+                    run.id, owner_id=run.owner_id
+                )
+                if refreshed is None:
+                    raise WorkflowNotFoundError(f"Workflow run {run.id} not found.")
+                run, executions = refreshed
 
         return run
+
+    async def _resume_interrupted_node(
+        self,
+        run: WorkflowRun,
+        node: WorkflowNode,
+        execution: WorkflowNodeExecution,
+        *,
+        definition: WorkflowDefinition,
+    ) -> WorkflowRun:
+        allowed, reason = crash_recovery_allowed(
+            execution,
+            node_config=node.config,
+            registry=self._tool_registry,
+        )
+        if not allowed:
+            return await self._fail_run(
+                run,
+                error=reason or "Crash recovery is not allowed for this node.",
+            )
+
+        _logger.info(
+            "Recovering interrupted workflow node",
+            run_id=str(run.id),
+            node_id=node.id,
+            attempt=execution.attempt,
+        )
+        interrupted_receipt = extract_execution_receipt_id(execution) or (
+            build_execution_receipt_id(
+                run_id=run.id, node_id=node.id, attempt=execution.attempt
+            )
+        )
+        if execution.status is NodeStatus.RUNNING:
+            await self._mark_attempt_failed(
+                execution,
+                error=execution_interrupted_error(),
+            )
+
+        refreshed = await self._store.get_run_with_executions(
+            run.id, owner_id=run.owner_id
+        )
+        if refreshed is None:
+            raise WorkflowNotFoundError(f"Workflow run {run.id} not found.")
+        run, all_executions = refreshed
+        return await self._execute_node(
+            run,
+            node,
+            definition=definition,
+            executions=all_executions,
+            recovery_receipt_id=interrupted_receipt,
+        )
+
+    async def _execute_node(
+        self,
+        run: WorkflowRun,
+        node: WorkflowNode,
+        *,
+        definition: WorkflowDefinition,
+        executions: list[WorkflowNodeExecution] | None = None,
+        recovery_receipt_id: str | None = None,
+    ) -> WorkflowRun:
+        retry_policy = RetryPolicy(node.retry_policy, settings=self._settings)
+        attempt = next_attempt_number(executions or [], node.id)
+        receipt_id = recovery_receipt_id or build_execution_receipt_id(
+            run_id=run.id, node_id=node.id, attempt=attempt
+        )
+
+        retries_remaining = retry_policy.max_retries()
+        retry_index = 0
+        while True:
+            now = _utcnow()
+            pending = WorkflowNodeExecution(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                node_id=node.id,
+                node_type=node.type,
+                attempt=attempt,
+                status=NodeStatus.RUNNING,
+                input={"execution_receipt_id": receipt_id, "config": node.config},
+                started_at=now,
+            )
+            await self._store.append_node_execution(pending)
+            recovery_receipt_id = None
+
+            if node.id not in run.current_node_ids:
+                run = await self._checkpoint_with_retry(run, add_current_node=node.id)
+
+            executor = self._node_executors.get(node.type)
+            if executor is None:
+                return await self._fail_node(
+                    run,
+                    pending,
+                    error=f"No node executor registered for type {node.type.value!r}.",
+                )
+
+            request = NodeExecutionRequest(
+                owner_id=run.owner_id,
+                execution_receipt_id=receipt_id,
+                outgoing_edges=tuple(outgoing_edges(definition, node.id)),
+            )
+            timeout_seconds = node.timeout_seconds or self._default_node_timeout_seconds
+            try:
+                output = await asyncio.wait_for(
+                    executor.execute(node, run.context, request),
+                    timeout=timeout_seconds,
+                )
+            except WorkflowNodeExecutionError as exc:
+                fresh = await self._store.get_run(run.id, owner_id=run.owner_id)
+                if fresh is not None and self._should_ignore_branch_failure(
+                    definition, fresh, node
+                ):
+                    return await self._skip_branch_node(
+                        fresh, pending, definition=definition, reason=str(exc)
+                    )
+                if retry_policy.is_retryable(exc) and retries_remaining > 0:
+                    await self._mark_attempt_failed(
+                        pending,
+                        error=str(exc),
+                    )
+                    retries_remaining -= 1
+                    attempt += 1
+                    receipt_id = build_execution_receipt_id(
+                        run_id=run.id, node_id=node.id, attempt=attempt
+                    )
+                    await _sleep_before_retry(retry_policy, retry_index)
+                    retry_index += 1
+                    continue
+                return await self._fail_node(run, pending, error=str(exc))
+            except TimeoutError:
+                error = f"Node {node.id!r} execution timed out."
+                if retries_remaining > 0:
+                    await self._mark_attempt_failed(pending, error=error)
+                    retries_remaining -= 1
+                    attempt += 1
+                    receipt_id = build_execution_receipt_id(
+                        run_id=run.id, node_id=node.id, attempt=attempt
+                    )
+                    await _sleep_before_retry(retry_policy, retry_index)
+                    retry_index += 1
+                    continue
+                return await self._fail_node(run, pending, error=error)
+            except Exception:  # noqa: BLE001 - node failures must never crash the run loop
+                _logger.exception(
+                    "Unhandled workflow node execution error",
+                    run_id=str(run.id),
+                    node_id=node.id,
+                )
+                return await self._fail_node(
+                    run, pending, error=f"Node {node.id!r} execution failed."
+                )
+
+            if node.type is NodeType.APPROVAL:
+                return await self._pause_for_approval(
+                    run, pending, output=output, definition=definition, node=node
+                )
+
+            return await self._succeed_node(
+                run, pending, output=output, definition=definition
+            )
+
+    async def _mark_attempt_failed(
+        self,
+        execution: WorkflowNodeExecution,
+        *,
+        error: str,
+    ) -> None:
+        now = _utcnow()
+        await self._store.append_node_execution(
+            execution.model_copy(
+                update={
+                    "status": NodeStatus.FAILED,
+                    "error": error,
+                    "completed_at": now,
+                }
+            )
+        )
+
+    def _run_exceeded_duration(self, run: WorkflowRun) -> bool:
+        if run.started_at is None:
+            return False
+        elapsed = _utcnow() - run.started_at
+        return elapsed > datetime.timedelta(minutes=self._max_run_duration_minutes)
+
+    async def _fail_run_duration(self, run: WorkflowRun) -> WorkflowRun:
+        _logger.warning(
+            "Workflow run exceeded duration guard",
+            run_id=str(run.id),
+            max_run_duration_minutes=self._max_run_duration_minutes,
+        )
+        return await self._checkpoint_with_retry(
+            run,
+            status=RunStatus.FAILED,
+            error=_RUN_DURATION_EXCEEDED,
+            current_node_ids=[],
+            completed_at=_utcnow(),
+        )
+
+    async def _fail_run(self, run: WorkflowRun, *, error: str) -> WorkflowRun:
+        return await self._checkpoint_with_retry(
+            run,
+            status=RunStatus.FAILED,
+            error=error,
+            current_node_ids=[],
+            completed_at=_utcnow(),
+        )
 
     async def _execute_nodes_parallel(
         self,
@@ -147,10 +425,16 @@ class WorkflowExecutor:
         nodes_by_id: dict[str, WorkflowNode],
         *,
         definition: WorkflowDefinition,
+        executions: list[WorkflowNodeExecution],
     ) -> WorkflowRun:
         results = await asyncio.gather(
             *[
-                self._execute_node(run, nodes_by_id[node_id], definition=definition)
+                self._execute_node(
+                    run,
+                    nodes_by_id[node_id],
+                    definition=definition,
+                    executions=executions,
+                )
                 for node_id in node_ids
             ],
             return_exceptions=True,
@@ -237,76 +521,6 @@ class WorkflowExecutor:
             error=error,
             current_node_ids=[],
             completed_at=_utcnow(),
-        )
-
-    async def _execute_node(
-        self, run: WorkflowRun, node: WorkflowNode, *, definition: WorkflowDefinition
-    ) -> WorkflowRun:
-        attempt = 1
-        receipt_id = f"{run.id}:{node.id}:{attempt}"
-        now = _utcnow()
-
-        pending = WorkflowNodeExecution(
-            id=uuid.uuid4(),
-            run_id=run.id,
-            node_id=node.id,
-            node_type=node.type,
-            attempt=attempt,
-            status=NodeStatus.RUNNING,
-            input={"execution_receipt_id": receipt_id, "config": node.config},
-            started_at=now,
-        )
-        await self._store.append_node_execution(pending)
-        run = await self._checkpoint_with_retry(run, add_current_node=node.id)
-
-        executor = self._node_executors.get(node.type)
-        if executor is None:
-            return await self._fail_node(
-                run,
-                pending,
-                error=f"No node executor registered for type {node.type.value!r}.",
-            )
-
-        request = NodeExecutionRequest(
-            owner_id=run.owner_id,
-            execution_receipt_id=receipt_id,
-            outgoing_edges=tuple(outgoing_edges(definition, node.id)),
-        )
-        timeout_seconds = node.timeout_seconds or self._default_node_timeout_seconds
-        try:
-            output = await asyncio.wait_for(
-                executor.execute(node, run.context, request), timeout=timeout_seconds
-            )
-        except WorkflowNodeExecutionError as exc:
-            fresh = await self._store.get_run(run.id, owner_id=run.owner_id)
-            if fresh is not None and self._should_ignore_branch_failure(
-                definition, fresh, node
-            ):
-                return await self._skip_branch_node(
-                    fresh, pending, definition=definition, reason=str(exc)
-                )
-            return await self._fail_node(run, pending, error=str(exc))
-        except TimeoutError:
-            return await self._fail_node(
-                run, pending, error=f"Node {node.id!r} execution timed out."
-            )
-        except Exception:  # noqa: BLE001 - node failures must never crash the run loop
-            _logger.exception(
-                "Unhandled workflow node execution error",
-                run_id=str(run.id),
-                node_id=node.id,
-            )
-            return await self._fail_node(
-                run, pending, error=f"Node {node.id!r} execution failed."
-            )
-
-        if node.type is NodeType.APPROVAL:
-            return await self._pause_for_approval(
-                run, pending, output=output, definition=definition, node=node
-            )
-
-        return await self._succeed_node(
-            run, pending, output=output, definition=definition
         )
 
     async def continue_from_approval(
@@ -676,3 +890,9 @@ def _merge_context_metadata(
 
 def _utcnow() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
+
+
+async def _sleep_before_retry(policy: RetryPolicy, retry_index: int) -> None:
+    """Apply exponential backoff between workflow node retry attempts."""
+    delay = policy.base_delay_seconds() * (2**retry_index)
+    await asyncio.sleep(delay)

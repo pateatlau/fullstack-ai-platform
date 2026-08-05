@@ -134,9 +134,16 @@ class DefaultAgent:
         caller = context.caller
         if caller is None:
             caller = CallerContext.anonymous(guest_id=uuid.uuid4())
+        receipt_raw = context.metadata.get("execution_receipt_id")
+        execution_receipt_id = (
+            receipt_raw
+            if isinstance(receipt_raw, str) and receipt_raw.strip()
+            else None
+        )
         return ToolExecutionContext(
             caller=caller,
             request_id=context.request_id,
+            execution_receipt_id=execution_receipt_id,
         )
 
     @staticmethod
