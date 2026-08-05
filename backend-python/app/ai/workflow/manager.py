@@ -118,9 +118,25 @@ class WorkflowManager:
         *,
         owner_id: uuid.UUID,
         status: DefinitionStatus | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[WorkflowDefinition]:
         """Return workflow definitions owned by ``owner_id``."""
-        return await self._store.list_definitions(owner_id=owner_id, status=status)
+        return await self._store.list_definitions(
+            owner_id=owner_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_definitions(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        status: DefinitionStatus | None = None,
+    ) -> int:
+        """Return the number of workflow definitions owned by ``owner_id``."""
+        return await self._store.count_definitions(owner_id=owner_id, status=status)
 
     async def create_definition(
         self, definition: WorkflowDefinition
@@ -216,9 +232,27 @@ class WorkflowManager:
         owner_id: uuid.UUID,
         workflow_definition_id: uuid.UUID | None = None,
         status: RunStatus | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[WorkflowRun]:
         """Return workflow runs owned by ``owner_id``."""
         return await self._store.list_runs(
+            owner_id=owner_id,
+            workflow_definition_id=workflow_definition_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_runs(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        workflow_definition_id: uuid.UUID | None = None,
+        status: RunStatus | None = None,
+    ) -> int:
+        """Return the number of workflow runs owned by ``owner_id``."""
+        return await self._store.count_runs(
             owner_id=owner_id,
             workflow_definition_id=workflow_definition_id,
             status=status,

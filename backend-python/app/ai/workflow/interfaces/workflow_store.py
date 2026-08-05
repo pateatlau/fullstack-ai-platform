@@ -45,7 +45,16 @@ class WorkflowStore(Protocol):
         *,
         owner_id: uuid.UUID,
         status: DefinitionStatus | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[WorkflowDefinition]: ...
+
+    async def count_definitions(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        status: DefinitionStatus | None = None,
+    ) -> int: ...
 
     async def create_run(self, run: WorkflowRun) -> WorkflowRun: ...
 
@@ -77,7 +86,17 @@ class WorkflowStore(Protocol):
         owner_id: uuid.UUID,
         workflow_definition_id: uuid.UUID | None = None,
         status: RunStatus | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[WorkflowRun]: ...
+
+    async def count_runs(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        workflow_definition_id: uuid.UUID | None = None,
+        status: RunStatus | None = None,
+    ) -> int: ...
 
     async def list_runs_by_status(self, *, status: RunStatus) -> list[WorkflowRun]: ...
 

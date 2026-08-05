@@ -135,7 +135,15 @@ class WorkflowExecutor:
         if self._run_exceeded_duration(run):
             return await self._fail_run_duration(run)
 
+        cancelled = await self._stop_if_cancelled(run_id, owner_id=owner_id)
+        if cancelled is not None:
+            return cancelled
+
         while run.status is RunStatus.RUNNING:
+            cancelled = await self._stop_if_cancelled(run.id, owner_id=run.owner_id)
+            if cancelled is not None:
+                return cancelled
+
             if self._run_exceeded_duration(run):
                 return await self._fail_run_duration(run)
 
@@ -273,6 +281,10 @@ class WorkflowExecutor:
         executions: list[WorkflowNodeExecution] | None = None,
         recovery_receipt_id: str | None = None,
     ) -> WorkflowRun:
+        cancelled = await self._stop_if_cancelled(run.id, owner_id=run.owner_id)
+        if cancelled is not None:
+            return cancelled
+
         retry_policy = RetryPolicy(node.retry_policy, settings=self._settings)
         attempt = next_attempt_number(executions or [], node.id)
         receipt_id = recovery_receipt_id or build_execution_receipt_id(
@@ -282,6 +294,10 @@ class WorkflowExecutor:
         retries_remaining = retry_policy.max_retries()
         retry_index = 0
         while True:
+            cancelled = await self._stop_if_cancelled(run.id, owner_id=run.owner_id)
+            if cancelled is not None:
+                return cancelled
+
             now = _utcnow()
             pending = WorkflowNodeExecution(
                 id=uuid.uuid4(),
@@ -362,6 +378,10 @@ class WorkflowExecutor:
                 return await self._fail_node(
                     run, pending, error=f"Node {node.id!r} execution failed."
                 )
+
+            cancelled = await self._stop_if_cancelled(run.id, owner_id=run.owner_id)
+            if cancelled is not None:
+                return cancelled
 
             if node.type is NodeType.APPROVAL:
                 return await self._pause_for_approval(
@@ -449,6 +469,9 @@ class WorkflowExecutor:
         latest = await self._store.get_run(run.id, owner_id=run.owner_id)
         if latest is None:
             raise WorkflowNotFoundError(f"Workflow run {run.id} not found.")
+        for result in results:
+            if isinstance(result, WorkflowRun) and result.status is RunStatus.CANCELLED:
+                return result
         for result in results:
             if isinstance(result, WorkflowRun) and result.status is RunStatus.FAILED:
                 return result
@@ -551,6 +574,10 @@ class WorkflowExecutor:
         node: WorkflowNode,
     ) -> WorkflowRun:
         del definition
+        cancelled = await self._stop_if_cancelled(run.id, owner_id=run.owner_id)
+        if cancelled is not None:
+            return cancelled
+
         await self._store.append_node_execution(
             execution.model_copy(
                 update={
@@ -572,6 +599,10 @@ class WorkflowExecutor:
         output: dict[str, object],
         definition: WorkflowDefinition,
     ) -> WorkflowRun:
+        cancelled = await self._stop_if_cancelled(run.id, owner_id=run.owner_id)
+        if cancelled is not None:
+            return cancelled
+
         now = _utcnow()
         await self._store.append_node_execution(
             execution.model_copy(
@@ -587,6 +618,8 @@ class WorkflowExecutor:
             fresh = await self._store.get_run(run.id, owner_id=run.owner_id)
             if fresh is None:
                 raise WorkflowNotFoundError(f"Workflow run {run.id} not found.")
+            if fresh.status is RunStatus.CANCELLED:
+                return fresh
             updated_context = fresh.context.model_copy(
                 update={
                     "variables": {
@@ -703,6 +736,10 @@ class WorkflowExecutor:
     async def _fail_node(
         self, run: WorkflowRun, execution: WorkflowNodeExecution, *, error: str
     ) -> WorkflowRun:
+        cancelled = await self._stop_if_cancelled(run.id, owner_id=run.owner_id)
+        if cancelled is not None:
+            return cancelled
+
         now = _utcnow()
         await self._store.append_node_execution(
             execution.model_copy(
@@ -797,6 +834,8 @@ class WorkflowExecutor:
             fresh = await self._store.get_run(run_id, owner_id=owner_id)
             if fresh is None:
                 raise WorkflowNotFoundError(f"Workflow run {run_id} not found.")
+            if fresh.status is RunStatus.CANCELLED:
+                return fresh
 
             patch: dict[str, object] = dict(updates)
             if "current_node_ids" not in patch and (
@@ -840,6 +879,17 @@ class WorkflowExecutor:
         raise WorkflowValidationError(
             "Workflow run checkpoint merge exceeded retry limit."
         )
+
+    async def _stop_if_cancelled(
+        self, run_id: uuid.UUID, *, owner_id: uuid.UUID
+    ) -> WorkflowRun | None:
+        """Return the persisted run when cancellation has been recorded."""
+        fresh = await self._store.get_run(run_id, owner_id=owner_id)
+        if fresh is None:
+            raise WorkflowNotFoundError(f"Workflow run {run_id} not found.")
+        if fresh.status is RunStatus.CANCELLED:
+            return fresh
+        return None
 
 
 def _merge_current_node_ids(

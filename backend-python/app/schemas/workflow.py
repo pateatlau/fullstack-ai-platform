@@ -9,8 +9,9 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
+from app.ai.workflow.exceptions import WorkflowValidationError
 from app.ai.workflow.models import (
     ApprovalDecision,
     DefinitionStatus,
@@ -26,7 +27,12 @@ from app.ai.workflow.models import (
     WorkflowRun,
 )
 
+DEFAULT_WORKFLOW_LIST_LIMIT = 50
+MAX_WORKFLOW_LIST_LIMIT = 100
+
 __all__ = [
+    "DEFAULT_WORKFLOW_LIST_LIMIT",
+    "MAX_WORKFLOW_LIST_LIMIT",
     "StartWorkflowRunRequest",
     "WorkflowContextResponse",
     "WorkflowDefinitionCreateRequest",
@@ -98,9 +104,12 @@ class WorkflowDefinitionResponse(BaseModel):
 
 
 class WorkflowDefinitionListResponse(BaseModel):
-    """List of caller-owned workflow definitions."""
+    """Paginated list of caller-owned workflow definitions."""
 
     definitions: list[WorkflowDefinitionResponse] = Field(default_factory=list)
+    limit: int
+    offset: int
+    total: int
 
 
 class WorkflowContextResponse(BaseModel):
@@ -160,9 +169,12 @@ class WorkflowRunDetailResponse(WorkflowRunResponse):
 
 
 class WorkflowRunListResponse(BaseModel):
-    """List of caller-owned workflow runs."""
+    """Paginated list of caller-owned workflow runs."""
 
     runs: list[WorkflowRunResponse] = Field(default_factory=list)
+    limit: int
+    offset: int
+    total: int
 
 
 def _node_to_schema(node: WorkflowNode) -> WorkflowNodeSchema:
@@ -266,34 +278,39 @@ def definition_from_create_request(
     created_at: datetime.datetime,
     updated_at: datetime.datetime,
 ) -> WorkflowDefinition:
-    return WorkflowDefinition(
-        id=definition_id,
-        owner_id=owner_id,
-        name=request.name,
-        description=request.description,
-        version=version,
-        status=request.status,
-        entry_node_id=request.entry_node_id,
-        nodes=[
-            WorkflowNode(
-                id=node.id,
-                type=node.type,
-                config=node.config,
-                retry_policy=node.retry_policy,
-                timeout_seconds=node.timeout_seconds,
-            )
-            for node in request.nodes
-        ],
-        edges=[
-            WorkflowEdge(
-                id=edge.id,
-                from_node_id=edge.from_node_id,
-                to_node_id=edge.to_node_id,
-                condition=edge.condition,
-            )
-            for edge in request.edges
-        ],
-        metadata=request.metadata,
-        created_at=created_at,
-        updated_at=updated_at,
-    )
+    try:
+        return WorkflowDefinition(
+            id=definition_id,
+            owner_id=owner_id,
+            name=request.name,
+            description=request.description,
+            version=version,
+            status=request.status,
+            entry_node_id=request.entry_node_id,
+            nodes=[
+                WorkflowNode(
+                    id=node.id,
+                    type=node.type,
+                    config=node.config,
+                    retry_policy=node.retry_policy,
+                    timeout_seconds=node.timeout_seconds,
+                )
+                for node in request.nodes
+            ],
+            edges=[
+                WorkflowEdge(
+                    id=edge.id,
+                    from_node_id=edge.from_node_id,
+                    to_node_id=edge.to_node_id,
+                    condition=edge.condition,
+                )
+                for edge in request.edges
+            ],
+            metadata=request.metadata,
+            created_at=created_at,
+            updated_at=updated_at,
+        )
+    except ValidationError as exc:
+        raise WorkflowValidationError(str(exc)) from exc
+    except ValueError as exc:
+        raise WorkflowValidationError(str(exc)) from exc

@@ -2,7 +2,7 @@
 epic: v2-06
 title: Workflow Engine
 status: in_progress
-version: 1.16
+version: 1.17
 depends_on: [v2-05]
 provides:
   [
@@ -832,7 +832,7 @@ _Reverified in Phase 0 audit (2026-08-04). See [post-mvp-v2-epic6-phase-0-baseli
 | 6     | LLM & Agent Node Integration                    | M      | Completed   |
 | 7     | Human Approval Nodes, Pause & Resume            | L      | Completed   |
 | 8     | Node Retry & Crash Recovery                     | M      | Completed   |
-| 9     | Workflow REST API                               | L      | Not Started |
+| 9     | Workflow REST API                               | L      | Completed   |
 | 10    | Agent Tool Integration                          | M      | Not Started |
 | 11    | Frontend Controls                               | S      | Not Started |
 | 12    | Validation & Release                            | M      | Not Started |
@@ -1761,41 +1761,41 @@ Expose the Workflow Engine through an authenticated, owner-scoped REST API per P
 
 ### Schemas
 
-- [ ] Define request/response schemas for definitions (create/update/list/get).
-- [ ] Define request/response schemas for runs (start requires `idempotency_key` + `trigger_input`; list/get/cancel/resume).
-- [ ] Define request/response schemas for approval decisions.
-- [ ] Ensure schemas never expose internal-only fields (Part I § Response rules).
+- [x] Define request/response schemas for definitions (create/update/list/get).
+- [x] Define request/response schemas for runs (start requires `idempotency_key` + `trigger_input`; list/get/cancel/resume).
+- [x] Define request/response schemas for approval decisions.
+- [x] Ensure schemas never expose internal-only fields (Part I § Response rules).
 
 ### Router
 
-- [ ] Implement `POST /api/workflows`, `GET /api/workflows`, `GET /api/workflows/{id}`, `PUT /api/workflows/{id}`, `DELETE /api/workflows/{id}`.
-- [ ] Implement `POST /api/workflows/{id}/runs`, `GET /api/workflows/{id}/runs` (start route enforces required `idempotency_key` and idempotent dedupe).
-- [ ] Implement `GET /api/workflow-runs`, `GET /api/workflow-runs/{run_id}`.
-- [ ] Implement `POST /api/workflow-runs/{run_id}/cancel`, `/resume`.
-- [ ] Implement `POST /api/workflow-runs/{run_id}/nodes/{node_execution_id}/approve`, `/reject`.
-- [ ] Enforce `Depends(get_current_caller)` and owner checks on every route.
-- [ ] Return `503 feature_disabled` per-route when `WORKFLOW_ENGINE_ENABLED=false`.
-- [ ] Mount the router in `app/main.py`.
+- [x] Implement `POST /api/workflows`, `GET /api/workflows`, `GET /api/workflows/{id}`, `PUT /api/workflows/{id}`, `DELETE /api/workflows/{id}`.
+- [x] Implement `POST /api/workflows/{id}/runs`, `GET /api/workflows/{id}/runs` (start route enforces required `idempotency_key` and idempotent dedupe).
+- [x] Implement `GET /api/workflow-runs`, `GET /api/workflow-runs/{run_id}`.
+- [x] Implement `POST /api/workflow-runs/{run_id}/cancel`, `/resume`.
+- [x] Implement `POST /api/workflow-runs/{run_id}/nodes/{node_execution_id}/approve`, `/reject`.
+- [x] Enforce `Depends(get_current_caller)` and owner checks on every route.
+- [x] Return `503 feature_disabled` per-route when `WORKFLOW_ENGINE_ENABLED=false`.
+- [x] Mount the router in `app/main.py`.
 
 ### Health
 
-- [ ] Extend `app/routers/health.py` with `workflow_engine_enabled`.
+- [x] Extend `app/routers/health.py` with `workflow_engine_enabled`.
 
 ### Error Handling
 
-- [ ] Map `WorkflowNotFoundError` → `404`.
-- [ ] Map `WorkflowAccessDeniedError` → `403`.
-- [ ] Map `WorkflowValidationError` → `422`.
-- [ ] Map generic `WorkflowError` → `500` with a safe message.
+- [x] Map `WorkflowNotFoundError` → `404`.
+- [x] Map `WorkflowAccessDeniedError` → `403`.
+- [x] Map `WorkflowValidationError` → `422`.
+- [x] Map generic `WorkflowError` → `500` with a safe message.
 
 ### Testing
 
-- [ ] Add router tests for every endpoint (happy path).
-- [ ] Add owner-isolation tests (cross-owner 403/404).
-- [ ] Add feature-flag-off tests (`503` on every route).
-- [ ] Add router idempotency tests (retry same key returns existing run, no duplicate side effects).
-- [ ] Add validation-error response tests.
-- [ ] Add health endpoint tests.
+- [x] Add router tests for every endpoint (happy path).
+- [x] Add owner-isolation tests (cross-owner 403/404).
+- [x] Add feature-flag-off tests (`503` on every route).
+- [x] Add router idempotency tests (retry same key returns existing run, no duplicate side effects).
+- [x] Add validation-error response tests.
+- [x] Add health endpoint tests.
 
 **Verify**
 
@@ -1803,10 +1803,10 @@ Expose the Workflow Engine through an authenticated, owner-scoped REST API per P
 
 Additional verification:
 
-- [ ] All endpoints function per Part I contract.
-- [ ] Feature flag gates every route independently.
-- [ ] Owner isolation holds across all endpoints.
-- [ ] Health endpoint reports `workflow_engine_enabled` correctly.
+- [x] All endpoints function per Part I contract.
+- [x] Feature flag gates every route independently.
+- [x] Owner isolation holds across all endpoints.
+- [x] Health endpoint reports `workflow_engine_enabled` correctly.
 
 **Acceptance**
 
@@ -1818,6 +1818,20 @@ Additional verification:
 
 - REST API tests pass.
 - Ready for agent tool integration (Phase 10).
+
+**Completion Record**
+
+| Metric               | Result                                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------------------- |
+| REST schemas         | ✅ `app/schemas/workflow.py` — definitions, runs, paginated list responses; internal fields omitted   |
+| REST router          | ✅ Full Part I endpoint set; `require_authenticated_caller`; per-route `503 feature_disabled` gating |
+| Health               | ✅ `workflow_engine_enabled` on `GET /api/health`                                                    |
+| Manager extensions   | ✅ `get_run_with_executions()`, `cancel_run()`, paginated `list_*` / `count_*`                       |
+| Cancel propagation   | ✅ Cooperative cancellation in `WorkflowExecutor` stops in-flight nodes without persisting results   |
+| List pagination      | ✅ `limit`/`offset` on definition and run list endpoints (default 50, max 100)                     |
+| Router tests         | ✅ 23 tests in `tests/test_workflow_router.py`                                                      |
+| Workflow unit tests  | ✅ 205 total in `tests/ai/workflow/` (+ `test_cancel_run.py`)                                       |
+| Backend regression   | ✅ 1538 passed                                                                                      |
 
 ---
 
@@ -2276,5 +2290,6 @@ No workflow input/output content or personally identifiable information should b
 | 1.14    | 2026-08-05 | Phase 6 doc sync: clarify `execution_receipt_id` is carried in node output / `AgentContext.metadata` (not `AgentRequest`); provider & tool pass-through deferred to Phase 8. |
 | 1.15    | 2026-08-05 | Phase 7 complete: `ApprovalNodeExecutor`, `WorkflowManager.apply_decision()`/`resume()`, approval edge routing, atomic CAS persistence (`checkpoint_version`), `WorkflowConcurrentUpdateError`. 187 workflow tests; 1496 total backend passed. |
 | 1.16    | 2026-08-05 | Phase 8 complete: `RetryPolicy` + crash recovery (`retry/classifier.py`, `retry/recovery.py`), attempt tracking, duration guard, startup reconciliation, agent tool receipt pass-through. 203 workflow tests; 1513 total backend passed. Part II only. |
+| 1.17    | 2026-08-05 | Phase 9 complete: Workflow REST API (`app/schemas/workflow.py`, `app/routers/workflows.py`), health `workflow_engine_enabled`, `cancel_run()` + cooperative executor cancellation, paginated list endpoints, 23 router tests. 205 workflow tests; 1538 total backend passed. Part II only. |
 
 ---

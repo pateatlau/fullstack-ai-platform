@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Awaitable
 from typing import NoReturn, TypeVar
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.ai.deps import get_workflow_manager
 from app.ai.workflow.exceptions import (
@@ -19,12 +19,14 @@ from app.ai.workflow.exceptions import (
     WorkflowValidationError,
 )
 from app.ai.workflow.manager import WorkflowManager
-from app.ai.workflow.models import ApprovalDecision
+from app.ai.workflow.models import ApprovalDecision, WorkflowDefinition
 from app.core.caller import CallerContext, require_authenticated_caller
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
 from app.core.logging import bind_context
 from app.schemas.workflow import (
+    DEFAULT_WORKFLOW_LIST_LIMIT,
+    MAX_WORKFLOW_LIST_LIMIT,
     StartWorkflowRunRequest,
     WorkflowDefinitionCreateRequest,
     WorkflowDefinitionListResponse,
@@ -98,6 +100,28 @@ async def _run_workflow_operation(coro: Awaitable[_T]) -> _T:
         _raise_workflow_error(exc)
 
 
+def _definition_from_request(
+    request: WorkflowDefinitionCreateRequest,
+    *,
+    definition_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    version: int,
+    created_at: datetime.datetime,
+    updated_at: datetime.datetime,
+) -> WorkflowDefinition:
+    try:
+        return definition_from_create_request(
+            request,
+            definition_id=definition_id,
+            owner_id=owner_id,
+            version=version,
+            created_at=created_at,
+            updated_at=updated_at,
+        )
+    except WorkflowError as exc:
+        _raise_workflow_error(exc)
+
+
 @router.post("/api/workflows", response_model=WorkflowDefinitionResponse)
 async def create_workflow_definition(
     body: WorkflowDefinitionCreateRequest,
@@ -110,7 +134,7 @@ async def create_workflow_definition(
     _require_workflow_enabled(settings)
 
     now = datetime.datetime.now(datetime.UTC)
-    definition = definition_from_create_request(
+    definition = _definition_from_request(
         body,
         definition_id=uuid.uuid4(),
         owner_id=caller.user_id,
@@ -129,14 +153,26 @@ async def list_workflow_definitions(
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     workflow_manager: WorkflowManager = Depends(get_workflow_manager),
+    limit: int = Query(
+        default=DEFAULT_WORKFLOW_LIST_LIMIT, ge=1, le=MAX_WORKFLOW_LIST_LIMIT
+    ),
+    offset: int = Query(default=0, ge=0),
 ) -> WorkflowDefinitionListResponse:
     assert caller.user_id is not None
     bind_context(user_id=str(caller.user_id))
     _require_workflow_enabled(settings)
 
-    definitions = await workflow_manager.list_definitions(owner_id=caller.user_id)
+    definitions = await workflow_manager.list_definitions(
+        owner_id=caller.user_id,
+        limit=limit,
+        offset=offset,
+    )
+    total = await workflow_manager.count_definitions(owner_id=caller.user_id)
     return WorkflowDefinitionListResponse(
-        definitions=[to_definition_response(item) for item in definitions]
+        definitions=[to_definition_response(item) for item in definitions],
+        limit=limit,
+        offset=offset,
+        total=total,
     )
 
 
@@ -186,7 +222,7 @@ async def update_workflow_definition(
         )
 
     now = datetime.datetime.now(datetime.UTC)
-    definition = definition_from_create_request(
+    definition = _definition_from_request(
         body,
         definition_id=definition_id,
         owner_id=caller.user_id,
@@ -254,6 +290,10 @@ async def list_workflow_runs_for_definition(
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     workflow_manager: WorkflowManager = Depends(get_workflow_manager),
+    limit: int = Query(
+        default=DEFAULT_WORKFLOW_LIST_LIMIT, ge=1, le=MAX_WORKFLOW_LIST_LIMIT
+    ),
+    offset: int = Query(default=0, ge=0),
 ) -> WorkflowRunListResponse:
     assert caller.user_id is not None
     bind_context(user_id=str(caller.user_id))
@@ -272,8 +312,19 @@ async def list_workflow_runs_for_definition(
     runs = await workflow_manager.list_runs(
         owner_id=caller.user_id,
         workflow_definition_id=definition_id,
+        limit=limit,
+        offset=offset,
     )
-    return WorkflowRunListResponse(runs=[to_run_response(item) for item in runs])
+    total = await workflow_manager.count_runs(
+        owner_id=caller.user_id,
+        workflow_definition_id=definition_id,
+    )
+    return WorkflowRunListResponse(
+        runs=[to_run_response(item) for item in runs],
+        limit=limit,
+        offset=offset,
+        total=total,
+    )
 
 
 @router.get("/api/workflow-runs", response_model=WorkflowRunListResponse)
@@ -281,13 +332,27 @@ async def list_workflow_runs(
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     workflow_manager: WorkflowManager = Depends(get_workflow_manager),
+    limit: int = Query(
+        default=DEFAULT_WORKFLOW_LIST_LIMIT, ge=1, le=MAX_WORKFLOW_LIST_LIMIT
+    ),
+    offset: int = Query(default=0, ge=0),
 ) -> WorkflowRunListResponse:
     assert caller.user_id is not None
     bind_context(user_id=str(caller.user_id))
     _require_workflow_enabled(settings)
 
-    runs = await workflow_manager.list_runs(owner_id=caller.user_id)
-    return WorkflowRunListResponse(runs=[to_run_response(item) for item in runs])
+    runs = await workflow_manager.list_runs(
+        owner_id=caller.user_id,
+        limit=limit,
+        offset=offset,
+    )
+    total = await workflow_manager.count_runs(owner_id=caller.user_id)
+    return WorkflowRunListResponse(
+        runs=[to_run_response(item) for item in runs],
+        limit=limit,
+        offset=offset,
+        total=total,
+    )
 
 
 @router.get(

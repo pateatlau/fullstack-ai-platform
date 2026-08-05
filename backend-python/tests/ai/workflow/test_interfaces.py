@@ -117,6 +117,8 @@ class FakeWorkflowStore:
         *,
         owner_id: uuid.UUID,
         status: DefinitionStatus | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[WorkflowDefinition]:
         results = [
             definition
@@ -127,7 +129,18 @@ class FakeWorkflowStore:
             results = [
                 definition for definition in results if definition.status is status
             ]
+        results.sort(key=lambda item: (item.name, -item.version))
+        if limit is not None:
+            results = results[offset : offset + limit]
         return results
+
+    async def count_definitions(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        status: DefinitionStatus | None = None,
+    ) -> int:
+        return len(await self.list_definitions(owner_id=owner_id, status=status))
 
     async def create_run(self, run: WorkflowRun) -> WorkflowRun:
         self._runs[run.id] = run
@@ -199,6 +212,8 @@ class FakeWorkflowStore:
         owner_id: uuid.UUID,
         workflow_definition_id: uuid.UUID | None = None,
         status: RunStatus | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[WorkflowRun]:
         results = [run for run in self._runs.values() if run.owner_id == owner_id]
         if workflow_definition_id is not None:
@@ -209,7 +224,25 @@ class FakeWorkflowStore:
             ]
         if status is not None:
             results = [run for run in results if run.status is status]
+        results.sort(key=lambda item: item.created_at, reverse=True)
+        if limit is not None:
+            results = results[offset : offset + limit]
         return results
+
+    async def count_runs(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        workflow_definition_id: uuid.UUID | None = None,
+        status: RunStatus | None = None,
+    ) -> int:
+        return len(
+            await self.list_runs(
+                owner_id=owner_id,
+                workflow_definition_id=workflow_definition_id,
+                status=status,
+            )
+        )
 
     async def list_runs_by_status(self, *, status: RunStatus) -> list[WorkflowRun]:
         return [run for run in self._runs.values() if run.status is status]

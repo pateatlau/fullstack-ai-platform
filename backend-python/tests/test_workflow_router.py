@@ -24,6 +24,7 @@ from app.ai.workflow.models import (
     WorkflowNodeExecution,
     WorkflowRun,
 )
+from app.schemas.workflow import DEFAULT_WORKFLOW_LIST_LIMIT
 from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.security import create_access_token
@@ -135,11 +136,19 @@ def _disabled_route_request_json(method: str, path: str) -> dict[str, object]:
 
 
 @pytest.fixture
-def workflow_api_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:
+def workflow_api_app(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[FastAPI]:
     monkeypatch.setenv("WORKFLOW_ENGINE_ENABLED", "true")
     get_settings.cache_clear()
-    yield _build_test_app()
-    get_settings.cache_clear()
+    test_app = _build_test_app()
+    _bind_db_session(test_app, db_session)
+    try:
+        yield test_app
+    finally:
+        _clear_router_overrides(test_app)
+        get_settings.cache_clear()
 
 
 @pytest.mark.anyio
@@ -177,18 +186,13 @@ async def test_workflow_api_disabled_returns_503(
 
 @pytest.mark.anyio
 async def test_workflow_api_requires_authentication(
-    db_session,
     workflow_api_app: FastAPI,
 ) -> None:
-    _bind_db_session(workflow_api_app, db_session)
-    try:
-        async with AsyncClient(
-            transport=ASGITransport(app=workflow_api_app),
-            base_url="http://testserver",
-        ) as client:
-            response = await client.get("/api/workflows")
-    finally:
-        _clear_router_overrides(workflow_api_app)
+    async with AsyncClient(
+        transport=ASGITransport(app=workflow_api_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/workflows")
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "authentication_required"
@@ -223,7 +227,11 @@ async def test_create_list_get_update_archive_definition(
 
         list_response = await client.get("/api/workflows", headers=headers)
         assert list_response.status_code == 200
-        assert len(list_response.json()["definitions"]) == 1
+        list_body = list_response.json()
+        assert len(list_body["definitions"]) == 1
+        assert list_body["limit"] == DEFAULT_WORKFLOW_LIST_LIMIT
+        assert list_body["offset"] == 0
+        assert list_body["total"] == 1
 
         get_response = await client.get(
             f"/api/workflows/{definition_id}",
@@ -249,8 +257,6 @@ async def test_create_list_get_update_archive_definition(
         )
         assert archive_response.status_code == 200
         assert archive_response.json()["status"] == "archived"
-
-    _clear_router_overrides(workflow_api_app)
 
 
 @pytest.mark.anyio
@@ -287,9 +293,36 @@ async def test_create_definition_validation_error_returns_422(
             json=invalid_payload,
         )
 
-    _clear_router_overrides(workflow_api_app)
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "workflow_validation_error"
+
+
+@pytest.mark.anyio
+async def test_create_definition_blank_name_returns_422(
+    workflow_api_app: FastAPI,
+) -> None:
+    store = FakeWorkflowStore()
+    owner_id = uuid.uuid4()
+    workflow_api_app.dependency_overrides[get_workflow_manager] = lambda: (
+        WorkflowManager(store)
+    )
+    headers = _auth_headers(owner_id)
+    payload = _definition_payload()
+    payload["name"] = "   "
+
+    async with AsyncClient(
+        transport=ASGITransport(app=workflow_api_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/workflows",
+            headers=headers,
+            json=payload,
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "workflow_validation_error"
+    assert "name must not be blank" in response.json()["error"]["message"]
 
 
 @pytest.mark.anyio
@@ -330,7 +363,6 @@ async def test_owner_isolation_returns_404(
             headers=headers,
         )
 
-    _clear_router_overrides(workflow_api_app)
     assert definition_response.status_code == 404
     assert run_response.status_code == 404
 
@@ -362,7 +394,6 @@ async def test_start_run_idempotency_returns_existing_run(
             json=body,
         )
 
-    _clear_router_overrides(workflow_api_app)
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.json()["id"] == second.json()["id"]
@@ -427,11 +458,14 @@ async def test_list_runs_and_get_run_detail(
             headers=headers,
         )
 
-    _clear_router_overrides(workflow_api_app)
     assert all_runs.status_code == 200
-    assert len(all_runs.json()["runs"]) == 1
+    all_runs_body = all_runs.json()
+    assert len(all_runs_body["runs"]) == 1
+    assert all_runs_body["total"] == 1
     assert scoped_runs.status_code == 200
-    assert len(scoped_runs.json()["runs"]) == 1
+    scoped_runs_body = scoped_runs.json()
+    assert len(scoped_runs_body["runs"]) == 1
+    assert scoped_runs_body["total"] == 1
     assert detail.status_code == 200
     detail_body = detail.json()
     assert detail_body["context"]["trigger_input"] == {"x": 1}
@@ -481,7 +515,6 @@ async def test_cancel_and_resume_run(
             headers=headers,
         )
 
-    _clear_router_overrides(workflow_api_app)
     assert cancel_response.status_code == 200
     assert cancel_response.json()["status"] == "cancelled"
     assert resume_response.status_code == 200
@@ -588,9 +621,92 @@ async def test_approve_and_reject_pending_approval_node(
             headers=headers,
         )
 
-    _clear_router_overrides(workflow_api_app)
     assert approve_response.status_code == 200
     assert duplicate.status_code == 200
     assert reject_response.status_code == 200
     assert conflict_response.status_code == 409
     assert conflict_response.json()["error"]["code"] == "workflow_decision_conflict"
+
+
+@pytest.mark.anyio
+async def test_list_endpoints_honor_limit_and_offset(workflow_api_app: FastAPI) -> None:
+    store = FakeWorkflowStore()
+    owner_id = uuid.uuid4()
+    for index in range(3):
+        await store.create_definition(
+            WorkflowDefinition(
+                id=uuid.uuid4(),
+                owner_id=owner_id,
+                name=f"Workflow {index}",
+                status=DefinitionStatus.ACTIVE,
+                entry_node_id="start",
+                nodes=[
+                    WorkflowNode(id="start", type=NodeType.TASK, config={}),
+                    WorkflowNode(id="end", type=NodeType.TERMINAL, config={}),
+                ],
+                edges=[WorkflowEdge(id="e1", from_node_id="start", to_node_id="end")],
+                created_at=_NOW,
+                updated_at=_NOW,
+            )
+        )
+    definition = next(
+        definition
+        for definition in store._definitions.values()
+        if definition.owner_id == owner_id
+    )
+    for index in range(3):
+        await store.create_run(
+            WorkflowRun(
+                id=uuid.uuid4(),
+                workflow_definition_id=definition.id,
+                owner_id=owner_id,
+                idempotency_key=f"run-{index}",
+                status=RunStatus.COMPLETED,
+                context=WorkflowContext(),
+                created_at=_NOW + datetime.timedelta(seconds=index),
+                updated_at=_NOW + datetime.timedelta(seconds=index),
+            )
+        )
+    workflow_api_app.dependency_overrides[get_workflow_manager] = lambda: (
+        WorkflowManager(store)
+    )
+    headers = _auth_headers(owner_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=workflow_api_app),
+        base_url="http://testserver",
+    ) as client:
+        definitions_page = await client.get(
+            "/api/workflows",
+            headers=headers,
+            params={"limit": 2, "offset": 1},
+        )
+        runs_page = await client.get(
+            "/api/workflow-runs",
+            headers=headers,
+            params={"limit": 1, "offset": 1},
+        )
+        scoped_runs_page = await client.get(
+            f"/api/workflows/{definition.id}/runs",
+            headers=headers,
+            params={"limit": 1, "offset": 0},
+        )
+
+    definitions_body = definitions_page.json()
+    assert definitions_page.status_code == 200
+    assert len(definitions_body["definitions"]) == 2
+    assert definitions_body["total"] == 3
+    assert definitions_body["limit"] == 2
+    assert definitions_body["offset"] == 1
+
+    runs_body = runs_page.json()
+    assert runs_page.status_code == 200
+    assert len(runs_body["runs"]) == 1
+    assert runs_body["total"] == 3
+    assert runs_body["limit"] == 1
+    assert runs_body["offset"] == 1
+
+    scoped_body = scoped_runs_page.json()
+    assert scoped_runs_page.status_code == 200
+    assert len(scoped_body["runs"]) == 1
+    assert scoped_body["total"] == 3
