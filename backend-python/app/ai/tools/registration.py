@@ -10,6 +10,10 @@ from app.ai.tools.implementations.web_search import (
     WebSearchClient,
     create_web_search_handler,
 )
+from app.ai.tools.implementations.workflow_tool import (
+    WORKFLOW_EXECUTION_TOOL_DEFINITION,
+    create_workflow_execution_handler,
+)
 from app.ai.tools.registry import ToolRegistry
 from app.core.config import Settings
 
@@ -36,6 +40,11 @@ def register_production_tools(
 
     handler = create_web_search_handler(settings=settings, client=web_search_client)
     registry.register(WEB_SEARCH_TOOL_DEFINITION, handler)
+
+    if settings.workflow_engine_enabled:
+        workflow_handler = create_workflow_execution_handler(settings)
+        registry.register(WORKFLOW_EXECUTION_TOOL_DEFINITION, workflow_handler)
+        logger.info("Registered workflow execution tool")
 
 
 async def register_mcp_tools(

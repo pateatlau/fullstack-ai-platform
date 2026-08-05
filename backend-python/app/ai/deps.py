@@ -90,14 +90,12 @@ def get_web_search_client() -> WebSearchClient:
     return create_tavily_client(get_settings())
 
 
-def get_tool_executor(
-    registry: ToolRegistry = Depends(get_tool_registry),
-    settings: Settings = Depends(get_settings),
+def _create_tool_executor(
+    *,
+    registry: ToolRegistry,
+    settings: Settings,
 ) -> ToolExecutor:
-    """Build a ``ToolExecutor`` wired to the app-scoped registry and settings.
-
-    Phase 9: Includes MCP permission policy when MCP is enabled.
-    """
+    """Build a ``ToolExecutor`` with MCP permission policy when MCP is enabled."""
     mcp_permission_policy = None
     if settings.mcp_enabled:
         from app.ai.mcp.permissions import McpPermissionPolicy
@@ -111,6 +109,17 @@ def get_tool_executor(
         settings=settings,
         mcp_permission_policy=mcp_permission_policy,
     )
+
+
+def get_tool_executor(
+    registry: ToolRegistry = Depends(get_tool_registry),
+    settings: Settings = Depends(get_settings),
+) -> ToolExecutor:
+    """Build a ``ToolExecutor`` wired to the app-scoped registry and settings.
+
+    Phase 9: Includes MCP permission policy when MCP is enabled.
+    """
+    return _create_tool_executor(registry=registry, settings=settings)
 
 
 def get_agent_runtime(
@@ -603,6 +612,39 @@ def _create_workflow_manager(
     )
 
 
+def build_workflow_manager_for_session(
+    session: AsyncSession,
+    settings: Settings,
+) -> "WorkflowManager":
+    """Build a ``WorkflowManager`` for a standalone DB session (tool calls)."""
+    from app.ai.workflow.providers.postgres import PostgresWorkflowStore
+
+    registry = get_tool_registry()
+    prompt_manager = get_prompt_manager()
+    tool_executor = _create_tool_executor(registry=registry, settings=settings)
+    agent_runtime = create_default_agent(
+        settings=settings,
+        tool_registry=registry,
+        prompt_manager=prompt_manager,
+        tool_executor=tool_executor,
+    )
+    store = PostgresWorkflowStore(session=session, settings=settings)
+
+    def background_store_factory(
+        bg_session: AsyncSession,
+    ) -> "PostgresWorkflowStore":
+        return PostgresWorkflowStore(session=bg_session, settings=settings)
+
+    return _create_workflow_manager(
+        store=store,
+        settings=settings,
+        tool_executor=tool_executor,
+        prompt_manager=prompt_manager,
+        agent_runtime=agent_runtime,
+        background_store_factory=background_store_factory,
+    )
+
+
 async def reconcile_workflow_runs_at_startup(settings: Settings) -> int:
     """Reattach executors to orphaned ``running`` runs after process restart."""
     from app.ai.workflow.providers.postgres import PostgresWorkflowStore
@@ -610,7 +652,7 @@ async def reconcile_workflow_runs_at_startup(settings: Settings) -> int:
 
     registry = get_tool_registry()
     prompt_manager = get_prompt_manager()
-    tool_executor = ToolExecutor(registry=registry, settings=settings)
+    tool_executor = _create_tool_executor(registry=registry, settings=settings)
     agent_runtime = create_default_agent(
         settings=settings,
         tool_registry=registry,

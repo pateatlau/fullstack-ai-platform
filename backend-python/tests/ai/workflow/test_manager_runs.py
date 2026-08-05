@@ -250,3 +250,62 @@ async def test_start_run_concurrent_requests_deduplicate() -> None:
     assert len({run.id for run in results}) == 1
     assert schedule_count == 1
     await _await_scheduled(manager)
+
+
+@pytest.mark.anyio
+async def test_start_run_defer_schedule_flushes_after_commit() -> None:
+    store = FakeWorkflowStore()
+    owner_id = uuid.uuid4()
+    definition = await store.create_definition(_active_definition(owner_id))
+    manager = WorkflowManager(store)
+    scheduled: list[uuid.UUID] = []
+    original_schedule = manager._schedule_run
+
+    def tracking_schedule(
+        run_id: uuid.UUID, *, owner_id: uuid.UUID
+    ) -> asyncio.Task[None]:
+        scheduled.append(run_id)
+        return original_schedule(run_id, owner_id=owner_id)
+
+    manager._schedule_run = tracking_schedule  # type: ignore[method-assign]
+
+    run = await manager.start_run(
+        definition.id,
+        owner_id=owner_id,
+        idempotency_key="deferred-key",
+        defer_schedule=True,
+    )
+
+    assert scheduled == []
+    manager.flush_deferred_run_schedules()
+    assert scheduled == [run.id]
+    await _await_scheduled(manager)
+
+
+@pytest.mark.anyio
+async def test_start_run_defer_schedule_discarded_on_failure() -> None:
+    store = FakeWorkflowStore()
+    owner_id = uuid.uuid4()
+    definition = await store.create_definition(_active_definition(owner_id))
+    manager = WorkflowManager(store)
+    schedule_count = 0
+    original_schedule = manager._schedule_run
+
+    def counting_schedule(
+        run_id: uuid.UUID, *, owner_id: uuid.UUID
+    ) -> asyncio.Task[None]:
+        nonlocal schedule_count
+        schedule_count += 1
+        return original_schedule(run_id, owner_id=owner_id)
+
+    manager._schedule_run = counting_schedule  # type: ignore[method-assign]
+
+    await manager.start_run(
+        definition.id,
+        owner_id=owner_id,
+        idempotency_key="discarded-key",
+        defer_schedule=True,
+    )
+    manager.discard_deferred_run_schedules()
+
+    assert schedule_count == 0

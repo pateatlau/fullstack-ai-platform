@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -43,6 +44,7 @@ class ToolExecutionContext(BaseModel):
 
     caller: CallerContext
     request_id: str | None = None
+    session_id: uuid.UUID | None = None
     # Stable per-attempt id (``{run_id}:{node_id}:{attempt}``) set by the Workflow
     # Engine (Epic 06) so receipt-aware tools can detect and dedupe replayed
     # invocations after crash recovery (Part I § Crash-safe running). Unused by
