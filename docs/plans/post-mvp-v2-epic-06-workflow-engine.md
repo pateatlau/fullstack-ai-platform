@@ -2,7 +2,7 @@
 epic: v2-06
 title: Workflow Engine
 status: in_progress
-version: 1.17
+version: 1.18
 depends_on: [v2-05]
 provides:
   [
@@ -833,7 +833,7 @@ _Reverified in Phase 0 audit (2026-08-04). See [post-mvp-v2-epic6-phase-0-baseli
 | 7     | Human Approval Nodes, Pause & Resume            | L      | Completed   |
 | 8     | Node Retry & Crash Recovery                     | M      | Completed   |
 | 9     | Workflow REST API                               | L      | Completed   |
-| 10    | Agent Tool Integration                          | M      | Not Started |
+| 10    | Agent Tool Integration                          | M      | Completed   |
 | 11    | Frontend Controls                               | S      | Not Started |
 | 12    | Validation & Release                            | M      | Not Started |
 
@@ -1853,25 +1853,25 @@ Register `WorkflowExecutionTool` in the existing tool platform so an agent can s
 
 ### Tool Implementation
 
-- [ ] Implement `WorkflowExecutionTool` with actions `start` (definition_id, idempotency_key, input) and `status` (run_id).
-- [ ] Map `WorkflowManager.start_run()` → `run_id` + status snapshot (idempotent on owner + definition + key); map `get_run()` → full run state for `action=status`.
-- [ ] Set `WorkflowRun.session_id` from `ToolExecutionContext` when available.
-- [ ] Ensure tool failures return a normalized `ToolResult(success=False, ...)`, never raise past `ToolExecutor`.
+- [x] Implement `WorkflowExecutionTool` with actions `start` (definition_id, idempotency_key, input) and `status` (run_id).
+- [x] Map `WorkflowManager.start_run()` → `run_id` + status snapshot (idempotent on owner + definition + key); map `get_run()` → full run state for `action=status`.
+- [x] Set `WorkflowRun.session_id` from `ToolExecutionContext` when available.
+- [x] Ensure tool failures return a normalized `ToolResult(success=False, ...)`, never raise past `ToolExecutor`.
 
 ### Registration
 
-- [ ] Register `WorkflowExecutionTool` in `app/ai/tools/registration.py` guarded by `settings.workflow_engine_enabled`.
-- [ ] Verify `ToolAuthorizer` already denies guests (no new authorization logic needed).
-- [ ] Verify the tool's JSON schema (`ToolDefinition.parameters`) is well-formed for LLM function-calling.
+- [x] Register `WorkflowExecutionTool` in `app/ai/tools/registration.py` guarded by `settings.workflow_engine_enabled`.
+- [x] Verify `ToolAuthorizer` already denies guests (no new authorization logic needed).
+- [x] Verify the tool's JSON schema (`ToolDefinition.parameters`) is well-formed for LLM function-calling.
 
 ### Testing
 
-- [ ] Add tool start idempotency tests (same key returns existing run).
-- [ ] Add tool `start` action tests.
-- [ ] Add tool `status` action tests.
-- [ ] Add tool registration-gating tests (flag on/off).
-- [ ] Add guest-denial tests (via existing `ToolAuthorizer`).
-- [ ] Add end-to-end test: agent invokes the tool via `ToolExecutor` (fake provider/agent).
+- [x] Add tool start idempotency tests (same key returns existing run).
+- [x] Add tool `start` action tests.
+- [x] Add tool `status` action tests.
+- [x] Add tool registration-gating tests (flag on/off).
+- [x] Add guest-denial tests (via existing `ToolAuthorizer`).
+- [x] Add end-to-end test: agent invokes the tool via `ToolExecutor` (fake provider/agent).
 
 **Verify**
 
@@ -1879,9 +1879,9 @@ Register `WorkflowExecutionTool` in the existing tool platform so an agent can s
 
 Additional verification:
 
-- [ ] The tool is registered only when the flag is on.
-- [ ] Agents can start and check workflows through the existing tool-calling path.
-- [ ] No `ChatService`/`UnifiedChatService` code paths were modified.
+- [x] The tool is registered only when the flag is on.
+- [x] Agents can start and check workflows through the existing tool-calling path.
+- [x] No `ChatService`/`UnifiedChatService` code paths were modified.
 
 **Acceptance**
 
@@ -1898,6 +1898,18 @@ Additional verification:
 - [ ] Disable `WORKFLOW_ENGINE_ENABLED`.
 - [ ] Remove `WorkflowExecutionTool` registration.
 - [ ] Verify existing tool-calling behaviour is unchanged.
+
+**Completion Record**
+
+| Metric               | Result                                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------------------- |
+| Tool implementation  | ✅ `app/ai/tools/implementations/workflow_tool.py` — `workflow_execution` tool; `start` + `status` actions |
+| Registration         | ✅ Conditional in `registration.py` when `workflow_engine_enabled`; no chat pipeline coupling        |
+| Session linkage      | ✅ `ToolExecutionContext.session_id` → `WorkflowRun.session_id` on start                             |
+| DI helper            | ✅ `build_workflow_manager_for_session()` in `app/ai/deps.py` for standalone tool DB sessions         |
+| Tool tests           | ✅ 11 tests in `tests/test_workflow_tool.py` (idempotency, status, guest denial, flag gating, agent e2e) |
+| Workflow unit tests  | ✅ 216 total (205 in `tests/ai/workflow/` + 11 tool tests)                                           |
+| Backend regression   | ✅ 1549 passed                                                                                      |
 
 ---
 
@@ -2291,5 +2303,6 @@ No workflow input/output content or personally identifiable information should b
 | 1.15    | 2026-08-05 | Phase 7 complete: `ApprovalNodeExecutor`, `WorkflowManager.apply_decision()`/`resume()`, approval edge routing, atomic CAS persistence (`checkpoint_version`), `WorkflowConcurrentUpdateError`. 187 workflow tests; 1496 total backend passed. |
 | 1.16    | 2026-08-05 | Phase 8 complete: `RetryPolicy` + crash recovery (`retry/classifier.py`, `retry/recovery.py`), attempt tracking, duration guard, startup reconciliation, agent tool receipt pass-through. 203 workflow tests; 1513 total backend passed. Part II only. |
 | 1.17    | 2026-08-05 | Phase 9 complete: Workflow REST API (`app/schemas/workflow.py`, `app/routers/workflows.py`), health `workflow_engine_enabled`, `cancel_run()` + cooperative executor cancellation, paginated list endpoints, 23 router tests. 205 workflow tests; 1538 total backend passed. Part II only. |
+| 1.18    | 2026-08-05 | Phase 10 complete: `WorkflowExecutionTool` (`workflow_tool.py`), conditional registration in `registration.py`, `ToolExecutionContext.session_id`, `build_workflow_manager_for_session()` DI helper, 11 tool tests. 216 workflow tests; 1549 total backend passed. Part II only. |
 
 ---
