@@ -23,6 +23,7 @@ async def test_health_returns_expected_shape() -> None:
         "rag_enabled": get_settings().rag_enabled,
         "voice_enabled": get_settings().voice_enabled,
         "memory_enabled": get_settings().memory_enabled,
+        "workflow_engine_enabled": get_settings().workflow_engine_enabled,
         "capabilities": {
             "by_provider": capabilities_by_provider(get_settings()),
         },
