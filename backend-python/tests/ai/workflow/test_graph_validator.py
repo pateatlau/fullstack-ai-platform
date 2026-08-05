@@ -298,3 +298,83 @@ class TestGraphValidatorLimits:
             WorkflowValidationError, match="workflow_max_nodes_per_definition"
         ):
             _VALIDATOR.validate(definition)
+
+
+class TestGraphValidatorNodeConfigs:
+    def test_valid_llm_node_config_passes(self) -> None:
+        definition = _definition(
+            nodes=[
+                _node(
+                    "start",
+                    NodeType.LLM,
+                    config={"prompt_template": "Hello {{ variables.name }}"},
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+        )
+        _VALIDATOR.validate(definition)
+
+    def test_llm_node_missing_prompt_template_is_rejected(self) -> None:
+        definition = _definition(
+            nodes=[
+                _node("start", NodeType.LLM, config={}),
+                _node("end", NodeType.TERMINAL),
+            ],
+        )
+        with pytest.raises(WorkflowValidationError, match="prompt_template"):
+            _VALIDATOR.validate(definition)
+
+    def test_llm_node_invalid_file_template_reference_is_rejected(self) -> None:
+        definition = _definition(
+            nodes=[
+                _node(
+                    "start",
+                    NodeType.LLM,
+                    config={"prompt_template": "@workflow/only-two"},
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+        )
+        with pytest.raises(WorkflowValidationError, match="@category/name/version"):
+            _VALIDATOR.validate(definition)
+
+    def test_valid_agent_node_config_passes(self) -> None:
+        definition = _definition(
+            nodes=[
+                _node(
+                    "start",
+                    NodeType.AGENT,
+                    config={
+                        "goal": "Research topic",
+                        "tool_names": ["web_search"],
+                        "max_iterations": 3,
+                    },
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+        )
+        _VALIDATOR.validate(definition)
+
+    def test_agent_node_missing_goal_is_rejected(self) -> None:
+        definition = _definition(
+            nodes=[
+                _node("start", NodeType.AGENT, config={"tool_names": ["web_search"]}),
+                _node("end", NodeType.TERMINAL),
+            ],
+        )
+        with pytest.raises(WorkflowValidationError, match="goal"):
+            _VALIDATOR.validate(definition)
+
+    def test_agent_node_invalid_tool_names_is_rejected(self) -> None:
+        definition = _definition(
+            nodes=[
+                _node(
+                    "start",
+                    NodeType.AGENT,
+                    config={"goal": "Do work", "tool_names": []},
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+        )
+        with pytest.raises(WorkflowValidationError, match="tool_names"):
+            _VALIDATOR.validate(definition)
