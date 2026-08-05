@@ -21,6 +21,7 @@ describe('useChatStreamingEnabled', () => {
           rag_enabled: true,
           voice_enabled: true,
           memory_enabled: false,
+          workflow_engine_enabled: true,
           capabilities: {
             by_provider: {
               openai: { supports_streaming: true, supports_tool_calling: true },
@@ -42,6 +43,7 @@ describe('useChatStreamingEnabled', () => {
       expect(result.current.ragEnabled).toBe(true)
       expect(result.current.voiceEnabled).toBe(true)
       expect(result.current.memoryEnabled).toBe(false)
+      expect(result.current.workflowEngineEnabled).toBe(true)
       expect(result.current.healthLoading).toBe(false)
     })
   })
