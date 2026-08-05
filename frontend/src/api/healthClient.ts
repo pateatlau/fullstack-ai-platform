@@ -9,6 +9,7 @@ export interface HealthResponse {
   rag_enabled: boolean
   voice_enabled: boolean
   memory_enabled: boolean
+  workflow_engine_enabled: boolean
   capabilities?: {
     by_provider: Record<
       string,

@@ -5,6 +5,7 @@ import { ChatPage } from './pages/ChatPage'
 import { DocumentsPage } from './pages/DocumentsPage'
 import { MemorySettingsPage } from './pages/MemorySettingsPage'
 import { NotFoundPage } from './pages/NotFoundPage'
+import { WorkflowsPage } from './pages/WorkflowsPage'
 
 function App() {
   return (
@@ -26,6 +27,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <MemorySettingsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/workflows"
+              element={
+                <ProtectedRoute>
+                  <WorkflowsPage />
                 </ProtectedRoute>
               }
             />

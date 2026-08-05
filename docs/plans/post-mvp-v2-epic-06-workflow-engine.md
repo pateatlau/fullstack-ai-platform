@@ -2,7 +2,7 @@
 epic: v2-06
 title: Workflow Engine
 status: in_progress
-version: 1.18
+version: 1.19
 depends_on: [v2-05]
 provides:
   [
@@ -834,7 +834,7 @@ _Reverified in Phase 0 audit (2026-08-04). See [post-mvp-v2-epic6-phase-0-baseli
 | 8     | Node Retry & Crash Recovery                     | M      | Completed   |
 | 9     | Workflow REST API                               | L      | Completed   |
 | 10    | Agent Tool Integration                          | M      | Completed   |
-| 11    | Frontend Controls                               | S      | Not Started |
+| 11    | Frontend Controls                               | S      | Completed   |
 | 12    | Validation & Release                            | M      | Not Started |
 
 ---
@@ -1933,54 +1933,54 @@ Implement a frontend dashboard for defining, triggering, inspecting, and decidin
 
 ### Dashboard UI
 
-- [ ] Add a Workflows section to the authenticated app.
-- [ ] Display Workflow feature availability (via `workflow_engine_enabled`).
-- [ ] List the caller's workflow definitions.
-- [ ] Support creating a definition from a JSON graph payload.
+- [x] Add a Workflows section to the authenticated app.
+- [x] Display Workflow feature availability (via `workflow_engine_enabled`).
+- [x] List the caller's workflow definitions.
+- [x] Support creating a definition from a JSON graph payload.
 
 ### Run Inspection
 
-- [ ] List runs for a definition and across all definitions.
-- [ ] Display a run's status and full node execution history.
-- [ ] Display node input/output for completed nodes.
-- [ ] Support cancelling a `running` or `waiting_approval` run.
-- [ ] Support resuming a crashed `running` run via `/resume`.
+- [x] List runs for a definition and across all definitions.
+- [x] Display a run's status and full node execution history.
+- [x] Display node input/output for completed nodes.
+- [x] Support cancelling a `running` or `waiting_approval` run.
+- [x] Support resuming a crashed `running` run via `/resume`.
 
 ### Approval Decisions
 
-- [ ] Highlight runs in `waiting_approval` status.
-- [ ] Display the pending approval node's context.
-- [ ] Provide approve/reject actions.
-- [ ] Confirm rejection before submission.
-- [ ] Refresh run status after a decision.
+- [x] Highlight runs in `waiting_approval` status.
+- [x] Display the pending approval node's context.
+- [x] Provide approve/reject actions.
+- [x] Confirm rejection before submission.
+- [x] Refresh run status after a decision.
 
 ### API Integration
 
-- [ ] Create `frontend/src/api/workflowClient.ts`.
-- [ ] Create `frontend/src/types/workflow.ts`.
-- [ ] Create `frontend/src/pages/WorkflowsPage.tsx` (authenticated route).
-- [ ] Extend `frontend/src/api/healthClient.ts` with `workflow_engine_enabled`.
-- [ ] Wire navigation link in the authenticated app shell.
+- [x] Create `frontend/src/api/workflowClient.ts`.
+- [x] Create `frontend/src/types/workflow.ts`.
+- [x] Create `frontend/src/pages/WorkflowsPage.tsx` (authenticated route).
+- [x] Extend `frontend/src/api/healthClient.ts` with `workflow_engine_enabled`.
+- [x] Wire navigation link in the authenticated app shell.
 
 ### Feature Flag Integration
 
-- [ ] Hide Workflow controls when `WORKFLOW_ENGINE_ENABLED=false`.
-- [ ] Preserve existing authenticated user experience.
-- [ ] Preserve guest user experience.
+- [x] Hide Workflow controls when `WORKFLOW_ENGINE_ENABLED=false`.
+- [x] Preserve existing authenticated user experience.
+- [x] Preserve guest user experience.
 
 ### Error Handling
 
-- [ ] Handle API failures gracefully.
-- [ ] Handle validation failures (invalid graph JSON) with clear messages.
-- [ ] Preserve existing application behaviour during frontend failures.
+- [x] Handle API failures gracefully.
+- [x] Handle validation failures (invalid graph JSON) with clear messages.
+- [x] Preserve existing application behaviour during frontend failures.
 
 ### Testing
 
-- [ ] Add component tests.
-- [ ] Add API integration tests.
-- [ ] Add approval-decision tests.
-- [ ] Add feature flag tests.
-- [ ] Add accessibility tests.
+- [x] Add component tests.
+- [x] Add API integration tests.
+- [x] Add approval-decision tests.
+- [x] Add feature flag tests.
+- [x] Add accessibility tests.
 
 **Verify**
 
@@ -1990,10 +1990,10 @@ Implement a frontend dashboard for defining, triggering, inspecting, and decidin
 
 Additional verification:
 
-- [ ] Workflows page renders successfully.
-- [ ] Definitions and runs load correctly.
-- [ ] Approve/reject actions succeed and refresh state.
-- [ ] Feature flag regression passes.
+- [x] Workflows page renders successfully.
+- [x] Definitions and runs load correctly.
+- [x] Approve/reject actions succeed and refresh state.
+- [x] Feature flag regression passes.
 
 **Acceptance**
 
@@ -2006,6 +2006,19 @@ Additional verification:
 - Workflow dashboard operational.
 - API integration validated.
 - Ready for production validation.
+
+**Completion Record**
+
+| Metric               | Result                                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------------------- |
+| Workflow dashboard   | ✅ `frontend/src/pages/WorkflowsPage.tsx` — definitions, runs, run detail, approval, cancel/resume |
+| API client           | ✅ `frontend/src/api/workflowClient.ts` — full Part I REST surface                                  |
+| Types                | ✅ `frontend/src/types/workflow.ts` — snake_case API-aligned types                                  |
+| Health flag          | ✅ `workflow_engine_enabled` in `healthClient.ts` + `useChatStreamingEnabled`                       |
+| Navigation           | ✅ `/workflows` route (`App.tsx`); flag-gated link in `AppNav.tsx`                                  |
+| Component tests      | ✅ 9 tests in `frontend/src/pages/WorkflowsPage.test.tsx`                                           |
+| API client tests     | ✅ 8 tests in `frontend/src/api/workflowClient.test.ts`                                             |
+| Frontend regression  | ✅ 268 passed; lint + production build pass                                                         |
 
 **Rollback**
 
@@ -2304,5 +2317,6 @@ No workflow input/output content or personally identifiable information should b
 | 1.16    | 2026-08-05 | Phase 8 complete: `RetryPolicy` + crash recovery (`retry/classifier.py`, `retry/recovery.py`), attempt tracking, duration guard, startup reconciliation, agent tool receipt pass-through. 203 workflow tests; 1513 total backend passed. Part II only. |
 | 1.17    | 2026-08-05 | Phase 9 complete: Workflow REST API (`app/schemas/workflow.py`, `app/routers/workflows.py`), health `workflow_engine_enabled`, `cancel_run()` + cooperative executor cancellation, paginated list endpoints, 23 router tests. 205 workflow tests; 1538 total backend passed. Part II only. |
 | 1.18    | 2026-08-05 | Phase 10 complete: `WorkflowExecutionTool` (`workflow_tool.py`), conditional registration in `registration.py`, `ToolExecutionContext.session_id`, `build_workflow_manager_for_session()` DI helper, 11 tool tests. 216 workflow tests; 1549 total backend passed. Part II only. |
+| 1.19    | 2026-08-05 | Phase 11 complete: Workflow dashboard (`WorkflowsPage.tsx`, `workflowClient.ts`, `types/workflow.ts`), health `workflow_engine_enabled`, flag-gated nav/route, approval/cancel/resume UI. 17 new frontend tests; 268 total frontend passed. Part II only. |
 
 ---
