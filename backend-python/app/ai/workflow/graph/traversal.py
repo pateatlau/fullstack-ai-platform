@@ -88,9 +88,16 @@ def collect_nodes_to_skip(
     skipped = get_skipped_node_ids(run)
     started = get_resolved_node_ids(run) | set(run.current_node_ids)
 
+    outgoing = outgoing_edges(definition, router_node_id)
+    selected_targets = {edge.to_node_id for edge in outgoing if edge.id in selected}
+
     to_skip: set[str] = set()
-    for edge in outgoing_edges(definition, router_node_id):
-        if edge.id not in selected and edge.to_node_id not in started:
+    for edge in outgoing:
+        if (
+            edge.id not in selected
+            and edge.to_node_id not in started
+            and edge.to_node_id not in selected_targets
+        ):
             to_skip.add(edge.to_node_id)
 
     changed = True
@@ -118,16 +125,21 @@ def _incoming_router_edges_selected(
     nodes_by_id: dict[str, WorkflowNode],
     run: WorkflowRun,
 ) -> bool:
+    router_edges_by_source: dict[str, list[WorkflowEdge]] = defaultdict(list)
     for edge in incoming_edges:
         source = nodes_by_id.get(edge.from_node_id)
         if source is None or source.type is not NodeType.ROUTER:
             continue
-        output = run.context.variables.get(edge.from_node_id)
+        router_edges_by_source[edge.from_node_id].append(edge)
+
+    for router_id, edges in router_edges_by_source.items():
+        output = run.context.variables.get(router_id)
         if not isinstance(output, dict):
             return False
         selected = output.get("selected_edge_ids")
         if not isinstance(selected, list):
             return False
-        if edge.id not in selected:
+        selected_ids = {item for item in selected if isinstance(item, str)}
+        if not any(edge.id in selected_ids for edge in edges):
             return False
     return True

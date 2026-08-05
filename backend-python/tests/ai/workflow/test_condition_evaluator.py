@@ -135,3 +135,11 @@ class TestComposition:
             ]
         }
         assert _EVALUATOR.evaluate(condition, context) is False
+
+    def test_empty_all_is_non_matching(self) -> None:
+        context = _context(variables={"entry": {"score": 10}})
+        assert _EVALUATOR.evaluate({"all": []}, context) is False
+
+    def test_empty_any_is_non_matching(self) -> None:
+        context = _context(variables={"entry": {"score": 10}})
+        assert _EVALUATOR.evaluate({"any": []}, context) is False

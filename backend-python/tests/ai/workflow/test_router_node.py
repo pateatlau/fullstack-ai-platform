@@ -333,3 +333,78 @@ class TestConditionalRoutingIntegration:
 
         assert result.status is RunStatus.FAILED
         assert "matched no outgoing edge" in (result.error or "")
+
+
+class TestCollectNodesToSkip:
+    def test_does_not_skip_node_reachable_via_selected_edge(self) -> None:
+        """Unselected edges must not skip a target also reached by a selected edge."""
+        from app.ai.workflow.graph.traversal import collect_nodes_to_skip
+
+        owner_id = uuid.uuid4()
+        definition = _definition(
+            owner_id=owner_id,
+            nodes=[
+                WorkflowNode(id="route", type=NodeType.ROUTER, config={}),
+                WorkflowNode(id="shared", type=NodeType.TASK, config={}),
+            ],
+            edges=[
+                _edge(
+                    "cond",
+                    "route",
+                    "shared",
+                    condition={"field": "entry.score", "operator": "gte", "value": 100},
+                ),
+                _edge("default", "route", "shared"),
+            ],
+        )
+        run = _run(owner_id=owner_id, definition_id=definition.id).model_copy(
+            update={
+                "context": WorkflowContext(
+                    variables={"route": {"selected_edge_ids": ["default"]}}
+                )
+            }
+        )
+
+        skipped = collect_nodes_to_skip(
+            definition,
+            router_node_id="route",
+            selected_edge_ids=["default"],
+            run=run,
+        )
+
+        assert skipped == []
+
+
+class TestIncomingRouterEdgesSelected:
+    def test_any_selected_edge_from_router_satisfies_multi_edge_target(self) -> None:
+        """A node reachable via multiple router edges is ready when any one is selected."""
+        from app.ai.workflow.graph.traversal import resolve_ready_nodes
+
+        owner_id = uuid.uuid4()
+        definition = _definition(
+            owner_id=owner_id,
+            nodes=[
+                WorkflowNode(id="route", type=NodeType.ROUTER, config={}),
+                WorkflowNode(id="shared", type=NodeType.TASK, config={}),
+            ],
+            edges=[
+                _edge(
+                    "cond",
+                    "route",
+                    "shared",
+                    condition={"field": "entry.score", "operator": "gte", "value": 100},
+                ),
+                _edge("default", "route", "shared"),
+            ],
+        )
+        run = _run(owner_id=owner_id, definition_id=definition.id).model_copy(
+            update={
+                "context": WorkflowContext(
+                    variables={"route": {"selected_edge_ids": ["default"]}}
+                )
+            }
+        )
+
+        ready = resolve_ready_nodes(definition, run)
+
+        assert ready == ["shared"]

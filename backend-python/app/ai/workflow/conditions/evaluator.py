@@ -27,14 +27,14 @@ class ConditionEvaluator:
             return False
         if "all" in condition:
             children = condition["all"]
-            if not isinstance(children, list):
+            if not isinstance(children, list) or not children:
                 return False
             return all(
                 isinstance(child, dict) and self.evaluate(child, context)
                 for child in children
             )
         children = condition.get("any")
-        if not isinstance(children, list):
+        if not isinstance(children, list) or not children:
             return False
         return any(
             isinstance(child, dict) and self.evaluate(child, context)
