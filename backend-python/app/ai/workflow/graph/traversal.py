@@ -199,7 +199,7 @@ def resolve_ready_nodes(definition: WorkflowDefinition, run: WorkflowRun) -> lis
             continue
         incoming = incoming_by_node.get(node.id)
         if incoming and all(source_id in resolved for source_id in incoming):
-            if _incoming_router_edges_selected(
+            if _incoming_branch_edges_selected(
                 incoming_edges_by_node[node.id], nodes_by_id, run
             ):
                 ready.append(node.id)
@@ -251,20 +251,20 @@ def collect_nodes_to_skip(
     return sorted(to_skip)
 
 
-def _incoming_router_edges_selected(
+def _incoming_branch_edges_selected(
     incoming_edges_list: list[WorkflowEdge],
     nodes_by_id: dict[str, WorkflowNode],
     run: WorkflowRun,
 ) -> bool:
-    router_edges_by_source: dict[str, list[WorkflowEdge]] = defaultdict(list)
+    branch_sources: dict[str, list[WorkflowEdge]] = defaultdict(list)
     for edge in incoming_edges_list:
         source = nodes_by_id.get(edge.from_node_id)
-        if source is None or source.type is not NodeType.ROUTER:
+        if source is None or source.type not in {NodeType.ROUTER, NodeType.APPROVAL}:
             continue
-        router_edges_by_source[edge.from_node_id].append(edge)
+        branch_sources[edge.from_node_id].append(edge)
 
-    for router_id, edges in router_edges_by_source.items():
-        output = run.context.variables.get(router_id)
+    for source_id, edges in branch_sources.items():
+        output = run.context.variables.get(source_id)
         if not isinstance(output, dict):
             return False
         selected = output.get("selected_edge_ids")

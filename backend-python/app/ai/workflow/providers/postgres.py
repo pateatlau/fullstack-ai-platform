@@ -15,6 +15,7 @@ transaction, which commits both together atomically.
 
 from __future__ import annotations
 
+import datetime
 import uuid
 
 from pydantic import ValidationError
@@ -22,7 +23,11 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.workflow.exceptions import WorkflowNotFoundError, WorkflowValidationError
+from app.ai.workflow.exceptions import (
+    WorkflowApprovalCasMissError,
+    WorkflowNotFoundError,
+    WorkflowValidationError,
+)
 from app.ai.workflow.models import (
     ApprovalDecision,
     DefinitionStatus,
@@ -43,10 +48,6 @@ from app.db.models import (
     WorkflowRunRecord,
 )
 
-_APPROVAL_METHODS_MSG = (
-    "PostgresWorkflowStore approval decision persistence is not implemented "
-    "until Phase 7."
-)
 _CONCURRENT_UPDATE_MSG = (
     "Workflow definition was modified concurrently; retry the update."
 )
@@ -352,7 +353,82 @@ class PostgresWorkflowStore:
         node_status: NodeStatus,
         run: WorkflowRun,
     ) -> WorkflowNodeExecution:
-        raise NotImplementedError(_APPROVAL_METHODS_MSG)
+        existing = await self._session.scalar(
+            select(WorkflowNodeExecutionRecord)
+            .join(
+                WorkflowRunRecord,
+                WorkflowRunRecord.id == WorkflowNodeExecutionRecord.run_id,
+            )
+            .where(
+                WorkflowNodeExecutionRecord.id == execution_id,
+                WorkflowRunRecord.owner_id == owner_id,
+            )
+        )
+        if existing is None:
+            raise WorkflowNotFoundError(
+                f"Workflow node execution {execution_id} not found."
+            )
+
+        if existing.status != NodeStatus.WAITING_APPROVAL.value:
+            raise WorkflowApprovalCasMissError(_node_execution_to_domain(existing))
+
+        now = datetime.datetime.now(datetime.UTC)
+        execution_stmt = (
+            update(WorkflowNodeExecutionRecord)
+            .where(
+                WorkflowNodeExecutionRecord.id == execution_id,
+                WorkflowNodeExecutionRecord.status == NodeStatus.WAITING_APPROVAL.value,
+            )
+            .values(
+                status=node_status.value,
+                decision=decision.value,
+                decided_by=decided_by,
+                decided_at=now,
+                completed_at=now,
+            )
+            .returning(WorkflowNodeExecutionRecord)
+        )
+        execution_row = (
+            await self._session.execute(execution_stmt)
+        ).scalar_one_or_none()
+        if execution_row is None:
+            refreshed = await self._session.scalar(
+                select(WorkflowNodeExecutionRecord).where(
+                    WorkflowNodeExecutionRecord.id == execution_id
+                )
+            )
+            if refreshed is None:
+                raise WorkflowNotFoundError(
+                    f"Workflow node execution {execution_id} not found."
+                )
+            raise WorkflowApprovalCasMissError(_node_execution_to_domain(refreshed))
+
+        run_stmt = (
+            update(WorkflowRunRecord)
+            .where(
+                WorkflowRunRecord.id == run.id,
+                WorkflowRunRecord.owner_id == owner_id,
+                WorkflowRunRecord.status == RunStatus.WAITING_APPROVAL.value,
+            )
+            .values(
+                status=run.status.value,
+                context=run.context.model_dump(mode="json"),
+                current_node_ids=list(run.current_node_ids),
+                checkpoint_version=run.checkpoint_version,
+                error=run.error,
+                updated_at=run.updated_at,
+                completed_at=run.completed_at,
+            )
+            .returning(WorkflowRunRecord)
+        )
+        run_row = (await self._session.execute(run_stmt)).scalar_one_or_none()
+        if run_row is None:
+            await self._session.rollback()
+            raise WorkflowValidationError(_CONCURRENT_RUN_UPDATE_MSG)
+
+        await self._session.commit()
+        await self._session.refresh(execution_row)
+        return _node_execution_to_domain(execution_row)
 
 
 def _graph_to_json(definition: WorkflowDefinition) -> dict[str, object]:

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.ai.workflow.models import WorkflowNodeExecution
+
 
 class WorkflowError(Exception):
     """Base exception for Workflow subsystem errors."""
@@ -30,3 +35,26 @@ class WorkflowValidationError(WorkflowError):
 
     def __init__(self, message: str = "Workflow validation failed.") -> None:
         super().__init__(message, code="workflow_validation_error")
+
+
+class WorkflowDecisionConflictError(WorkflowError):
+    """Raised when an approval decision conflicts with an existing decision."""
+
+    def __init__(
+        self,
+        message: str = "Approval decision conflicts with an existing decision.",
+    ) -> None:
+        super().__init__(message, code="workflow_decision_conflict")
+
+
+class WorkflowApprovalCasMissError(WorkflowError):
+    """Raised when an approval CAS update finds the node already decided."""
+
+    def __init__(
+        self,
+        execution: WorkflowNodeExecution,
+        *,
+        message: str = "Approval node is no longer waiting for a decision.",
+    ) -> None:
+        super().__init__(message, code="workflow_approval_cas_miss")
+        self.execution = execution

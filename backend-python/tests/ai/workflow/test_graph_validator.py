@@ -409,3 +409,25 @@ class TestGraphValidatorNodeConfigs:
         )
         with pytest.raises(WorkflowValidationError, match="instructions"):
             _VALIDATOR.validate(definition)
+
+    def test_approval_node_requires_approved_edge_id_for_multiple_outgoing(
+        self,
+    ) -> None:
+        definition = _definition(
+            nodes=[
+                _node("start", NodeType.TASK),
+                _node("approve", NodeType.APPROVAL, config={}),
+                _node("left", NodeType.TASK),
+                _node("right", NodeType.TASK),
+                _node("end", NodeType.TERMINAL),
+            ],
+            edges=[
+                _edge("e1", "start", "approve"),
+                _edge("e2", "approve", "left"),
+                _edge("e3", "approve", "right"),
+                _edge("e4", "left", "end"),
+                _edge("e5", "right", "end"),
+            ],
+        )
+        with pytest.raises(WorkflowValidationError, match="approved_edge_id"):
+            _VALIDATOR.validate(definition)

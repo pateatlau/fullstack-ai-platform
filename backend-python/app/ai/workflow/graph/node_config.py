@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from app.ai.workflow.exceptions import WorkflowValidationError
 from app.ai.workflow.models import NodeType, WorkflowNode
+from app.ai.workflow.nodes.approval_node import (
+    APPROVED_EDGE_ID_KEY,
+    REJECTED_EDGE_ID_KEY,
+)
 
 _FILE_TEMPLATE_PREFIX = "@"
 
@@ -15,6 +19,8 @@ def validate_node_configs(nodes: list[WorkflowNode]) -> None:
             _validate_llm_node_config(node.id, node.config)
         elif node.type is NodeType.AGENT:
             _validate_agent_node_config(node.id, node.config)
+        elif node.type is NodeType.APPROVAL:
+            _validate_approval_node_config(node.id, node.config)
 
 
 def _validate_llm_node_config(node_id: str, config: dict[str, object]) -> None:
@@ -85,6 +91,17 @@ def _validate_agent_node_config(node_id: str, config: dict[str, object]) -> None
         raise WorkflowValidationError(
             f"Agent node {node_id!r} config.model_override must be a non-empty string."
         )
+
+
+def _validate_approval_node_config(node_id: str, config: dict[str, object]) -> None:
+    for key in (APPROVED_EDGE_ID_KEY, REJECTED_EDGE_ID_KEY):
+        value = config.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value.strip():
+            raise WorkflowValidationError(
+                f"Approval node {node_id!r} config.{key} must be a non-empty string."
+            )
 
 
 def _reject_file_template_ref(value: str, *, node_id: str, field_name: str) -> None:

@@ -8,7 +8,11 @@ import uuid
 
 import pytest
 
-from app.ai.workflow.exceptions import WorkflowNotFoundError, WorkflowValidationError
+from app.ai.workflow.exceptions import (
+    WorkflowApprovalCasMissError,
+    WorkflowNotFoundError,
+    WorkflowValidationError,
+)
 from app.ai.workflow.interfaces import WorkflowStore
 from app.ai.workflow.models import (
     ApprovalDecision,
@@ -60,6 +64,7 @@ class FakeWorkflowStore:
         self._runs: dict[uuid.UUID, WorkflowRun] = {}
         self._executions: dict[uuid.UUID, WorkflowNodeExecution] = {}
         self._run_create_lock = asyncio.Lock()
+        self._approval_decision_lock = asyncio.Lock()
 
     async def create_definition(
         self, definition: WorkflowDefinition
@@ -230,19 +235,36 @@ class FakeWorkflowStore:
         node_status: NodeStatus,
         run: WorkflowRun,
     ) -> WorkflowNodeExecution:
-        del owner_id
-        execution = self._executions[execution_id]
-        updated = execution.model_copy(
-            update={
-                "decision": decision,
-                "decided_by": decided_by,
-                "decided_at": _NOW,
-                "status": node_status,
-            }
-        )
-        self._executions[execution_id] = updated
-        self._runs[run.id] = run
-        return updated
+        async with self._approval_decision_lock:
+            execution = self._executions.get(execution_id)
+            if execution is None:
+                raise WorkflowNotFoundError(
+                    f"Workflow node execution {execution_id} not found."
+                )
+            stored_run = self._runs.get(execution.run_id)
+            if stored_run is None or stored_run.owner_id != owner_id:
+                raise WorkflowNotFoundError(
+                    f"Workflow node execution {execution_id} not found."
+                )
+            if execution.status is not NodeStatus.WAITING_APPROVAL:
+                raise WorkflowApprovalCasMissError(execution)
+            if stored_run.status is not RunStatus.WAITING_APPROVAL:
+                raise WorkflowValidationError(
+                    "Workflow run checkpoint was modified concurrently; retry the update."
+                )
+
+            updated = execution.model_copy(
+                update={
+                    "decision": decision,
+                    "decided_by": decided_by,
+                    "decided_at": _NOW,
+                    "status": node_status,
+                    "completed_at": _NOW,
+                }
+            )
+            self._executions[execution_id] = updated
+            self._runs[run.id] = run
+            return updated
 
 
 class TestWorkflowStoreProtocol:
@@ -307,12 +329,33 @@ class TestWorkflowStoreProtocol:
         runs = await store.list_runs(owner_id=owner_id, status=RunStatus.RUNNING)
         assert runs == [checkpointed]
 
+        approval_execution = WorkflowNodeExecution(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            node_id="approve",
+            node_type=NodeType.APPROVAL,
+            status=NodeStatus.WAITING_APPROVAL,
+        )
+        await store.append_node_execution(approval_execution)
+        waiting_run = checkpointed.model_copy(
+            update={"status": RunStatus.WAITING_APPROVAL}
+        )
+        await store.checkpoint_run(
+            waiting_run.model_copy(update={"checkpoint_version": 2}),
+            expected_checkpoint_version=1,
+        )
+
         decided = await store.record_approval_decision(
-            execution.id,
+            approval_execution.id,
             owner_id=owner_id,
             decision=ApprovalDecision.APPROVED,
             decided_by=owner_id,
             node_status=NodeStatus.SUCCEEDED,
-            run=checkpointed.model_copy(update={"status": RunStatus.COMPLETED}),
+            run=waiting_run.model_copy(
+                update={
+                    "status": RunStatus.COMPLETED,
+                    "checkpoint_version": 3,
+                }
+            ),
         )
         assert decided.decision is ApprovalDecision.APPROVED
