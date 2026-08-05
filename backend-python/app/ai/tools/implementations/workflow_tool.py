@@ -13,10 +13,13 @@ from app.ai.workflow.exceptions import (
     WorkflowValidationError,
 )
 from app.core.config import Settings
+from app.core.logging import get_logger
 from app.schemas.workflow import to_run_detail_response, to_run_response
 
 if TYPE_CHECKING:
     from app.ai.workflow.manager import WorkflowManager
+
+_logger = get_logger(__name__)
 
 WORKFLOW_EXECUTION_TOOL_NAME = "workflow_execution"
 
@@ -152,6 +155,12 @@ class WorkflowExecutionToolHandler:
                 error_code="workflow_validation_error",
             )
         except Exception:
+            _logger.warning(
+                "Workflow tool start failed",
+                owner_id=str(owner_id),
+                definition_id=str(definition_id),
+                exc_info=True,
+            )
             return ToolResult(
                 success=False,
                 error="Workflow execution is temporarily unavailable",
@@ -180,6 +189,12 @@ class WorkflowExecutionToolHandler:
                     owner_id=owner_id,
                 )
         except Exception:
+            _logger.warning(
+                "Workflow tool status failed",
+                owner_id=str(owner_id),
+                run_id=str(run_id),
+                exc_info=True,
+            )
             return ToolResult(
                 success=False,
                 error="Workflow execution is temporarily unavailable",
