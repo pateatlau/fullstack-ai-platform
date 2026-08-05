@@ -18,13 +18,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.workflow.engine.background import schedule_run_task
 from app.ai.workflow.engine.executor import WorkflowExecutor
 from app.ai.workflow.exceptions import (
+    WorkflowApprovalCasMissError,
+    WorkflowConcurrentUpdateError,
+    WorkflowDecisionConflictError,
     WorkflowNotFoundError,
     WorkflowValidationError,
 )
+from app.ai.workflow.graph.traversal import outgoing_edges
 from app.ai.workflow.graph.validator import GraphValidator
 from app.ai.workflow.interfaces.workflow_store import WorkflowStore
 from app.ai.workflow.models import (
+    ApprovalDecision,
     DefinitionStatus,
+    NodeStatus,
     NodeType,
     RunStatus,
     WorkflowContext,
@@ -32,6 +38,10 @@ from app.ai.workflow.models import (
     WorkflowRun,
 )
 from app.ai.workflow.models.run import normalize_idempotency_key
+from app.ai.workflow.nodes.approval_node import (
+    build_approval_decision_output,
+    resolve_approval_selected_edge_ids,
+)
 from app.core.logging import get_logger
 
 if TYPE_CHECKING:
@@ -44,6 +54,24 @@ if TYPE_CHECKING:
 BackgroundStoreFactory = Callable[[AsyncSession], WorkflowStore]
 
 _logger = get_logger(__name__)
+_MAX_APPROVAL_DECISION_RETRIES = 25
+
+
+def _run_status_after_approval_decision(
+    *,
+    reject_ends_run: bool,
+    remaining_current_node_ids: list[str],
+    definition: WorkflowDefinition,
+) -> RunStatus:
+    """Keep ``waiting_approval`` while other approval nodes remain in progress."""
+    if reject_ends_run:
+        return RunStatus.FAILED
+    approval_node_ids = {
+        node.id for node in definition.nodes if node.type is NodeType.APPROVAL
+    }
+    if any(node_id in approval_node_ids for node_id in remaining_current_node_ids):
+        return RunStatus.WAITING_APPROVAL
+    return RunStatus.RUNNING
 
 
 class WorkflowManager:
@@ -240,6 +268,215 @@ class WorkflowManager:
         if created:
             self._schedule_run(result.id, owner_id=owner_id)
         return result
+
+    async def apply_decision(
+        self,
+        run_id: uuid.UUID,
+        node_execution_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        decision: ApprovalDecision,
+    ) -> WorkflowRun:
+        """Record an owner-scoped approval decision and resume when applicable."""
+        updated_run: WorkflowRun | None = None
+        run_status_after_decision: RunStatus | None = None
+        reject_ends_run = False
+        approval_node_id = ""
+        selected_edge_ids: list[str] = []
+        definition: WorkflowDefinition | None = None
+
+        for attempt in range(_MAX_APPROVAL_DECISION_RETRIES):
+            run = await self._store.get_run(run_id, owner_id=owner_id)
+            if run is None:
+                raise WorkflowNotFoundError(f"Workflow run {run_id} not found.")
+
+            with_executions = await self._store.get_run_with_executions(
+                run_id, owner_id=owner_id
+            )
+            if with_executions is None:
+                raise WorkflowNotFoundError(f"Workflow run {run_id} not found.")
+            _, executions = with_executions
+            execution = next(
+                (item for item in executions if item.id == node_execution_id), None
+            )
+            if execution is None:
+                raise WorkflowNotFoundError(
+                    f"Workflow node execution {node_execution_id} not found."
+                )
+            if execution.node_type is not NodeType.APPROVAL:
+                raise WorkflowValidationError(
+                    "Only approval node executions accept approve/reject decisions."
+                )
+
+            if run.status is not RunStatus.WAITING_APPROVAL:
+                if execution.decision is decision:
+                    return run
+                if execution.decision is not None:
+                    raise WorkflowDecisionConflictError(
+                        "Approval decision conflicts with an existing decision."
+                    )
+                raise WorkflowValidationError(
+                    "Workflow run is not waiting for an approval decision."
+                )
+            if execution.status is not NodeStatus.WAITING_APPROVAL:
+                if execution.decision is decision:
+                    return run
+                if execution.decision is not None:
+                    raise WorkflowDecisionConflictError(
+                        "Approval decision conflicts with an existing decision."
+                    )
+                raise WorkflowValidationError(
+                    "Workflow node execution is not waiting for a decision."
+                )
+
+            if definition is None:
+                definition = await self._store.get_definition(
+                    run.workflow_definition_id, owner_id=owner_id
+                )
+                if definition is None:
+                    raise WorkflowNotFoundError(
+                        f"Workflow definition {run.workflow_definition_id} not found."
+                    )
+
+            approval_node = next(
+                (node for node in definition.nodes if node.id == execution.node_id),
+                None,
+            )
+            if approval_node is None:
+                raise WorkflowValidationError(
+                    f"Approval node {execution.node_id!r} is missing from the "
+                    "definition."
+                )
+
+            node_edges = outgoing_edges(definition, approval_node.id)
+            selected_edge_ids = resolve_approval_selected_edge_ids(
+                approval_node, node_edges, decision
+            )
+            node_status = (
+                NodeStatus.SUCCEEDED
+                if decision is ApprovalDecision.APPROVED
+                else NodeStatus.FAILED
+            )
+            now = datetime.datetime.now(datetime.UTC)
+            reject_ends_run = (
+                decision is ApprovalDecision.REJECTED and not selected_edge_ids
+            )
+            output = build_approval_decision_output(
+                node_id=approval_node.id,
+                decision=decision,
+                selected_edge_ids=selected_edge_ids,
+            )
+            updated_context = run.context.model_copy(
+                update={
+                    "variables": {
+                        **run.context.variables,
+                        approval_node.id: output,
+                    }
+                }
+            )
+            remaining_current_node_ids = [
+                node_id
+                for node_id in run.current_node_ids
+                if node_id != approval_node.id
+            ]
+            run_status_after_decision = _run_status_after_approval_decision(
+                reject_ends_run=reject_ends_run,
+                remaining_current_node_ids=remaining_current_node_ids,
+                definition=definition,
+            )
+            updated_run = run.model_copy(
+                update={
+                    "status": run_status_after_decision,
+                    "context": updated_context,
+                    "current_node_ids": remaining_current_node_ids,
+                    "error": (
+                        f"Approval node {approval_node.id!r} was rejected."
+                        if reject_ends_run
+                        else None
+                    ),
+                    "completed_at": now if reject_ends_run else None,
+                    "updated_at": now,
+                    "checkpoint_version": run.checkpoint_version + 1,
+                }
+            )
+            approval_node_id = approval_node.id
+
+            try:
+                await self._store.record_approval_decision(
+                    node_execution_id,
+                    owner_id=owner_id,
+                    decision=decision,
+                    decided_by=owner_id,
+                    node_status=node_status,
+                    run=updated_run,
+                )
+                break
+            except WorkflowApprovalCasMissError as exc:
+                existing = exc.execution
+                if existing.decision is decision:
+                    latest = await self._store.get_run(run_id, owner_id=owner_id)
+                    if latest is None:
+                        raise WorkflowNotFoundError(
+                            f"Workflow run {run_id} not found."
+                        ) from exc
+                    return latest
+                raise WorkflowDecisionConflictError(
+                    "Approval decision conflicts with an existing decision."
+                ) from exc
+            except WorkflowConcurrentUpdateError:
+                if attempt < _MAX_APPROVAL_DECISION_RETRIES - 1:
+                    continue
+                raise
+        else:
+            raise WorkflowValidationError(
+                "Workflow approval decision exceeded concurrent retry limit."
+            )
+
+        assert updated_run is not None
+        assert definition is not None
+
+        if reject_ends_run:
+            return updated_run
+
+        executor = WorkflowExecutor(
+            self._store, self._node_executors, settings=self._settings
+        )
+        continued = await executor.continue_from_approval(
+            updated_run,
+            definition=definition,
+            approval_node_id=approval_node_id,
+            selected_edge_ids=selected_edge_ids,
+        )
+        if run_status_after_decision is RunStatus.RUNNING:
+            self._schedule_run(continued.id, owner_id=owner_id)
+        return continued
+
+    async def resume(self, run_id: uuid.UUID, *, owner_id: uuid.UUID) -> WorkflowRun:
+        """Reattach an in-process executor to a crashed ``running`` run."""
+        run = await self._store.get_run(run_id, owner_id=owner_id)
+        if run is None:
+            raise WorkflowNotFoundError(f"Workflow run {run_id} not found.")
+
+        if run.status in {
+            RunStatus.COMPLETED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        }:
+            return run
+
+        if run.status is RunStatus.WAITING_APPROVAL:
+            raise WorkflowValidationError(
+                "Workflow runs waiting for approval use approve/reject, not resume."
+            )
+
+        if run.status is not RunStatus.RUNNING:
+            raise WorkflowValidationError(
+                f"Workflow run {run_id} cannot be resumed from status "
+                f"{run.status.value!r}."
+            )
+
+        self._schedule_run(run_id, owner_id=owner_id)
+        return run
 
     def _schedule_run(
         self, run_id: uuid.UUID, *, owner_id: uuid.UUID

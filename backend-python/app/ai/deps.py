@@ -550,6 +550,7 @@ def get_workflow_manager(
     from app.ai.workflow.conditions.evaluator import ConditionEvaluator
     from app.ai.workflow.manager import WorkflowManager
     from app.ai.workflow.models import NodeType
+    from app.ai.workflow.nodes.approval_node import ApprovalNodeExecutor
     from app.ai.workflow.nodes.llm_node import LLMNodeExecutor
     from app.ai.workflow.nodes.agent_node import AgentNodeExecutor
     from app.ai.workflow.nodes.parallel_node import ForkNodeExecutor, JoinNodeExecutor
@@ -575,6 +576,7 @@ def get_workflow_manager(
                 max_parallel_branches=settings.workflow_max_parallel_branches
             ),
             NodeType.JOIN: JoinNodeExecutor(),
+            NodeType.APPROVAL: ApprovalNodeExecutor(),
         },
         background_store_factory=background_store_factory,
     )

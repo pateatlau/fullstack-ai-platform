@@ -13,7 +13,11 @@ import uuid
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from app.ai.workflow.exceptions import WorkflowNotFoundError, WorkflowValidationError
+from app.ai.workflow.exceptions import (
+    WorkflowConcurrentUpdateError,
+    WorkflowNotFoundError,
+    WorkflowValidationError,
+)
 from app.ai.workflow.graph.traversal import (
     SKIPPED_NODE_IDS_KEY,
     collect_incomplete_fork_branch_nodes_to_skip,
@@ -296,8 +300,54 @@ class WorkflowExecutor:
                 run, pending, error=f"Node {node.id!r} execution failed."
             )
 
+        if node.type is NodeType.APPROVAL:
+            return await self._pause_for_approval(
+                run, pending, output=output, definition=definition, node=node
+            )
+
         return await self._succeed_node(
             run, pending, output=output, definition=definition
+        )
+
+    async def continue_from_approval(
+        self,
+        run: WorkflowRun,
+        *,
+        definition: WorkflowDefinition,
+        approval_node_id: str,
+        selected_edge_ids: list[str],
+    ) -> WorkflowRun:
+        """Skip unselected branches after an approval decision is persisted."""
+        if not selected_edge_ids:
+            return run
+        return await self._skip_unselected_branches(
+            run,
+            definition=definition,
+            router_node_id=approval_node_id,
+            selected_edge_ids=selected_edge_ids,
+        )
+
+    async def _pause_for_approval(
+        self,
+        run: WorkflowRun,
+        execution: WorkflowNodeExecution,
+        *,
+        output: dict[str, object],
+        definition: WorkflowDefinition,
+        node: WorkflowNode,
+    ) -> WorkflowRun:
+        del definition
+        await self._store.append_node_execution(
+            execution.model_copy(
+                update={
+                    "status": NodeStatus.WAITING_APPROVAL,
+                    "output": output,
+                }
+            )
+        )
+        return await self._checkpoint_with_retry(
+            run,
+            status=RunStatus.WAITING_APPROVAL,
         )
 
     async def _succeed_node(
@@ -346,7 +396,7 @@ class WorkflowExecutor:
                     expected_checkpoint_version=fresh.checkpoint_version,
                 )
                 break
-            except WorkflowValidationError:
+            except WorkflowConcurrentUpdateError:
                 if attempt == _MAX_CHECKPOINT_RETRIES - 1:
                     raise
                 continue
@@ -569,7 +619,7 @@ class WorkflowExecutor:
                     ),
                     expected_checkpoint_version=fresh.checkpoint_version,
                 )
-            except WorkflowValidationError:
+            except WorkflowConcurrentUpdateError:
                 if attempt == _MAX_CHECKPOINT_RETRIES - 1:
                     raise
 

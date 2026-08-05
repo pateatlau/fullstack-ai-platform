@@ -8,6 +8,10 @@ from app.ai.workflow.conditions.schema import validate_condition_shape
 from app.ai.workflow.exceptions import WorkflowValidationError
 from app.ai.workflow.graph.node_config import validate_node_configs
 from app.ai.workflow.models import NodeType, WorkflowDefinition, WorkflowEdge
+from app.ai.workflow.nodes.approval_node import (
+    APPROVED_EDGE_ID_KEY,
+    REJECTED_EDGE_ID_KEY,
+)
 
 _DEFAULT_MAX_NODES = 50
 _DEFAULT_MAX_PARALLEL_BRANCHES = 8
@@ -37,6 +41,7 @@ class GraphValidator:
         self._validate_cycles(definition, node_ids)
         self._validate_reachability(definition, node_ids)
         self._validate_fork_join_pairing(definition, node_ids)
+        self._validate_approval_nodes(definition)
 
     def _validate_node_count(self, definition: WorkflowDefinition) -> None:
         if len(definition.nodes) > self._max_nodes:
@@ -207,6 +212,62 @@ class GraphValidator:
                 raise WorkflowValidationError(
                     f"Join node {join_id!r} and fork node {fork_id!r} are not "
                     "paired bidirectionally."
+                )
+
+    def _validate_approval_nodes(self, definition: WorkflowDefinition) -> None:
+        outgoing_by_node: dict[str, list[WorkflowEdge]] = defaultdict(list)
+        for edge in definition.edges:
+            outgoing_by_node[edge.from_node_id].append(edge)
+
+        for node in definition.nodes:
+            if node.type is not NodeType.APPROVAL:
+                continue
+            outgoing = outgoing_by_node.get(node.id, [])
+            if not outgoing:
+                raise WorkflowValidationError(
+                    f"Approval node {node.id!r} requires at least one outgoing edge."
+                )
+
+            outgoing_ids = {edge.id for edge in outgoing}
+            approved_edge_id = node.config.get(APPROVED_EDGE_ID_KEY)
+            rejected_edge_id = node.config.get(REJECTED_EDGE_ID_KEY)
+
+            if (
+                isinstance(approved_edge_id, str)
+                and approved_edge_id not in outgoing_ids
+            ):
+                raise WorkflowValidationError(
+                    f"Approval node {node.id!r} config.approved_edge_id "
+                    f"{approved_edge_id!r} is not an outgoing edge."
+                )
+            if (
+                isinstance(rejected_edge_id, str)
+                and rejected_edge_id not in outgoing_ids
+            ):
+                raise WorkflowValidationError(
+                    f"Approval node {node.id!r} config.rejected_edge_id "
+                    f"{rejected_edge_id!r} is not an outgoing edge."
+                )
+            if (
+                isinstance(approved_edge_id, str)
+                and isinstance(rejected_edge_id, str)
+                and approved_edge_id == rejected_edge_id
+            ):
+                raise WorkflowValidationError(
+                    f"Approval node {node.id!r} approved_edge_id and rejected_edge_id "
+                    "must differ."
+                )
+
+            unconditional = [edge for edge in outgoing if edge.condition is None]
+            if len(unconditional) > 1 and not isinstance(approved_edge_id, str):
+                raise WorkflowValidationError(
+                    f"Approval node {node.id!r} requires config.approved_edge_id when "
+                    "multiple unconditional outgoing edges are present."
+                )
+            if not unconditional and not isinstance(approved_edge_id, str):
+                raise WorkflowValidationError(
+                    f"Approval node {node.id!r} requires config.approved_edge_id when "
+                    "no unconditional outgoing edge is present."
                 )
 
     @staticmethod

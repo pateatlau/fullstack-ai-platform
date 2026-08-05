@@ -11,7 +11,7 @@ import pytest
 
 from app.ai.workflow.engine.executor import WorkflowExecutor, _merge_context_metadata
 from app.ai.workflow.graph.traversal import SKIPPED_NODE_IDS_KEY, is_join_ready
-from app.ai.workflow.exceptions import WorkflowValidationError
+from app.ai.workflow.exceptions import WorkflowConcurrentUpdateError
 from app.ai.workflow.models import (
     NodeStatus,
     NodeType,
@@ -78,9 +78,7 @@ class ConflictAwareWorkflowStore(FakeWorkflowStore):
     ) -> WorkflowRun:
         self._checkpoint_attempts += 1
         if self._checkpoint_attempts == 1:
-            raise WorkflowValidationError(
-                "Workflow run checkpoint was modified concurrently; retry the update."
-            )
+            raise WorkflowConcurrentUpdateError()
         return await super().checkpoint_run(
             run, expected_checkpoint_version=expected_checkpoint_version
         )
