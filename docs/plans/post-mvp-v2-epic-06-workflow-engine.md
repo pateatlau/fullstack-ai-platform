@@ -2,7 +2,7 @@
 epic: v2-06
 title: Workflow Engine
 status: in_progress
-version: 1.11
+version: 1.12
 depends_on: [v2-05]
 provides:
   [
@@ -828,7 +828,7 @@ _Reverified in Phase 0 audit (2026-08-04). See [post-mvp-v2-epic6-phase-0-baseli
 | 2     | Graph Definition & Validation                   | M      | Completed   |
 | 3     | Sequential Execution Engine                     | L      | Completed   |
 | 4     | Conditional Routing                             | M      | Completed   |
-| 5     | Parallel Execution (Fork/Join)                  | M      | Not Started |
+| 5     | Parallel Execution (Fork/Join)                  | M      | Completed   |
 | 6     | LLM & Agent Node Integration                    | M      | Not Started |
 | 7     | Human Approval Nodes, Pause & Resume            | L      | Not Started |
 | 8     | Node Retry & Crash Recovery                     | M      | Not Started |
@@ -1399,39 +1399,39 @@ Implement `ForkNodeExecutor` and `JoinNodeExecutor` so independent branches of a
 
 ### Fork Node
 
-- [ ] Implement `ForkNodeExecutor` — activates all outgoing edges concurrently via `asyncio.gather`.
-- [ ] Enforce `workflow_max_parallel_branches` at validation time (Phase 2 hook) and at execution time.
-- [ ] Track `current_node_ids` for all active branches on the `WorkflowRun` (updated via merged checkpoints, not per-branch overwrites).
+- [x] Implement `ForkNodeExecutor` — activates all outgoing edges concurrently via `asyncio.gather`.
+- [x] Enforce `workflow_max_parallel_branches` at validation time (Phase 2 hook) and at execution time.
+- [x] Track `current_node_ids` for all active branches on the `WorkflowRun` (updated via merged checkpoints, not per-branch overwrites).
 
 ### Join Node
 
-- [ ] Implement `JoinNodeExecutor` — waits for its declared incoming branches.
-- [ ] Support join policy `all` (wait for every branch).
-- [ ] Support join policy `any` (continue on first completion; cancel or ignore the rest per config).
-- [ ] Support join policy `count(n)` (continue once `n` branches complete).
-- [ ] Merge branch outputs into `WorkflowContext.variables` under their originating node ids.
+- [x] Implement `JoinNodeExecutor` — waits for its declared incoming branches.
+- [x] Support join policy `all` (wait for every branch).
+- [x] Support join policy `any` (continue on first completion; cancel or ignore the rest per config).
+- [x] Support join policy `count(n)` (continue once `n` branches complete).
+- [x] Merge branch outputs into `WorkflowContext.variables` under their originating node ids.
 
 ### Branch Isolation
 
-- [ ] Ensure branch execution failures do not corrupt sibling branches' state.
-- [ ] Ensure branch-local retries (Phase 8) do not block sibling branches.
-- [ ] Merge parallel branch checkpoints in a single DB transaction: append the branch's `WorkflowNodeExecution`, deep-merge its outputs into `context.variables`, and update `current_node_ids` atomically.
-- [ ] Use optimistic concurrency on `WorkflowRun.checkpoint_version` (`UPDATE … WHERE checkpoint_version = :expected`); on conflict, re-read run state and retry the merge (prevent last-writer-wins data loss).
-- [ ] Add concurrent checkpoint consistency tests (parallel branches completing near-simultaneously preserve all branch outputs and active node ids).
+- [x] Ensure branch execution failures do not corrupt sibling branches' state.
+- [x] Ensure branch-local retries (Phase 8) do not block sibling branches.
+- [x] Merge parallel branch checkpoints in a single DB transaction: append the branch's `WorkflowNodeExecution`, deep-merge its outputs into `context.variables`, and update `current_node_ids` atomically.
+- [x] Use optimistic concurrency on `WorkflowRun.checkpoint_version` (`UPDATE … WHERE checkpoint_version = :expected`); on conflict, re-read run state and retry the merge (prevent last-writer-wins data loss).
+- [x] Add concurrent checkpoint consistency tests (parallel branches completing near-simultaneously preserve all branch outputs and active node ids).
 
 ### Ready-Node Resolver
 
-- [ ] Extend the resolver to track multiple concurrently `running` node ids.
-- [ ] Extend completion detection to require all branches (or per join policy) resolved before advancing past a join.
+- [x] Extend the resolver to track multiple concurrently `running` node ids.
+- [x] Extend completion detection to require all branches (or per join policy) resolved before advancing past a join.
 
 ### Testing
 
-- [ ] Add fork/join `all` policy tests.
-- [ ] Add fork/join `any` policy tests.
-- [ ] Add fork/join `count(n)` policy tests.
-- [ ] Add branch failure isolation tests.
-- [ ] Add `workflow_max_parallel_branches` enforcement tests.
-- [ ] Add concurrent checkpoint merge tests (optimistic retry; no lost `context`/`current_node_ids` updates).
+- [x] Add fork/join `all` policy tests.
+- [x] Add fork/join `any` policy tests.
+- [x] Add fork/join `count(n)` policy tests.
+- [x] Add branch failure isolation tests.
+- [x] Add `workflow_max_parallel_branches` enforcement tests.
+- [x] Add concurrent checkpoint merge tests (optimistic retry; no lost `context`/`current_node_ids` updates).
 
 **Verify**
 
@@ -1439,10 +1439,10 @@ Implement `ForkNodeExecutor` and `JoinNodeExecutor` so independent branches of a
 
 Additional verification:
 
-- [ ] Parallel branches execute concurrently, not sequentially.
-- [ ] Join policies behave per specification.
-- [ ] Branch failures are isolated appropriately per policy.
-- [ ] Checkpoints remain consistent under concurrent branch execution.
+- [x] Parallel branches execute concurrently, not sequentially.
+- [x] Join policies behave per specification.
+- [x] Branch failures are isolated appropriately per policy.
+- [x] Checkpoints remain consistent under concurrent branch execution.
 
 **Acceptance**
 
@@ -1453,6 +1453,19 @@ Additional verification:
 
 - Parallel execution tests pass.
 - Ready for LLM/Agent node integration (Phase 6).
+
+**Completion Record**
+
+| Metric               | Result                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------- |
+| Fork node            | ✅ `ForkNodeExecutor` — fans out branch targets; enforces `workflow_max_parallel_branches` |
+| Join node            | ✅ `JoinNodeExecutor` — join policies `all` / `any` / `count(n)`; merges branch outputs    |
+| Parallel executor    | ✅ `WorkflowExecutor` runs fork-region branches via `asyncio.gather`                        |
+| Checkpoint merge     | ✅ Optimistic `checkpoint_version` retry; deep-merge `context`/`current_node_ids`           |
+| Ready-node resolver  | ✅ Fork/join region detection; join-policy-aware readiness; parallel ready grouping         |
+| Branch isolation     | ✅ Sibling failures isolated per policy; incomplete branches skipped on `any`/`count` join  |
+| Unit tests           | ✅ 13 new tests; 141 total in `tests/ai/workflow/`                                          |
+| Backend regression   | ✅ 1450 passed; 89% `app/` coverage                                                         |
 
 ---
 
@@ -2215,5 +2228,6 @@ No workflow input/output content or personally identifiable information should b
 | 1.9     | 2026-08-05 | Phase 1 complete: canonical models/enums, `WorkflowStore` protocol, `PostgresWorkflowStore` scaffold, `WorkflowManager` skeleton, `0007_workflow_tables` migration, `WORKFLOW_ENGINE_ENABLED` + workflow config, DI wiring. 39 workflow tests; 1344 total backend passed; 89.80% coverage. Public API frozen. Phase 2 complete: `GraphValidator`, condition DSL shape validation, definition CRUD via `WorkflowManager`/`PostgresWorkflowStore`, versioning on run reference. 61 workflow tests; 1370 total backend passed; 90.00% coverage. Migration rollback CI smoke test pending. |
 | 1.10    | 2026-08-05 | Phase 3 complete: `WorkflowExecutor` sequential/branching step loop, `NodeExecutor` protocol, `TaskNodeExecutor` (dot-path `arguments_template` resolution), `WorkflowManager.start_run()`/`get_run()`/`list_runs()`, per-transition checkpointing via `PostgresWorkflowStore`, background run scheduling. 88 workflow tests; 1397 total backend passed; 89.20% coverage. |
 | 1.11    | 2026-08-05 | Phase 4 complete: `ConditionEvaluator`, declarative condition DSL, `RouterNodeExecutor` (exclusive / `all_matching`), routing-aware ready-node resolver, unselected-branch skip semantics. 128 workflow tests; 1437 total backend passed; 90.00% coverage. |
+| 1.12    | 2026-08-05 | Phase 5 complete: `ForkNodeExecutor`, `JoinNodeExecutor`, fork/join parallel execution (`asyncio.gather`), join policies (`all` / `any` / `count(n)`), optimistic checkpoint merge/retry, join-policy-aware ready-node resolver. 141 workflow tests; 1450 total backend passed; 89% coverage. |
 
 ---

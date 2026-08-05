@@ -548,6 +548,7 @@ def get_workflow_manager(
     from app.ai.workflow.conditions.evaluator import ConditionEvaluator
     from app.ai.workflow.manager import WorkflowManager
     from app.ai.workflow.models import NodeType
+    from app.ai.workflow.nodes.parallel_node import ForkNodeExecutor, JoinNodeExecutor
     from app.ai.workflow.nodes.router_node import RouterNodeExecutor
     from app.ai.workflow.nodes.task_node import TaskNodeExecutor
     from app.ai.workflow.providers.postgres import PostgresWorkflowStore
@@ -561,6 +562,10 @@ def get_workflow_manager(
         node_executors={
             NodeType.TASK: TaskNodeExecutor(tool_executor),
             NodeType.ROUTER: RouterNodeExecutor(ConditionEvaluator()),
+            NodeType.FORK: ForkNodeExecutor(
+                max_parallel_branches=settings.workflow_max_parallel_branches
+            ),
+            NodeType.JOIN: JoinNodeExecutor(),
         },
         background_store_factory=background_store_factory,
     )
