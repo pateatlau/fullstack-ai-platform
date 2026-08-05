@@ -24,6 +24,7 @@ from app.ai.workflow.models import (
     WorkflowDefinition,
     WorkflowEdge,
     WorkflowNode,
+    WorkflowNodeExecution,
     WorkflowRun,
 )
 from app.ai.workflow.nodes.approval_node import ApprovalNodeExecutor
@@ -529,6 +530,106 @@ async def test_pause_and_resume_with_parallel_branches() -> None:
     assert set(task_executor.calls) == {"start", "left", "right"}
     assert "join" in final.context.variables
     assert continued.status is RunStatus.RUNNING
+
+
+@pytest.mark.anyio
+async def test_partial_approval_decision_keeps_run_waiting() -> None:
+    owner_id = uuid.uuid4()
+    store = FakeWorkflowStore()
+    definition = _definition(
+        owner_id=owner_id,
+        nodes=[
+            WorkflowNode(id="start", type=NodeType.TASK, config={}),
+            WorkflowNode(
+                id="approve_a",
+                type=NodeType.APPROVAL,
+                config={"approved_edge_id": "approved_a"},
+            ),
+            WorkflowNode(
+                id="approve_b",
+                type=NodeType.APPROVAL,
+                config={"approved_edge_id": "approved_b"},
+            ),
+            WorkflowNode(id="end", type=NodeType.TERMINAL, config={}),
+        ],
+        edges=[
+            _edge("e1", "start", "approve_a"),
+            _edge("e2", "start", "approve_b"),
+            _edge("approved_a", "approve_a", "end"),
+            _edge("approved_b", "approve_b", "end"),
+        ],
+    )
+    await store.create_definition(definition)
+    run_id = uuid.uuid4()
+    await store.create_run(
+        WorkflowRun(
+            id=run_id,
+            workflow_definition_id=definition.id,
+            owner_id=owner_id,
+            idempotency_key="key-1",
+            status=RunStatus.WAITING_APPROVAL,
+            context=WorkflowContext(variables={"start": {"ok": True}}),
+            current_node_ids=["approve_a", "approve_b"],
+            checkpoint_version=2,
+            created_at=_NOW,
+            updated_at=_NOW,
+            started_at=_NOW,
+        )
+    )
+    execution_a_id = uuid.uuid4()
+    execution_b_id = uuid.uuid4()
+    await store.append_node_execution(
+        WorkflowNodeExecution(
+            id=execution_a_id,
+            run_id=run_id,
+            node_id="approve_a",
+            node_type=NodeType.APPROVAL,
+            status=NodeStatus.WAITING_APPROVAL,
+            started_at=_NOW,
+        )
+    )
+    await store.append_node_execution(
+        WorkflowNodeExecution(
+            id=execution_b_id,
+            run_id=run_id,
+            node_id="approve_b",
+            node_type=NodeType.APPROVAL,
+            status=NodeStatus.WAITING_APPROVAL,
+            started_at=_NOW,
+        )
+    )
+
+    manager = WorkflowManager(
+        store,
+        node_executors={
+            NodeType.TASK: FakeTaskExecutor(),
+            NodeType.APPROVAL: ApprovalNodeExecutor(),
+        },
+    )
+
+    partial = await manager.apply_decision(
+        run_id,
+        execution_a_id,
+        owner_id=owner_id,
+        decision=ApprovalDecision.APPROVED,
+    )
+
+    assert partial.status is RunStatus.WAITING_APPROVAL
+    assert partial.current_node_ids == ["approve_b"]
+    assert manager._last_scheduled_run_task is None
+
+    final = await manager.apply_decision(
+        run_id,
+        execution_b_id,
+        owner_id=owner_id,
+        decision=ApprovalDecision.APPROVED,
+    )
+    await _await_scheduled(manager)
+    completed = await manager.get_run(run_id, owner_id=owner_id)
+
+    assert final.status is RunStatus.RUNNING
+    assert completed is not None
+    assert completed.status is RunStatus.COMPLETED
 
 
 class TestApprovalNodeExecutor:

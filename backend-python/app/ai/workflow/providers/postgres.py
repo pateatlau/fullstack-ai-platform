@@ -409,6 +409,7 @@ class PostgresWorkflowStore:
                 WorkflowRunRecord.id == run.id,
                 WorkflowRunRecord.owner_id == owner_id,
                 WorkflowRunRecord.status == RunStatus.WAITING_APPROVAL.value,
+                WorkflowRunRecord.checkpoint_version == run.checkpoint_version - 1,
             )
             .values(
                 status=run.status.value,

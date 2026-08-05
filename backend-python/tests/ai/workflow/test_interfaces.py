@@ -252,6 +252,10 @@ class FakeWorkflowStore:
                 raise WorkflowValidationError(
                     "Workflow run checkpoint was modified concurrently; retry the update."
                 )
+            if stored_run.checkpoint_version != run.checkpoint_version - 1:
+                raise WorkflowValidationError(
+                    "Workflow run checkpoint was modified concurrently; retry the update."
+                )
 
             updated = execution.model_copy(
                 update={
@@ -359,3 +363,44 @@ class TestWorkflowStoreProtocol:
             ),
         )
         assert decided.decision is ApprovalDecision.APPROVED
+
+    @pytest.mark.anyio
+    async def test_record_approval_decision_rejects_stale_checkpoint_version(
+        self,
+    ) -> None:
+        store = FakeWorkflowStore()
+        owner_id = uuid.uuid4()
+        definition = await store.create_definition(_definition(owner_id))
+        run = _run(owner_id, definition.id)
+        await store.get_or_create_run(run)
+
+        approval_execution = WorkflowNodeExecution(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            node_id="approve",
+            node_type=NodeType.APPROVAL,
+            status=NodeStatus.WAITING_APPROVAL,
+        )
+        await store.append_node_execution(approval_execution)
+        waiting_run = run.model_copy(
+            update={"status": RunStatus.WAITING_APPROVAL, "checkpoint_version": 2}
+        )
+        await store.checkpoint_run(
+            waiting_run,
+            expected_checkpoint_version=0,
+        )
+
+        with pytest.raises(WorkflowValidationError, match="modified concurrently"):
+            await store.record_approval_decision(
+                approval_execution.id,
+                owner_id=owner_id,
+                decision=ApprovalDecision.APPROVED,
+                decided_by=owner_id,
+                node_status=NodeStatus.SUCCEEDED,
+                run=waiting_run.model_copy(
+                    update={
+                        "checkpoint_version": 2,
+                        "current_node_ids": [],
+                    }
+                ),
+            )

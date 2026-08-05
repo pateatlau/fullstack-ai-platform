@@ -259,15 +259,19 @@ class GraphValidator:
                 )
 
             unconditional = [edge for edge in outgoing if edge.condition is None]
-            if len(outgoing) > 1 and not isinstance(approved_edge_id, str):
-                raise WorkflowValidationError(
-                    f"Approval node {node.id!r} requires config.approved_edge_id when "
-                    "multiple outgoing edges are present."
-                )
             if len(unconditional) > 1 and not isinstance(approved_edge_id, str):
                 raise WorkflowValidationError(
                     f"Approval node {node.id!r} requires config.approved_edge_id when "
                     "multiple unconditional outgoing edges are present."
+                )
+            if (
+                len(outgoing) > 1
+                and not unconditional
+                and not isinstance(approved_edge_id, str)
+            ):
+                raise WorkflowValidationError(
+                    f"Approval node {node.id!r} requires config.approved_edge_id when "
+                    "all outgoing edges are conditional."
                 )
 
     @staticmethod
