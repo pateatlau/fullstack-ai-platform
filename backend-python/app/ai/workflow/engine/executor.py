@@ -13,7 +13,11 @@ import uuid
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from app.ai.workflow.exceptions import WorkflowNotFoundError, WorkflowValidationError
+from app.ai.workflow.exceptions import (
+    WorkflowConcurrentUpdateError,
+    WorkflowNotFoundError,
+    WorkflowValidationError,
+)
 from app.ai.workflow.graph.traversal import (
     SKIPPED_NODE_IDS_KEY,
     collect_incomplete_fork_branch_nodes_to_skip,
@@ -392,7 +396,7 @@ class WorkflowExecutor:
                     expected_checkpoint_version=fresh.checkpoint_version,
                 )
                 break
-            except WorkflowValidationError:
+            except WorkflowConcurrentUpdateError:
                 if attempt == _MAX_CHECKPOINT_RETRIES - 1:
                     raise
                 continue
@@ -615,7 +619,7 @@ class WorkflowExecutor:
                     ),
                     expected_checkpoint_version=fresh.checkpoint_version,
                 )
-            except WorkflowValidationError:
+            except WorkflowConcurrentUpdateError:
                 if attempt == _MAX_CHECKPOINT_RETRIES - 1:
                     raise
 

@@ -10,6 +10,7 @@ import pytest
 
 from app.ai.workflow.exceptions import (
     WorkflowApprovalCasMissError,
+    WorkflowConcurrentUpdateError,
     WorkflowNotFoundError,
     WorkflowValidationError,
 )
@@ -188,7 +189,7 @@ class FakeWorkflowStore:
         if existing is None:
             raise KeyError(run.id)
         if existing.checkpoint_version != expected_checkpoint_version:
-            raise ValueError("checkpoint version conflict")
+            raise WorkflowConcurrentUpdateError()
         self._runs[run.id] = run
         return run
 
@@ -248,14 +249,14 @@ class FakeWorkflowStore:
                 )
             if execution.status is not NodeStatus.WAITING_APPROVAL:
                 raise WorkflowApprovalCasMissError(execution)
+            if execution.run_id != run.id:
+                raise WorkflowValidationError(
+                    "Workflow node execution does not belong to the supplied run."
+                )
             if stored_run.status is not RunStatus.WAITING_APPROVAL:
-                raise WorkflowValidationError(
-                    "Workflow run checkpoint was modified concurrently; retry the update."
-                )
+                raise WorkflowConcurrentUpdateError()
             if stored_run.checkpoint_version != run.checkpoint_version - 1:
-                raise WorkflowValidationError(
-                    "Workflow run checkpoint was modified concurrently; retry the update."
-                )
+                raise WorkflowConcurrentUpdateError()
 
             updated = execution.model_copy(
                 update={
@@ -390,7 +391,7 @@ class TestWorkflowStoreProtocol:
             expected_checkpoint_version=0,
         )
 
-        with pytest.raises(WorkflowValidationError, match="modified concurrently"):
+        with pytest.raises(WorkflowConcurrentUpdateError):
             await store.record_approval_decision(
                 approval_execution.id,
                 owner_id=owner_id,

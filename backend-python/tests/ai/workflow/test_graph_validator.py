@@ -432,6 +432,34 @@ class TestGraphValidatorNodeConfigs:
         with pytest.raises(WorkflowValidationError, match="approved_edge_id"):
             _VALIDATOR.validate(definition)
 
+    def test_approval_node_requires_approved_edge_id_for_single_conditional_outgoing(
+        self,
+    ) -> None:
+        definition = _definition(
+            nodes=[
+                _node("start", NodeType.TASK),
+                _node("approve", NodeType.APPROVAL, config={}),
+                _node("next", NodeType.TASK),
+                _node("end", NodeType.TERMINAL),
+            ],
+            edges=[
+                _edge("e1", "start", "approve"),
+                _edge(
+                    "e2",
+                    "approve",
+                    "next",
+                    condition={
+                        "field": "trigger_input.flag",
+                        "operator": "eq",
+                        "value": True,
+                    },
+                ),
+                _edge("e3", "next", "end"),
+            ],
+        )
+        with pytest.raises(WorkflowValidationError, match="approved_edge_id"):
+            _VALIDATOR.validate(definition)
+
     def test_approval_node_allows_single_unconditional_edge_without_config(
         self,
     ) -> None:

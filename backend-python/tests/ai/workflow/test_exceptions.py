@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.ai.workflow.exceptions import (
     WorkflowAccessDeniedError,
+    WorkflowConcurrentUpdateError,
     WorkflowError,
     WorkflowNotFoundError,
     WorkflowValidationError,
@@ -31,3 +32,8 @@ class TestWorkflowExceptions:
         error = WorkflowValidationError()
 
         assert error.code == "workflow_validation_error"
+
+    def test_concurrent_update_defaults(self) -> None:
+        error = WorkflowConcurrentUpdateError()
+
+        assert error.code == "workflow_concurrent_update"

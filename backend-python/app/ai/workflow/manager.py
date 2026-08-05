@@ -19,6 +19,7 @@ from app.ai.workflow.engine.background import schedule_run_task
 from app.ai.workflow.engine.executor import WorkflowExecutor
 from app.ai.workflow.exceptions import (
     WorkflowApprovalCasMissError,
+    WorkflowConcurrentUpdateError,
     WorkflowDecisionConflictError,
     WorkflowNotFoundError,
     WorkflowValidationError,
@@ -54,9 +55,6 @@ BackgroundStoreFactory = Callable[[AsyncSession], WorkflowStore]
 
 _logger = get_logger(__name__)
 _MAX_APPROVAL_DECISION_RETRIES = 25
-_CONCURRENT_RUN_UPDATE_MSG = (
-    "Workflow run checkpoint was modified concurrently; retry the update."
-)
 
 
 def _run_status_after_approval_decision(
@@ -425,11 +423,8 @@ class WorkflowManager:
                 raise WorkflowDecisionConflictError(
                     "Approval decision conflicts with an existing decision."
                 ) from exc
-            except WorkflowValidationError as exc:
-                if (
-                    str(exc) == _CONCURRENT_RUN_UPDATE_MSG
-                    and attempt < _MAX_APPROVAL_DECISION_RETRIES - 1
-                ):
+            except WorkflowConcurrentUpdateError:
+                if attempt < _MAX_APPROVAL_DECISION_RETRIES - 1:
                     continue
                 raise
         else:

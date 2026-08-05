@@ -85,11 +85,30 @@ async def test_resume_running_run_schedules_executor() -> None:
     await _await_scheduled(manager)
     assert task_executor.calls
 
+    completed = await manager.get_run(run.id, owner_id=owner_id)
+    assert completed is not None
+    assert completed.status is RunStatus.COMPLETED
+    await store.checkpoint_run(
+        completed.model_copy(
+            update={
+                "status": RunStatus.RUNNING,
+                "completed_at": None,
+                "checkpoint_version": completed.checkpoint_version + 1,
+            }
+        ),
+        expected_checkpoint_version=completed.checkpoint_version,
+    )
+    manager._last_scheduled_run_task = None
+
     first_call_count = len(task_executor.calls)
     resumed = await manager.resume(run.id, owner_id=owner_id)
     await _await_scheduled(manager)
 
-    assert resumed.status is RunStatus.COMPLETED
+    assert resumed.status is RunStatus.RUNNING
+    assert manager._last_scheduled_run_task is not None
+    final = await manager.get_run(run.id, owner_id=owner_id)
+    assert final is not None
+    assert final.status is RunStatus.COMPLETED
     assert len(task_executor.calls) == first_call_count
 
 

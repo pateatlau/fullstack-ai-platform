@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.workflow.exceptions import (
     WorkflowApprovalCasMissError,
+    WorkflowConcurrentUpdateError,
     WorkflowNotFoundError,
     WorkflowValidationError,
 )
@@ -50,9 +51,6 @@ from app.db.models import (
 
 _CONCURRENT_UPDATE_MSG = (
     "Workflow definition was modified concurrently; retry the update."
-)
-_CONCURRENT_RUN_UPDATE_MSG = (
-    "Workflow run checkpoint was modified concurrently; retry the update."
 )
 
 
@@ -299,7 +297,7 @@ class PostgresWorkflowStore:
         )
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         if row is None:
-            raise WorkflowValidationError(_CONCURRENT_RUN_UPDATE_MSG)
+            raise WorkflowConcurrentUpdateError()
         await self._session.flush()
         await self._session.commit()
         await self._session.refresh(row)
@@ -371,6 +369,10 @@ class PostgresWorkflowStore:
 
         if existing.status != NodeStatus.WAITING_APPROVAL.value:
             raise WorkflowApprovalCasMissError(_node_execution_to_domain(existing))
+        if existing.run_id != run.id:
+            raise WorkflowValidationError(
+                "Workflow node execution does not belong to the supplied run."
+            )
 
         now = datetime.datetime.now(datetime.UTC)
         execution_stmt = (
@@ -425,7 +427,7 @@ class PostgresWorkflowStore:
         run_row = (await self._session.execute(run_stmt)).scalar_one_or_none()
         if run_row is None:
             await self._session.rollback()
-            raise WorkflowValidationError(_CONCURRENT_RUN_UPDATE_MSG)
+            raise WorkflowConcurrentUpdateError()
 
         await self._session.commit()
         await self._session.refresh(execution_row)

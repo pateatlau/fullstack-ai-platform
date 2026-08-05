@@ -37,6 +37,21 @@ class WorkflowValidationError(WorkflowError):
         super().__init__(message, code="workflow_validation_error")
 
 
+WORKFLOW_CONCURRENT_RUN_UPDATE_MSG = (
+    "Workflow run checkpoint was modified concurrently; retry the update."
+)
+
+
+class WorkflowConcurrentUpdateError(WorkflowError):
+    """Raised when an optimistic run update loses a concurrent write."""
+
+    def __init__(
+        self,
+        message: str = WORKFLOW_CONCURRENT_RUN_UPDATE_MSG,
+    ) -> None:
+        super().__init__(message, code="workflow_concurrent_update")
+
+
 class WorkflowDecisionConflictError(WorkflowError):
     """Raised when an approval decision conflicts with an existing decision."""
 
