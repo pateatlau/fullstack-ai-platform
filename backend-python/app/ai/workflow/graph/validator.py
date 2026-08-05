@@ -6,6 +6,7 @@ from collections import defaultdict
 
 from app.ai.workflow.conditions.schema import validate_condition_shape
 from app.ai.workflow.exceptions import WorkflowValidationError
+from app.ai.workflow.graph.node_config import validate_node_configs
 from app.ai.workflow.models import NodeType, WorkflowDefinition, WorkflowEdge
 
 _DEFAULT_MAX_NODES = 50
@@ -30,6 +31,7 @@ class GraphValidator:
         self._validate_node_count(definition)
         self._validate_entry_node(definition, node_ids)
         self._validate_node_types(definition)
+        self._validate_node_configs(definition)
         self._validate_dangling_edges(definition, node_ids)
         self._validate_edge_conditions(definition)
         self._validate_cycles(definition, node_ids)
@@ -57,6 +59,9 @@ class GraphValidator:
                 raise WorkflowValidationError(
                     f"Node {node.id!r} has unsupported type {node.type!r}."
                 )
+
+    def _validate_node_configs(self, definition: WorkflowDefinition) -> None:
+        validate_node_configs(definition.nodes)
 
     def _validate_dangling_edges(
         self, definition: WorkflowDefinition, node_ids: set[str]

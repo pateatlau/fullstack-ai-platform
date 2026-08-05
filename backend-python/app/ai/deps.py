@@ -537,6 +537,8 @@ def get_workflow_manager(
     store: "PostgresWorkflowStore" = Depends(get_workflow_store),
     settings: Settings = Depends(get_ai_settings),
     tool_executor: ToolExecutor = Depends(get_tool_executor),
+    prompt_manager: PromptManager = Depends(get_prompt_manager),
+    agent_runtime: DefaultAgent = Depends(get_agent_runtime),
 ) -> "WorkflowManager":
     """Return a request-scoped ``WorkflowManager`` wired to the configured store.
 
@@ -548,6 +550,8 @@ def get_workflow_manager(
     from app.ai.workflow.conditions.evaluator import ConditionEvaluator
     from app.ai.workflow.manager import WorkflowManager
     from app.ai.workflow.models import NodeType
+    from app.ai.workflow.nodes.llm_node import LLMNodeExecutor
+    from app.ai.workflow.nodes.agent_node import AgentNodeExecutor
     from app.ai.workflow.nodes.parallel_node import ForkNodeExecutor, JoinNodeExecutor
     from app.ai.workflow.nodes.router_node import RouterNodeExecutor
     from app.ai.workflow.nodes.task_node import TaskNodeExecutor
@@ -561,6 +565,11 @@ def get_workflow_manager(
         settings=settings,
         node_executors={
             NodeType.TASK: TaskNodeExecutor(tool_executor),
+            NodeType.LLM: LLMNodeExecutor(
+                prompt_manager=prompt_manager,
+                settings=settings,
+            ),
+            NodeType.AGENT: AgentNodeExecutor(agent_runtime, settings=settings),
             NodeType.ROUTER: RouterNodeExecutor(ConditionEvaluator()),
             NodeType.FORK: ForkNodeExecutor(
                 max_parallel_branches=settings.workflow_max_parallel_branches
