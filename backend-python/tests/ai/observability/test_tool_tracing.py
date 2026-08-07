@@ -139,7 +139,7 @@ async def test_tool_execute_success_emits_span_with_outcome_attributes(
     assert attributes["retry_count"] == 0
     assert isinstance(attributes["latency_ms"], int)
     assert attributes["latency_ms"] >= 0
-    assert "hello" not in attributes.values()
+    assert all("hello" not in str(value) for value in attributes.values())
 
 
 async def test_tool_execute_failure_records_error_status_without_raising(
@@ -164,7 +164,7 @@ async def test_tool_execute_failure_records_error_status_without_raising(
     assert attributes["success"] is False
     assert attributes["authorization_result"] == "allowed"
     assert spans[0].status.status_code.name == "ERROR"
-    assert "secret-input" not in attributes.values()
+    assert all("secret-input" not in str(value) for value in attributes.values())
 
 
 async def test_tool_execute_authorization_denied_records_error_status(

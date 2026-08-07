@@ -171,7 +171,7 @@ async def test_default_agent_multi_iteration_emits_iteration_and_tool_spans(
     execute_attributes = dict(execute_spans[0].attributes or {})
     assert execute_attributes["tool_name"] == "echo"
     assert execute_attributes["success"] is True
-    assert "hello" not in execute_attributes.values()
+    assert all("hello" not in str(value) for value in execute_attributes.values())
 
 
 async def test_agent_span_nesting_tool_call_parents_tool_execute(
