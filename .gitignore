@@ -65,5 +65,5 @@ dist-ssr/
 
 # Documentation for internal use only
 docs/prompts/
-docs/references/
+docs/references-internal/
 docs/plans-internal/
