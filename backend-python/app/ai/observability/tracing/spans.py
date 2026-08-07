@@ -18,6 +18,10 @@ from app.core.logging import get_logger, sanitize_value
 
 logger = get_logger(__name__)
 
+_TOKEN_COUNT_ATTRIBUTE_KEYS = frozenset(
+    {"prompt_tokens", "completion_tokens", "total_tokens"}
+)
+
 AgentSpanAction = Literal["iteration", "tool_call", "reflection"]
 RagSpanAction = Literal["retrieve"]
 MemorySpanAction = Literal["retrieve", "extract"]
@@ -54,7 +58,10 @@ def _set_span_attributes(span: Span, attributes: Mapping[str, Any]) -> None:
         if value is None:
             continue
         try:
-            sanitized = sanitize_value(key, value)
+            if key in _TOKEN_COUNT_ATTRIBUTE_KEYS:
+                sanitized = value
+            else:
+                sanitized = sanitize_value(key, value)
             span.set_attribute(key, sanitized)
         except Exception as exc:
             logger.warning(

@@ -10,6 +10,7 @@ from app.ai.observability.exceptions import (
 )
 from app.ai.observability.metrics.meter import MeterRegistry, get_meter
 from app.ai.observability.tracing.provider import TracerRegistry, get_tracer
+from app.ai.observability.tracing.provider_wrapper import TracingLLMProvider
 from app.ai.observability.tracing.spans import (
     agent_span,
     format_span_context,
@@ -32,6 +33,7 @@ __all__ = [
     "ObservabilityDisabledError",
     "ObservabilityError",
     "TracerRegistry",
+    "TracingLLMProvider",
     "agent_span",
     "format_span_context",
     "get_meter",
