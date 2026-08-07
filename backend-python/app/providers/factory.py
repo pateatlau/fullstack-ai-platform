@@ -1,3 +1,4 @@
+from app.ai.observability.tracing.provider_wrapper import TracingLLMProvider
 from app.core.config import Settings, get_settings
 from app.providers.anthropic_provider import AnthropicProvider
 from app.providers.base import LLMProvider
@@ -24,12 +25,16 @@ class ProviderFactory:
         provider_name = name or settings.llm_provider
 
         if provider_name == "openai":
-            return OpenAIProvider(api_key=settings.openai_api_key)
-        if provider_name == "gemini":
-            return GeminiProvider(api_key=settings.gemini_api_key)
-        if provider_name == "groq":
-            return GroqProvider(api_key=settings.groq_api_key)
-        if provider_name == "anthropic":
-            return AnthropicProvider(api_key=settings.anthropic_api_key)
+            provider: LLMProvider = OpenAIProvider(api_key=settings.openai_api_key)
+        elif provider_name == "gemini":
+            provider = GeminiProvider(api_key=settings.gemini_api_key)
+        elif provider_name == "groq":
+            provider = GroqProvider(api_key=settings.groq_api_key)
+        elif provider_name == "anthropic":
+            provider = AnthropicProvider(api_key=settings.anthropic_api_key)
+        else:
+            raise UnsupportedProviderError(f"Unsupported provider: {provider_name!r}")
 
-        raise UnsupportedProviderError(f"Unsupported provider: {provider_name!r}")
+        if settings.observability_enabled:
+            return TracingLLMProvider(provider, provider_name)
+        return provider
