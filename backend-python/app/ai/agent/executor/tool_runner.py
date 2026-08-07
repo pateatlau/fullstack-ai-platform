@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -20,6 +21,13 @@ from app.ai.agent.retry.classifier import is_retryable_tool_result
 from app.ai.agent.retry.executor import retry_operation
 from app.ai.agent.retry.policies import ToolRetryPolicy
 from app.ai.agent.streaming.publisher import NoOpStreamPublisher
+from app.ai.observability.tracing.spans import (
+    agent_span,
+    elapsed_ms_since,
+    record_agent_tool_call_attributes,
+    reset_tool_retry_count,
+    set_tool_retry_count,
+)
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext, ToolResult
 
@@ -175,18 +183,31 @@ class ToolRunner:
             )
         )
 
-        try:
-            result = await self._execute_with_retry(normalized_call, tool_context)
-        except Exception:
-            await self._publisher.publish(
-                AgentStreamEvent.tool_end(
-                    execution_id,
-                    tool_name=normalized_call.name,
-                    call_id=call_id,
-                    success=False,
+        dispatch_start = time.perf_counter()
+        with agent_span("tool_call") as span:
+            try:
+                result = await self._execute_with_retry(normalized_call, tool_context)
+            except Exception:
+                await self._publisher.publish(
+                    AgentStreamEvent.tool_end(
+                        execution_id,
+                        tool_name=normalized_call.name,
+                        call_id=call_id,
+                        success=False,
+                    )
                 )
+                record_agent_tool_call_attributes(
+                    span,
+                    tool_name=normalized_call.name,
+                    latency_ms=elapsed_ms_since(dispatch_start),
+                )
+                raise
+
+            record_agent_tool_call_attributes(
+                span,
+                tool_name=normalized_call.name,
+                latency_ms=elapsed_ms_since(dispatch_start),
             )
-            raise
 
         await self._publisher.publish(
             AgentStreamEvent.tool_end(
@@ -209,9 +230,17 @@ class ToolRunner:
         tool_context: ToolExecutionContext,
     ) -> ToolResult:
         policy: RetryPolicy = _ToolResultRetryPolicy(self._retry_policy)
+        attempt = 0
 
         async def operation() -> ToolResult:
-            result = await self._executor.execute(call, tool_context)
+            nonlocal attempt
+            retry_count = attempt
+            attempt += 1
+            token = set_tool_retry_count(retry_count)
+            try:
+                result = await self._executor.execute(call, tool_context)
+            finally:
+                reset_tool_retry_count(token)
             if not result.success and is_retryable_tool_result(result):
                 raise ToolExecutionRetryableError(result)
             return result
