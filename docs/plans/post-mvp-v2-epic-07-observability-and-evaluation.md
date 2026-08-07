@@ -1,8 +1,8 @@
 ---
 epic: v2-07
 title: Observability & Evaluation
-status: not_started
-version: 1.1
+status: in_progress
+version: 1.2
 depends_on: [v2-06]
 provides:
   [
@@ -716,19 +716,19 @@ Observability is additive. Existing chat, RAG, MCP, memory, voice, agent, tool, 
 
 ## Baseline
 
-_Copied from [Epic 06 Phase 12 completion record](./post-mvp-v2-epic-06-workflow-engine.md#phase-12--validation--release). Reverify in Phase 0._
+_Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post-mvp-v2-epic7-phase-0-baseline-audit.md)._
 
 | Area                     | State                                                             |
 | ------------------------ | ----------------------------------------------------------------- |
 | Backend tests / coverage | 1551 passed, 89.05% `app/`                                        |
 | Frontend tests           | 268 passed (43 files); lint + build pass                          |
-| Integration tests        | Workflow suite 241 passed; router 23; tool 11                     |
+| Integration tests        | Workflow suite 241 passed; router 23; tool 11; streaming 26       |
 | Eval CLI                 | 5/5 passed                                                        |
 | Chat pipeline            | Stable — `ChatService` + `UnifiedChatService`, Memory fully wired |
 | Agent Framework          | Completed (Epic 01); `AGENT_RUNTIME_ENABLED` behind flag          |
 | Memory subsystem         | Completed (Epic 05); `MEMORY_ENABLED` behind flag                 |
 | Workflow Engine          | Completed (Epic 06); `WORKFLOW_ENGINE_ENABLED` behind flag        |
-| Observability            | Not started                                                       |
+| Observability            | Phase 0 complete — implementation not started (Phase 1+)          |
 
 ---
 
@@ -736,7 +736,7 @@ _Copied from [Epic 06 Phase 12 completion record](./post-mvp-v2-epic-06-workflow
 
 | Phase | Name                                          | Effort | Status      |
 | ----- | --------------------------------------------- | ------ | ----------- |
-| 0     | Baseline Audit                                | XS     | Not Started |
+| 0     | Baseline Audit                                | XS     | Completed   |
 | 1     | Tracing & Metrics Foundation                  | M      | Not Started |
 | 2     | LLM Provider & Prompt Tracing                 | M      | Not Started |
 | 3     | Tool & Agent Tracing                          | M      | Not Started |
@@ -772,52 +772,52 @@ Establish a verified implementation baseline before introducing Observability in
 
 ### Platform Verification
 
-- [ ] Confirm Epic 06 Phase 12 complete / authorized for Epic 07.
-- [ ] Inventory `app/core/logging.py`, `app/middleware/correlation_id.py`.
-- [ ] Inventory `app/db/usage.py`, `UsageEvent`, `ProviderUsage`.
-- [ ] Inventory `app/ai/evaluation/` (datasets, runners, metrics, report, cli) and `make eval`.
-- [ ] Verify chat, RAG, MCP, memory, voice, agent, tool, and workflow pipelines all remain operational.
-- [ ] Verify streaming responses remain operational.
+- [x] Confirm Epic 06 Phase 12 complete / authorized for Epic 07.
+- [x] Inventory `app/core/logging.py`, `app/middleware/correlation_id.py`.
+- [x] Inventory `app/db/usage.py`, `UsageEvent`, `ProviderUsage`.
+- [x] Inventory `app/ai/evaluation/` (datasets, runners, metrics, report, cli) and `make eval`.
+- [x] Verify chat, RAG, MCP, memory, voice, agent, tool, and workflow pipelines all remain operational.
+- [x] Verify streaming responses remain operational.
 
 ### Architecture Review
 
-- [ ] Review the frozen Part I architecture.
-- [ ] Verify all architectural invariants are understood.
-- [ ] Identify every existing call site each span helper will instrument.
-- [ ] Identify existing extension points (`ProviderFactory`, DI factories, feature flag infra).
-- [ ] Confirm no OpenTelemetry / cost-accounting implementation already exists.
-- [ ] Record implementation assumptions.
+- [x] Review the frozen Part I architecture.
+- [x] Verify all architectural invariants are understood.
+- [x] Identify every existing call site each span helper will instrument.
+- [x] Identify existing extension points (`ProviderFactory`, DI factories, feature flag infra).
+- [x] Confirm no OpenTelemetry / cost-accounting implementation already exists.
+- [x] Record implementation assumptions.
 
 ### Dependency Verification
 
-- [ ] Verify PostgreSQL configuration and `usage_events` current schema.
-- [ ] Confirm target OpenTelemetry SDK/exporter package versions.
-- [ ] Verify existing provider abstractions (`LLMProvider`, `ProviderFactory`).
-- [ ] Verify dependency injection configuration (`app/ai/deps.py`).
-- [ ] Verify feature flag infrastructure.
+- [x] Verify PostgreSQL configuration and `usage_events` current schema.
+- [x] Confirm target OpenTelemetry SDK/exporter package versions.
+- [x] Verify existing provider abstractions (`LLMProvider`, `ProviderFactory`).
+- [x] Verify dependency injection configuration (`app/ai/deps.py`).
+- [x] Verify feature flag infrastructure.
 
 ### Codebase Inventory
 
-- [ ] Inventory `PromptManager`, `ToolExecutor`, `DefaultAgent`, `WorkflowExecutor`, RAG/Memory/Voice entry points.
-- [ ] Inventory existing Alembic migrations and numbering (`0007_workflow_tables` is latest).
-- [ ] Record components to be reused vs. newly introduced.
+- [x] Inventory `PromptManager`, `ToolExecutor`, `DefaultAgent`, `WorkflowExecutor`, RAG/Memory/Voice entry points.
+- [x] Inventory existing Alembic migrations and numbering (`0007_workflow_tables` is latest).
+- [x] Record components to be reused vs. newly introduced.
 
 ### Baseline Quality Validation
 
-- [ ] Execute lint.
-- [ ] Execute type checking.
-- [ ] Execute unit tests.
-- [ ] Execute integration tests.
-- [ ] Execute evaluation suite.
-- [ ] Record baseline quality metrics.
+- [x] Execute lint.
+- [x] Execute type checking.
+- [x] Execute unit tests.
+- [x] Execute integration tests.
+- [x] Execute evaluation suite.
+- [x] Record baseline quality metrics.
 
 ### Implementation Readiness
 
-- [ ] Confirm all required dependencies are available.
-- [ ] Confirm implementation order matches Part II.
-- [ ] Confirm no architectural conflicts exist.
-- [ ] Publish baseline audit document.
-- [ ] Freeze implementation baseline.
+- [x] Confirm all required dependencies are available.
+- [x] Confirm implementation order matches Part II.
+- [x] Confirm no architectural conflicts exist.
+- [x] Publish baseline audit document.
+- [x] Freeze implementation baseline.
 
 **Verify**
 
@@ -828,9 +828,9 @@ Establish a verified implementation baseline before introducing Observability in
 
 Additional verification:
 
-- [ ] Chat, RAG, memory, voice, agent, tool, and workflow functionality verified.
-- [ ] Streaming functionality verified.
-- [ ] All quality gates pass.
+- [x] Chat, RAG, memory, voice, agent, tool, and workflow functionality verified.
+- [x] Streaming functionality verified.
+- [x] All quality gates pass.
 
 **Acceptance**
 
@@ -853,19 +853,22 @@ Additional verification:
 
 **Rollback**
 
-- No rollback required. This phase introduces no functional code changes.
+- [x] No rollback required.
+- [x] This phase introduces no functional code changes.
 
 **Completion Record**
 
 | Metric                   | Result |
 | ------------------------ | ------ |
-| Lint                     |        |
-| Typecheck                |        |
-| Unit Tests               |        |
-| Integration Tests        |        |
-| Evaluation Suite         |        |
-| Platform Readiness       |        |
-| Baseline Audit Published |        |
+| Lint                     | ✅ PASS |
+| Format check             | ✅ PASS |
+| Typecheck                | ✅ PASS |
+| Unit Tests               | ✅ 1551 passed |
+| Integration Tests        | ✅ Workflow 241; router 23; tool 11; streaming 26 |
+| Evaluation Suite         | ✅ 5/5 |
+| Frontend tests           | ✅ 268 passed (43 files); build pass |
+| Platform Readiness       | ✅ Confirmed |
+| Baseline Audit Published | ✅ [post-mvp-v2-epic7-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic7-phase-0-baseline-audit.md) |
 
 ---
 
@@ -1856,3 +1859,4 @@ No prompt, tool, or message content is ever attached to a span, metric, or log f
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
 | 1       | 2026-08-07 | Initial epic draft — Part I design + Part II 11-phase execution plan (Phases 0–10). Not started. |
 | 1.1     | 2026-08-07 | Added Trace Sampling Strategy, Metric Cardinality Policy, and Span Naming Convention sections; explicit streaming `llm.complete` span lifecycle; pricing table lifecycle clarification (no retroactive recalculation); evaluation reproducibility metadata (`model`/`model_version`/`temperature`/`seed`/`prompt_version`) on `EvalCaseResult`; flagged `ObservabilityStore` as a provisional façade to collapse into `UsageAggregator` in Phase 6 if it adds no logic. Part I + Phases 1, 2, 5, 6, 7, 8 sync. Not started. |
+| 1.2     | 2026-08-07 | Phase 0 complete: baseline audit published; quality gates verified (1551 backend, 268 frontend, eval 5/5, 89.05% coverage). Part II only. |
