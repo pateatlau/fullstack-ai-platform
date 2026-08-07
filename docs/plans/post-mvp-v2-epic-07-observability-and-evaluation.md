@@ -2,7 +2,7 @@
 epic: v2-07
 title: Observability & Evaluation
 status: in_progress
-version: 1.12
+version: 1.13
 depends_on: [v2-06]
 provides:
   [
@@ -793,7 +793,7 @@ _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post
 | Agent Framework          | Completed (Epic 01); `AGENT_RUNTIME_ENABLED` behind flag          |
 | Memory subsystem         | Completed (Epic 05); `MEMORY_ENABLED` behind flag                 |
 | Workflow Engine          | Completed (Epic 06); `WORKFLOW_ENGINE_ENABLED` behind flag        |
-| Observability            | Phase 0 complete — existing `UsageEvent` / `SqlUsageStore.record()` token-usage assets; OTel tracing, metrics, cost, REST API, and evaluation extensions unimplemented (Phase 1+) |
+| Observability            | Phase 1 complete — OTel TracerRegistry/MeterRegistry bootstrap, span helper scaffolds, trace/span-id log correlation; pipeline instrumentation, cost, REST API, eval extensions remain Phase 2+ |
 
 ---
 
@@ -959,50 +959,50 @@ Establish the OpenTelemetry foundation: `TracerRegistry`/`MeterRegistry` with a 
 
 ## Package Structure
 
-- [ ] Create the `app/ai/observability/` package with `tracing/`, `metrics/`, `cost/`, `aggregation/` subpackages.
-- [ ] Add package exports through `__init__.py`.
-- [ ] Verify package imports are dependency-cycle free.
+- [x] Create the `app/ai/observability/` package with `tracing/`, `metrics/`, `cost/`, `aggregation/` subpackages.
+- [x] Add package exports through `__init__.py`.
+- [x] Verify package imports are dependency-cycle free.
 
 ## Dependencies
 
-- [ ] Add `opentelemetry-api`, `opentelemetry-sdk` to `pyproject.toml`.
-- [ ] Add an OTLP HTTP exporter package and a Prometheus exporter/reader package.
-- [ ] Pin versions consistent with `requires-python = ">=3.12"`.
+- [x] Add `opentelemetry-api`, `opentelemetry-sdk` to `pyproject.toml`.
+- [x] Add an OTLP HTTP exporter package and a Prometheus exporter/reader package.
+- [x] Pin versions consistent with `requires-python = ">=3.12"`.
 
 ## Tracer / Meter Registry
 
-- [ ] Implement `TracerRegistry.get_tracer(name) -> Tracer` — returns a real tracer when `OBSERVABILITY_ENABLED=true`, else OTel's `NoOpTracer`.
-- [ ] Configure a console `SpanExporter` by default; switch to an OTLP/HTTP exporter when `otel_exporter_otlp_endpoint` is set.
-- [ ] Configure a `ParentBased(TraceIdRatioBased(otel_traces_sample_ratio))` sampler per Part I § Trace Sampling Strategy; verify `.env.example` documents environment-specific recommended ratios (dev `1.0` / staging `0.25` / production `0.05`).
-- [ ] Implement `MeterRegistry.get_meter(name) -> Meter` with the same real/no-op split, backed by a Prometheus reader.
-- [ ] Ensure both registries initialize once per process (idempotent bootstrap in `app/main.py` startup).
-- [ ] Verify metric/cost recording paths (Phase 5) are wired independently of the trace sampler — a sampled-out span must never suppress a metric or cost record.
+- [x] Implement `TracerRegistry.get_tracer(name) -> Tracer` — returns a real tracer when `OBSERVABILITY_ENABLED=true`, else OTel's `NoOpTracer`.
+- [x] Configure a console `SpanExporter` by default; switch to an OTLP/HTTP exporter when `otel_exporter_otlp_endpoint` is set.
+- [x] Configure a `ParentBased(TraceIdRatioBased(otel_traces_sample_ratio))` sampler per Part I § Trace Sampling Strategy; verify `.env.example` documents environment-specific recommended ratios (dev `1.0` / staging `0.25` / production `0.05`).
+- [x] Implement `MeterRegistry.get_meter(name) -> Meter` with the same real/no-op split, backed by a Prometheus reader.
+- [x] Ensure both registries initialize once per process (idempotent bootstrap in `app/main.py` startup).
+- [x] Verify metric/cost recording paths (Phase 5) are wired independently of the trace sampler — a sampled-out span must never suppress a metric or cost record.
 
 ## Span Helper Scaffold
 
-- [ ] Implement the span helper module (`spans.py`) with the context-manager signatures frozen in Part I (bodies are no-ops / generic until Phases 2–4 wire real call sites).
-- [ ] Ensure span helpers sanitize any dynamic attribute via `app.core.logging.sanitize_value`.
-- [ ] Ensure span helpers catch and log (not raise) only OTel/telemetry exceptions at span open, attribute set, span close, and metric hooks — never wrap or catch the `yield` body / wrapped call.
-- [ ] Add fail-open tests covering both exception categories: (1) simulated telemetry failure → wrapped operation completes, warning logged; (2) simulated business failure from wrapped call → exception propagates unchanged.
+- [x] Implement the span helper module (`spans.py`) with the context-manager signatures frozen in Part I (bodies are no-ops / generic until Phases 2–4 wire real call sites).
+- [x] Ensure span helpers sanitize any dynamic attribute via `app.core.logging.sanitize_value`.
+- [x] Ensure span helpers catch and log (not raise) only OTel/telemetry exceptions at span open, attribute set, span close, and metric hooks — never wrap or catch the `yield` body / wrapped call.
+- [x] Add fail-open tests covering both exception categories: (1) simulated telemetry failure → wrapped operation completes, warning logged; (2) simulated business failure from wrapped call → exception propagates unchanged.
 
 ## Logging Correlation
 
-- [ ] Extend `correlation_id_middleware` to open an explicit per-request root span **`http.server`** when Observability is enabled (middleware/ASGI-created — no OTel HTTP auto-instrumentation).
-- [ ] Bind `trace_id`/`span_id` into log context alongside `request_id` from that root span when Observability is enabled.
-- [ ] Verify log context is unaffected (no `trace_id`/`span_id` keys) when the flag is off.
+- [x] Extend `correlation_id_middleware` to open an explicit per-request root span **`http.server`** when Observability is enabled (middleware/ASGI-created — no OTel HTTP auto-instrumentation).
+- [x] Bind `trace_id`/`span_id` into log context alongside `request_id` from that root span when Observability is enabled.
+- [x] Verify log context is unaffected (no `trace_id`/`span_id` keys) when the flag is off.
 
 ## Configuration
 
-- [ ] Add `OBSERVABILITY_ENABLED` feature flag (default `false`).
-- [ ] Add `otel_service_name`, `otel_exporter_otlp_endpoint`, `otel_traces_sample_ratio` settings.
-- [ ] Preserve backward compatibility when disabled.
+- [x] Add `OBSERVABILITY_ENABLED` feature flag (default `false`).
+- [x] Add `otel_service_name`, `otel_exporter_otlp_endpoint`, `otel_traces_sample_ratio` settings.
+- [x] Preserve backward compatibility when disabled.
 
 ## Testing
 
-- [ ] Add `TracerRegistry`/`MeterRegistry` real-vs-no-op tests.
-- [ ] Add in-memory span exporter tests verifying span helper attribute sanitization.
-- [ ] Add logging-correlation tests (flag on/off).
-- [ ] Add package import tests.
+- [x] Add `TracerRegistry`/`MeterRegistry` real-vs-no-op tests.
+- [x] Add in-memory span exporter tests verifying span helper attribute sanitization.
+- [x] Add logging-correlation tests (flag on/off).
+- [x] Add package import tests.
 
 **Verify**
 
@@ -1012,10 +1012,10 @@ Establish the OpenTelemetry foundation: `TracerRegistry`/`MeterRegistry` with a 
 
 Additional verification:
 
-- [ ] Flag off yields a genuine no-op tracer/meter (zero exporter calls).
-- [ ] Flag on yields a real tracer/meter with a console exporter by default.
-- [ ] No circular imports detected.
-- [ ] Feature flag defaults to disabled.
+- [x] Flag off yields a genuine no-op tracer/meter (zero exporter calls).
+- [x] Flag on yields a real tracer/meter with a console exporter by default.
+- [x] No circular imports detected.
+- [x] Feature flag defaults to disabled.
 
 **Acceptance**
 
@@ -1041,7 +1041,14 @@ Additional verification:
 
 **Completion Record**
 
-_Filled upon phase completion._
+| Metric                   | Result |
+| ------------------------ | ------ |
+| Lint                     | ✅ PASS |
+| Typecheck                | ✅ PASS |
+| Phase 1 unit tests       | ✅ 17 passed (`tests/ai/observability/`) |
+| Public APIs frozen       | ✅ TracerRegistry, MeterRegistry, span helpers |
+| Pipeline wiring          | ✅ None (infrastructure-only) |
+| User confirmation        | ⏳ Pending |
 
 ---
 
@@ -1948,3 +1955,4 @@ No prompt, tool, or message content is ever attached to a span, metric, or log f
 | 1.10    | 2026-08-07 | Phase 0/Baseline status: acknowledge existing `UsageEvent`/`SqlUsageStore.record()`; Epic 07 OTel/metrics/cost/API/eval extensions remain unimplemented. Part II only. |
 | 1.11    | 2026-08-07 | Fix Part II `# Phase …` heading hierarchy: promote Steps subsections from `###` to `##` (Phases 0–10). Part II only. |
 | 1.12    | 2026-08-07 | Workflow background tracing: capture full originating `SpanContext` at `start_run()` for run-level span links; best-effort + crash-recovery (no link) behavior. Part I § Workflow Spans + Phase 4 sync. |
+| 1.13    | 2026-08-07 | Phase 1 complete: OTel TracerRegistry/MeterRegistry bootstrap, span helper scaffolds, trace/span-id log correlation, 17 unit tests. Part II only. |

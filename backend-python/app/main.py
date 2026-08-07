@@ -12,6 +12,8 @@ from app.ai.deps import (
     get_tool_registry,
     reconcile_workflow_runs_at_startup,
 )
+from app.ai.observability.metrics.meter import MeterRegistry
+from app.ai.observability.tracing.provider import TracerRegistry
 from app.ai.tools.registration import register_mcp_tools, register_production_tools
 from app.core.config import get_settings
 from app.core.cors import CORS_EXPOSE_HEADER_NAMES, DEV_ORIGIN_REGEX
@@ -30,6 +32,8 @@ logger = get_logger(__name__)
 async def lifespan(_: FastAPI):
     """App lifespan: register tools, MCP servers (if enabled), then cleanup."""
     setup_logging(settings)
+    TracerRegistry.initialize(settings)
+    MeterRegistry.initialize(settings)
     settings.log_development_warnings(logger)
 
     # Register V1 production tools

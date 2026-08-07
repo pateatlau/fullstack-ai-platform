@@ -217,6 +217,20 @@ class Settings(BaseSettings):
     workflow_approval_timeout_hours: int = Field(default=0, ge=0)
     workflow_run_retention_days: int = Field(default=90, ge=1)
 
+    # V2 Epic 7 Phase 1: Observability infrastructure flag (default false).
+    # When true: registers OTel TracerProvider/MeterProvider, span helpers, and
+    # trace/span-id log correlation. Pipeline instrumentation, cost accounting,
+    # REST API, and evaluation extensions are not wired until later phases.
+    # Flag-off keeps all Epic 06 pipeline paths unchanged.
+    observability_enabled: bool = False
+
+    # OpenTelemetry configuration (honoured only when OBSERVABILITY_ENABLED=true).
+    otel_service_name: str = "fullstack-ai-platform"
+    # Empty string selects the console span exporter (dev default).
+    otel_exporter_otlp_endpoint: str = ""
+    # Dev-safe default — override per environment (staging 0.25, production 0.05).
+    otel_traces_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, value: object) -> str:
