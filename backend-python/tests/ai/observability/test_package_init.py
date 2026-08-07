@@ -23,6 +23,7 @@ def test_public_api_surface_matches_locked_scope() -> None:
         "ObservabilityDisabledError",
         "ObservabilityError",
         "TracerRegistry",
+        "TracingLLMProvider",
         "agent_span",
         "format_span_context",
         "get_meter",

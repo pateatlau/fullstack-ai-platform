@@ -2,7 +2,7 @@
 epic: v2-07
 title: Observability & Evaluation
 status: in_progress
-version: 1.13
+version: 1.14
 depends_on: [v2-06]
 provides:
   [
@@ -793,7 +793,7 @@ _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post
 | Agent Framework          | Completed (Epic 01); `AGENT_RUNTIME_ENABLED` behind flag                                                                                                                                        |
 | Memory subsystem         | Completed (Epic 05); `MEMORY_ENABLED` behind flag                                                                                                                                               |
 | Workflow Engine          | Completed (Epic 06); `WORKFLOW_ENGINE_ENABLED` behind flag                                                                                                                                      |
-| Observability            | Phase 1 complete — OTel TracerRegistry/MeterRegistry bootstrap, span helper scaffolds, trace/span-id log correlation; pipeline instrumentation, cost, REST API, eval extensions remain Phase 2+ |
+| Observability            | Phase 2 complete — `TracingLLMProvider`, `ProviderFactory` wrapping, `PromptManager` prompt spans; cost, REST API, eval extensions remain Phase 5+ |
 
 ---
 
@@ -803,7 +803,7 @@ _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post
 | ----- | --------------------------------------------- | ------ | ----------- |
 | 0     | Baseline Audit                                | XS     | Completed   |
 | 1     | Tracing & Metrics Foundation                  | M      | Completed   |
-| 2     | LLM Provider & Prompt Tracing                 | M      | Not Started |
+| 2     | LLM Provider & Prompt Tracing                 | M      | Completed   |
 | 3     | Tool & Agent Tracing                          | M      | Not Started |
 | 4     | RAG, Memory, Voice & Workflow Tracing         | L      | Not Started |
 | 5     | Token & Cost Metrics                          | L      | Not Started |
@@ -1071,26 +1071,26 @@ Instrument every LLM call and every prompt render with spans and latency/token a
 
 ## LLM Tracing
 
-- [ ] Implement `TracingLLMProvider` wrapping `complete_chat`, `complete_chat_with_tools`, and `stream_chat`.
-- [ ] Open a span named `llm.complete` (`llm_span(provider, model, streaming)`) around each call; record `provider`, `model`, `streaming`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `finish_reason`, `latency_ms` as span attributes (per Part I § Tracing Domains, `llm.complete` is the fixed span name; provider/model are attributes, not name components).
-- [ ] Implement the streaming span lifecycle exactly per Part I § LLM Spans: start the `llm.complete` span immediately before issuing the `stream_chat` request; keep it open across every yielded chunk (no per-chunk child span); close it only after the async generator is exhausted.
-- [ ] Record `prompt_tokens`/`completion_tokens`/`total_tokens` on the span from the terminal chunk's usage payload only — never from intermediate chunks; **do not** call `CostCalculator` or write usage here (cost is owned by `SqlUsageStore.record()` at the service layer).
-- [ ] Wrap the provider returned by `ProviderFactory.get_provider()` only when `OBSERVABILITY_ENABLED=true`; return the concrete provider unmodified otherwise.
-- [ ] Verify no individual provider adapter file (`openai_provider.py`, `anthropic_provider.py`, `gemini_provider.py`, `groq_provider.py`) is modified.
+- [x] Implement `TracingLLMProvider` wrapping `complete_chat`, `complete_chat_with_tools`, and `stream_chat`.
+- [x] Open a span named `llm.complete` (`llm_span(provider, model, streaming)`) around each call; record `provider`, `model`, `streaming`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `finish_reason`, `latency_ms` as span attributes (per Part I § Tracing Domains, `llm.complete` is the fixed span name; provider/model are attributes, not name components).
+- [x] Implement the streaming span lifecycle exactly per Part I § LLM Spans: start the `llm.complete` span immediately before issuing the `stream_chat` request; keep it open across every yielded chunk (no per-chunk child span); close it only after the async generator is exhausted.
+- [x] Record `prompt_tokens`/`completion_tokens`/`total_tokens` on the span from the terminal chunk's usage payload only — never from intermediate chunks; **do not** call `CostCalculator` or write usage here (cost is owned by `SqlUsageStore.record()` at the service layer).
+- [x] Wrap the provider returned by `ProviderFactory.get_provider()` only when `OBSERVABILITY_ENABLED=true`; return the concrete provider unmodified otherwise.
+- [x] Verify no individual provider adapter file (`openai_provider.py`, `anthropic_provider.py`, `gemini_provider.py`, `groq_provider.py`) is modified.
 
 ## Prompt Tracing
 
-- [ ] Wrap `PromptManager.render()` with `prompt_span(category, name, version)`.
-- [ ] Record `variable_count`, `rendered_length_chars` as attributes; never the rendered text.
-- [ ] Verify rendering behaviour and return value are unchanged.
+- [x] Wrap `PromptManager.render()` with `prompt_span(category, name, version)`.
+- [x] Record `variable_count`, `rendered_length_chars` as attributes; never the rendered text.
+- [x] Verify rendering behaviour and return value are unchanged.
 
 ## Testing
 
-- [ ] Add `TracingLLMProvider` tests (fake provider + in-memory span exporter) for `complete_chat`, `complete_chat_with_tools`, `stream_chat`.
-- [ ] Add a streaming lifecycle test: exactly one `llm.complete` span per `stream_chat` call (not one per chunk), span duration covers the full stream; usage/cost persistence verified at `SqlUsageStore.record()` (exactly once, terminal chunk).
-- [ ] Add `ProviderFactory` wrapping tests (flag on/off).
-- [ ] Add `PromptManager` span tests (attributes present, content absent).
-- [ ] Add failure-mode tests: a span/attribute error never fails the LLM call or prompt render.
+- [x] Add `TracingLLMProvider` tests (fake provider + in-memory span exporter) for `complete_chat`, `complete_chat_with_tools`, `stream_chat`.
+- [x] Add a streaming lifecycle test: exactly one `llm.complete` span per `stream_chat` call (not one per chunk), span duration covers the full stream; usage/cost persistence verified at `SqlUsageStore.record()` (exactly once, terminal chunk).
+- [x] Add `ProviderFactory` wrapping tests (flag on/off).
+- [x] Add `PromptManager` span tests (attributes present, content absent).
+- [x] Add failure-mode tests: a span/attribute error never fails the LLM call or prompt render.
 
 **Verify**
 
@@ -1098,9 +1098,9 @@ Instrument every LLM call and every prompt render with spans and latency/token a
 
 Additional verification:
 
-- [ ] LLM spans carry token/latency attributes and no message content.
-- [ ] Prompt spans carry category/name/version and no rendered content.
-- [ ] Chat, RAG, and tool-calling flows behave identically with the flag on or off.
+- [x] LLM spans carry token/latency attributes and no message content.
+- [x] Prompt spans carry category/name/version and no rendered content.
+- [x] Chat, RAG, and tool-calling flows behave identically with the flag on or off.
 
 **Acceptance**
 
@@ -1114,7 +1114,14 @@ Additional verification:
 
 **Completion Record**
 
-_Filled upon phase completion._
+| Metric               | Result                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| Lint                 | ✅ PASS                                                                                 |
+| Typecheck            | ✅ PASS                                                                                 |
+| Phase 2 unit tests   | ✅ 13 passed (`test_llm_tracing.py`, `test_prompt_tracing.py`)                          |
+| Provider adapters    | ✅ Unmodified (`openai`, `anthropic`, `gemini`, `groq`)                                 |
+| Pipeline wiring      | ✅ `TracingLLMProvider`, `ProviderFactory`, `PromptManager.render()`                    |
+| User confirmation    | ⏳ Pending                                                                              |
 
 ---
 
@@ -1956,3 +1963,4 @@ No prompt, tool, or message content is ever attached to a span, metric, or log f
 | 1.11    | 2026-08-07 | Fix Part II `# Phase …` heading hierarchy: promote Steps subsections from `###` to `##` (Phases 0–10). Part II only.                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 1.12    | 2026-08-07 | Workflow background tracing: capture full originating `SpanContext` at `start_run()` for run-level span links; best-effort + crash-recovery (no link) behavior. Part I § Workflow Spans + Phase 4 sync.                                                                                                                                                                                                                                                                                                                     |
 | 1.13    | 2026-08-07 | Phase 1 complete: OTel TracerRegistry/MeterRegistry bootstrap, span helper scaffolds, trace/span-id log correlation, 17 unit tests. Part II only.                                                                                                                                                                                                                                                                                                                                                                           |
+| 1.14    | 2026-08-07 | Phase 2 complete: TracingLLMProvider, ProviderFactory wrapping, PromptManager prompt_span wiring, token-count span attribute allowlist, 13 unit tests. Part II only.                                                                                                                                                                                                                                                                                                                                                          |
