@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
-from opentelemetry.trace import Span, Status, StatusCode
+from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
 from app.ai.observability.tracing.provider import get_tracer
 from app.core.logging import get_logger, sanitize_value
@@ -69,13 +69,14 @@ def _set_span_attributes(span: Span, attributes: Mapping[str, Any]) -> None:
 def _observability_span(
     span_name: str,
     *,
+    kind: SpanKind = SpanKind.INTERNAL,
     attributes: Mapping[str, Any] | None = None,
 ) -> Generator[Span | None, None, None]:
     """Open a named span; telemetry failures are fail-open, business errors propagate."""
     span: Span | None = None
     token: object | None = None
     try:
-        span = get_tracer(__name__).start_span(span_name)
+        span = get_tracer(__name__).start_span(span_name, kind=kind)
         if attributes:
             _set_span_attributes(span, attributes)
         token = otel_context.attach(trace.set_span_in_context(span))
@@ -135,7 +136,8 @@ def http_server_span(
     """Root HTTP request span — opened by correlation middleware when enabled."""
     with _observability_span(
         "http.server",
-        attributes={"http.method": method, "http.route": route},
+        kind=SpanKind.SERVER,
+        attributes={"http.request.method": method, "http.route": route},
     ) as span:
         yield span
 

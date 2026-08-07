@@ -159,20 +159,20 @@ EvalRunReport ── RegressionChecker (NEW) ── baseline-report.json (git-tr
 
 ## Locked Architectural Decisions
 
-| Topic                        | Decision                                                                                                                                                                                                                                                                                                                                                                                                       | Deferred to                                                           |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| Tracing SDK                  | OpenTelemetry API/SDK only; console exporter by default (dev), OTLP/HTTP exporter when `otel_exporter_otlp_endpoint` is configured; no vendor SDK imported into core packages                                                                                                                                                                                                                                  | Vendor-specific auto-instrumentation bundle → future                  |
-| Flag semantics               | `OBSERVABILITY_ENABLED=false` installs a process-wide no-op `TracerProvider`/`MeterProvider` (OTel API's own `NoOpTracer`, not a bespoke reimplementation) — zero spans, zero metrics, zero overhead beyond a cheap flag check; every instrumented call site's return value and behavior is unchanged                                                                                                          | —                                                                     |
-| Span/metric content policy   | Attributes carry identifiers, counts, durations, provider/model names, and status only; reuses `app.core.logging.sanitize_value` for any dynamic attribute; prompt text, tool arguments/results, and chat message content are never attached to a span or metric                                                                                                                                               | Opt-in payload capture for debugging → future                         |
+| Topic                        | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Deferred to                                                           |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Tracing SDK                  | OpenTelemetry API/SDK only; console exporter by default (dev), OTLP/HTTP exporter when `otel_exporter_otlp_endpoint` is configured; no vendor SDK imported into core packages                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Vendor-specific auto-instrumentation bundle → future                  |
+| Flag semantics               | `OBSERVABILITY_ENABLED=false` installs a process-wide no-op `TracerProvider`/`MeterProvider` (OTel API's own `NoOpTracer`, not a bespoke reimplementation) — zero spans, zero metrics, zero overhead beyond a cheap flag check; every instrumented call site's return value and behavior is unchanged                                                                                                                                                                                                                                                                                                                                                                                                                         | —                                                                     |
+| Span/metric content policy   | Attributes carry identifiers, counts, durations, provider/model names, and status only; reuses `app.core.logging.sanitize_value` for any dynamic attribute; prompt text, tool arguments/results, and chat message content are never attached to a span or metric                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Opt-in payload capture for debugging → future                         |
 | Trace context propagation    | Per-HTTP-request trace context flows through OTel's built-in context + the existing `correlation_id` middleware (`request_id` and `trace_id`/`span_id` both bound into log context). Workflow runs that continue on an in-process `asyncio.Task` after the triggering request completes start a new root span with a span **link** to the full originating `SpanContext` (`trace_id`, `span_id`, `trace_flags`, `trace_state`) captured at `WorkflowManager.start_run()` (or at `flush_deferred_run_schedules()` when `defer_schedule=True`); link omitted when context is invalid/unavailable (best-effort, never blocks scheduling). `resume()` / `reconcile_orphaned_runs()` open a fresh run-level root span with no link | Fully distributed cross-service trace propagation → future            |
-| Cost accounting              | Static, versioned per-(provider, model) rates in git-tracked `config/model_pricing.yaml`; `pricing_version` version-lock at startup; computed at `SqlUsageStore.record()` from `ProviderUsage`; approximate, not billing-grade; unknown provider/model → `cost_usd=NULL`, never blocks the usage write                                                                                                       | Real-time reconciliation with provider invoices → future              |
-| Metrics exposition           | OTel `MeterProvider` backed by a Prometheus reader, exposed at `GET /metrics` in Prometheus text format; contains only aggregate counters/histograms (no owner-identifying labels); owner-scoped cost/usage detail is served only via the authenticated REST API, never `/metrics`                                                                                                                             | Push-based metrics backend (CloudWatch, Datadog) integration → future |
-| Evaluation framework         | Extends `app/ai/evaluation/` in place; `agent`/`workflow` levels reuse `DefaultAgent`/`WorkflowManager`. Targeted `--level agent`/`--level workflow` may skip when prerequisites are missing; **`--level all` and `--update-baseline` require** enabled agent/workflow runtimes and Postgres — no skipped agent/workflow cases in comparable baselines |
-| Regression baseline          | Git-tracked `tests/data/evaluation/baseline-report.json` from `EvalRunReport`; includes **run environment metadata** (feature flags + Postgres availability); `RegressionChecker` rejects or flags non-comparable baselines before pass-rate/latency comparison |
-| Dashboard scope              | The frontend Observability dashboard shows only DB-native, owner-scoped cost/usage summaries sourced from `usage_events`; trace/span visualization is explicitly out of scope — operators point any OTLP-compatible backend (Jaeger, Tempo, Grafana, Datadog) at the configured exporter                                                                                                                       | Embedded trace explorer UI → future                                   |
-| Instrumentation failure mode | Telemetry boundaries only: exceptions from **span creation**, **metric recording**, or **cost computation** are caught, logged at `warning`, and suppressed (fail-open). Exceptions from the wrapped provider call, tool execution, or other business/request logic are **never** caught by observability helpers — they propagate unchanged. Tests (Phase 1+) must cover both categories: telemetry failure → operation succeeds; business failure → exception propagates. | —                                                                     |
-| Trace sampling               | `ParentBased(TraceIdRatioBased(otel_traces_sample_ratio))` sampler; ratio defaults are environment-dependent (see § Trace Sampling Strategy) — 100% sampling is a dev-only default, never assumed safe in production                                                                                                                                                                                             | Tail-based / adaptive sampling → future                              |
-| Metric cardinality            | Metric label **keys and values** are bounded (see § Metric Cardinality Policy): fixed allowlisted label names, value registries with normalization to `other` for unknown/plugin-defined inputs; no per-user, per-session, per-request, or per-trace label |
+| Cost accounting              | Static, versioned per-(provider, model) rates in git-tracked `config/model_pricing.yaml`; `pricing_version` version-lock at startup; computed at `SqlUsageStore.record()` from `ProviderUsage`; approximate, not billing-grade; unknown provider/model → `cost_usd=NULL`, never blocks the usage write                                                                                                                                                                                                                                                                                                                                                                                                                        | Real-time reconciliation with provider invoices → future              |
+| Metrics exposition           | OTel `MeterProvider` backed by a Prometheus reader, exposed at `GET /metrics` in Prometheus text format; contains only aggregate counters/histograms (no owner-identifying labels); owner-scoped cost/usage detail is served only via the authenticated REST API, never `/metrics`                                                                                                                                                                                                                                                                                                                                                                                                                                            | Push-based metrics backend (CloudWatch, Datadog) integration → future |
+| Evaluation framework         | Extends `app/ai/evaluation/` in place; `agent`/`workflow` levels reuse `DefaultAgent`/`WorkflowManager`. Targeted `--level agent`/`--level workflow` may skip when prerequisites are missing; **`--level all` and `--update-baseline` require** enabled agent/workflow runtimes and Postgres — no skipped agent/workflow cases in comparable baselines                                                                                                                                                                                                                                                                                                                                                                        |
+| Regression baseline          | Git-tracked `tests/data/evaluation/baseline-report.json` from `EvalRunReport`; includes **run environment metadata** (feature flags + Postgres availability); `RegressionChecker` rejects or flags non-comparable baselines before pass-rate/latency comparison                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Dashboard scope              | The frontend Observability dashboard shows only DB-native, owner-scoped cost/usage summaries sourced from `usage_events`; trace/span visualization is explicitly out of scope — operators point any OTLP-compatible backend (Jaeger, Tempo, Grafana, Datadog) at the configured exporter                                                                                                                                                                                                                                                                                                                                                                                                                                      | Embedded trace explorer UI → future                                   |
+| Instrumentation failure mode | Telemetry boundaries only: exceptions from **span creation**, **metric recording**, or **cost computation** are caught, logged at `warning`, and suppressed (fail-open). Exceptions from the wrapped provider call, tool execution, or other business/request logic are **never** caught by observability helpers — they propagate unchanged. Tests (Phase 1+) must cover both categories: telemetry failure → operation succeeds; business failure → exception propagates.                                                                                                                                                                                                                                                   | —                                                                     |
+| Trace sampling               | `ParentBased(TraceIdRatioBased(otel_traces_sample_ratio))` sampler; ratio defaults are environment-dependent (see § Trace Sampling Strategy) — 100% sampling is a dev-only default, never assumed safe in production                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Tail-based / adaptive sampling → future                               |
+| Metric cardinality           | Metric label **keys and values** are bounded (see § Metric Cardinality Policy): fixed allowlisted label names, value registries with normalization to `other` for unknown/plugin-defined inputs; no per-user, per-session, per-request, or per-trace label                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ---
 
@@ -180,11 +180,11 @@ EvalRunReport ── RegressionChecker (NEW) ── baseline-report.json (git-tr
 
 Sampling controls trace volume/cost without disabling observability. The platform uses OTel's standard `ParentBased(TraceIdRatioBased(ratio))` sampler — a child span always follows its parent's sampling decision, and root spans are sampled at `otel_traces_sample_ratio`.
 
-| Environment | Recommended `otel_traces_sample_ratio` | Rationale |
-| ----------- | --------------------------------------- | --------- |
-| Development / local | `1.0` (100%) | Full visibility while iterating; low volume |
-| Staging / CI | `0.25` (25%) | Enough signal to catch regressions without excessive exporter/storage load |
-| Production | `0.05` (5%) | Representative sampling at sustained volume; raise temporarily when investigating an incident |
+| Environment         | Recommended `otel_traces_sample_ratio` | Rationale                                                                                     |
+| ------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Development / local | `1.0` (100%)                           | Full visibility while iterating; low volume                                                   |
+| Staging / CI        | `0.25` (25%)                           | Enough signal to catch regressions without excessive exporter/storage load                    |
+| Production          | `0.05` (5%)                            | Representative sampling at sustained volume; raise temporarily when investigating an incident |
 
 `otel_traces_sample_ratio` defaults to `1.0` (dev-safe) in `app/core/config.py`; deployment configuration (`.env` per environment) **must** override it for staging/production. This is called out explicitly so a 100% default is never silently carried into production. Sampling never affects metrics or cost accounting — `CostCalculator` and the OTel `Meter` instruments record every request regardless of trace sampling decisions, since cost/metric accuracy must not depend on trace volume.
 
@@ -318,10 +318,10 @@ Call sites (`ChatService`, `ToolChatService`, …) pass terminal `ProviderUsage`
 **Schema** (YAML):
 
 ```yaml
-pricing_version: "2026-08"   # required; immutable identifier for this exact rate set
+pricing_version: '2026-08' # required; immutable identifier for this exact rate set
 models:
-  - provider: openai         # must match ProviderFactory provider name
-    model: gpt-4o            # exact model string used in usage_events.model
+  - provider: openai # must match ProviderFactory provider name
+    model: gpt-4o # exact model string used in usage_events.model
     input_usd_per_1k: 0.0025 # USD per 1,000 prompt/input tokens (≥ 0)
     output_usd_per_1k: 0.0100 # USD per 1,000 completion/output tokens (≥ 0)
 ```
@@ -359,22 +359,22 @@ Prometheus-backed metrics degrade badly under high label cardinality — unbound
 
 ### Allowed label keys (forbidden keys never attached)
 
-| Allowed label keys | Forbidden label keys |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| Allowed label keys                                                       | Forbidden label keys                                                                                                                                                      |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `provider`, `model`, `tool_name`, `workflow_type`, `node_type`, `status` | `user_id`, `guest_id`, `session_id`, `request_id`, `trace_id`, `span_id`, `workflow_run_id`, `workflow_node_id`, `message_id`, prompt text, error messages, arbitrary IDs |
 
 ### Value registries and normalization
 
 All metric recording goes through `normalize_metric_label(dimension, raw_value) -> str` (`app/ai/observability/metrics/labels.py`). Unknown, empty, or plugin/MCP-defined raw values map to **`other`** — never emitted as-is.
 
-| Label key | Accepted values (registry) | Normalization rule |
-| --------- | -------------------------- | ------------------ |
-| `provider` | `openai`, `gemini`, `groq`, `anthropic`, `other` | Match `ProviderFactory` provider names; else `other` |
-| `model` | Each `model` key in the active `ModelPricingTable`, plus `other` | Exact match against pricing-table registry loaded at startup; else `other` (raw model strings never pass through unbounded) |
-| `tool_name` | `web_search`, `workflow_execution`, `other` | Match registered production tool names (`ToolRegistry`); MCP and future plugin tools → `other` |
-| `node_type` | `task`, `llm`, `agent`, `router`, `fork`, `join`, `approval`, `terminal`, `other` | Match `NodeType` (`app/ai/workflow/models/definition.py`); else `other` |
-| `workflow_type` | `standard`, `other` | Platform/API-authored workflow definitions → `standard`; plugin-defined or unrecognized → `other` |
-| `status` | `succeeded`, `failed`, `skipped`, `other` | Map domain terminal outcomes to this set; unrecognized → `other` |
+| Label key       | Accepted values (registry)                                                        | Normalization rule                                                                                                          |
+| --------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `provider`      | `openai`, `gemini`, `groq`, `anthropic`, `other`                                  | Match `ProviderFactory` provider names; else `other`                                                                        |
+| `model`         | Each `model` key in the active `ModelPricingTable`, plus `other`                  | Exact match against pricing-table registry loaded at startup; else `other` (raw model strings never pass through unbounded) |
+| `tool_name`     | `web_search`, `workflow_execution`, `other`                                       | Match registered production tool names (`ToolRegistry`); MCP and future plugin tools → `other`                              |
+| `node_type`     | `task`, `llm`, `agent`, `router`, `fork`, `join`, `approval`, `terminal`, `other` | Match `NodeType` (`app/ai/workflow/models/definition.py`); else `other`                                                     |
+| `workflow_type` | `standard`, `other`                                                               | Platform/API-authored workflow definitions → `standard`; plugin-defined or unrecognized → `other`                           |
+| `status`        | `succeeded`, `failed`, `skipped`, `other`                                         | Map domain terminal outcomes to this set; unrecognized → `other`                                                            |
 
 Registries are code-defined constants (and pricing-table-derived model keys) — not free-form runtime strings. Adding a new **metric-visible** provider, production tool, or node type requires updating the registry (and tests); adding a priced model requires a `model_pricing.yaml` entry (existing model key or falls through to `other` until added).
 
@@ -386,9 +386,9 @@ This distinguishes **metrics** (Prometheus labels — bounded keys **and** value
 
 Builds on the existing `EvalLevel = Literal["prompt", "retrieval", "e2e"]` (`app/ai/evaluation/datasets.py`) rather than replacing it.
 
-| New level  | Runner               | Reuses                                                                                             | Skip / fail policy                                                                 |
-| ---------- | -------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `agent`    | `AgentEvalRunner`    | `DefaultAgent`, fake provider/tools (same pattern as `_EvalLLMProvider`)                           | **`--level agent` only:** skip (not fail) when `AGENT_RUNTIME_ENABLED=false`. **`--level all` / `--update-baseline`:** hard fail if agent runtime disabled |
+| New level  | Runner               | Reuses                                                                                             | Skip / fail policy                                                                                                                                                                |
+| ---------- | -------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`    | `AgentEvalRunner`    | `DefaultAgent`, fake provider/tools (same pattern as `_EvalLLMProvider`)                           | **`--level agent` only:** skip (not fail) when `AGENT_RUNTIME_ENABLED=false`. **`--level all` / `--update-baseline`:** hard fail if agent runtime disabled                        |
 | `workflow` | `WorkflowEvalRunner` | `WorkflowManager`, `PostgresWorkflowStore` (same Postgres-availability check as `retrieval`/`e2e`) | **`--level workflow` only:** skip when `WORKFLOW_ENGINE_ENABLED=false` or Postgres unavailable. **`--level all` / `--update-baseline`:** hard fail if either prerequisite missing |
 
 Each new case type extends `EvalCase`/`EvalDataset` parsing (`_parse_agent_case`, `_parse_workflow_case`) with the same "fail fast on malformed dataset" validation style as existing case parsers. `EvalCaseResult` gains only the fields needed for these levels (e.g., `tool_calls_correct: bool | None`, `terminal_status: str | None`) — no unrelated schema churn.
@@ -403,24 +403,24 @@ Each new case type extends `EvalCase`/`EvalDataset` parsing (`_parse_agent_case`
 
 **Run environment metadata:** `EvalRunReport` gains a top-level `run_environment` object (persisted in `baseline-report.json` and every `.eval/eval-report.json`), captured once per run:
 
-| Field | Purpose |
-| ----- | ------- |
-| `agent_runtime_enabled` | `settings.agent_runtime_enabled` at run time |
-| `workflow_engine_enabled` | `settings.workflow_engine_enabled` at run time |
-| `postgres_available` | Result of the same Postgres connectivity check used by `RetrievalEvalRunner`/`WorkflowEvalRunner` |
-| `pgvector_available` | Result of `pgvector_available()` (required for `retrieval`/`e2e`) |
+| Field                     | Purpose                                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------- |
+| `agent_runtime_enabled`   | `settings.agent_runtime_enabled` at run time                                                      |
+| `workflow_engine_enabled` | `settings.workflow_engine_enabled` at run time                                                    |
+| `postgres_available`      | Result of the same Postgres connectivity check used by `RetrievalEvalRunner`/`WorkflowEvalRunner` |
+| `pgvector_available`      | Result of `pgvector_available()` (required for `retrieval`/`e2e`)                                 |
 
 Baselines used for regression (`--update-baseline`, CI `--check-regression`) must be produced from `--level all` with all four prerequisites satisfied and **zero skipped `agent`/`workflow` cases**. `RegressionChecker` rejects baselines where `run_environment` indicates disabled flags/unavailable Postgres or where any `agent`/`workflow` result has `skipped=true`.
 
 **Per-case reproducibility metadata:**
 
-| Field | Purpose |
-| ---------------- | ------------------------------------------------------------------------------- |
-| `model` | The concrete model used for the case (already implied by `settings_snapshot`, now recorded per-case for `agent`/`e2e`/`workflow` levels where a model override is possible) |
-| `model_version` | Provider-reported model version/snapshot id, when the provider exposes one |
-| `temperature` | Sampling temperature used for the case |
-| `seed` | Deterministic seed, when the provider supports one (`None` otherwise — never fabricated) |
-| `prompt_version` | The `PromptManager` category/name/version rendered for the case |
+| Field            | Purpose                                                                                                                                                                     |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`          | The concrete model used for the case (already implied by `settings_snapshot`, now recorded per-case for `agent`/`e2e`/`workflow` levels where a model override is possible) |
+| `model_version`  | Provider-reported model version/snapshot id, when the provider exposes one                                                                                                  |
+| `temperature`    | Sampling temperature used for the case                                                                                                                                      |
+| `seed`           | Deterministic seed, when the provider supports one (`None` otherwise — never fabricated)                                                                                    |
+| `prompt_version` | The `PromptManager` category/name/version rendered for the case                                                                                                             |
 
 This metadata is additive to the existing `EvalCaseResult`/`EvalRunReport` schema (`schema_version` bump, not a breaking change) and is included in `baseline-report.json` so a future regression finding can be explained by "the model/prompt/temperature changed" rather than left ambiguous.
 
@@ -487,37 +487,37 @@ tests/data/evaluation/baseline-report.json  # NEW — git-tracked regression bas
 
 ## Component Responsibilities
 
-| Component          | Responsibility                                                                                                         | Inputs                                                   | Outputs                            | Dependencies                                      |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------- | ------------------------------------------------- |
-| TracerRegistry     | Provides the process-wide OTel `Tracer` (real or no-op) based on `OBSERVABILITY_ENABLED`                               | Settings                                                 | `Tracer`                           | OpenTelemetry SDK                                 |
-| MeterRegistry      | Provides the process-wide OTel `Meter` (real or no-op) and the Prometheus reader                                       | Settings                                                 | `Meter`, Prometheus registry       | OpenTelemetry SDK                                 |
-| Span helpers       | Thin context managers that open a named span, attach sanitized attributes, and record status/duration                  | Domain-specific args (provider, tool name, node id, ...) | Closed span                        | TracerRegistry, `app.core.logging.sanitize_value` |
-| TracingLLMProvider | Wraps a concrete `LLMProvider` to emit `llm_span`s and record token/latency metrics without touching provider adapters | Wrapped `LLMProvider`                                    | Same `LLMProvider` interface       | Span helpers, MeterRegistry                       |
-| CostCalculator     | Converts `ProviderUsage` into an approximate `cost_usd` — invoked only from `SqlUsageStore.record()`                 | provider, model, `ProviderUsage`                         | `float \| None`, `pricing_version` | ModelPricingTable; `SqlUsageStore`                |
-| ModelPricingTable  | Loads git-tracked `config/model_pricing.yaml`; validates schema and version lock at startup | `observability_cost_pricing_file`, `observability_cost_pricing_version` | Pricing entry or `None` per lookup | YAML file on disk; `Settings` version lock |
-| UsageAggregator    | Owner-scoped aggregation queries over `usage_events` (by day / provider / model)                                       | owner id, date range, group-by                           | Usage/cost summary rows            | SQLAlchemy `AsyncSession`                         |
-| ObservabilityStore | Read façade the router depends on (keeps router thin, mirrors `WorkflowStore`-style separation) — **provisional; collapse into `UsageAggregator` in Phase 6 if it adds no logic of its own (see Storage Architecture)** | Aggregation requests                                     | Summary DTOs                       | UsageAggregator                                   |
-| AgentEvalRunner    | Runs an `agent`-level eval case through `DefaultAgent` with fake provider/tools                                        | `EvalCase`                                               | `EvalCaseResult`                   | `DefaultAgent`, `AGENT_RUNTIME_ENABLED`           |
-| WorkflowEvalRunner | Runs a `workflow`-level eval case through `WorkflowManager` to a terminal run status                                   | `EvalCase`                                               | `EvalCaseResult`                   | `WorkflowManager`, `WORKFLOW_ENGINE_ENABLED`      |
-| RegressionChecker  | Compares a new `EvalRunReport` against the git-tracked baseline                                                        | Current + baseline reports, tolerances                   | `RegressionResult`                 | —                                                 |
+| Component          | Responsibility                                                                                                                                                                                                          | Inputs                                                                  | Outputs                            | Dependencies                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------- |
+| TracerRegistry     | Provides the process-wide OTel `Tracer` (real or no-op) based on `OBSERVABILITY_ENABLED`                                                                                                                                | Settings                                                                | `Tracer`                           | OpenTelemetry SDK                                 |
+| MeterRegistry      | Provides the process-wide OTel `Meter` (real or no-op) and the Prometheus reader                                                                                                                                        | Settings                                                                | `Meter`, Prometheus registry       | OpenTelemetry SDK                                 |
+| Span helpers       | Thin context managers that open a named span, attach sanitized attributes, and record status/duration                                                                                                                   | Domain-specific args (provider, tool name, node id, ...)                | Closed span                        | TracerRegistry, `app.core.logging.sanitize_value` |
+| TracingLLMProvider | Wraps a concrete `LLMProvider` to emit `llm_span`s and record token/latency metrics without touching provider adapters                                                                                                  | Wrapped `LLMProvider`                                                   | Same `LLMProvider` interface       | Span helpers, MeterRegistry                       |
+| CostCalculator     | Converts `ProviderUsage` into an approximate `cost_usd` — invoked only from `SqlUsageStore.record()`                                                                                                                    | provider, model, `ProviderUsage`                                        | `float \| None`, `pricing_version` | ModelPricingTable; `SqlUsageStore`                |
+| ModelPricingTable  | Loads git-tracked `config/model_pricing.yaml`; validates schema and version lock at startup                                                                                                                             | `observability_cost_pricing_file`, `observability_cost_pricing_version` | Pricing entry or `None` per lookup | YAML file on disk; `Settings` version lock        |
+| UsageAggregator    | Owner-scoped aggregation queries over `usage_events` (by day / provider / model)                                                                                                                                        | owner id, date range, group-by                                          | Usage/cost summary rows            | SQLAlchemy `AsyncSession`                         |
+| ObservabilityStore | Read façade the router depends on (keeps router thin, mirrors `WorkflowStore`-style separation) — **provisional; collapse into `UsageAggregator` in Phase 6 if it adds no logic of its own (see Storage Architecture)** | Aggregation requests                                                    | Summary DTOs                       | UsageAggregator                                   |
+| AgentEvalRunner    | Runs an `agent`-level eval case through `DefaultAgent` with fake provider/tools                                                                                                                                         | `EvalCase`                                                              | `EvalCaseResult`                   | `DefaultAgent`, `AGENT_RUNTIME_ENABLED`           |
+| WorkflowEvalRunner | Runs a `workflow`-level eval case through `WorkflowManager` to a terminal run status                                                                                                                                    | `EvalCase`                                                              | `EvalCaseResult`                   | `WorkflowManager`, `WORKFLOW_ENGINE_ENABLED`      |
+| RegressionChecker  | Compares a new `EvalRunReport` against the git-tracked baseline                                                                                                                                                         | Current + baseline reports, tolerances                                  | `RegressionResult`                 | —                                                 |
 
 ---
 
 ## Span Naming Convention
 
-Every span helper opens a span under a **fixed, dot-namespaced name** — `{domain}.{action}` — regardless of the dynamic provider/tool/node involved. The dynamic detail (which provider, which tool, which node) is an **attribute**, never part of the name. This keeps span names low-cardinality and consistent across every OTLP-compatible backend, and is a distinct concern from the § Metric Cardinality Policy (which governs Prometheus *labels*, not trace *span names*).
+Every span helper opens a span under a **fixed, dot-namespaced name** — `{domain}.{action}` — regardless of the dynamic provider/tool/node involved. The dynamic detail (which provider, which tool, which node) is an **attribute**, never part of the name. This keeps span names low-cardinality and consistent across every OTLP-compatible backend, and is a distinct concern from the § Metric Cardinality Policy (which governs Prometheus _labels_, not trace _span names_).
 
-| Helper | Span name | Fixed regardless of |
-| -------------- | ------------------------------------------- | ------------------------------------------------------ |
-| HTTP root (middleware) | `http.server` | route / method / status (attributes) |
-| `prompt_span` | `prompt.render` | category / name / version (attributes) |
-| `llm_span` | `llm.complete` | provider / model / streaming (attributes) |
-| `tool_span` | `tool.execute` | tool name (attribute) |
-| `agent_span` | `agent.iteration`, `agent.tool_call`, `agent.reflection` | iteration index / tool name (attributes) |
-| `rag_span` | `rag.retrieve` | top_k / retrieved_count (attributes) |
-| `memory_span` | `memory.retrieve`, `memory.extract` | — |
-| `workflow_span` | `workflow.run`, `workflow.node` | run id / node type / attempt (attributes) |
-| `voice_span` | `voice.session` | — |
+| Helper                 | Span name                                                | Fixed regardless of                       |
+| ---------------------- | -------------------------------------------------------- | ----------------------------------------- |
+| HTTP root (middleware) | `http.server`                                            | route / method / status (attributes)      |
+| `prompt_span`          | `prompt.render`                                          | category / name / version (attributes)    |
+| `llm_span`             | `llm.complete`                                           | provider / model / streaming (attributes) |
+| `tool_span`            | `tool.execute`                                           | tool name (attribute)                     |
+| `agent_span`           | `agent.iteration`, `agent.tool_call`, `agent.reflection` | iteration index / tool name (attributes)  |
+| `rag_span`             | `rag.retrieve`                                           | top_k / retrieved_count (attributes)      |
+| `memory_span`          | `memory.retrieve`, `memory.extract`                      | —                                         |
+| `workflow_span`        | `workflow.run`, `workflow.node`                          | run id / node type / attempt (attributes) |
+| `voice_span`           | `voice.session`                                          | —                                         |
 
 Every span helper function signature in Part I (e.g. `llm_span(provider, model, streaming)`) takes these dynamic values as **arguments used to populate attributes**, not to construct the span name.
 
@@ -651,16 +651,16 @@ Internal (may evolve): OTel SDK bootstrap internals, Prometheus registry wiring,
 
 ## Configuration defaults
 
-| Setting                                            | Default                         |
-| -------------------------------------------------- | ------------------------------- |
-| `OBSERVABILITY_ENABLED`                            | **`false`**                     |
-| `otel_service_name`                                | `"fullstack-ai-platform"`       |
-| `otel_exporter_otlp_endpoint`                      | `""` (empty = console exporter) |
-| `otel_traces_sample_ratio`                         | `1.0` (dev-safe default — **override per environment**; see § Trace Sampling Strategy) |
-| `observability_cost_pricing_file`                  | `"config/model_pricing.yaml"` (relative to `backend-python/`; git-tracked canonical table) |
+| Setting                                            | Default                                                                                             |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `OBSERVABILITY_ENABLED`                            | **`false`**                                                                                         |
+| `otel_service_name`                                | `"fullstack-ai-platform"`                                                                           |
+| `otel_exporter_otlp_endpoint`                      | `""` (empty = console exporter)                                                                     |
+| `otel_traces_sample_ratio`                         | `1.0` (dev-safe default — **override per environment**; see § Trace Sampling Strategy)              |
+| `observability_cost_pricing_file`                  | `"config/model_pricing.yaml"` (relative to `backend-python/`; git-tracked canonical table)          |
 | `observability_cost_pricing_version`               | `"2026-08"` (must match `pricing_version` in the pricing file at startup — see § ModelPricingTable) |
-| `observability_regression_pass_rate_tolerance_pct` | `5.0`                           |
-| `observability_regression_latency_tolerance_pct`   | `20.0`                          |
+| `observability_regression_pass_rate_tolerance_pct` | `5.0`                                                                                               |
+| `observability_regression_latency_tolerance_pct`   | `20.0`                                                                                              |
 
 ---
 
@@ -783,16 +783,16 @@ Observability is additive. Existing chat, RAG, MCP, memory, voice, agent, tool, 
 
 _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post-mvp-v2-epic7-phase-0-baseline-audit.md)._
 
-| Area                     | State                                                             |
-| ------------------------ | ----------------------------------------------------------------- |
-| Backend tests / coverage | 1551 passed, 89.05% `app/`                                        |
-| Frontend tests           | 268 passed (43 files); lint + build pass                          |
-| Integration tests        | Workflow suite 241 passed; router 23; tool 11; streaming 26       |
-| Eval CLI                 | 5/5 passed                                                        |
-| Chat pipeline            | Stable — `ChatService` + `UnifiedChatService`, Memory fully wired |
-| Agent Framework          | Completed (Epic 01); `AGENT_RUNTIME_ENABLED` behind flag          |
-| Memory subsystem         | Completed (Epic 05); `MEMORY_ENABLED` behind flag                 |
-| Workflow Engine          | Completed (Epic 06); `WORKFLOW_ENGINE_ENABLED` behind flag        |
+| Area                     | State                                                                                                                                                                                           |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backend tests / coverage | 1551 passed, 89.05% `app/`                                                                                                                                                                      |
+| Frontend tests           | 268 passed (43 files); lint + build pass                                                                                                                                                        |
+| Integration tests        | Workflow suite 241 passed; router 23; tool 11; streaming 26                                                                                                                                     |
+| Eval CLI                 | 5/5 passed                                                                                                                                                                                      |
+| Chat pipeline            | Stable — `ChatService` + `UnifiedChatService`, Memory fully wired                                                                                                                               |
+| Agent Framework          | Completed (Epic 01); `AGENT_RUNTIME_ENABLED` behind flag                                                                                                                                        |
+| Memory subsystem         | Completed (Epic 05); `MEMORY_ENABLED` behind flag                                                                                                                                               |
+| Workflow Engine          | Completed (Epic 06); `WORKFLOW_ENGINE_ENABLED` behind flag                                                                                                                                      |
 | Observability            | Phase 1 complete — OTel TracerRegistry/MeterRegistry bootstrap, span helper scaffolds, trace/span-id log correlation; pipeline instrumentation, cost, REST API, eval extensions remain Phase 2+ |
 
 ---
@@ -802,7 +802,7 @@ _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post
 | Phase | Name                                          | Effort | Status      |
 | ----- | --------------------------------------------- | ------ | ----------- |
 | 0     | Baseline Audit                                | XS     | Completed   |
-| 1     | Tracing & Metrics Foundation                  | M      | Not Started |
+| 1     | Tracing & Metrics Foundation                  | M      | Completed   |
 | 2     | LLM Provider & Prompt Tracing                 | M      | Not Started |
 | 3     | Tool & Agent Tracing                          | M      | Not Started |
 | 4     | RAG, Memory, Voice & Workflow Tracing         | L      | Not Started |
@@ -923,16 +923,16 @@ Additional verification:
 
 **Completion Record**
 
-| Metric                   | Result |
-| ------------------------ | ------ |
-| Lint                     | ✅ PASS |
-| Format check             | ✅ PASS |
-| Typecheck                | ✅ PASS |
-| Unit Tests               | ✅ 1551 passed |
-| Integration Tests        | ✅ Workflow 241; router 23; tool 11; streaming 26 |
-| Evaluation Suite         | ✅ 5/5 |
-| Frontend tests           | ✅ 268 passed (43 files); build pass |
-| Platform Readiness       | ✅ Confirmed |
+| Metric                   | Result                                                                                                  |
+| ------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Lint                     | ✅ PASS                                                                                                 |
+| Format check             | ✅ PASS                                                                                                 |
+| Typecheck                | ✅ PASS                                                                                                 |
+| Unit Tests               | ✅ 1551 passed                                                                                          |
+| Integration Tests        | ✅ Workflow 241; router 23; tool 11; streaming 26                                                       |
+| Evaluation Suite         | ✅ 5/5                                                                                                  |
+| Frontend tests           | ✅ 268 passed (43 files); build pass                                                                    |
+| Platform Readiness       | ✅ Confirmed                                                                                            |
 | Baseline Audit Published | ✅ [post-mvp-v2-epic7-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic7-phase-0-baseline-audit.md) |
 
 ---
@@ -1041,14 +1041,14 @@ Additional verification:
 
 **Completion Record**
 
-| Metric                   | Result |
-| ------------------------ | ------ |
-| Lint                     | ✅ PASS |
-| Typecheck                | ✅ PASS |
-| Phase 1 unit tests       | ✅ 17 passed (`tests/ai/observability/`) |
-| Public APIs frozen       | ✅ TracerRegistry, MeterRegistry, span helpers |
-| Pipeline wiring          | ✅ None (infrastructure-only) |
-| User confirmation        | ⏳ Pending |
+| Metric             | Result                                         |
+| ------------------ | ---------------------------------------------- |
+| Lint               | ✅ PASS                                        |
+| Typecheck          | ✅ PASS                                        |
+| Phase 1 unit tests | ✅ 17 passed (`tests/ai/observability/`)       |
+| Public APIs frozen | ✅ TracerRegistry, MeterRegistry, span helpers |
+| Pipeline wiring    | ✅ None (infrastructure-only)                  |
+| User confirmation  | ⏳ Pending                                     |
 
 ---
 
@@ -1834,20 +1834,20 @@ One PR per phase.
 
 # Risks
 
-| Risk                                            | Mitigation                                                                                             |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Tracing/metrics overhead in hot paths           | No-op tracer/meter when disabled; span helpers are lightweight context managers; fail-open on error    |
-| Content leakage via span/metric attributes      | Reuses `app.core.logging.sanitize_value`; explicit "never attach content" invariant + tests            |
-| Vendor lock-in via SDK choice                   | OTel API only; exporter is configuration, not code                                                     |
-| Inaccurate cost figures                         | Explicitly "approximate, not billing-grade"; `NULL` for unpriced models rather than a wrong number     |
-| Pricing table drift from real provider pricing  | Git-tracked `config/model_pricing.yaml` + `pricing_version` version-lock; every row stamped so historical figures remain interpretable after a table update |
-| Regression baseline staleness                   | `--update-baseline` is an explicit, separate, auditable CLI action                                     |
+| Risk                                            | Mitigation                                                                                                                                                        |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tracing/metrics overhead in hot paths           | No-op tracer/meter when disabled; span helpers are lightweight context managers; fail-open on error                                                               |
+| Content leakage via span/metric attributes      | Reuses `app.core.logging.sanitize_value`; explicit "never attach content" invariant + tests                                                                       |
+| Vendor lock-in via SDK choice                   | OTel API only; exporter is configuration, not code                                                                                                                |
+| Inaccurate cost figures                         | Explicitly "approximate, not billing-grade"; `NULL` for unpriced models rather than a wrong number                                                                |
+| Pricing table drift from real provider pricing  | Git-tracked `config/model_pricing.yaml` + `pricing_version` version-lock; every row stamped so historical figures remain interpretable after a table update       |
+| Regression baseline staleness                   | `--update-baseline` is an explicit, separate, auditable CLI action                                                                                                |
 | Workflow background-task trace correlation gaps | Best-effort full-`SpanContext` span link at `start_run()`; link omitted when invalid/unavailable (incl. crash recovery); fresh run-level root span always created |
-| `/metrics` exposing sensitive data              | Aggregate-only counters/histograms; explicit invariant + tests forbidding owner-identifying labels     |
-| Accidental 100% sampling in production          | `otel_traces_sample_ratio` deployment config must override the dev-safe `1.0` default; documented per-environment recommendations (§ Trace Sampling Strategy) |
-| Prometheus cardinality explosion                | Bounded label keys **and** values via `normalize_metric_label()` + registries; MCP/plugin/unknown inputs → `other`; high-cardinality raw values stay on spans |
-| Feature regression                              | `OBSERVABILITY_ENABLED` flag-off parity                                                                |
-| Eval framework fork/divergence                  | Extends `app/ai/evaluation/` in place; no parallel evaluation system                                   |
+| `/metrics` exposing sensitive data              | Aggregate-only counters/histograms; explicit invariant + tests forbidding owner-identifying labels                                                                |
+| Accidental 100% sampling in production          | `otel_traces_sample_ratio` deployment config must override the dev-safe `1.0` default; documented per-environment recommendations (§ Trace Sampling Strategy)     |
+| Prometheus cardinality explosion                | Bounded label keys **and** values via `normalize_metric_label()` + registries; MCP/plugin/unknown inputs → `other`; high-cardinality raw values stay on spans     |
+| Feature regression                              | `OBSERVABILITY_ENABLED` flag-off parity                                                                                                                           |
+| Eval framework fork/divergence                  | Extends `app/ai/evaluation/` in place; no parallel evaluation system                                                                                              |
 
 ---
 
@@ -1900,7 +1900,7 @@ No prompt, tool, or message content is ever attached to a span, metric, or log f
 | `pyproject.toml`                                          | modify        | Core     | 1       |
 | `app/ai/observability/**`                                 | create        | Core     | 1–5     |
 | `app/core/config.py`                                      | modify        | Core     | 1, 5, 8 |
-| `backend-python/config/model_pricing.yaml`                  | create        | Core     | 5       |
+| `backend-python/config/model_pricing.yaml`                | create        | Core     | 5       |
 | `backend-python/.env.example`                             | modify        | Docs     | 1, 5    |
 | `app/main.py`                                             | modify        | Adapter  | 1, 6    |
 | `app/middleware/correlation_id.py`                        | modify        | Adapter  | 1       |
@@ -1940,19 +1940,19 @@ No prompt, tool, or message content is ever attached to a span, metric, or log f
 
 ## Changelog
 
-| Version | Date       | Changes                                                                                          |
-| ------- | ---------- | ------------------------------------------------------------------------------------------------ |
-| 1       | 2026-08-07 | Initial epic draft — Part I design + Part II 11-phase execution plan (Phases 0–10). Not started. |
+| Version | Date       | Changes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1       | 2026-08-07 | Initial epic draft — Part I design + Part II 11-phase execution plan (Phases 0–10). Not started.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | 1.1     | 2026-08-07 | Added Trace Sampling Strategy, Metric Cardinality Policy, and Span Naming Convention sections; explicit streaming `llm.complete` span lifecycle; pricing table lifecycle clarification (no retroactive recalculation); evaluation reproducibility metadata (`model`/`model_version`/`temperature`/`seed`/`prompt_version`) on `EvalCaseResult`; flagged `ObservabilityStore` as a provisional façade to collapse into `UsageAggregator` in Phase 6 if it adds no logic. Part I + Phases 1, 2, 5, 6, 7, 8 sync. Not started. |
-| 1.2     | 2026-08-07 | Phase 0 complete: baseline audit published; quality gates verified (1551 backend, 268 frontend, eval 5/5, 89.05% coverage). Part II only. |
-| 1.3     | 2026-08-07 | Clarify instrumentation failure mode: telemetry-only fail-open; business exceptions propagate; dual-category tests required. Part I + Phases 1, 10 sync. |
-| 1.4     | 2026-08-07 | Request tracing: explicit Phase 1 middleware-created `http.server` root span (no OTel HTTP auto-instrumentation). Part I + End-to-End sequence + Span Naming sync. |
-| 1.5     | 2026-08-07 | Cost accounting: `SqlUsageStore.record()` is the single usage-recording boundary; `CostCalculator` invoked inside `record()` only (not in `TracingLLMProvider`). Part I + Phases 2, 5 sync. |
-| 1.6     | 2026-08-07 | ModelPricingTable canonical source: `config/model_pricing.yaml` schema, validation, version lock, update process. Part I § Configuration defaults + Phase 5 sync. |
-| 1.7     | 2026-08-07 | Metric Cardinality Policy: bound label values via registries + `normalize_metric_label()` (`other` fallback); Phase 5 value-cardinality tests. Part I + Phase 5 sync. |
-| 1.8     | 2026-08-07 | Eval baseline/regression: `--level all`/`--update-baseline` require agent/workflow + Postgres; `run_environment` in baseline-report.json; regression rejects non-comparable baselines. Part I + Phases 7, 8 sync. |
-| 1.9     | 2026-08-07 | Remove `observability_usage_retention_days` from Configuration defaults (no retention behavior/owner in epic). Part I only. |
-| 1.10    | 2026-08-07 | Phase 0/Baseline status: acknowledge existing `UsageEvent`/`SqlUsageStore.record()`; Epic 07 OTel/metrics/cost/API/eval extensions remain unimplemented. Part II only. |
-| 1.11    | 2026-08-07 | Fix Part II `# Phase …` heading hierarchy: promote Steps subsections from `###` to `##` (Phases 0–10). Part II only. |
-| 1.12    | 2026-08-07 | Workflow background tracing: capture full originating `SpanContext` at `start_run()` for run-level span links; best-effort + crash-recovery (no link) behavior. Part I § Workflow Spans + Phase 4 sync. |
-| 1.13    | 2026-08-07 | Phase 1 complete: OTel TracerRegistry/MeterRegistry bootstrap, span helper scaffolds, trace/span-id log correlation, 17 unit tests. Part II only. |
+| 1.2     | 2026-08-07 | Phase 0 complete: baseline audit published; quality gates verified (1551 backend, 268 frontend, eval 5/5, 89.05% coverage). Part II only.                                                                                                                                                                                                                                                                                                                                                                                   |
+| 1.3     | 2026-08-07 | Clarify instrumentation failure mode: telemetry-only fail-open; business exceptions propagate; dual-category tests required. Part I + Phases 1, 10 sync.                                                                                                                                                                                                                                                                                                                                                                    |
+| 1.4     | 2026-08-07 | Request tracing: explicit Phase 1 middleware-created `http.server` root span (no OTel HTTP auto-instrumentation). Part I + End-to-End sequence + Span Naming sync.                                                                                                                                                                                                                                                                                                                                                          |
+| 1.5     | 2026-08-07 | Cost accounting: `SqlUsageStore.record()` is the single usage-recording boundary; `CostCalculator` invoked inside `record()` only (not in `TracingLLMProvider`). Part I + Phases 2, 5 sync.                                                                                                                                                                                                                                                                                                                                 |
+| 1.6     | 2026-08-07 | ModelPricingTable canonical source: `config/model_pricing.yaml` schema, validation, version lock, update process. Part I § Configuration defaults + Phase 5 sync.                                                                                                                                                                                                                                                                                                                                                           |
+| 1.7     | 2026-08-07 | Metric Cardinality Policy: bound label values via registries + `normalize_metric_label()` (`other` fallback); Phase 5 value-cardinality tests. Part I + Phase 5 sync.                                                                                                                                                                                                                                                                                                                                                       |
+| 1.8     | 2026-08-07 | Eval baseline/regression: `--level all`/`--update-baseline` require agent/workflow + Postgres; `run_environment` in baseline-report.json; regression rejects non-comparable baselines. Part I + Phases 7, 8 sync.                                                                                                                                                                                                                                                                                                           |
+| 1.9     | 2026-08-07 | Remove `observability_usage_retention_days` from Configuration defaults (no retention behavior/owner in epic). Part I only.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 1.10    | 2026-08-07 | Phase 0/Baseline status: acknowledge existing `UsageEvent`/`SqlUsageStore.record()`; Epic 07 OTel/metrics/cost/API/eval extensions remain unimplemented. Part II only.                                                                                                                                                                                                                                                                                                                                                      |
+| 1.11    | 2026-08-07 | Fix Part II `# Phase …` heading hierarchy: promote Steps subsections from `###` to `##` (Phases 0–10). Part II only.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 1.12    | 2026-08-07 | Workflow background tracing: capture full originating `SpanContext` at `start_run()` for run-level span links; best-effort + crash-recovery (no link) behavior. Part I § Workflow Spans + Phase 4 sync.                                                                                                                                                                                                                                                                                                                     |
+| 1.13    | 2026-08-07 | Phase 1 complete: OTel TracerRegistry/MeterRegistry bootstrap, span helper scaffolds, trace/span-id log correlation, 17 unit tests. Part II only.                                                                                                                                                                                                                                                                                                                                                                           |
