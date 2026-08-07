@@ -10,7 +10,7 @@
 
 ## Executive Summary
 
-Baseline audit before implementing Epic 07 (Observability & Evaluation). All quality gates pass. Epic 06 (Workflow Engine) Phase 12 is complete and release summary is published. No observability subsystem exists yet — clean baseline. Platform is ready for Phase 1 (tracing & metrics foundation).
+Baseline audit before implementing Epic 07 (Observability & Evaluation). All quality gates pass. Epic 06 (Workflow Engine) Phase 12 is complete and release summary is published. No observability subsystem exists yet — clean baseline. Platform baseline verified; **Phase 0 complete**. Phase 1 requires separate user confirmation.
 
 **Key findings:**
 
@@ -20,7 +20,9 @@ Baseline audit before implementing Epic 07 (Observability & Evaluation). All qua
 - ✅ All architectural dependencies verified: logging, correlation middleware, usage store, providers, evaluation CLI, DI, feature flags
 - ❌ `OBSERVABILITY_ENABLED` absent; `app/ai/observability/` does not exist (expected Phase 1+)
 - ❌ OpenTelemetry SDK packages not yet in `pyproject.toml` (Phase 1 deliverable)
-- ⚠️ Epic 06 release doc lists "User authorizes Epic 07" unchecked — user has requested Phase 0 implementation
+- ⚠️ Epic 06 release doc: epic-level "User authorizes Epic 07" remains unchecked
+- ✅ **Phase 0 authorized** (user requested Phase 0 baseline audit)
+- ⬜ **Phase 1 not authorized** — explicit user confirmation pending
 
 ---
 
@@ -37,7 +39,7 @@ Baseline audit before implementing Epic 07 (Observability & Evaluation). All qua
 - `tests/ai/workflow/` — 23 test modules; workflow suite **241 passed**
 - Baseline from Epic 06 Phase 12: 1551 passed, 89.05%; current run: **1551 passed, 89.05%** (no regression)
 
-**Recommendation:** Epic 07 implementation may proceed.
+**Recommendation:** Epic 07 **Phase 0** is complete. Do not start Phase 1 until the user explicitly confirms.
 
 ---
 
@@ -220,20 +222,22 @@ Structured log metrics (V1/V2) exist in services (e.g. `retrieval_latency_ms`, w
 
 ## 10. Architecture Review
 
-### 10.1 Part I Architectural Invariants — Understood as Preconditions
+### 10.1 Part I Architectural Invariants — Phase 0 Evidence vs Phase 1+ Acceptance
 
-| Invariant | Precondition status |
-| --------- | ------------------- |
-| Provider-agnostic OTel API only; no vendor APM SDKs | ✅ No conflicting SDKs in codebase |
-| `OBSERVABILITY_ENABLED=false` → no-op Tracer/Meter, zero behaviour change | ✅ Flag absent; default-off pattern established by other flags |
-| Zero content leakage on spans/metrics | ✅ `sanitize_value` exists; policy documented |
-| Fail-open instrumentation | ✅ Pattern exists elsewhere (memory extraction catches all) |
-| Bounded metric cardinality | ✅ Policy documented; no metrics exist yet |
-| Reuse V1 evaluation harness in place | ✅ `app/ai/evaluation/` ready for extension |
-| Reuse `usage_events` table (additive columns only) | ✅ Table exists; no cost columns yet |
-| `TracingLLMProvider` at `ProviderFactory` only | ✅ Factory is single switch point |
-| Public APIs stable after Phase 1 | ✅ No observability public APIs yet |
-| Flag-off parity with Epic 06 behaviour | ✅ All pipelines operational at baseline |
+Phase 0 confirms **prerequisites and absence of conflicts** only. Invariants marked **Planned** are Part I requirements verified in Phase 1+ acceptance tests, not in this audit.
+
+| Invariant | Phase 0 status | Notes |
+| --------- | -------------- | ----- |
+| Provider-agnostic OTel API only; no vendor APM SDKs | **Verified** | No `opentelemetry` or vendor APM imports in `backend-python/` |
+| `OBSERVABILITY_ENABLED=false` → no-op Tracer/Meter, zero behaviour change | **Planned** | Flag absent; default-off flag pattern exists in `config.py`; no-op behaviour unverified until Phase 1 |
+| Zero content leakage on spans/metrics | **Planned** (prerequisite met) | `sanitize_value` exists and is tested (`app/core/logging.py`); not yet applied to spans/metrics |
+| Fail-open instrumentation (telemetry boundaries only) | **Planned** | Part I requirement; analogous fail-open in memory extraction — observability dual-category tests in Phase 1 |
+| Bounded metric cardinality | **Planned** | Policy documented in epic Part I; no OTel metric instruments exist |
+| Reuse V1 evaluation harness in place | **Verified** | `app/ai/evaluation/` operational (`make eval` 5/5) |
+| Reuse `usage_events` table (additive columns only) | **Verified** | Table and `SqlUsageStore` exist; `cost_usd`/`pricing_version` absent (Phase 5) |
+| `TracingLLMProvider` at `ProviderFactory` only | **Planned** (prerequisite met) | `ProviderFactory.get_provider()` is the single switch point; wrapper not implemented (Phase 2) |
+| Public APIs stable after Phase 1 | **Planned** | No observability public APIs exist; stability is a Phase 1 exit criterion |
+| Flag-off parity with Epic 06 behaviour | **Planned** (baseline verified) | Epic 06 baseline tests pass without observability code; explicit `OBSERVABILITY_ENABLED=false` parity unverified until Phase 1+ / Phase 10 |
 
 ### 10.2 Epic 07 Integration Points (by Phase)
 
@@ -273,26 +277,26 @@ Per Part II **Reuse Existing Components** — all verified present:
 
 ## 11. Dependency Verification
 
-| Dependency | Status | Notes |
-| ---------- | ------ | ----- |
-| Epic 06 Workflow (predecessor) | ✅ | All phases complete; stable platform |
-| PostgreSQL | ✅ | Default `postgresql+asyncpg://...@localhost:5433/chatbot` |
-| Alembic migrations | ✅ | Head: `0007_workflow_tables.py` (7 migrations); next: `0008_observability_usage_cost` |
-| `usage_events` table | ✅ | Exists; no cost columns |
-| `ProviderFactory` / `LLMProvider` | ✅ | OpenAI, Gemini, Groq, Anthropic |
-| Feature flag infrastructure | ✅ | `agent_runtime_enabled`, `memory_enabled`, `voice_enabled`, `workflow_engine_enabled`, etc. |
-| OpenTelemetry SDK | ❌ | Phase 1 — `opentelemetry-api`, `opentelemetry-sdk`, OTLP HTTP exporter, Prometheus reader |
-| `OBSERVABILITY_ENABLED` | ❌ | Phase 1 deliverable |
-| Python | ✅ | `requires-python = ">=3.12"` in `pyproject.toml` |
+| Dependency | Phase 0 status | Notes |
+| ---------- | -------------- | ----- |
+| Epic 06 Workflow (predecessor) | **Verified** | All phases complete; stable platform |
+| PostgreSQL | **Verified** | Default `postgresql+asyncpg://...@localhost:5433/chatbot` |
+| Alembic migrations | **Verified** | Head: `0007_workflow_tables.py` (7 migrations); next: `0008_observability_usage_cost` |
+| `usage_events` table | **Verified** | Exists; no cost columns |
+| `ProviderFactory` / `LLMProvider` | **Verified** | OpenAI, Gemini, Groq, Anthropic |
+| Feature flag infrastructure | **Verified** | `agent_runtime_enabled`, `memory_enabled`, `voice_enabled`, `workflow_engine_enabled`, etc. |
+| Python | **Verified** | `requires-python = ">=3.12"` in `pyproject.toml` |
+| OpenTelemetry SDK packages | **Phase 1 prerequisite** (not present) | Not in `pyproject.toml`; planned: `opentelemetry-api`, `opentelemetry-sdk`, OTLP HTTP exporter, Prometheus reader |
+| `OBSERVABILITY_ENABLED` / `app/ai/observability/` | **Phase 1 prerequisite** (not present) | Flag and package absent — expected Phase 1 deliverables |
 
 ---
 
-## 12. Platform Readiness
+## 12. Platform Test-Backed Baseline
 
-Verified via comprehensive test suite (no live manual smoke in this audit):
+Automated test evidence only — no live manual smoke tests or environment-specific validation in this audit:
 
-| Capability | Evidence |
-| ---------- | -------- |
+| Capability | Automated test evidence |
+| ---------- | ----------------------- |
 | Chat (plain + persistence) | `tests/test_chat_persistence.py`, `test_summarization_and_linking.py`, `test_chat_service_memory.py` |
 | Streaming SSE | `tests/test_unified_chat.py`, `tests/test_chat_stream.py` — **26 passed** |
 | RAG | `tests/test_rag_api.py`, `tests/test_rag_service.py`, `tests/ai/rag/` |
@@ -303,7 +307,7 @@ Verified via comprehensive test suite (no live manual smoke in this audit):
 | Voice | `tests/ai/voice/` — 11 test modules, `tests/test_voice_router.py` |
 | Workflow | `tests/ai/workflow/` — **241 passed**; router **23**; tool **11** |
 
-All subsystems operational at Epic 06 baseline; no blockers for additive observability layer.
+Epic 06 **test-backed baseline** recorded above. Live operational readiness is not confirmed in Phase 0. No Phase 0 blockers identified; Phase 1 prerequisites (OTel SDK, observability package, `OBSERVABILITY_ENABLED`) remain to be delivered and verified.
 
 ---
 
@@ -340,9 +344,18 @@ All subsystems operational at Epic 06 baseline; no blockers for additive observa
 
 ## 15. Implementation Readiness Checklist
 
-- [x] Epic 06 Phase 12 complete / authorized for Epic 07 (release published; user requested Phase 0)
-- [x] All required dependencies available (Postgres, providers, usage store, evaluation, DI)
-- [x] OpenTelemetry packages identified for Phase 1 (not yet installed)
+### Authorization
+
+- [x] Epic 06 Phase 12 complete (predecessor gate satisfied; release published)
+- [ ] Epic-level "User authorizes Epic 07" (Epic 06 release checklist — still unchecked in release doc)
+- [x] **Epic 07 Phase 0 authorized** (user requested Phase 0 baseline audit)
+- [ ] **Epic 07 Phase 1 authorized** (explicit user confirmation pending — not implied by Phase 0)
+
+### Readiness
+
+- [x] Phase 0 prerequisites available (Postgres, providers, usage store, evaluation, DI, extension points identified)
+- [ ] Phase 1 prerequisites present (OpenTelemetry SDK packages, `OBSERVABILITY_ENABLED`, `app/ai/observability/`) — tracked as Phase 1 deliverables, not verified in Phase 0
+- [x] OpenTelemetry package list identified for Phase 1 (not yet installed)
 - [x] Implementation order matches Part II (Phases 1–10)
 - [x] No architectural conflicts identified
 - [x] No observability implementation already exists
@@ -357,7 +370,7 @@ All subsystems operational at Epic 06 baseline; no blockers for additive observa
 
 ```bash
 Branch: feat/v2-epic-07-observability-and-evaluation-phase-00
-Working tree: audit doc + epic plan updates (+ generated .eval/eval-report.json from make eval)
+Working tree: audit doc + epic plan updates; ignored local artifact `backend-python/.eval/eval-report.json` (generated by `make eval`, listed in `.gitignore`)
 ```
 
 ---
@@ -375,7 +388,7 @@ Working tree: audit doc + epic plan updates (+ generated .eval/eval-report.json 
 | Frontend tests | ✅ **268** passed (43 files) |
 | Frontend build | ✅ PASS |
 | Workflow integration | ✅ **241** passed |
-| Platform readiness | ✅ Confirmed |
+| Test-backed baseline (automated) | ✅ Recorded (§12); live smoke not performed |
 | Observability subsystem | ❌ None (expected) |
 | Baseline audit published | ✅ This document |
 
@@ -383,7 +396,7 @@ Working tree: audit doc + epic plan updates (+ generated .eval/eval-report.json 
 
 ## 18. Recommendations
 
-1. **Proceed to Phase 1** — all gates green; clean observability baseline
+1. **Await Phase 1 authorization** — baseline gates are green; do not start implementation until the user explicitly confirms
 2. **Add `OBSERVABILITY_ENABLED=false`** before any behaviour change
 3. **Install OTel packages in Phase 1** — pin for Python ≥3.12
 4. **Instrument `WorkflowExecutor.execute_run()`** — map Part I `step()` naming to actual API in Phase 4
@@ -398,9 +411,10 @@ Working tree: audit doc + epic plan updates (+ generated .eval/eval-report.json 
 - [x] Quality gates passed
 - [x] Architecture verified
 - [x] No implementation blockers
-- [ ] User confirmation to proceed to Phase 1
+- [x] **Phase 0 authorized** (user requested Phase 0 baseline audit)
+- [ ] **Phase 1 authorization** — explicit user confirmation to proceed to Phase 1 (not implied by Phase 0 completion)
 
-**Next phase:** Phase 1 — Tracing & Metrics Foundation
+**Next phase (pending authorization):** Phase 1 — Tracing & Metrics Foundation
 **Branch:** `feat/v2-epic-07-observability-and-evaluation-phase-00`
 
 ---
