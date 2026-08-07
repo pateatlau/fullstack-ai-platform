@@ -36,6 +36,9 @@ __MACOSX/
 coverage.xml
 htmlcov/
 
+# Evaluation CLI output
+backend-python/.eval/eval-report.json
+
 # Python packaging/build
 build/
 dist/
@@ -62,5 +65,5 @@ dist-ssr/
 
 # Documentation for internal use only
 docs/prompts/
-docs/references/
+docs/references-internal/
 docs/plans-internal/
