@@ -10,8 +10,12 @@ from typing import Any, Literal
 
 import yaml
 
-EvalLevel = Literal["prompt", "retrieval", "e2e"]
+EvalLevel = Literal["prompt", "retrieval", "e2e", "agent", "workflow"]
 AnswerMatchMode = Literal["exact", "contains", "fuzzy"]
+
+WORKFLOW_FIXTURES_ROOT = (
+    Path(__file__).resolve().parents[3] / "tests" / "data" / "evaluation" / "workflows"
+)
 
 
 class EvalDatasetError(ValueError):
@@ -35,6 +39,17 @@ class EvalCase:
     prompt_variables: dict[str, object] = field(default_factory=dict)
     expected_render_contains: tuple[str, ...] = ()
     expected_render_exact: str | None = None
+    goal: str | None = None
+    instructions: str | None = None
+    expected_tool_calls: tuple[str, ...] = ()
+    expected_outcome: str | None = None
+    expected_outcome_match: AnswerMatchMode = "contains"
+    workflow_definition: dict[str, object] | None = None
+    workflow_fixture: str | None = None
+    trigger_input: dict[str, object] = field(default_factory=dict)
+    expected_terminal_status: str | None = None
+    model: str | None = None
+    temperature: float | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +97,17 @@ def filter_cases(dataset: EvalDataset, level: EvalLevel | None) -> tuple[EvalCas
     return tuple(case for case in dataset.cases if case.level == level)
 
 
+def load_workflow_fixture(filename: str) -> dict[str, object]:
+    """Load an inline workflow definition spec from a fixture file."""
+    path = WORKFLOW_FIXTURES_ROOT / filename
+    if not path.is_file():
+        raise EvalDatasetError(f"Workflow fixture not found: {path}")
+    raw = _read_dataset_file(path)
+    if not isinstance(raw, dict):
+        raise EvalDatasetError(f"Workflow fixture '{filename}' root must be a mapping.")
+    return raw
+
+
 def _read_dataset_file(path: Path) -> object:
     text = path.read_text(encoding="utf-8")
     suffix = path.suffix.lower()
@@ -113,7 +139,11 @@ def _parse_case(raw: dict[str, Any], *, index: int) -> EvalCase:
         return _parse_prompt_case(raw, case_id=case_id)
     if level == "retrieval":
         return _parse_retrieval_case(raw, case_id=case_id)
-    return _parse_e2e_case(raw, case_id=case_id)
+    if level == "e2e":
+        return _parse_e2e_case(raw, case_id=case_id)
+    if level == "agent":
+        return _parse_agent_case(raw, case_id=case_id)
+    return _parse_workflow_case(raw, case_id=case_id)
 
 
 def _parse_prompt_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
@@ -205,6 +235,136 @@ def _parse_e2e_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
     )
 
 
+def _parse_agent_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
+    goal = _require_str(raw, "goal", case_id=case_id)
+    instructions = raw.get("instructions")
+    if instructions is not None and not isinstance(instructions, str):
+        raise EvalDatasetError(
+            f"Case '{case_id}': instructions must be a string when provided."
+        )
+
+    expected_tool_calls = _parse_string_list(
+        raw.get("expected_tool_calls", []),
+        case_id=case_id,
+        field_name="expected_tool_calls",
+    )
+    expected_outcome = raw.get("expected_outcome")
+    if expected_outcome is not None and not isinstance(expected_outcome, str):
+        raise EvalDatasetError(
+            f"Case '{case_id}': expected_outcome must be a string when provided."
+        )
+    if not expected_tool_calls and expected_outcome is None:
+        raise EvalDatasetError(
+            f"Case '{case_id}': agent cases require expected_tool_calls "
+            "and/or expected_outcome."
+        )
+
+    match_mode = raw.get("expected_outcome_match", "contains")
+    if match_mode not in {"exact", "contains", "fuzzy"}:
+        raise EvalDatasetError(
+            f"Case '{case_id}': expected_outcome_match must be exact, contains, or fuzzy."
+        )
+
+    model = raw.get("model")
+    if model is not None and not isinstance(model, str):
+        raise EvalDatasetError(
+            f"Case '{case_id}': model must be a string when provided."
+        )
+
+    temperature = raw.get("temperature")
+    if temperature is not None and not isinstance(temperature, (int, float)):
+        raise EvalDatasetError(
+            f"Case '{case_id}': temperature must be a number when provided."
+        )
+
+    return EvalCase(
+        id=case_id,
+        level="agent",
+        goal=goal,
+        instructions=instructions,
+        expected_tool_calls=expected_tool_calls,
+        expected_outcome=expected_outcome,
+        expected_outcome_match=match_mode,  # type: ignore[arg-type]
+        model=model,
+        temperature=float(temperature) if temperature is not None else None,
+    )
+
+
+def _parse_workflow_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
+    inline_definition = raw.get("workflow_definition")
+    workflow_fixture = raw.get("workflow_fixture")
+    if inline_definition is None and workflow_fixture is None:
+        raise EvalDatasetError(
+            f"Case '{case_id}': workflow cases require workflow_definition "
+            "or workflow_fixture."
+        )
+    if inline_definition is not None and workflow_fixture is not None:
+        raise EvalDatasetError(
+            f"Case '{case_id}': provide workflow_definition or workflow_fixture, not both."
+        )
+    if inline_definition is not None and not isinstance(inline_definition, dict):
+        raise EvalDatasetError(
+            f"Case '{case_id}': workflow_definition must be a mapping."
+        )
+    if workflow_fixture is not None and not isinstance(workflow_fixture, str):
+        raise EvalDatasetError(
+            f"Case '{case_id}': workflow_fixture must be a string when provided."
+        )
+
+    expected_terminal_status = _require_str(
+        raw, "expected_terminal_status", case_id=case_id
+    )
+
+    trigger_input = raw.get("trigger_input", {})
+    if trigger_input is None:
+        trigger_input = {}
+    if not isinstance(trigger_input, dict):
+        raise EvalDatasetError(
+            f"Case '{case_id}': trigger_input must be a mapping when provided."
+        )
+
+    if inline_definition is not None:
+        _validate_workflow_definition_spec(inline_definition, case_id=case_id)
+
+    return EvalCase(
+        id=case_id,
+        level="workflow",
+        workflow_definition=inline_definition,
+        workflow_fixture=workflow_fixture,
+        trigger_input=trigger_input,
+        expected_terminal_status=expected_terminal_status,
+    )
+
+
+def _validate_workflow_definition_spec(
+    spec: dict[str, object], *, case_id: str
+) -> None:
+    for key in ("name", "entry_node_id", "nodes", "edges"):
+        if key not in spec:
+            raise EvalDatasetError(
+                f"Case '{case_id}': workflow_definition missing required field '{key}'."
+            )
+    nodes = spec.get("nodes")
+    edges = spec.get("edges")
+    if not isinstance(nodes, list) or not nodes:
+        raise EvalDatasetError(
+            f"Case '{case_id}': workflow_definition.nodes must be a non-empty list."
+        )
+    if not isinstance(edges, list):
+        raise EvalDatasetError(
+            f"Case '{case_id}': workflow_definition.edges must be a list."
+        )
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            raise EvalDatasetError(
+                f"Case '{case_id}': workflow_definition.nodes[{index}] must be a mapping."
+            )
+        if "id" not in node or "type" not in node:
+            raise EvalDatasetError(
+                f"Case '{case_id}': workflow nodes require id and type."
+            )
+
+
 def _parse_uuid_list(value: object, *, case_id: str) -> tuple[uuid.UUID, ...]:
     if value is None:
         return ()
@@ -227,6 +387,18 @@ def _parse_uuid_list(value: object, *, case_id: str) -> tuple[uuid.UUID, ...]:
     return tuple(parsed)
 
 
+def _parse_string_list(
+    value: object, *, case_id: str, field_name: str
+) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise EvalDatasetError(
+            f"Case '{case_id}': {field_name} must be a list of strings."
+        )
+    return tuple(value)
+
+
 def _require_str(
     raw: dict[str, Any],
     key: str,
@@ -246,8 +418,15 @@ def _require_str(
 
 def _require_level(raw: dict[str, Any], *, index: int) -> EvalLevel:
     value = raw.get("level")
-    if value not in {"prompt", "retrieval", "e2e"}:
+    if value not in {
+        "prompt",
+        "retrieval",
+        "e2e",
+        "agent",
+        "workflow",
+    }:
         raise EvalDatasetError(
-            f"Case at index {index}: level must be prompt, retrieval, or e2e."
+            f"Case at index {index}: level must be prompt, retrieval, e2e, agent, "
+            "or workflow."
         )
     return value  # type: ignore[return-value]

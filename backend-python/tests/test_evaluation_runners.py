@@ -84,6 +84,16 @@ def test_prompt_eval_runner_pass_and_fail() -> None:
     assert failed.passed is False
 
 
+def test_prompt_eval_runner_populates_prompt_version() -> None:
+    manager = create_prompt_manager()
+    runner = PromptEvalRunner(prompt_manager=manager)
+
+    result = runner.run_case(_prompt_case("rag_answer_renders"))
+
+    assert result.prompt_version == "1"
+    assert result.model is None
+
+
 @pytest.mark.anyio
 async def test_retrieval_eval_runner_with_mocked_store(
     monkeypatch: pytest.MonkeyPatch,
@@ -233,6 +243,10 @@ async def test_end_to_end_eval_runner_with_mocked_llm(
     assert result.passed is True
     assert result.correctness is True
     assert result.latency_ms >= 0
+    assert result.model == "gpt-4o-mini"
+    assert result.temperature == 0.7
+    assert result.model_version is None
+    assert result.seed is None
 
 
 def test_report_json_serialization(tmp_path: Path) -> None:
@@ -245,9 +259,10 @@ def test_report_json_serialization(tmp_path: Path) -> None:
     write_json_report(report, output)
 
     payload = output.read_text(encoding="utf-8")
-    assert '"schema_version": 1' in payload
+    assert '"schema_version": 2' in payload
     assert '"dataset_path"' in payload
     assert '"settings_snapshot"' in payload
+    assert '"run_environment"' in payload
 
 
 @pytest.fixture

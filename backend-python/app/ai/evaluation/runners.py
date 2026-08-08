@@ -1,7 +1,8 @@
-"""Evaluation runners for prompt, retrieval, and end-to-end levels."""
+"""Evaluation runners for prompt, retrieval, end-to-end, agent, and workflow levels."""
 
 from __future__ import annotations
 
+import datetime
 import json
 import re
 import time
@@ -14,8 +15,12 @@ from unittest.mock import patch
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.agent.models.context import AgentContext
+from app.ai.agent.models.messages import AgentMessage
+from app.ai.agent.models.request import AgentRequest
+from app.ai.agent.runtime.factory import create_default_agent
 from app.ai.documents.pipeline import IngestionPipeline
-from app.ai.evaluation.datasets import EvalCase
+from app.ai.evaluation.datasets import EvalCase, load_workflow_fixture
 from app.ai.evaluation.metrics import (
     TARGET_RAG_RESPONSE_MS,
     TARGET_RETRIEVAL_MS,
@@ -27,8 +32,27 @@ from app.ai.evaluation.metrics import (
     recall,
 )
 from app.ai.evaluation.report import EvalCaseResult
-from app.ai.prompts.manager import PromptManager
+from app.ai.prompts.manager import PromptManager, create_prompt_manager
 from app.ai.rag.context_builder import ContextBuilder
+from app.ai.tools.executor import ToolExecutor
+from app.ai.tools.registry import ToolRegistry
+from app.ai.tools.stubs.echo import ECHO_TOOL_DEFINITION, EchoToolHandler
+from app.ai.workflow.conditions.evaluator import ConditionEvaluator
+from app.ai.workflow.manager import WorkflowManager
+from app.ai.workflow.models import (
+    DefinitionStatus,
+    NodeType,
+    WorkflowDefinition,
+    WorkflowEdge,
+    WorkflowNode,
+)
+from app.ai.workflow.nodes.agent_node import AgentNodeExecutor
+from app.ai.workflow.nodes.approval_node import ApprovalNodeExecutor
+from app.ai.workflow.nodes.llm_node import LLMNodeExecutor
+from app.ai.workflow.nodes.parallel_node import ForkNodeExecutor, JoinNodeExecutor
+from app.ai.workflow.nodes.router_node import RouterNodeExecutor
+from app.ai.workflow.nodes.task_node import TaskNodeExecutor
+from app.ai.workflow.providers.postgres import PostgresWorkflowStore
 from app.ai.rag.prompt_builder import PromptBuilder
 from app.ai.rag.retriever import Retriever
 from app.ai.rag.service import RAGService
@@ -41,6 +65,7 @@ from app.providers.base import (
     LLMProvider,
     ProviderChunk,
     ProviderCompletion,
+    ProviderToolCall,
     ProviderToolCompletion,
     ProviderUsage,
 )
@@ -135,6 +160,79 @@ class _EvalLLMProvider:
         )
 
 
+class _AgentEvalProvider:
+    """Deterministic agent eval double with scripted tool-call completions."""
+
+    def __init__(
+        self,
+        *,
+        tool_completions: list[ProviderToolCompletion],
+        model: str,
+        temperature: float,
+    ) -> None:
+        self._tool_completions = tool_completions
+        self._tool_call_index = 0
+        self.model = model
+        self.temperature = temperature
+
+    async def stream_chat(
+        self,
+        messages: list[ChatMessageSchema],
+        model: str,
+        temperature: float = 0.7,
+        *,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[ProviderChunk]:
+        del messages, model, temperature, max_tokens
+        if False:
+            yield ProviderChunk(content="", finish_reason=None)
+
+    async def complete_chat(
+        self,
+        messages: list[ChatMessageSchema],
+        model: str,
+        temperature: float = 0.7,
+        *,
+        max_tokens: int | None = None,
+    ) -> ProviderCompletion:
+        del messages, model, temperature, max_tokens
+        completion = self._next_tool_completion()
+        return ProviderCompletion(
+            content=completion.content or "",
+            finish_reason=completion.finish_reason,
+            usage=completion.usage,
+        )
+
+    async def complete_chat_with_tools(
+        self,
+        messages: list[ChatMessageInput],
+        model: str,
+        tools: list[dict[str, object]],
+        temperature: float = 0.7,
+        *,
+        max_tokens: int | None = None,
+    ) -> ProviderToolCompletion:
+        del messages, model, tools, temperature, max_tokens
+        return self._next_tool_completion()
+
+    def _next_tool_completion(self) -> ProviderToolCompletion:
+        if not self._tool_completions:
+            return ProviderToolCompletion(
+                content="",
+                tool_calls=[],
+                finish_reason="stop",
+                usage=ProviderUsage(
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                    total_tokens=2,
+                ),
+            )
+        index = min(self._tool_call_index, len(self._tool_completions) - 1)
+        completion = self._tool_completions[index]
+        self._tool_call_index += 1
+        return completion
+
+
 @dataclass(frozen=True)
 class PromptEvalRunner:
     """Render prompt templates and assert expected output."""
@@ -163,6 +261,7 @@ class PromptEvalRunner:
                 level="prompt",
                 passed=passed,
                 latency_ms=latency_ms,
+                prompt_version=case.prompt_version,
             )
         except Exception as exc:
             latency_ms = int((time.perf_counter() - start) * 1000)
@@ -171,6 +270,7 @@ class PromptEvalRunner:
                 level="prompt",
                 passed=False,
                 latency_ms=latency_ms,
+                prompt_version=case.prompt_version,
                 error=str(exc),
             )
 
@@ -370,6 +470,8 @@ class EndToEndEvalRunner:
                 faithfulness=faithful,
                 hallucination=hallucination,
                 latency_warning=warning,
+                model=self.settings.openai_model,
+                temperature=self.settings.default_temperature,
             )
         except Exception as exc:
             await self.session.rollback()
@@ -379,6 +481,8 @@ class EndToEndEvalRunner:
                 level="e2e",
                 passed=False,
                 latency_ms=latency_ms,
+                model=self.settings.openai_model,
+                temperature=self.settings.default_temperature,
                 error=str(exc),
             )
 
@@ -418,6 +522,194 @@ class EndToEndEvalRunner:
             self.settings.default_temperature,
         )
         return _parse_judge_response(completion.content)
+
+
+@dataclass(frozen=True)
+class AgentEvalRunner:
+    """Run agent-level cases through ``DefaultAgent`` with fake provider/tools."""
+
+    settings: Settings
+    prompt_manager: PromptManager
+
+    async def run_case(self, case: EvalCase) -> EvalCaseResult:
+        start = time.perf_counter()
+        if not self.settings.agent_runtime_enabled:
+            return EvalCaseResult(
+                case_id=case.id,
+                level="agent",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="AGENT_RUNTIME_ENABLED=false",
+            )
+
+        model = case.model or self.settings.openai_model
+        temperature = (
+            case.temperature
+            if case.temperature is not None
+            else self.settings.default_temperature
+        )
+        try:
+            provider = _build_agent_eval_provider(
+                case,
+                model=model,
+                temperature=temperature,
+            )
+            registry = ToolRegistry()
+            registry.register(ECHO_TOOL_DEFINITION, EchoToolHandler())
+            tool_executor = ToolExecutor(registry=registry, settings=self.settings)
+            agent = create_default_agent(
+                settings=self.settings,
+                tool_registry=registry,
+                prompt_manager=self.prompt_manager,
+                tool_executor=tool_executor,
+            )
+            request = AgentRequest(
+                messages=[
+                    AgentMessage(
+                        role="user",
+                        content=_agent_user_content(case),
+                    )
+                ],
+                model=model,
+                temperature=temperature,
+            )
+            context = AgentContext(execution_id=f"eval-agent-{case.id}")
+
+            with patch.object(
+                ProviderFactory,
+                "get_provider",
+                staticmethod(lambda _name, _settings: provider),
+            ):
+                response = await agent.run(request, context)
+
+            tool_calls_correct = None
+            if case.expected_tool_calls:
+                tool_calls_correct = list(response.tools_used) == list(
+                    case.expected_tool_calls
+                )
+
+            outcome_correct = True
+            if case.expected_outcome is not None:
+                outcome_correct = answer_matches(
+                    response.content,
+                    case.expected_outcome,
+                    case.expected_outcome_match,
+                )
+
+            passed = outcome_correct and (
+                tool_calls_correct is None or tool_calls_correct
+            )
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="agent",
+                passed=passed,
+                latency_ms=latency_ms,
+                tool_calls_correct=tool_calls_correct,
+                model=model,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="agent",
+                passed=False,
+                latency_ms=latency_ms,
+                model=model,
+                temperature=temperature,
+                error=str(exc),
+            )
+
+
+@dataclass(frozen=True)
+class WorkflowEvalRunner:
+    """Run workflow-level cases through ``WorkflowManager`` against Postgres."""
+
+    session: AsyncSession
+    settings: Settings
+
+    async def run_case(self, case: EvalCase) -> EvalCaseResult:
+        start = time.perf_counter()
+        if not self.settings.workflow_engine_enabled:
+            return EvalCaseResult(
+                case_id=case.id,
+                level="workflow",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="WORKFLOW_ENGINE_ENABLED=false",
+            )
+
+        try:
+            owner_id = await self._create_user()
+            definition = _workflow_definition_from_case(case, owner_id=owner_id)
+            manager = _build_eval_workflow_manager(
+                session=self.session,
+                settings=self.settings,
+            )
+            created = await manager.create_definition(definition)
+            await self.session.commit()
+
+            run = await manager.start_run(
+                created.id,
+                owner_id=owner_id,
+                idempotency_key=f"eval-{case.id}-{uuid.uuid4()}",
+                trigger_input=case.trigger_input,
+                defer_schedule=True,
+            )
+            await self.session.commit()
+            manager.flush_deferred_run_schedules()
+            await _await_scheduled_run(manager)
+
+            final_run = await manager.get_run(run.id, owner_id=owner_id)
+            if final_run is None:
+                raise RuntimeError(f"Workflow run {run.id} not found after execution.")
+
+            terminal_status = final_run.status.value
+            expected_status = case.expected_terminal_status or ""
+            passed = terminal_status == expected_status
+            model, prompt_version = _workflow_reproducibility_metadata(definition)
+
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="workflow",
+                passed=passed,
+                latency_ms=latency_ms,
+                terminal_status=terminal_status,
+                model=model,
+                prompt_version=prompt_version,
+            )
+        except Exception as exc:
+            await self.session.rollback()
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="workflow",
+                passed=False,
+                latency_ms=latency_ms,
+                error=str(exc),
+            )
+
+    async def _create_user(self) -> uuid.UUID:
+        user = await SqlUserStore(self.session).create(
+            sub=f"eval-workflow-{uuid.uuid4()}",
+            email=None,
+            name=None,
+            picture=None,
+        )
+        return user.id
+
+
+async def postgres_available(session: AsyncSession) -> bool:
+    """Return True when Postgres accepts a simple connectivity probe."""
+    try:
+        await session.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
 
 
 async def pgvector_available(session: AsyncSession) -> bool:
@@ -473,3 +765,182 @@ def _guess_mime_type(filename: str) -> str | None:
     if lowered.endswith(".docx"):
         return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     return None
+
+
+def _agent_user_content(case: EvalCase) -> str:
+    parts = [case.goal or ""]
+    if case.instructions:
+        parts.append(case.instructions)
+    return "\n\n".join(part for part in parts if part.strip())
+
+
+def _build_agent_eval_provider(
+    case: EvalCase,
+    *,
+    model: str,
+    temperature: float,
+) -> _AgentEvalProvider:
+    tool_completions: list[ProviderToolCompletion] = [
+        ProviderToolCompletion(
+            content="Calling echo.",
+            tool_calls=[
+                ProviderToolCall(
+                    id="call-echo",
+                    name="echo",
+                    arguments={"message": case.goal or "hello"},
+                )
+            ],
+        ),
+        ProviderToolCompletion(
+            content=case.expected_outcome or "Done.",
+            tool_calls=[],
+            finish_reason="stop",
+            usage=ProviderUsage(
+                prompt_tokens=1,
+                completion_tokens=1,
+                total_tokens=2,
+            ),
+        ),
+    ]
+    return _AgentEvalProvider(
+        tool_completions=tool_completions,
+        model=model,
+        temperature=temperature,
+    )
+
+
+def _workflow_definition_from_case(
+    case: EvalCase,
+    *,
+    owner_id: uuid.UUID,
+) -> WorkflowDefinition:
+    if case.workflow_definition is not None:
+        spec = case.workflow_definition
+    elif case.workflow_fixture is not None:
+        spec = load_workflow_fixture(case.workflow_fixture)
+    else:
+        raise ValueError("Workflow case missing definition spec.")
+
+    now = datetime.datetime.now(datetime.UTC)
+    nodes_raw = spec.get("nodes")
+    nodes = (
+        [
+            WorkflowNode.model_validate(node)
+            for node in nodes_raw
+            if isinstance(node, dict)
+        ]
+        if isinstance(nodes_raw, list)
+        else []
+    )
+    edges_raw = spec.get("edges")
+    edges = (
+        [
+            WorkflowEdge.model_validate(edge)
+            for edge in edges_raw
+            if isinstance(edge, dict)
+        ]
+        if isinstance(edges_raw, list)
+        else []
+    )
+    status_raw = spec.get("status", DefinitionStatus.ACTIVE.value)
+    status = (
+        DefinitionStatus(status_raw)
+        if isinstance(status_raw, str)
+        else DefinitionStatus.ACTIVE
+    )
+    version_raw = spec.get("version", 1)
+    version = version_raw if isinstance(version_raw, int) else 1
+    metadata_raw = spec.get("metadata", {})
+    metadata: dict[str, object] = (
+        dict(metadata_raw) if isinstance(metadata_raw, dict) else {}
+    )
+    return WorkflowDefinition(
+        id=uuid.uuid4(),
+        owner_id=owner_id,
+        name=str(spec.get("name", f"Eval Workflow {case.id}")),
+        description=(
+            str(spec["description"])
+            if isinstance(spec.get("description"), str)
+            else None
+        ),
+        version=version,
+        status=status,
+        entry_node_id=str(spec["entry_node_id"]),
+        nodes=nodes,
+        edges=edges,
+        metadata=metadata,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _build_eval_workflow_manager(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+) -> WorkflowManager:
+    registry = ToolRegistry()
+    registry.register(ECHO_TOOL_DEFINITION, EchoToolHandler())
+    prompt_manager = create_prompt_manager()
+    tool_executor = ToolExecutor(registry=registry, settings=settings)
+    agent_runtime = create_default_agent(
+        settings=settings,
+        tool_registry=registry,
+        prompt_manager=prompt_manager,
+        tool_executor=tool_executor,
+    )
+    store = PostgresWorkflowStore(session=session, settings=settings)
+
+    def background_store_factory(
+        bg_session: AsyncSession,
+    ) -> PostgresWorkflowStore:
+        return PostgresWorkflowStore(session=bg_session, settings=settings)
+
+    return WorkflowManager(
+        store=store,
+        settings=settings,
+        node_executors={
+            NodeType.TASK: TaskNodeExecutor(tool_executor),
+            NodeType.LLM: LLMNodeExecutor(
+                prompt_manager=prompt_manager,
+                settings=settings,
+            ),
+            NodeType.AGENT: AgentNodeExecutor(agent_runtime, settings=settings),
+            NodeType.ROUTER: RouterNodeExecutor(ConditionEvaluator()),
+            NodeType.FORK: ForkNodeExecutor(
+                max_parallel_branches=settings.workflow_max_parallel_branches
+            ),
+            NodeType.JOIN: JoinNodeExecutor(),
+            NodeType.APPROVAL: ApprovalNodeExecutor(),
+        },
+        background_store_factory=background_store_factory,
+        tool_registry=registry,
+    )
+
+
+async def _await_scheduled_run(manager: WorkflowManager) -> None:
+    task = manager._last_scheduled_run_task
+    if task is not None:
+        await task
+
+
+def _workflow_reproducibility_metadata(
+    definition: WorkflowDefinition,
+) -> tuple[str | None, str | None]:
+    model: str | None = None
+    prompt_version: str | None = None
+    for node in definition.nodes:
+        if node.type is NodeType.LLM:
+            config = node.config
+            model_value = config.get("model")
+            if isinstance(model_value, str):
+                model = model_value
+            prompt_version_value = config.get("prompt_version")
+            if isinstance(prompt_version_value, str):
+                prompt_version = prompt_version_value
+        if node.type is NodeType.AGENT:
+            config = node.config
+            model_value = config.get("model")
+            if isinstance(model_value, str):
+                model = model_value
+    return model, prompt_version
