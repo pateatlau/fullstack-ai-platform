@@ -14,6 +14,11 @@ import uuid
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+from app.ai.observability.metrics.instruments import (
+    record_workflow_approval_pending_delta,
+    record_workflow_checkpoint_metric,
+    record_workflow_retry,
+)
 from app.ai.observability.tracing.spans import (
     elapsed_ms_since,
     record_workflow_node_outcome,
@@ -380,6 +385,7 @@ class WorkflowExecutor:
                             status=NodeStatus.FAILED.value,
                             latency_ms=elapsed_ms_since(attempt_start),
                         )
+                        record_workflow_retry(node_type=node.type.value)
                         retries_remaining -= 1
                         attempt += 1
                         receipt_id = build_execution_receipt_id(
@@ -407,6 +413,7 @@ class WorkflowExecutor:
                             status=NodeStatus.FAILED.value,
                             latency_ms=elapsed_ms_since(attempt_start),
                         )
+                        record_workflow_retry(node_type=node.type.value)
                         retries_remaining -= 1
                         attempt += 1
                         receipt_id = build_execution_receipt_id(
@@ -463,12 +470,18 @@ class WorkflowExecutor:
                         run, pending, output=output, definition=definition, node=node
                     )
 
+                branch_count = output.get("branch_count")
                 record_workflow_node_outcome(
                     node_span,
                     node_type=node.type.value,
                     attempt=attempt,
                     status=NodeStatus.SUCCEEDED.value,
                     latency_ms=elapsed_ms_since(attempt_start),
+                    parallel_branch_count=(
+                        branch_count
+                        if node.type is NodeType.FORK and isinstance(branch_count, int)
+                        else None
+                    ),
                 )
                 return await self._succeed_node(
                     run, pending, output=output, definition=definition
@@ -668,6 +681,7 @@ class WorkflowExecutor:
                 }
             )
         )
+        record_workflow_approval_pending_delta(1)
         return await self._checkpoint_with_retry(
             run,
             status=RunStatus.WAITING_APPROVAL,
@@ -944,7 +958,8 @@ class WorkflowExecutor:
                 )
 
             try:
-                return await self._store.checkpoint_run(
+                checkpoint_start = time.perf_counter()
+                result = await self._store.checkpoint_run(
                     fresh.model_copy(
                         update={
                             **patch,
@@ -954,6 +969,10 @@ class WorkflowExecutor:
                     ),
                     expected_checkpoint_version=fresh.checkpoint_version,
                 )
+                record_workflow_checkpoint_metric(
+                    latency_ms=elapsed_ms_since(checkpoint_start)
+                )
+                return result
             except WorkflowConcurrentUpdateError:
                 if attempt == _MAX_CHECKPOINT_RETRIES - 1:
                     raise

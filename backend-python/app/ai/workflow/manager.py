@@ -16,6 +16,10 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.observability.metrics.instruments import (
+    record_workflow_approval_pending_delta,
+    record_workflow_run_started,
+)
 from app.ai.observability.tracing.spans import (
     capture_current_span_context,
     elapsed_ms_since,
@@ -325,6 +329,7 @@ class WorkflowManager:
         )
         result, created = await self._store.get_or_create_run(run)
         if created:
+            record_workflow_run_started()
             if defer_schedule:
                 self._deferred_run_schedules.append((result.id, owner_id))
             else:
@@ -516,6 +521,8 @@ class WorkflowManager:
 
         assert updated_run is not None
         assert definition is not None
+
+        record_workflow_approval_pending_delta(-1)
 
         if reject_ends_run:
             return updated_run

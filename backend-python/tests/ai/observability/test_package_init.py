@@ -18,7 +18,9 @@ def test_public_api_surface_matches_locked_scope() -> None:
 
     assert set(module.__all__) == {
         "OBSERVABILITY_ENABLED",
+        "CostCalculator",
         "MeterRegistry",
+        "ModelPricingTable",
         "ObservabilityConfigError",
         "ObservabilityDisabledError",
         "ObservabilityError",

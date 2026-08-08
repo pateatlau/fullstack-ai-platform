@@ -1,0 +1,22 @@
+pricing_version: '2026-08'
+models:
+  - provider: openai
+    model: gpt-4o-mini
+    input_usd_per_1k: 0.00015
+    output_usd_per_1k: 0.0006
+  - provider: openai
+    model: gpt-4o
+    input_usd_per_1k: 0.0025
+    output_usd_per_1k: 0.01
+  - provider: gemini
+    model: gemini-3.1-flash-lite
+    input_usd_per_1k: 0.000075
+    output_usd_per_1k: 0.0003
+  - provider: groq
+    model: openai/gpt-oss-20b
+    input_usd_per_1k: 0.000075
+    output_usd_per_1k: 0.0003
+  - provider: anthropic
+    model: claude-haiku-4-5-20251001
+    input_usd_per_1k: 0.0008
+    output_usd_per_1k: 0.004

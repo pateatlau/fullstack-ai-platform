@@ -3,6 +3,8 @@
 See ``docs/plans/post-mvp-v2-epic-07-observability-and-evaluation.md`` Part I § Public APIs.
 """
 
+from app.ai.observability.cost.calculator import CostCalculator
+from app.ai.observability.cost.pricing import ModelPricingTable
 from app.ai.observability.exceptions import (
     ObservabilityConfigError,
     ObservabilityDisabledError,
@@ -28,7 +30,9 @@ OBSERVABILITY_ENABLED = "observability_enabled"
 
 __all__ = [
     "OBSERVABILITY_ENABLED",
+    "CostCalculator",
     "MeterRegistry",
+    "ModelPricingTable",
     "ObservabilityConfigError",
     "ObservabilityDisabledError",
     "ObservabilityError",
