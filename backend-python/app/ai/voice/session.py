@@ -9,6 +9,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol
 
+from opentelemetry.trace import Span
+
+from app.ai.observability.tracing.spans import (
+    begin_voice_session_span,
+    end_voice_session_span,
+)
 from app.ai.voice.config import VoiceConfig
 from app.ai.voice.exceptions import VoiceAuthError, VoiceSessionError
 from app.core.caller import CallerContext
@@ -46,6 +52,8 @@ class ManagedVoiceSession:
         default_factory=lambda: datetime.now(timezone.utc)
     )
     close_reason: str | None = None
+    _observability_span: Span | None = field(default=None, repr=False, compare=False)
+    _observability_started_at: float = field(default=0.0, repr=False, compare=False)
     _cleanup_callbacks: list[CleanupCallback] = field(default_factory=list)
     _tasks: list[asyncio.Task[object]] = field(default_factory=list)
 
@@ -136,6 +144,9 @@ class VoiceSessionManager:
             last_heartbeat_at=now,
             last_activity_at=now,
         )
+        span, started_at = begin_voice_session_span()
+        managed._observability_span = span
+        managed._observability_started_at = started_at
         self._sessions[voice_session_id] = managed
         self._active_by_user[caller.user_id] = voice_session_id
         return managed
@@ -236,6 +247,13 @@ class VoiceSessionManager:
 
         session.is_active = False
         session.close_reason = reason
+
+        end_voice_session_span(
+            session._observability_span,
+            start=session._observability_started_at,
+            status=reason,
+        )
+        session._observability_span = None
 
         active_id = self._active_by_user.get(session.user_id)
         if active_id == voice_session_id:

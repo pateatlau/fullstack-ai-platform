@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
@@ -15,6 +16,13 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.observability.tracing.spans import (
+    capture_current_span_context,
+    elapsed_ms_since,
+    record_workflow_run_outcome,
+    SpanContextSnapshot,
+    workflow_run_root_span,
+)
 from app.ai.workflow.engine.background import reconcile_orphaned_runs, schedule_run_task
 from app.ai.workflow.engine.executor import WorkflowExecutor
 from app.ai.workflow.exceptions import (
@@ -319,15 +327,24 @@ class WorkflowManager:
             if defer_schedule:
                 self._deferred_run_schedules.append((result.id, owner_id))
             else:
-                self._schedule_run(result.id, owner_id=owner_id)
+                self._schedule_run(
+                    result.id,
+                    owner_id=owner_id,
+                    origin_context=capture_current_span_context(),
+                )
         return result
 
     def flush_deferred_run_schedules(self) -> None:
         """Schedule runs deferred by ``start_run(..., defer_schedule=True)``."""
         pending = self._deferred_run_schedules
         self._deferred_run_schedules = []
+        origin_context = capture_current_span_context()
         for run_id, owner_id in pending:
-            self._schedule_run(run_id, owner_id=owner_id)
+            self._schedule_run(
+                run_id,
+                owner_id=owner_id,
+                origin_context=origin_context,
+            )
 
     def discard_deferred_run_schedules(self) -> None:
         """Drop deferred schedules after a failed commit or setup."""
@@ -590,14 +607,24 @@ class WorkflowManager:
                 f"{run.status.value!r}."
             )
 
-        self._schedule_run(run_id, owner_id=owner_id)
+        self._schedule_run(run_id, owner_id=owner_id, resume_reason="resume")
         return run
 
     def _schedule_run(
-        self, run_id: uuid.UUID, *, owner_id: uuid.UUID
+        self,
+        run_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        origin_context: SpanContextSnapshot | None = None,
+        resume_reason: str | None = None,
     ) -> asyncio.Task[None]:
         task = schedule_run_task(
-            self._execute_run(run_id, owner_id=owner_id),
+            self._execute_run(
+                run_id,
+                owner_id=owner_id,
+                origin_context=origin_context,
+                resume_reason=resume_reason,
+            ),
             run_id=run_id,
         )
         self._last_scheduled_run_task = task
@@ -607,13 +634,30 @@ class WorkflowManager:
         """Reattach in-process executors to persisted ``running`` runs."""
 
         async def _schedule(run_id: uuid.UUID, owner_id: uuid.UUID) -> None:
-            self._schedule_run(run_id, owner_id=owner_id)
+            self._schedule_run(
+                run_id,
+                owner_id=owner_id,
+                resume_reason="reconcile",
+            )
 
         return await reconcile_orphaned_runs(self._store, schedule_run=_schedule)
 
-    async def _execute_run(self, run_id: uuid.UUID, *, owner_id: uuid.UUID) -> None:
+    async def _execute_run(
+        self,
+        run_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        origin_context: SpanContextSnapshot | None = None,
+        resume_reason: str | None = None,
+    ) -> None:
         if self._background_store_factory is None:
-            await self._run_with_store(self._store, run_id, owner_id=owner_id)
+            await self._run_with_store(
+                self._store,
+                run_id,
+                owner_id=owner_id,
+                origin_context=origin_context,
+                resume_reason=resume_reason,
+            )
             return
 
         from app.db.engine import get_sessionmaker
@@ -621,21 +665,52 @@ class WorkflowManager:
         sessionmaker = get_sessionmaker()
         async with sessionmaker() as session:
             store = self._background_store_factory(session)
-            await self._run_with_store(store, run_id, owner_id=owner_id)
+            await self._run_with_store(
+                store,
+                run_id,
+                owner_id=owner_id,
+                origin_context=origin_context,
+                resume_reason=resume_reason,
+            )
 
     async def _run_with_store(
-        self, store: WorkflowStore, run_id: uuid.UUID, *, owner_id: uuid.UUID
+        self,
+        store: WorkflowStore,
+        run_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        origin_context: SpanContextSnapshot | None = None,
+        resume_reason: str | None = None,
     ) -> None:
-        executor = WorkflowExecutor(
-            store,
-            self._node_executors,
-            settings=self._settings,
-            tool_registry=self._tool_registry,
-        )
-        try:
-            await executor.execute_run(run_id, owner_id=owner_id)
-        except Exception:  # noqa: BLE001 - background execution must never crash the app
-            _logger.exception("Workflow run execution failed.", run_id=str(run_id))
+        run_id_str = str(run_id)
+        started = time.perf_counter()
+        with workflow_run_root_span(
+            run_id_str,
+            link=origin_context,
+            resume_reason=resume_reason,
+        ) as run_span:
+            executor = WorkflowExecutor(
+                store,
+                self._node_executors,
+                settings=self._settings,
+                tool_registry=self._tool_registry,
+            )
+            try:
+                final_run = await executor.execute_run(run_id, owner_id=owner_id)
+                record_workflow_run_outcome(
+                    run_span,
+                    run_id=run_id_str,
+                    status=final_run.status.value,
+                    latency_ms=elapsed_ms_since(started),
+                )
+            except Exception:  # noqa: BLE001 - background execution must never crash the app
+                record_workflow_run_outcome(
+                    run_span,
+                    run_id=run_id_str,
+                    status=RunStatus.FAILED.value,
+                    latency_ms=elapsed_ms_since(started),
+                )
+                _logger.exception("Workflow run execution failed.", run_id=run_id_str)
 
     def _validate_before_persist(self, definition: WorkflowDefinition) -> None:
         try:

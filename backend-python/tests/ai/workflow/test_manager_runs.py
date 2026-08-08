@@ -8,6 +8,7 @@ import uuid
 
 import pytest
 
+from app.ai.observability.tracing.spans import SpanContextSnapshot
 from app.ai.workflow.exceptions import WorkflowNotFoundError, WorkflowValidationError
 from app.ai.workflow.manager import WorkflowManager
 from app.ai.workflow.models import (
@@ -174,11 +175,20 @@ async def test_start_run_normalizes_idempotency_key_whitespace() -> None:
     original_schedule = manager._schedule_run
 
     def counting_schedule(
-        run_id: uuid.UUID, *, owner_id: uuid.UUID
+        run_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        origin_context: SpanContextSnapshot | None = None,
+        resume_reason: str | None = None,
     ) -> asyncio.Task[None]:
         nonlocal schedule_count
         schedule_count += 1
-        return original_schedule(run_id, owner_id=owner_id)
+        return original_schedule(
+            run_id,
+            owner_id=owner_id,
+            origin_context=origin_context,
+            resume_reason=resume_reason,
+        )
 
     manager._schedule_run = counting_schedule  # type: ignore[method-assign]
 
@@ -232,11 +242,20 @@ async def test_start_run_concurrent_requests_deduplicate() -> None:
     original_schedule = manager._schedule_run
 
     def counting_schedule(
-        run_id: uuid.UUID, *, owner_id: uuid.UUID
+        run_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        origin_context: SpanContextSnapshot | None = None,
+        resume_reason: str | None = None,
     ) -> asyncio.Task[None]:
         nonlocal schedule_count
         schedule_count += 1
-        return original_schedule(run_id, owner_id=owner_id)
+        return original_schedule(
+            run_id,
+            owner_id=owner_id,
+            origin_context=origin_context,
+            resume_reason=resume_reason,
+        )
 
     manager._schedule_run = counting_schedule  # type: ignore[method-assign]
 
@@ -262,10 +281,19 @@ async def test_start_run_defer_schedule_flushes_after_commit() -> None:
     original_schedule = manager._schedule_run
 
     def tracking_schedule(
-        run_id: uuid.UUID, *, owner_id: uuid.UUID
+        run_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        origin_context: SpanContextSnapshot | None = None,
+        resume_reason: str | None = None,
     ) -> asyncio.Task[None]:
         scheduled.append(run_id)
-        return original_schedule(run_id, owner_id=owner_id)
+        return original_schedule(
+            run_id,
+            owner_id=owner_id,
+            origin_context=origin_context,
+            resume_reason=resume_reason,
+        )
 
     manager._schedule_run = tracking_schedule  # type: ignore[method-assign]
 
@@ -292,11 +320,20 @@ async def test_start_run_defer_schedule_discarded_on_failure() -> None:
     original_schedule = manager._schedule_run
 
     def counting_schedule(
-        run_id: uuid.UUID, *, owner_id: uuid.UUID
+        run_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        origin_context: SpanContextSnapshot | None = None,
+        resume_reason: str | None = None,
     ) -> asyncio.Task[None]:
         nonlocal schedule_count
         schedule_count += 1
-        return original_schedule(run_id, owner_id=owner_id)
+        return original_schedule(
+            run_id,
+            owner_id=owner_id,
+            origin_context=origin_context,
+            resume_reason=resume_reason,
+        )
 
     manager._schedule_run = counting_schedule  # type: ignore[method-assign]
 

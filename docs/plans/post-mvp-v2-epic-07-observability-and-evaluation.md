@@ -2,7 +2,7 @@
 epic: v2-07
 title: Observability & Evaluation
 status: in_progress
-version: 1.14
+version: 1.16
 depends_on: [v2-06]
 provides:
   [
@@ -793,7 +793,7 @@ _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post
 | Agent Framework          | Completed (Epic 01); `AGENT_RUNTIME_ENABLED` behind flag                                                                                                                                        |
 | Memory subsystem         | Completed (Epic 05); `MEMORY_ENABLED` behind flag                                                                                                                                               |
 | Workflow Engine          | Completed (Epic 06); `WORKFLOW_ENGINE_ENABLED` behind flag                                                                                                                                      |
-| Observability            | Phase 2 complete — `TracingLLMProvider`, `ProviderFactory` wrapping, `PromptManager` prompt spans; cost, REST API, eval extensions remain Phase 5+ |
+| Observability            | Phase 4 complete — full span coverage (LLM, prompt, tool, agent, RAG, memory, voice, workflow); cost, REST API, eval extensions remain Phase 5+ |
 
 ---
 
@@ -804,8 +804,8 @@ _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post
 | 0     | Baseline Audit                                | XS     | Completed   |
 | 1     | Tracing & Metrics Foundation                  | M      | Completed   |
 | 2     | LLM Provider & Prompt Tracing                 | M      | Completed   |
-| 3     | Tool & Agent Tracing                          | M      | Not Started |
-| 4     | RAG, Memory, Voice & Workflow Tracing         | L      | Not Started |
+| 3     | Tool & Agent Tracing                          | M      | Completed   |
+| 4     | RAG, Memory, Voice & Workflow Tracing         | L      | Completed   |
 | 5     | Token & Cost Metrics                          | L      | Not Started |
 | 6     | Observability REST API & `/metrics`           | M      | Not Started |
 | 7     | Evaluation Framework: Agent & Workflow Levels | L      | Not Started |
@@ -1143,23 +1143,23 @@ Instrument tool execution and the agent reasoning loop with spans, reusing `Tool
 
 ## Tool Tracing
 
-- [ ] Wrap `ToolExecutor.execute()` with `tool_span(tool_name)`.
-- [ ] Record `success`, `retry_count`, `latency_ms`, `authorization_result` as attributes.
-- [ ] Verify tool arguments/results are never attached to the span.
-- [ ] Verify authorization failures and tool errors are recorded as span status, not exceptions raised from the span helper.
+- [x] Wrap `ToolExecutor.execute()` with `tool_span(tool_name)`.
+- [x] Record `success`, `retry_count`, `latency_ms`, `authorization_result` as attributes.
+- [x] Verify tool arguments/results are never attached to the span.
+- [x] Verify authorization failures and tool errors are recorded as span status, not exceptions raised from the span helper.
 
 ## Agent Tracing
 
-- [ ] Wrap each `DefaultAgent` reasoning iteration with `agent_span("iteration")`.
-- [ ] Record `iteration_index`, `tool_calls_count`, `finish_reason`, `latency_ms`.
-- [ ] Add a nested `agent_span("tool_call")` around each tool dispatch within an iteration (parents to the existing `tool_span`, not a duplicate).
-- [ ] Verify no change to the agent's reasoning/tool-selection behaviour.
+- [x] Wrap each `DefaultAgent` reasoning iteration with `agent_span("iteration")`.
+- [x] Record `iteration_index`, `tool_calls_count`, `finish_reason`, `latency_ms`.
+- [x] Add a nested `agent_span("tool_call")` around each tool dispatch within an iteration (parents to the existing `tool_span`, not a duplicate).
+- [x] Verify no change to the agent's reasoning/tool-selection behaviour.
 
 ## Testing
 
-- [ ] Add `ToolExecutor` span tests (success, failure, retry, authorization-denied cases).
-- [ ] Add `DefaultAgent` span tests (multi-iteration run, fake provider/tools).
-- [ ] Add failure-mode tests: a span error never fails a tool call or agent iteration.
+- [x] Add `ToolExecutor` span tests (success, failure, retry, authorization-denied cases).
+- [x] Add `DefaultAgent` span tests (multi-iteration run, fake provider/tools).
+- [x] Add failure-mode tests: a span error never fails a tool call or agent iteration.
 
 **Verify**
 
@@ -1167,9 +1167,9 @@ Instrument tool execution and the agent reasoning loop with spans, reusing `Tool
 
 Additional verification:
 
-- [ ] Tool spans carry outcome/latency attributes and no argument/result content.
-- [ ] Agent spans reflect the actual iteration count and tool-call count of a run.
-- [ ] Existing tool and agent test suites still pass unmodified.
+- [x] Tool spans carry outcome/latency attributes and no argument/result content.
+- [x] Agent spans reflect the actual iteration count and tool-call count of a run.
+- [x] Existing tool and agent test suites still pass unmodified.
 
 **Acceptance**
 
@@ -1182,7 +1182,13 @@ Additional verification:
 
 **Completion Record**
 
-_Filled upon phase completion._
+| Metric             | Result                                                                                  |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| Lint               | ✅ PASS                                                                                 |
+| Typecheck          | ✅ PASS                                                                                 |
+| Phase 3 unit tests | ✅ 8 passed (`test_tool_tracing.py`, `test_agent_tracing.py`)                           |
+| Pipeline wiring    | ✅ `ToolExecutor.execute()`, `DefaultAgent` iteration loop + nested `agent.tool_call`   |
+| User confirmation  | ⏳ Pending                                                                              |
 
 ---
 
@@ -1207,36 +1213,36 @@ Complete platform-wide trace coverage: RAG retrieval, memory retrieval/extractio
 
 ## RAG Tracing
 
-- [ ] Wrap `Retriever.retrieve()` with `rag_span("retrieve")`.
-- [ ] Record `top_k`, `retrieved_count`, `latency_ms`.
+- [x] Wrap `Retriever.retrieve()` with `rag_span("retrieve")`.
+- [x] Record `top_k`, `retrieved_count`, `latency_ms`.
 
 ## Memory Tracing
 
-- [ ] Wrap the memory retrieval entry point with `memory_span("retrieve")`.
-- [ ] Wrap the memory extraction entry point with `memory_span("extract")`.
-- [ ] Record counts/latency only; never memory content.
+- [x] Wrap the memory retrieval entry point with `memory_span("retrieve")`.
+- [x] Wrap the memory extraction entry point with `memory_span("extract")`.
+- [x] Record counts/latency only; never memory content.
 
 ## Voice Tracing
 
-- [ ] Wrap voice session start/end (`app/ai/voice/session.py`) with `voice_span("session")`.
-- [ ] Record session duration and terminal status only.
+- [x] Wrap voice session start/end (`app/ai/voice/session.py`) with `voice_span("session")`.
+- [x] Record session duration and terminal status only.
 
 ## Workflow Tracing
 
-- [ ] Wrap `WorkflowExecutor.step()` run-level invocation with `workflow_span("run")`; attributes `run_id`, terminal `status`, `latency_ms`.
-- [ ] Wrap each `WorkflowNodeExecution` attempt with `workflow_span("node")`; attributes `node_type`, `attempt`, `status`, `latency_ms`.
-- [ ] At `WorkflowManager.start_run()` (or `flush_deferred_run_schedules()` when `defer_schedule=True`), snapshot the active OTel `SpanContext` when `SpanContext.is_valid` — capture `trace_id`, `span_id`, `trace_flags`, and `trace_state` — and pass the immutable snapshot into `_schedule_run()` for the background `asyncio.Task`.
-- [ ] Inside the background task, open a fresh run-level root span and add a span **link** to the captured `SpanContext` when valid; omit the link when no valid context exists (best-effort — never fail run scheduling or execution).
-- [ ] For `resume()` and `reconcile_orphaned_runs()` (crash recovery / orphan reattach): open a fresh run-level root span with **no** span link; record `run_id` and resume reason as span attributes only.
-- [ ] Verify resumed runs never attempt to reopen or continue a closed run-level span from a prior execution attempt.
+- [x] Wrap `WorkflowExecutor.step()` run-level invocation with `workflow_span("run")`; attributes `run_id`, terminal `status`, `latency_ms`.
+- [x] Wrap each `WorkflowNodeExecution` attempt with `workflow_span("node")`; attributes `node_type`, `attempt`, `status`, `latency_ms`.
+- [x] At `WorkflowManager.start_run()` (or `flush_deferred_run_schedules()` when `defer_schedule=True`), snapshot the active OTel `SpanContext` when `SpanContext.is_valid` — capture `trace_id`, `span_id`, `trace_flags`, and `trace_state` — and pass the immutable snapshot into `_schedule_run()` for the background `asyncio.Task`.
+- [x] Inside the background task, open a fresh run-level root span and add a span **link** to the captured `SpanContext` when valid; omit the link when no valid context exists (best-effort — never fail run scheduling or execution).
+- [x] For `resume()` and `reconcile_orphaned_runs()` (crash recovery / orphan reattach): open a fresh run-level root span with **no** span link; record `run_id` and resume reason as span attributes only.
+- [x] Verify resumed runs never attempt to reopen or continue a closed run-level span from a prior execution attempt.
 
 ## Testing
 
-- [ ] Add RAG/memory/voice span tests (attributes present, content absent).
-- [ ] Add workflow run/node span tests, including a fork/join scenario (multiple concurrent node spans).
-- [ ] Add a background-task trace-link test (run started from a request with active span context — link includes `trace_id`, `span_id`, `trace_flags`, `trace_state`).
-- [ ] Add a no-valid-context test (invalid/missing span context at schedule time — fresh run-level root span created, no link, run succeeds).
-- [ ] Add resume/crash-recovery span tests (fresh root span per resume/reconcile, no span link).
+- [x] Add RAG/memory/voice span tests (attributes present, content absent).
+- [x] Add workflow run/node span tests, including a fork/join scenario (multiple concurrent node spans).
+- [x] Add a background-task trace-link test (run started from a request with active span context — link includes `trace_id`, `span_id`, `trace_flags`, `trace_state`).
+- [x] Add a no-valid-context test (invalid/missing span context at schedule time — fresh run-level root span created, no link, run succeeds).
+- [x] Add resume/crash-recovery span tests (fresh root span per resume/reconcile, no span link).
 
 **Verify**
 
@@ -1244,9 +1250,9 @@ Complete platform-wide trace coverage: RAG retrieval, memory retrieval/extractio
 
 Additional verification:
 
-- [ ] All eight span domains from Part I are wired and produce spans when enabled.
-- [ ] Parallel workflow branches produce concurrent, correctly nested node spans.
-- [ ] No pipeline's functional behaviour changed.
+- [x] All eight span domains from Part I are wired and produce spans when enabled.
+- [x] Parallel workflow branches produce concurrent, correctly nested node spans.
+- [x] No pipeline's functional behaviour changed.
 
 **Acceptance**
 
@@ -1260,7 +1266,14 @@ Additional verification:
 
 **Completion Record**
 
-_Filled upon phase completion._
+| Metric             | Result                                                                                                                                                                      |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lint               | ✅ PASS                                                                                                                                                                     |
+| Typecheck          | ✅ PASS                                                                                                                                                                     |
+| Phase 4 unit tests | ✅ 14 passed (`test_rag_tracing.py`, `test_memory_tracing.py`, `test_voice_tracing.py`, `test_workflow_tracing.py`)                                                         |
+| Observability suite| ✅ 53 passed (`tests/ai/observability/`)                                                                                                                                    |
+| Pipeline wiring    | ✅ `Retriever`, `MemoryManager`, `VoiceSessionManager`, `WorkflowExecutor` (node), `WorkflowManager` (run + span links via `SpanContextSnapshot`)                           |
+| User confirmation  | ⏳ Pending                                                                                                                                                                  |
 
 ---
 
@@ -1964,3 +1977,5 @@ No prompt, tool, or message content is ever attached to a span, metric, or log f
 | 1.12    | 2026-08-07 | Workflow background tracing: capture full originating `SpanContext` at `start_run()` for run-level span links; best-effort + crash-recovery (no link) behavior. Part I § Workflow Spans + Phase 4 sync.                                                                                                                                                                                                                                                                                                                     |
 | 1.13    | 2026-08-07 | Phase 1 complete: OTel TracerRegistry/MeterRegistry bootstrap, span helper scaffolds, trace/span-id log correlation, 17 unit tests. Part II only.                                                                                                                                                                                                                                                                                                                                                                           |
 | 1.14    | 2026-08-07 | Phase 2 complete: TracingLLMProvider, ProviderFactory wrapping, PromptManager prompt_span wiring, token-count span attribute allowlist, 13 unit tests. Part II only.                                                                                                                                                                                                                                                                                                                                                          |
+| 1.15    | 2026-08-08 | Phase 3 complete: ToolExecutor tool_span, DefaultAgent agent_span (iteration + tool_call), fail-open telemetry tests, 8 unit tests. Part II only.                                                                                                                                                                                                                                                                                                                                                                             |
+| 1.16    | 2026-08-08 | Phase 4 complete: RAG/memory/voice/workflow span wiring, workflow background SpanContext snapshot + span links, resume/reconcile fresh-root spans, 14 unit tests (53 total observability). Part II only.                                                                                                                                                                                                                                                                                                                      |

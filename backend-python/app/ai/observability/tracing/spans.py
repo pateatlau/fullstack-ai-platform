@@ -9,11 +9,21 @@ import contextvars
 import time
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
-from opentelemetry.trace import Span, SpanKind, Status, StatusCode
+from opentelemetry.trace import (
+    Link,
+    Span,
+    SpanContext,
+    SpanKind,
+    Status,
+    StatusCode,
+    TraceFlags,
+)
+from opentelemetry.trace.span import TraceState
 
 from app.ai.observability.tracing.provider import get_tracer
 from app.core.logging import get_logger, sanitize_value
@@ -316,6 +326,252 @@ def record_agent_tool_call_attributes(
         span,
         {
             "tool_name": tool_name,
+            "latency_ms": latency_ms,
+        },
+    )
+
+
+@dataclass(frozen=True)
+class SpanContextSnapshot:
+    """Immutable OTel span context captured for cross-task workflow trace links."""
+
+    trace_id: int
+    span_id: int
+    trace_flags: int
+    trace_state: str
+
+    @property
+    def is_valid(self) -> bool:
+        return self.trace_id != 0 and self.span_id != 0
+
+    def to_span_context(self) -> SpanContext:
+        state = (
+            TraceState.from_header([self.trace_state])
+            if self.trace_state
+            else TraceState()
+        )
+        return SpanContext(
+            trace_id=self.trace_id,
+            span_id=self.span_id,
+            is_remote=True,
+            trace_flags=TraceFlags(self.trace_flags),
+            trace_state=state,
+        )
+
+
+def capture_current_span_context() -> SpanContextSnapshot | None:
+    """Snapshot the active span context when valid — best-effort, never raises."""
+    try:
+        context = trace.get_current_span().get_span_context()
+        if not context.is_valid:
+            return None
+        trace_state = str(context.trace_state) if context.trace_state else ""
+        return SpanContextSnapshot(
+            trace_id=context.trace_id,
+            span_id=context.span_id,
+            trace_flags=int(context.trace_flags),
+            trace_state=trace_state,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Observability span context capture failed",
+            error=str(exc),
+            exc_info=True,
+        )
+        return None
+
+
+@contextmanager
+def workflow_run_root_span(
+    run_id: str,
+    *,
+    link: SpanContextSnapshot | None = None,
+    resume_reason: str | None = None,
+) -> Generator[Span | None, None, None]:
+    """Open a fresh run-level root span, optionally linked to a captured context."""
+    span: Span | None = None
+    token: object | None = None
+    links: tuple[Link, ...] = ()
+    if link is not None and link.is_valid:
+        links = (Link(link.to_span_context()),)
+
+    attributes: dict[str, Any] = {"run_id": run_id}
+    if resume_reason is not None:
+        attributes["resume_reason"] = resume_reason
+
+    try:
+        tracer = get_tracer(__name__)
+        span = tracer.start_span(
+            "workflow.run",
+            context=otel_context.Context(),
+            links=links,
+        )
+        _set_span_attributes(span, attributes)
+        token = otel_context.attach(trace.set_span_in_context(span))
+    except Exception as exc:
+        logger.warning(
+            "Observability workflow run span setup failed",
+            run_id=run_id,
+            error=str(exc),
+            exc_info=True,
+        )
+        span = None
+        token = None
+
+    try:
+        yield span
+    except Exception:
+        if span is not None:
+            try:
+                span.set_status(Status(StatusCode.ERROR))
+            except Exception as exc:
+                logger.warning(
+                    "Observability span status failed",
+                    span_name="workflow.run",
+                    error=str(exc),
+                    exc_info=True,
+                )
+        raise
+    finally:
+        if token is not None:
+            try:
+                otel_context.detach(token)
+            except Exception as exc:
+                logger.warning(
+                    "Observability span context detach failed",
+                    span_name="workflow.run",
+                    error=str(exc),
+                    exc_info=True,
+                )
+        if span is not None:
+            try:
+                span.end()
+            except Exception as exc:
+                logger.warning(
+                    "Observability span end failed",
+                    span_name="workflow.run",
+                    error=str(exc),
+                    exc_info=True,
+                )
+
+
+def record_rag_span_outcome(
+    span: Span | None,
+    *,
+    top_k: int,
+    retrieved_count: int,
+    latency_ms: int,
+) -> None:
+    """Attach terminal RAG retrieval attributes."""
+    if span is None:
+        return
+    _set_span_attributes(
+        span,
+        {
+            "top_k": top_k,
+            "retrieved_count": retrieved_count,
+            "latency_ms": latency_ms,
+        },
+    )
+
+
+def record_memory_span_outcome(
+    span: Span | None,
+    *,
+    retrieved_count: int,
+    latency_ms: int,
+) -> None:
+    """Attach terminal memory span attributes (counts/latency only)."""
+    if span is None:
+        return
+    _set_span_attributes(
+        span,
+        {
+            "retrieved_count": retrieved_count,
+            "latency_ms": latency_ms,
+        },
+    )
+
+
+def begin_voice_session_span() -> tuple[Span | None, float]:
+    """Start a long-lived ``voice.session`` span; end via ``end_voice_session_span``."""
+    start = time.perf_counter()
+    try:
+        span = get_tracer(__name__).start_span("voice.session")
+        return span, start
+    except Exception as exc:
+        logger.warning(
+            "Observability voice session span setup failed",
+            error=str(exc),
+            exc_info=True,
+        )
+        return None, start
+
+
+def end_voice_session_span(
+    span: Span | None,
+    *,
+    start: float,
+    status: str,
+) -> None:
+    """End a ``voice.session`` span with duration and terminal status only."""
+    if span is None:
+        return
+    _set_span_attributes(
+        span,
+        {
+            "status": status,
+            "latency_ms": elapsed_ms_since(start),
+        },
+    )
+    try:
+        span.end()
+    except Exception as exc:
+        logger.warning(
+            "Observability span end failed",
+            span_name="voice.session",
+            error=str(exc),
+            exc_info=True,
+        )
+
+
+def record_workflow_run_outcome(
+    span: Span | None,
+    *,
+    run_id: str,
+    status: str,
+    latency_ms: int,
+) -> None:
+    """Attach terminal workflow run attributes."""
+    if span is None:
+        return
+    _set_span_attributes(
+        span,
+        {
+            "run_id": run_id,
+            "status": status,
+            "latency_ms": latency_ms,
+        },
+    )
+
+
+def record_workflow_node_outcome(
+    span: Span | None,
+    *,
+    node_type: str,
+    attempt: int,
+    status: str,
+    latency_ms: int,
+) -> None:
+    """Attach terminal workflow node attempt attributes."""
+    if span is None:
+        return
+    _set_span_attributes(
+        span,
+        {
+            "node_type": node_type,
+            "attempt": attempt,
+            "status": status,
             "latency_ms": latency_ms,
         },
     )
