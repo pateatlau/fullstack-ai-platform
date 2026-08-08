@@ -7,6 +7,11 @@ import uuid
 
 from app.ai.interfaces.embedding_provider import EmbeddingProvider
 from app.ai.interfaces.vector_store import ScoredChunk, VectorStore
+from app.ai.observability.tracing.spans import (
+    elapsed_ms_since,
+    rag_span,
+    record_rag_span_outcome,
+)
 from app.ai.rag.metadata_filter import is_unsatisfiable_filter
 from app.ai.rag.schemas import MetadataFilter
 from app.core.config import Settings
@@ -40,37 +45,56 @@ class Retriever:
         effective_top_k = top_k if top_k is not None else self._settings.rag_top_k
         start = time.perf_counter()
 
-        # Empty document_ids/tags frozensets can never match — skip embed/search.
-        if filters is not None and is_unsatisfiable_filter(filters):
-            latency_ms = int((time.perf_counter() - start) * 1000)
+        with rag_span("retrieve") as span:
+            # Empty document_ids/tags frozensets can never match — skip embed/search.
+            if filters is not None and is_unsatisfiable_filter(filters):
+                latency_ms = elapsed_ms_since(start)
+                record_rag_span_outcome(
+                    span,
+                    top_k=effective_top_k,
+                    retrieved_count=0,
+                    latency_ms=latency_ms,
+                )
+                _logger.info(
+                    "Retrieval completed",
+                    retrieval_latency_ms=latency_ms,
+                    result_count=0,
+                )
+                return []
+
+            embeddings = await self._embedding_provider.embed_texts([question])
+            if not embeddings:
+                latency_ms = elapsed_ms_since(start)
+                record_rag_span_outcome(
+                    span,
+                    top_k=effective_top_k,
+                    retrieved_count=0,
+                    latency_ms=latency_ms,
+                )
+                _logger.info(
+                    "Retrieval completed",
+                    retrieval_latency_ms=latency_ms,
+                    result_count=0,
+                )
+                return []
+
+            results = await self._vector_store.similarity_search(
+                embeddings[0],
+                top_k=effective_top_k,
+                user_id=user_id,
+                filters=filters,
+            )
+
+            latency_ms = elapsed_ms_since(start)
+            record_rag_span_outcome(
+                span,
+                top_k=effective_top_k,
+                retrieved_count=len(results),
+                latency_ms=latency_ms,
+            )
             _logger.info(
                 "Retrieval completed",
                 retrieval_latency_ms=latency_ms,
-                result_count=0,
+                result_count=len(results),
             )
-            return []
-
-        embeddings = await self._embedding_provider.embed_texts([question])
-        if not embeddings:
-            latency_ms = int((time.perf_counter() - start) * 1000)
-            _logger.info(
-                "Retrieval completed",
-                retrieval_latency_ms=latency_ms,
-                result_count=0,
-            )
-            return []
-
-        results = await self._vector_store.similarity_search(
-            embeddings[0],
-            top_k=effective_top_k,
-            user_id=user_id,
-            filters=filters,
-        )
-
-        latency_ms = int((time.perf_counter() - start) * 1000)
-        _logger.info(
-            "Retrieval completed",
-            retrieval_latency_ms=latency_ms,
-            result_count=len(results),
-        )
-        return results
+            return results

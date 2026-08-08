@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
@@ -47,6 +48,11 @@ from app.ai.memory.project import (
     validate_project_id,
 )
 from app.ai.memory.quality import MemoryQualityEvaluator
+from app.ai.observability.tracing.spans import (
+    elapsed_ms_since,
+    memory_span,
+    record_memory_span_outcome,
+)
 from app.core.logging import get_logger
 from app.schemas.chat import ChatMessageSchema, ProviderName
 
@@ -206,40 +212,59 @@ class MemoryManager:
         conversation_summary: str | None = None,
     ) -> MemoryContext:
         """Retrieve ranked semantic memories and build a canonical ``MemoryContext``."""
-        if not self._retrieval_enabled():
-            return MemoryContext()
+        started = time.perf_counter()
+        with memory_span("retrieve") as span:
+            if not self._retrieval_enabled():
+                record_memory_span_outcome(
+                    span, retrieved_count=0, latency_ms=elapsed_ms_since(started)
+                )
+                return MemoryContext()
 
-        assert self._settings is not None
-        assert self._embedding_provider is not None
+            assert self._settings is not None
+            assert self._embedding_provider is not None
 
-        retriever = SemanticRetriever(
-            self._provider,
-            self._embedding_provider,
-            self._settings,
-            session_ownership_checker=self._session_ownership_checker,
-        )
-        builder = MemoryContextBuilder(self._provider, settings=self._settings)
+            retriever = SemanticRetriever(
+                self._provider,
+                self._embedding_provider,
+                self._settings,
+                session_ownership_checker=self._session_ownership_checker,
+            )
+            builder = MemoryContextBuilder(self._provider, settings=self._settings)
 
-        try:
-            retrieval = await retriever.retrieve(
-                owner_id=owner_id,
-                messages=messages,
-                conversation_summary=conversation_summary,
-                project_id=session_id,
-            )
-            context = builder.build_from_retrieval(
-                retrieval,
-                conversation_summary=conversation_summary,
-            )
-            return await builder.with_preferences(owner_id, context=context)
-        except Exception:  # noqa: BLE001 - retrieval must not block callers
-            logger.warning(
-                "Semantic memory context retrieval failed",
-                owner_id=str(owner_id),
-                session_id=str(session_id) if session_id is not None else None,
-                exc_info=True,
-            )
-            return MemoryContext(conversation_summary=conversation_summary)
+            try:
+                retrieval = await retriever.retrieve(
+                    owner_id=owner_id,
+                    messages=messages,
+                    conversation_summary=conversation_summary,
+                    project_id=session_id,
+                )
+                context = builder.build_from_retrieval(
+                    retrieval,
+                    conversation_summary=conversation_summary,
+                )
+                result = await builder.with_preferences(owner_id, context=context)
+                retrieved_count = len(result.user_memories) + len(
+                    result.project_memories
+                )
+                record_memory_span_outcome(
+                    span,
+                    retrieved_count=retrieved_count,
+                    latency_ms=elapsed_ms_since(started),
+                )
+                return result
+            except Exception:  # noqa: BLE001 - retrieval must not block callers
+                record_memory_span_outcome(
+                    span,
+                    retrieved_count=0,
+                    latency_ms=elapsed_ms_since(started),
+                )
+                logger.warning(
+                    "Semantic memory context retrieval failed",
+                    owner_id=str(owner_id),
+                    session_id=str(session_id) if session_id is not None else None,
+                    exc_info=True,
+                )
+                return MemoryContext(conversation_summary=conversation_summary)
 
     async def list_project_memories(
         self, *, owner_id: uuid.UUID, project_id: uuid.UUID
@@ -440,43 +465,64 @@ class MemoryManager:
         assert self._prompt_manager is not None
         assert self._embedding_provider is not None
 
-        try:
-            extractor = MemoryExtractor(
-                prompt_manager=self._prompt_manager,
-                settings=self._settings,
-            )
-            candidates = await extractor.extract_candidates(
-                messages=messages,
-                provider=provider,
-                provider_name=provider_name,
-                model=model,
-                session_id=session_id,
-            )
-            if not candidates:
-                return
+        started = time.perf_counter()
+        persisted_count = 0
+        with memory_span("extract") as span:
+            try:
+                extractor = MemoryExtractor(
+                    prompt_manager=self._prompt_manager,
+                    settings=self._settings,
+                )
+                candidates = await extractor.extract_candidates(
+                    messages=messages,
+                    provider=provider,
+                    provider_name=provider_name,
+                    model=model,
+                    session_id=session_id,
+                )
+                if not candidates:
+                    record_memory_span_outcome(
+                        span,
+                        retrieved_count=0,
+                        latency_ms=elapsed_ms_since(started),
+                    )
+                    return
 
-            evaluator = MemoryQualityEvaluator(self._settings)
-            filtered = evaluator.filter_preliminary(candidates)
-            if not filtered:
-                return
+                evaluator = MemoryQualityEvaluator(self._settings)
+                filtered = evaluator.filter_preliminary(candidates)
+                if not filtered:
+                    record_memory_span_outcome(
+                        span,
+                        retrieved_count=0,
+                        latency_ms=elapsed_ms_since(started),
+                    )
+                    return
 
-            embeddings = await self._embed_with_retry([c.content for c in filtered])
-            extraction_model = self._settings.memory_extraction_model.strip() or model
-            await self._persist_approved_candidates(
-                owner_id=owner_id,
-                session_id=session_id,
-                filtered=filtered,
-                embeddings=embeddings,
-                provider_name=provider_name,
-                extraction_model=extraction_model,
-            )
-        except Exception:  # noqa: BLE001 - extraction must never affect chat callers
-            logger.warning(
-                "Durable memory extraction pipeline failed",
-                owner_id=str(owner_id),
-                session_id=str(session_id) if session_id is not None else None,
-                exc_info=True,
-            )
+                embeddings = await self._embed_with_retry([c.content for c in filtered])
+                extraction_model = (
+                    self._settings.memory_extraction_model.strip() or model
+                )
+                persisted_count = await self._persist_approved_candidates(
+                    owner_id=owner_id,
+                    session_id=session_id,
+                    filtered=filtered,
+                    embeddings=embeddings,
+                    provider_name=provider_name,
+                    extraction_model=extraction_model,
+                )
+            except Exception:  # noqa: BLE001 - extraction must never affect chat callers
+                logger.warning(
+                    "Durable memory extraction pipeline failed",
+                    owner_id=str(owner_id),
+                    session_id=str(session_id) if session_id is not None else None,
+                    exc_info=True,
+                )
+            finally:
+                record_memory_span_outcome(
+                    span,
+                    retrieved_count=persisted_count,
+                    latency_ms=elapsed_ms_since(started),
+                )
 
     async def _persist_approved_candidates(
         self,
@@ -487,7 +533,7 @@ class MemoryManager:
         embeddings: list[list[float] | None],
         provider_name: ProviderName,
         extraction_model: str,
-    ) -> None:
+    ) -> int:
         assert self._settings is not None
 
         evaluator = MemoryQualityEvaluator(self._settings)
@@ -496,6 +542,7 @@ class MemoryManager:
 
             sessionmaker = get_sessionmaker()
             bg_provider: MemoryProvider | None = None
+            persisted = 0
             async with sessionmaker() as session:
                 try:
                     bg_provider = self._background_provider_factory(session)
@@ -510,7 +557,7 @@ class MemoryManager:
                         existing_records,
                     )
                     if not approved:
-                        return
+                        return 0
 
                     for candidate, embedding in approved:
                         await self._persist_candidate(
@@ -522,6 +569,7 @@ class MemoryManager:
                             provider_name=provider_name,
                             extraction_model=extraction_model,
                         )
+                        persisted += 1
                     await session.commit()
                 except Exception:
                     await session.rollback()
@@ -532,7 +580,7 @@ class MemoryManager:
                 owner_id=owner_id,
                 session_id=session_id,
             )
-            return
+            return persisted
 
         existing_records = await self._load_existing_records(
             self._provider,
@@ -544,6 +592,7 @@ class MemoryManager:
             embeddings,
             existing_records,
         )
+        persisted = 0
         for candidate, embedding in approved:
             await self._persist_candidate(
                 self._provider,
@@ -554,11 +603,13 @@ class MemoryManager:
                 provider_name=provider_name,
                 extraction_model=extraction_model,
             )
+            persisted += 1
         await self._schedule_lifecycle_processing(
             provider=self._provider,
             owner_id=owner_id,
             session_id=session_id,
         )
+        return persisted
 
     async def _persist_candidate(
         self,
