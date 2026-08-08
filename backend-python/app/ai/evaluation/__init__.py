@@ -17,22 +17,31 @@ from app.ai.evaluation.metrics import (
     precision,
     recall,
 )
-from app.ai.evaluation.report import EvalCaseResult, EvalRunReport
+from app.ai.evaluation.report import (
+    EvalCaseResult,
+    EvalRunEnvironment,
+    EvalRunReport,
+)
 from app.ai.evaluation.runners import (
+    AgentEvalRunner,
     EndToEndEvalRunner,
     PromptEvalRunner,
     RetrievalEvalRunner,
+    WorkflowEvalRunner,
 )
 
 __all__ = [
+    "AgentEvalRunner",
     "EvalCase",
     "EvalCaseResult",
     "EvalDataset",
     "EvalDatasetError",
+    "EvalRunEnvironment",
     "EvalRunReport",
     "EndToEndEvalRunner",
     "PromptEvalRunner",
     "RetrievalEvalRunner",
+    "WorkflowEvalRunner",
     "TARGET_RAG_RESPONSE_MS",
     "TARGET_RETRIEVAL_MS",
     "TARGET_VECTOR_SEARCH_MS",

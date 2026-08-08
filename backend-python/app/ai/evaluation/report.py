@@ -14,7 +14,25 @@ from app.ai.evaluation.metrics import (
     TARGET_RETRIEVAL_MS,
 )
 
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
+
+_ALL_LEVELS: tuple[EvalLevel, ...] = (
+    "prompt",
+    "retrieval",
+    "e2e",
+    "agent",
+    "workflow",
+)
+
+
+@dataclass(frozen=True)
+class EvalRunEnvironment:
+    """Runtime prerequisites captured once per evaluation run."""
+
+    agent_runtime_enabled: bool
+    workflow_engine_enabled: bool
+    postgres_available: bool
+    pgvector_available: bool
 
 
 @dataclass(frozen=True)
@@ -31,6 +49,13 @@ class EvalCaseResult:
     faithfulness: float | None = None
     hallucination: bool | None = None
     retrieved_count: int | None = None
+    tool_calls_correct: bool | None = None
+    terminal_status: str | None = None
+    model: str | None = None
+    model_version: str | None = None
+    temperature: float | None = None
+    seed: int | None = None
+    prompt_version: str | None = None
     latency_warning: str | None = None
     error: str | None = None
     skipped: bool = False
@@ -45,6 +70,7 @@ class EvalRunReport:
     settings_snapshot: dict[str, object]
     results: list[EvalCaseResult] = field(default_factory=list)
     skipped_levels: list[str] = field(default_factory=list)
+    run_environment: EvalRunEnvironment | None = None
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -112,8 +138,16 @@ def print_console_summary(report: EvalRunReport) -> None:
     print(f"  Failed: {report.failed_count}")
     print(f"  Skipped: {report.skipped_count}")
 
-    for level in ("prompt", "retrieval", "e2e"):
-        level_results = report.results_for_level(level)  # type: ignore[arg-type]
+    if report.run_environment is not None:
+        env = report.run_environment
+        print("\n  Run environment:")
+        print(f"    agent_runtime_enabled: {env.agent_runtime_enabled}")
+        print(f"    workflow_engine_enabled: {env.workflow_engine_enabled}")
+        print(f"    postgres_available: {env.postgres_available}")
+        print(f"    pgvector_available: {env.pgvector_available}")
+
+    for level in _ALL_LEVELS:
+        level_results = report.results_for_level(level)
         if not level_results:
             continue
         passed = sum(
@@ -123,7 +157,7 @@ def print_console_summary(report: EvalRunReport) -> None:
             1 for result in level_results if not result.passed and not result.skipped
         )
         skipped = sum(1 for result in level_results if result.skipped)
-        mean_latency = report.mean_latency_ms(level)  # type: ignore[arg-type]
+        mean_latency = report.mean_latency_ms(level)
         latency_text = f"{mean_latency:.1f} ms" if mean_latency is not None else "n/a"
         print(f"\n  [{level}] passed={passed} failed={failed} skipped={skipped}")
         print(f"    mean latency: {latency_text}")
@@ -153,6 +187,16 @@ def print_console_summary(report: EvalRunReport) -> None:
                 detail_parts.append(f"faithfulness={result.faithfulness:.3f}")
             if result.hallucination is not None:
                 detail_parts.append(f"hallucination={result.hallucination}")
+            if result.tool_calls_correct is not None:
+                detail_parts.append(f"tool_calls_correct={result.tool_calls_correct}")
+            if result.terminal_status is not None:
+                detail_parts.append(f"terminal_status={result.terminal_status}")
+            if result.model is not None:
+                detail_parts.append(f"model={result.model}")
+            if result.temperature is not None:
+                detail_parts.append(f"temperature={result.temperature}")
+            if result.prompt_version is not None:
+                detail_parts.append(f"prompt_version={result.prompt_version}")
             if result.latency_warning:
                 detail_parts.append(f"warning={result.latency_warning}")
             if result.error:
@@ -183,14 +227,19 @@ def _serialize_report(report: EvalRunReport) -> dict[str, Any]:
         "timestamp": report.timestamp,
         "dataset_path": report.dataset_path,
         "settings_snapshot": report.settings_snapshot,
+        "run_environment": (
+            asdict(report.run_environment)
+            if report.run_environment is not None
+            else None
+        ),
         "summary": {
             "passed": report.passed_count,
             "failed": report.failed_count,
             "skipped": report.skipped_count,
             "mean_latency_ms": {
-                level: report.mean_latency_ms(level)  # type: ignore[arg-type]
-                for level in ("prompt", "retrieval", "e2e")
-                if report.results_for_level(level)  # type: ignore[arg-type]
+                level: report.mean_latency_ms(level)
+                for level in _ALL_LEVELS
+                if report.results_for_level(level)
             },
             "retrieval": {
                 "mean_precision": report.aggregate_precision(),
