@@ -6,6 +6,13 @@ import asyncio
 import time
 from typing import TYPE_CHECKING
 
+from opentelemetry.trace import Span
+
+from app.ai.observability.tracing.spans import (
+    elapsed_ms_since,
+    record_tool_span_outcome,
+    tool_span,
+)
 from app.ai.tools.authorizer import ToolAuthorizer
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext, ToolResult
@@ -45,123 +52,139 @@ class ToolExecutor:
         start = time.perf_counter()
         tool_name = call.name
 
-        tool = self._registry.get(tool_name)
-        if tool is None:
-            return self._finalize(
-                call=call,
-                context=context,
-                result=ToolResult(
-                    success=False,
-                    error=f"Tool '{tool_name}' is not registered",
-                    error_code="not_found",
-                ),
-                start=start,
-            )
-
-        handler = self._registry.get_handler(tool_name)
-        if handler is None:
-            return self._finalize(
-                call=call,
-                context=context,
-                result=ToolResult(
-                    success=False,
-                    error=f"Handler for tool '{tool_name}' is not registered",
-                    error_code="not_found",
-                ),
-                start=start,
-            )
-
-        arguments = _normalize_handler_arguments(handler, call.arguments)
-        validation_error = self._validator.validate(tool, arguments)
-        if validation_error is not None:
-            return self._finalize(
-                call=call,
-                context=context,
-                result=ToolResult(
-                    success=False,
-                    error=validation_error.message,
-                    error_code="validation_error",
-                ),
-                start=start,
-            )
-
-        auth_error = self._authorizer.authorize(tool, context)
-        if auth_error is not None:
-            return self._finalize(
-                call=call,
-                context=context,
-                result=ToolResult(
-                    success=False,
-                    error=auth_error,
-                    error_code="forbidden",
-                ),
-                start=start,
-            )
-
-        # Phase 7: MCP permission check (after ToolAuthorizer; both must pass)
-        if self._mcp_permission_policy is not None:
-            mcp_permission_error = self._check_mcp_permissions(handler)
-            if mcp_permission_error is not None:
+        with tool_span(tool_name) as span:
+            tool = self._registry.get(tool_name)
+            if tool is None:
                 return self._finalize(
                     call=call,
                     context=context,
                     result=ToolResult(
                         success=False,
-                        error=mcp_permission_error,
+                        error=f"Tool '{tool_name}' is not registered",
+                        error_code="not_found",
+                    ),
+                    start=start,
+                    span=span,
+                )
+
+            handler = self._registry.get_handler(tool_name)
+            if handler is None:
+                return self._finalize(
+                    call=call,
+                    context=context,
+                    result=ToolResult(
+                        success=False,
+                        error=f"Handler for tool '{tool_name}' is not registered",
+                        error_code="not_found",
+                    ),
+                    start=start,
+                    span=span,
+                )
+
+            arguments = _normalize_handler_arguments(handler, call.arguments)
+            validation_error = self._validator.validate(tool, arguments)
+            if validation_error is not None:
+                return self._finalize(
+                    call=call,
+                    context=context,
+                    result=ToolResult(
+                        success=False,
+                        error=validation_error.message,
+                        error_code="validation_error",
+                    ),
+                    start=start,
+                    span=span,
+                )
+
+            auth_error = self._authorizer.authorize(tool, context)
+            if auth_error is not None:
+                return self._finalize(
+                    call=call,
+                    context=context,
+                    result=ToolResult(
+                        success=False,
+                        error=auth_error,
                         error_code="forbidden",
                     ),
                     start=start,
+                    span=span,
+                    authorization_result="denied",
                 )
 
-        try:
-            handler_result = await asyncio.wait_for(
-                handler.execute(arguments, context),
-                timeout=self._settings.request_timeout_seconds,
-            )
-        except TimeoutError:
-            return self._finalize(
-                call=call,
-                context=context,
-                result=ToolResult(
-                    success=False,
-                    error="Tool execution timed out",
-                    error_code="timeout",
-                ),
-                start=start,
-            )
-        except Exception:
-            _logger.exception(
-                "Tool handler raised an exception",
-                tool_name=tool_name,
-                request_id=context.request_id,
-            )
-            return self._finalize(
-                call=call,
-                context=context,
-                result=ToolResult(
-                    success=False,
-                    error="Tool execution failed",
-                    error_code="handler_error",
-                ),
-                start=start,
-            )
+            # Phase 7: MCP permission check (after ToolAuthorizer; both must pass)
+            if self._mcp_permission_policy is not None:
+                mcp_permission_error = self._check_mcp_permissions(handler)
+                if mcp_permission_error is not None:
+                    return self._finalize(
+                        call=call,
+                        context=context,
+                        result=ToolResult(
+                            success=False,
+                            error=mcp_permission_error,
+                            error_code="forbidden",
+                        ),
+                        start=start,
+                        span=span,
+                        authorization_result="denied",
+                    )
 
-        if not handler_result.success:
+            try:
+                handler_result = await asyncio.wait_for(
+                    handler.execute(arguments, context),
+                    timeout=self._settings.request_timeout_seconds,
+                )
+            except TimeoutError:
+                return self._finalize(
+                    call=call,
+                    context=context,
+                    result=ToolResult(
+                        success=False,
+                        error="Tool execution timed out",
+                        error_code="timeout",
+                    ),
+                    start=start,
+                    span=span,
+                    authorization_result="allowed",
+                )
+            except Exception:
+                _logger.exception(
+                    "Tool handler raised an exception",
+                    tool_name=tool_name,
+                    request_id=context.request_id,
+                )
+                return self._finalize(
+                    call=call,
+                    context=context,
+                    result=ToolResult(
+                        success=False,
+                        error="Tool execution failed",
+                        error_code="handler_error",
+                    ),
+                    start=start,
+                    span=span,
+                    authorization_result="allowed",
+                )
+
+            if not handler_result.success:
+                return self._finalize(
+                    call=call,
+                    context=context,
+                    result=handler_result,
+                    start=start,
+                    span=span,
+                    authorization_result="allowed",
+                )
+
+            metadata = dict(handler_result.metadata)
+            metadata.setdefault("tool_name", tool_name)
             return self._finalize(
                 call=call,
                 context=context,
-                result=handler_result,
+                result=handler_result.model_copy(update={"metadata": metadata}),
                 start=start,
+                span=span,
+                authorization_result="allowed",
             )
-
-        metadata = dict(handler_result.metadata)
-        metadata.setdefault("tool_name", tool_name)
-        return self._finalize(
-            call=call,
-            context=context,
-            result=handler_result.model_copy(update={"metadata": metadata}),
-            start=start,
-        )
 
     def _finalize(
         self,
@@ -170,8 +193,10 @@ class ToolExecutor:
         context: ToolExecutionContext,
         result: ToolResult,
         start: float,
+        span: Span | None = None,
+        authorization_result: str | None = None,
     ) -> ToolResult:
-        latency_ms = int((time.perf_counter() - start) * 1000)
+        latency_ms = elapsed_ms_since(start)
         tool_name = call.name
 
         metadata = dict(result.metadata)
@@ -181,6 +206,13 @@ class ToolExecutor:
             metadata["call_id"] = call.call_id
 
         normalized = result.model_copy(update={"metadata": metadata})
+
+        record_tool_span_outcome(
+            span,
+            success=normalized.success,
+            latency_ms=latency_ms,
+            authorization_result=authorization_result,
+        )
 
         if normalized.success:
             _logger.info(

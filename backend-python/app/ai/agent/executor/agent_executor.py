@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from app.ai.agent.exceptions import AgentError
 from app.ai.agent.executor.finalizer import finalize_execution
@@ -24,6 +25,11 @@ from app.ai.agent.scratchpad.scratchpad import Scratchpad
 from app.ai.agent.scratchpad.store import ScratchpadStore, get_scratchpad_store
 from app.ai.agent.state.manager import AgentStateManager
 from app.ai.agent.streaming.publisher import NoOpStreamPublisher
+from app.ai.observability.tracing.spans import (
+    agent_span,
+    elapsed_ms_since,
+    record_agent_iteration_attributes,
+)
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext, ToolResult
 from app.ai.prompts.manager import PromptManager
 from app.core.logging import get_logger
@@ -80,89 +86,117 @@ class AgentExecutor:
             state = AgentStateManager.transition(state, AgentExecutionStatus.PLANNING)
 
             while state.has_remaining_iterations():
-                state = AgentStateManager.begin_iteration(state)
-                iteration_index = state.current_iteration - 1
-                await self._publisher.publish(
-                    AgentStreamEvent.planning(
-                        context.execution_id,
+                iteration_start = time.perf_counter()
+                with agent_span("iteration") as iteration_span:
+                    state = AgentStateManager.begin_iteration(state)
+                    iteration_index = state.current_iteration - 1
+                    tool_calls_count = 0
+                    await self._publisher.publish(
+                        AgentStreamEvent.planning(
+                            context.execution_id,
+                            iteration=iteration_index,
+                        )
+                    )
+
+                    plan = await self._planner.plan_next(
+                        request,
+                        context,
                         iteration=iteration_index,
                     )
-                )
+                    if plan.steps:
+                        last_planner_content = plan.steps[0].reasoning
 
-                plan = await self._planner.plan_next(
-                    request,
-                    context,
-                    iteration=iteration_index,
-                )
-                if plan.steps:
-                    last_planner_content = plan.steps[0].reasoning
+                    if plan.is_final:
+                        state = AgentStateManager.transition(
+                            state,
+                            AgentExecutionStatus.EXECUTING,
+                        )
+                        response = await self._finalize_and_complete(
+                            plan,
+                            request=request,
+                            context=context,
+                            state=state,
+                            scratchpad=scratchpad,
+                            last_planner_content=last_planner_content,
+                        )
+                        record_agent_iteration_attributes(
+                            iteration_span,
+                            iteration_index=iteration_index,
+                            tool_calls_count=tool_calls_count,
+                            latency_ms=elapsed_ms_since(iteration_start),
+                            finish_reason=response.finish_reason,
+                        )
+                        return response
 
-                if plan.is_final:
                     state = AgentStateManager.transition(
                         state,
                         AgentExecutionStatus.EXECUTING,
                     )
-                    return await self._finalize_and_complete(
+                    state, tool_results = await self._execute_tool_plan(
                         plan,
-                        request=request,
-                        context=context,
-                        state=state,
-                        scratchpad=scratchpad,
-                        last_planner_content=last_planner_content,
-                    )
-
-                state = AgentStateManager.transition(
-                    state,
-                    AgentExecutionStatus.EXECUTING,
-                )
-                state, tool_results = await self._execute_tool_plan(
-                    plan,
-                    context=context,
-                    state=state,
-                    tool_context=tool_context,
-                    scratchpad=scratchpad,
-                )
-                state, should_finalize, retry_plan = await self._maybe_reflect(
-                    request=request,
-                    context=context,
-                    state=state,
-                    scratchpad=scratchpad,
-                    tool_results=tool_results,
-                    llm_content=last_planner_content,
-                    last_tool_plan=plan,
-                )
-                if retry_plan is not None:
-                    state, _ = await self._execute_tool_plan(
-                        retry_plan,
                         context=context,
                         state=state,
                         tool_context=tool_context,
                         scratchpad=scratchpad,
                     )
-                if should_finalize:
-                    finalize_plan = ExecutionPlan(
-                        steps=[
-                            PlannedStep(
-                                step_id=f"finalize-reflect-{state.current_iteration}",
-                                action=StepAction.FINALIZE,
-                                reasoning=last_planner_content,
-                            )
-                        ],
-                        iteration=state.current_iteration,
-                        is_final=True,
-                    )
-                    return await self._finalize_and_complete(
-                        finalize_plan,
+                    tool_calls_count += _count_tool_calls(tool_results)
+                    state, should_finalize, retry_plan = await self._maybe_reflect(
                         request=request,
                         context=context,
                         state=state,
                         scratchpad=scratchpad,
-                        last_planner_content=last_planner_content,
+                        tool_results=tool_results,
+                        llm_content=last_planner_content,
+                        last_tool_plan=plan,
                     )
-                if state.status != AgentExecutionStatus.PLANNING:
-                    state = AgentStateManager.transition(
-                        state,
-                        AgentExecutionStatus.PLANNING,
+                    if retry_plan is not None:
+                        state, retry_results = await self._execute_tool_plan(
+                            retry_plan,
+                            context=context,
+                            state=state,
+                            tool_context=tool_context,
+                            scratchpad=scratchpad,
+                        )
+                        tool_calls_count += _count_tool_calls(retry_results)
+                    if should_finalize:
+                        finalize_plan = ExecutionPlan(
+                            steps=[
+                                PlannedStep(
+                                    step_id=f"finalize-reflect-{state.current_iteration}",
+                                    action=StepAction.FINALIZE,
+                                    reasoning=last_planner_content,
+                                )
+                            ],
+                            iteration=state.current_iteration,
+                            is_final=True,
+                        )
+                        response = await self._finalize_and_complete(
+                            finalize_plan,
+                            request=request,
+                            context=context,
+                            state=state,
+                            scratchpad=scratchpad,
+                            last_planner_content=last_planner_content,
+                        )
+                        record_agent_iteration_attributes(
+                            iteration_span,
+                            iteration_index=iteration_index,
+                            tool_calls_count=tool_calls_count,
+                            latency_ms=elapsed_ms_since(iteration_start),
+                            finish_reason=response.finish_reason,
+                        )
+                        return response
+                    if state.status != AgentExecutionStatus.PLANNING:
+                        state = AgentStateManager.transition(
+                            state,
+                            AgentExecutionStatus.PLANNING,
+                        )
+
+                    record_agent_iteration_attributes(
+                        iteration_span,
+                        iteration_index=iteration_index,
+                        tool_calls_count=tool_calls_count,
+                        latency_ms=elapsed_ms_since(iteration_start),
                     )
 
             limit_plan = build_iteration_limit_plan(iteration=state.current_iteration)
@@ -452,6 +486,12 @@ class AgentExecutor:
             iterations=state.current_iteration,
             finish_reason=result.finish_reason,
         )
+
+
+def _count_tool_calls(tool_results: AggregatedToolResults | None) -> int:
+    if tool_results is None:
+        return 0
+    return len(tool_results.records)
 
 
 def _record_tool_results(
