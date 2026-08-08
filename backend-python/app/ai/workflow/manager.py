@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.observability.tracing.spans import (
     capture_current_span_context,
     elapsed_ms_since,
+    mark_span_error_status,
     record_workflow_run_outcome,
     SpanContextSnapshot,
     workflow_run_root_span,
@@ -532,7 +533,12 @@ class WorkflowManager:
             selected_edge_ids=selected_edge_ids,
         )
         if run_status_after_decision is RunStatus.RUNNING:
-            self._schedule_run(continued.id, owner_id=owner_id)
+            self._schedule_run(
+                continued.id,
+                owner_id=owner_id,
+                origin_context=capture_current_span_context(),
+                resume_reason="approval_continue",
+            )
         return continued
 
     async def cancel_run(
@@ -704,6 +710,7 @@ class WorkflowManager:
                     latency_ms=elapsed_ms_since(started),
                 )
             except Exception:  # noqa: BLE001 - background execution must never crash the app
+                mark_span_error_status(run_span, span_name="workflow.run")
                 record_workflow_run_outcome(
                     run_span,
                     run_id=run_id_str,

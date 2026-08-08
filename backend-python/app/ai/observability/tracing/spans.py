@@ -376,7 +376,7 @@ def capture_current_span_context() -> SpanContextSnapshot | None:
         context = trace.get_current_span().get_span_context()
         if not context.is_valid:
             return None
-        trace_state = str(context.trace_state) if context.trace_state else ""
+        trace_state = context.trace_state.to_header()
         return SpanContextSnapshot(
             trace_id=context.trace_id,
             span_id=context.span_id,
@@ -468,6 +468,21 @@ def workflow_run_root_span(
                     error=str(exc),
                     exc_info=True,
                 )
+
+
+def mark_span_error_status(span: Span | None, *, span_name: str = "span") -> None:
+    """Mark a span as failed; telemetry failures are fail-open."""
+    if span is None:
+        return
+    try:
+        span.set_status(Status(StatusCode.ERROR))
+    except Exception as exc:
+        logger.warning(
+            "Observability span status failed",
+            span_name=span_name,
+            error=str(exc),
+            exc_info=True,
+        )
 
 
 def record_rag_span_outcome(

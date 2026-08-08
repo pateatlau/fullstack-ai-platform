@@ -22,7 +22,7 @@ from tests.ai.memory.test_manager import FakeMemoryProvider, _FakeEmbeddingProvi
 
 pytestmark = pytest.mark.anyio
 
-_NOW = datetime.datetime.now(datetime.timezone.utc)
+_NOW = datetime.datetime.now(datetime.UTC)
 _DIMENSIONS = 8
 
 

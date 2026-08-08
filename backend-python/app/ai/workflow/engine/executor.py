@@ -446,7 +446,7 @@ class WorkflowExecutor:
                         node_span,
                         node_type=node.type.value,
                         attempt=attempt,
-                        status=RunStatus.CANCELLED.value,
+                        status=NodeStatus.CANCELLED.value,
                         latency_ms=elapsed_ms_since(attempt_start),
                     )
                     return cancelled

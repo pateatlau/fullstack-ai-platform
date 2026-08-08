@@ -1205,7 +1205,7 @@ Complete platform-wide trace coverage: RAG retrieval, memory retrieval/extractio
 - `rag_span` wired into `Retriever.retrieve()`
 - `memory_span` wired into memory retrieval and extraction entry points
 - `voice_span` wired into voice session lifecycle events
-- `workflow_span` wired into `WorkflowExecutor.step()` (run + node level)
+- `workflow_run_root_span` wired into `WorkflowManager._run_with_store()`; `workflow_span("node")` wired into `WorkflowExecutor._execute_node()`
 - Trace-link propagation for background workflow execution
 - Integration test suite
 
@@ -1229,8 +1229,8 @@ Complete platform-wide trace coverage: RAG retrieval, memory retrieval/extractio
 
 ## Workflow Tracing
 
-- [x] Wrap `WorkflowExecutor.step()` run-level invocation with `workflow_span("run")`; attributes `run_id`, terminal `status`, `latency_ms`.
-- [x] Wrap each `WorkflowNodeExecution` attempt with `workflow_span("node")`; attributes `node_type`, `attempt`, `status`, `latency_ms`.
+- [x] Wrap `WorkflowManager._run_with_store()` (background task entry) with `workflow_run_root_span` (`workflow.run`); attributes `run_id`, terminal `status`, `latency_ms`; span **link** to captured origin context when valid.
+- [x] Wrap each `WorkflowNodeExecution` attempt in `WorkflowExecutor._execute_node()` with `workflow_span("node")`; attributes `node_type`, `attempt`, `status`, `latency_ms`.
 - [x] At `WorkflowManager.start_run()` (or `flush_deferred_run_schedules()` when `defer_schedule=True`), snapshot the active OTel `SpanContext` when `SpanContext.is_valid` — capture `trace_id`, `span_id`, `trace_flags`, and `trace_state` — and pass the immutable snapshot into `_schedule_run()` for the background `asyncio.Task`.
 - [x] Inside the background task, open a fresh run-level root span and add a span **link** to the captured `SpanContext` when valid; omit the link when no valid context exists (best-effort — never fail run scheduling or execution).
 - [x] For `resume()` and `reconcile_orphaned_runs()` (crash recovery / orphan reattach): open a fresh run-level root span with **no** span link; record `run_id` and resume reason as span attributes only.
@@ -1246,7 +1246,7 @@ Complete platform-wide trace coverage: RAG retrieval, memory retrieval/extractio
 
 **Verify**
 
-- `pytest tests/ai/observability/test_rag_tracing.py tests/ai/observability/test_memory_tracing.py tests/ai/observability/test_voice_tracing.py tests/ai/observability/test_workflow_tracing.py`
+- `cd backend-python && pytest tests/ai/observability/test_rag_tracing.py tests/ai/observability/test_memory_tracing.py tests/ai/observability/test_voice_tracing.py tests/ai/observability/test_workflow_tracing.py`
 
 Additional verification:
 

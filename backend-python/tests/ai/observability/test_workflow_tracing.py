@@ -370,3 +370,19 @@ async def test_capture_current_span_context_returns_snapshot_when_valid(
     finally:
         otel_context.detach(token)
         span.end()
+
+
+def test_span_context_snapshot_roundtrips_w3c_trace_state() -> None:
+    from opentelemetry.trace.span import TraceState
+
+    from app.ai.observability.tracing.spans import SpanContextSnapshot
+
+    header = TraceState([("vendor", "opaque")]).to_header()
+    snapshot = SpanContextSnapshot(
+        trace_id=0xABC,
+        span_id=0xDEF,
+        trace_flags=1,
+        trace_state=header,
+    )
+
+    assert snapshot.to_span_context().trace_state.to_header() == header

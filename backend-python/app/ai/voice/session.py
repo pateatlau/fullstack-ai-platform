@@ -247,13 +247,8 @@ class VoiceSessionManager:
 
         session.is_active = False
         session.close_reason = reason
-
-        end_voice_session_span(
-            session._observability_span,
-            start=session._observability_started_at,
-            status=reason,
-        )
-        session._observability_span = None
+        observability_span = session._observability_span
+        observability_started_at = session._observability_started_at
 
         active_id = self._active_by_user.get(session.user_id)
         if active_id == voice_session_id:
@@ -272,6 +267,13 @@ class VoiceSessionManager:
 
         session._tasks.clear()
         session._cleanup_callbacks.clear()
+
+        end_voice_session_span(
+            observability_span,
+            start=observability_started_at,
+            status=reason,
+        )
+        session._observability_span = None
         return True
 
     def _require_active_session(self, voice_session_id: str) -> ManagedVoiceSession:
