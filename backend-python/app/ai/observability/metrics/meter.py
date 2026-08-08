@@ -53,6 +53,16 @@ class MeterRegistry:
         return cls._prometheus_reader
 
     @classmethod
+    def render_prometheus_metrics(cls) -> bytes | None:
+        """Render aggregate counters/histograms in Prometheus text format."""
+        reader = cls.get_prometheus_reader()
+        if reader is None:
+            return None
+        from prometheus_client import generate_latest
+
+        return generate_latest(reader._registry)
+
+    @classmethod
     def reset_for_tests(cls) -> None:
         """Reset registry state — test helper only."""
         import opentelemetry.metrics._internal as ot_metrics
