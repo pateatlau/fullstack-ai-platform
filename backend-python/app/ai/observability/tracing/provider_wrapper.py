@@ -8,6 +8,7 @@ from typing import Any
 
 from opentelemetry.trace import Span
 
+from app.ai.observability.metrics.instruments import record_llm_request_metrics
 from app.ai.observability.tracing.spans import _set_span_attributes, llm_span
 from app.providers.base import (
     ChatMessageInput,
@@ -23,10 +24,19 @@ from app.schemas.chat import ChatMessageSchema
 def _record_llm_completion_attributes(
     span: Span | None,
     *,
+    provider: str,
+    model: str,
     finish_reason: str | None,
     usage: ProviderUsage | None,
     latency_ms: int,
+    succeeded: bool = True,
 ) -> None:
+    record_llm_request_metrics(
+        provider=provider,
+        model=model,
+        succeeded=succeeded,
+        total_tokens=usage.total_tokens if usage is not None else None,
+    )
     if span is None:
         return
     attributes: dict[str, Any] = {
@@ -66,6 +76,8 @@ class TracingLLMProvider:
             latency_ms = int((time.perf_counter() - start) * 1000)
             _record_llm_completion_attributes(
                 span,
+                provider=self._provider_name,
+                model=model,
                 finish_reason=result.finish_reason,
                 usage=result.usage,
                 latency_ms=latency_ms,
@@ -93,6 +105,8 @@ class TracingLLMProvider:
             latency_ms = int((time.perf_counter() - start) * 1000)
             _record_llm_completion_attributes(
                 span,
+                provider=self._provider_name,
+                model=model,
                 finish_reason=result.finish_reason,
                 usage=result.usage,
                 latency_ms=latency_ms,
@@ -126,6 +140,8 @@ class TracingLLMProvider:
             latency_ms = int((time.perf_counter() - start) * 1000)
             _record_llm_completion_attributes(
                 span,
+                provider=self._provider_name,
+                model=model,
                 finish_reason=terminal_finish_reason,
                 usage=terminal_usage,
                 latency_ms=latency_ms,

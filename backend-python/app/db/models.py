@@ -27,6 +27,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     UniqueConstraint,
     func,
     text,
@@ -250,6 +251,8 @@ class UsageEvent(Base):
     token_source: Mapped[str] = mapped_column(nullable=False)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     request_id: Mapped[str | None] = mapped_column(nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Numeric(12, 6), nullable=True)
+    pricing_version: Mapped[str | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
     )
@@ -270,6 +273,12 @@ class UsageEvent(Base):
         Index("ix_usage_events_user_created", "user_id", "created_at"),
         Index("ix_usage_events_guest_created", "guest_id", "created_at"),
         Index("ix_usage_events_session_created", "session_id", "created_at"),
+        Index(
+            "ix_usage_events_provider_model_created",
+            "provider",
+            "model",
+            "created_at",
+        ),
     )
 
 

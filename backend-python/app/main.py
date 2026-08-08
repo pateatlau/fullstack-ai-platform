@@ -13,6 +13,9 @@ from app.ai.deps import (
     reconcile_workflow_runs_at_startup,
 )
 from app.ai.observability.metrics.meter import MeterRegistry
+from app.ai.observability.cost.calculator import CostRegistry
+from app.ai.observability.metrics.instruments import MetricInstruments
+from app.ai.observability.metrics.labels import set_model_registry
 from app.ai.observability.tracing.provider import TracerRegistry
 from app.ai.tools.registration import register_mcp_tools, register_production_tools
 from app.core.config import get_settings
@@ -34,6 +37,11 @@ async def lifespan(_: FastAPI):
     setup_logging(settings)
     TracerRegistry.initialize(settings)
     MeterRegistry.initialize(settings)
+    CostRegistry.initialize(settings)
+    calculator = CostRegistry.get_calculator()
+    if calculator is not None:
+        set_model_registry(calculator.pricing_table.model_registry)
+    MetricInstruments.initialize()
     settings.log_development_warnings(logger)
 
     # Register V1 production tools

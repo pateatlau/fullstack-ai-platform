@@ -209,6 +209,7 @@ class ToolExecutor:
 
         record_tool_span_outcome(
             span,
+            tool_name=tool_name,
             success=normalized.success,
             latency_ms=latency_ms,
             authorization_result=authorization_result,

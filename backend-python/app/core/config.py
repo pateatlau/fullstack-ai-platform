@@ -231,6 +231,10 @@ class Settings(BaseSettings):
     # Dev-safe default — override per environment (staging 0.25, production 0.05).
     otel_traces_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
 
+    # Cost accounting (honoured only when OBSERVABILITY_ENABLED=true).
+    observability_cost_pricing_file: str = "config/model_pricing.yaml"
+    observability_cost_pricing_version: str = "2026-08"
+
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, value: object) -> str:

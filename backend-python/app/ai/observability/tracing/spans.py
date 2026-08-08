@@ -25,6 +25,13 @@ from opentelemetry.trace import (
 )
 from opentelemetry.trace.span import TraceState
 
+from app.ai.observability.metrics.instruments import (
+    record_agent_iteration_metric,
+    record_tool_call_metrics,
+    record_workflow_node_execution_metric,
+    record_workflow_parallel_branch_metric,
+    record_workflow_run_terminal,
+)
 from app.ai.observability.tracing.provider import TracerRegistry, get_tracer
 from app.core.logging import get_logger, sanitize_value
 
@@ -271,15 +278,22 @@ def workflow_span(action: WorkflowSpanAction) -> Generator[Span | None, None, No
 def record_tool_span_outcome(
     span: Span | None,
     *,
+    tool_name: str,
     success: bool,
     latency_ms: int,
     authorization_result: str | None = None,
     retry_count: int | None = None,
 ) -> None:
     """Attach terminal tool execution attributes and mark failed outcomes on the span."""
+    record_tool_call_metrics(
+        tool_name=tool_name,
+        success=success,
+        latency_ms=latency_ms,
+    )
     if span is None:
         return
     attributes: dict[str, Any] = {
+        "tool_name": tool_name,
         "success": success,
         "latency_ms": latency_ms,
         "retry_count": retry_count
@@ -310,6 +324,7 @@ def record_agent_iteration_attributes(
     finish_reason: str | None = None,
 ) -> None:
     """Attach terminal agent iteration attributes to an ``agent.iteration`` span."""
+    record_agent_iteration_metric(succeeded=True)
     if span is None:
         return
     attributes: dict[str, Any] = {
@@ -575,6 +590,7 @@ def record_workflow_run_outcome(
     latency_ms: int,
 ) -> None:
     """Attach terminal workflow run attributes."""
+    record_workflow_run_terminal(status=status)
     if span is None:
         return
     _set_span_attributes(
@@ -594,8 +610,16 @@ def record_workflow_node_outcome(
     attempt: int,
     status: str,
     latency_ms: int,
+    parallel_branch_count: int | None = None,
 ) -> None:
     """Attach terminal workflow node attempt attributes."""
+    record_workflow_node_execution_metric(
+        node_type=node_type,
+        status=status,
+        latency_ms=latency_ms,
+    )
+    if parallel_branch_count is not None and node_type == "fork":
+        record_workflow_parallel_branch_metric(branch_count=parallel_branch_count)
     if span is None:
         return
     _set_span_attributes(
