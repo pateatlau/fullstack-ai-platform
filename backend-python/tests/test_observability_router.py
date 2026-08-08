@@ -219,6 +219,44 @@ async def test_usage_summary_happy_path_group_by_day(
 
 
 @pytest.mark.anyio
+async def test_usage_summary_group_by_day_uses_utc_not_session_timezone(
+    db_session,
+    observability_api_app: FastAPI,
+) -> None:
+    """Day buckets must follow UTC to match UTC range bounds, not DB session TZ."""
+    await _skip_without_usage_cost_columns(db_session)
+    await db_session.execute(text("SET TIME ZONE 'America/New_York'"))
+
+    user_id = await _make_user(db_session)
+    # 2026-08-08 02:00 UTC is still 2026-08-07 in US/Eastern.
+    created_at = datetime.datetime(2026, 8, 8, 2, 0, tzinfo=datetime.UTC)
+    await _seed_usage_event(
+        db_session,
+        user_id=user_id,
+        guest_id=None,
+        provider="openai",
+        model="gpt-4o-mini",
+        prompt_tokens=10,
+        completion_tokens=5,
+        created_at=created_at,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=observability_api_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get(
+            "/api/observability/usage?group_by=day&since=2026-08-08&until=2026-08-08",
+            headers=_auth_headers(user_id),
+        )
+
+    assert response.status_code == 200
+    rows = response.json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["day"] == "2026-08-08"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("group_by", ["day", "provider", "model"])
 async def test_usage_summary_group_by_modes(
     db_session,

@@ -102,7 +102,9 @@ class UsageAggregator:
         group_columns: list[Any] = []
 
         if group_by == "day":
-            day_col = func.date_trunc("day", UsageEvent.created_at).label("day")
+            # Truncate in UTC so day buckets align with UTC range_start/range_end.
+            created_at_utc = func.timezone("UTC", UsageEvent.created_at)
+            day_col = func.date_trunc("day", created_at_utc).label("day")
             select_columns.insert(0, day_col)
             group_columns.append(day_col)
         elif group_by == "provider":

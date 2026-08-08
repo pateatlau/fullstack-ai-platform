@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from prometheus_client import CollectorRegistry
 from opentelemetry import metrics
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.metrics import Meter, NoOpMeterProvider
@@ -17,6 +18,7 @@ class MeterRegistry:
     _initialized = False
     _enabled = False
     _prometheus_reader: PrometheusMetricReader | None = None
+    _prometheus_registry: CollectorRegistry | None = None
 
     @classmethod
     def initialize(cls, settings: Settings) -> None:
@@ -31,7 +33,9 @@ class MeterRegistry:
             return
 
         resource = Resource.create({"service.name": settings.otel_service_name})
-        cls._prometheus_reader = PrometheusMetricReader()
+        prometheus_registry = CollectorRegistry()
+        cls._prometheus_registry = prometheus_registry
+        cls._prometheus_reader = PrometheusMetricReader(registry=prometheus_registry)
         provider = MeterProvider(
             resource=resource,
             metric_readers=[cls._prometheus_reader],
@@ -53,14 +57,19 @@ class MeterRegistry:
         return cls._prometheus_reader
 
     @classmethod
+    def get_prometheus_registry(cls) -> CollectorRegistry | None:
+        """Return the dedicated Prometheus registry when enabled; ``None`` when disabled."""
+        return cls._prometheus_registry
+
+    @classmethod
     def render_prometheus_metrics(cls) -> bytes | None:
         """Render aggregate counters/histograms in Prometheus text format."""
-        reader = cls.get_prometheus_reader()
-        if reader is None:
+        registry = cls.get_prometheus_registry()
+        if registry is None:
             return None
         from prometheus_client import generate_latest
 
-        return generate_latest(reader._registry)
+        return generate_latest(registry)
 
     @classmethod
     def reset_for_tests(cls) -> None:
@@ -70,6 +79,7 @@ class MeterRegistry:
         cls._initialized = False
         cls._enabled = False
         cls._prometheus_reader = None
+        cls._prometheus_registry = None
         ot_metrics._METER_PROVIDER = ot_metrics._PROXY_METER_PROVIDER
         ot_metrics._METER_PROVIDER_SET_ONCE._done = False
 
