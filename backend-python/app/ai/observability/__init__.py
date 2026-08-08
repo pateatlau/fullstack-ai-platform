@@ -3,6 +3,7 @@
 See ``docs/plans/post-mvp-v2-epic-07-observability-and-evaluation.md`` Part I § Public APIs.
 """
 
+from app.ai.observability.aggregation.usage_aggregator import UsageAggregator
 from app.ai.observability.cost.calculator import CostCalculator
 from app.ai.observability.cost.pricing import ModelPricingTable
 from app.ai.observability.exceptions import (
@@ -38,6 +39,7 @@ __all__ = [
     "ObservabilityError",
     "TracerRegistry",
     "TracingLLMProvider",
+    "UsageAggregator",
     "agent_span",
     "format_span_context",
     "get_meter",

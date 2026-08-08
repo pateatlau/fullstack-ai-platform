@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from app.ai.voice.session import VoiceSessionManager
     from app.ai.workflow.manager import WorkflowManager
     from app.ai.workflow.providers.postgres import PostgresWorkflowStore
+    from app.ai.observability.aggregation.usage_aggregator import UsageAggregator
 
 from app.ai.agent.runtime.default_agent import DefaultAgent
 from app.ai.agent.runtime.factory import create_default_agent
@@ -678,3 +679,17 @@ async def reconcile_workflow_runs_at_startup(settings: Settings) -> int:
             background_store_factory=background_store_factory,
         )
         return await manager.reconcile_orphaned_runs()
+
+
+# ============================================================================
+# Observability (Epic 07)
+# ============================================================================
+
+
+def get_usage_aggregator(
+    session: AsyncSession = Depends(get_db_session),
+) -> "UsageAggregator":
+    """Return a request-scoped usage/cost aggregator over ``usage_events``."""
+    from app.ai.observability.aggregation.usage_aggregator import UsageAggregator
+
+    return UsageAggregator(session)
