@@ -25,7 +25,7 @@ from opentelemetry.trace import (
 )
 from opentelemetry.trace.span import TraceState
 
-from app.ai.observability.tracing.provider import get_tracer
+from app.ai.observability.tracing.provider import TracerRegistry, get_tracer
 from app.core.logging import get_logger, sanitize_value
 
 logger = get_logger(__name__)
@@ -113,6 +113,11 @@ def _set_span_attributes(span: Span, attributes: Mapping[str, Any]) -> None:
             )
 
 
+def _observability_enabled() -> bool:
+    """Cheap gate — skip span work entirely when observability is disabled."""
+    return TracerRegistry.is_enabled()
+
+
 @contextmanager
 def _observability_span(
     span_name: str,
@@ -121,6 +126,10 @@ def _observability_span(
     attributes: Mapping[str, Any] | None = None,
 ) -> Generator[Span | None, None, None]:
     """Open a named span; telemetry failures are fail-open, business errors propagate."""
+    if not _observability_enabled():
+        yield None
+        return
+
     span: Span | None = None
     token: object | None = None
     try:
@@ -361,6 +370,8 @@ class SpanContextSnapshot:
 
 def capture_current_span_context() -> SpanContextSnapshot | None:
     """Snapshot the active span context when valid — best-effort, never raises."""
+    if not _observability_enabled():
+        return None
     try:
         context = trace.get_current_span().get_span_context()
         if not context.is_valid:
@@ -389,6 +400,10 @@ def workflow_run_root_span(
     resume_reason: str | None = None,
 ) -> Generator[Span | None, None, None]:
     """Open a fresh run-level root span, optionally linked to a captured context."""
+    if not _observability_enabled():
+        yield None
+        return
+
     span: Span | None = None
     token: object | None = None
     links: tuple[Link, ...] = ()
@@ -496,6 +511,8 @@ def record_memory_span_outcome(
 def begin_voice_session_span() -> tuple[Span | None, float]:
     """Start a long-lived ``voice.session`` span; end via ``end_voice_session_span``."""
     start = time.perf_counter()
+    if not _observability_enabled():
+        return None, start
     try:
         span = get_tracer(__name__).start_span("voice.session")
         return span, start
