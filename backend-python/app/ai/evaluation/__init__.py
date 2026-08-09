@@ -22,6 +22,7 @@ from app.ai.evaluation.report import (
     EvalRunEnvironment,
     EvalRunReport,
 )
+from app.ai.evaluation.regression import RegressionChecker, RegressionResult
 from app.ai.evaluation.runners import (
     AgentEvalRunner,
     EndToEndEvalRunner,
@@ -40,6 +41,8 @@ __all__ = [
     "EvalRunReport",
     "EndToEndEvalRunner",
     "PromptEvalRunner",
+    "RegressionChecker",
+    "RegressionResult",
     "RetrievalEvalRunner",
     "WorkflowEvalRunner",
     "TARGET_RAG_RESPONSE_MS",

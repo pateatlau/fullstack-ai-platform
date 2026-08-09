@@ -221,6 +221,96 @@ def write_json_report(report: EvalRunReport, output_path: Path) -> None:
     )
 
 
+def load_json_report(path: Path) -> EvalRunReport:
+    """Load an evaluation report from a JSON file."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"Report root must be a JSON object: {path}")
+
+    run_environment = None
+    env_raw = payload.get("run_environment")
+    if isinstance(env_raw, dict):
+        run_environment = EvalRunEnvironment(
+            agent_runtime_enabled=bool(env_raw.get("agent_runtime_enabled")),
+            workflow_engine_enabled=bool(env_raw.get("workflow_engine_enabled")),
+            postgres_available=bool(env_raw.get("postgres_available")),
+            pgvector_available=bool(env_raw.get("pgvector_available")),
+        )
+
+    results_raw = payload.get("results")
+    if not isinstance(results_raw, list):
+        raise ValueError(f"Report missing results list: {path}")
+
+    results: list[EvalCaseResult] = []
+    for item in results_raw:
+        if not isinstance(item, dict):
+            raise ValueError(f"Report result entry must be an object: {path}")
+        results.append(
+            EvalCaseResult(
+                case_id=str(item["case_id"]),
+                level=item["level"],  # type: ignore[arg-type]
+                passed=bool(item.get("passed", False)),
+                latency_ms=int(item.get("latency_ms", 0)),
+                precision=_optional_float(item.get("precision")),
+                recall=_optional_float(item.get("recall")),
+                correctness=_optional_bool(item.get("correctness")),
+                faithfulness=_optional_float(item.get("faithfulness")),
+                hallucination=_optional_bool(item.get("hallucination")),
+                retrieved_count=_optional_int(item.get("retrieved_count")),
+                tool_calls_correct=_optional_bool(item.get("tool_calls_correct")),
+                terminal_status=_optional_str(item.get("terminal_status")),
+                model=_optional_str(item.get("model")),
+                model_version=_optional_str(item.get("model_version")),
+                temperature=_optional_float(item.get("temperature")),
+                seed=_optional_int(item.get("seed")),
+                prompt_version=_optional_str(item.get("prompt_version")),
+                latency_warning=_optional_str(item.get("latency_warning")),
+                error=_optional_str(item.get("error")),
+                skipped=bool(item.get("skipped", False)),
+                skip_reason=_optional_str(item.get("skip_reason")),
+            )
+        )
+
+    skipped_levels_raw = payload.get("skipped_levels", [])
+    skipped_levels = (
+        [str(item) for item in skipped_levels_raw]
+        if isinstance(skipped_levels_raw, list)
+        else []
+    )
+
+    settings_snapshot = payload.get("settings_snapshot", {})
+    if not isinstance(settings_snapshot, dict):
+        settings_snapshot = {}
+
+    return EvalRunReport(
+        dataset_path=str(payload.get("dataset_path", "")),
+        settings_snapshot=settings_snapshot,
+        results=results,
+        skipped_levels=skipped_levels,
+        run_environment=run_environment,
+        timestamp=str(payload.get("timestamp", "")),
+        schema_version=int(payload.get("schema_version", REPORT_SCHEMA_VERSION)),
+    )
+
+
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _optional_bool(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) else None
+
+
+def _optional_float(value: object) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
 def _serialize_report(report: EvalRunReport) -> dict[str, Any]:
     return {
         "schema_version": report.schema_version,

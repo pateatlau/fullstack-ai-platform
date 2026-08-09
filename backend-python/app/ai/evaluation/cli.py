@@ -22,6 +22,11 @@ from app.ai.evaluation.report import (
     print_console_summary,
     write_json_report,
 )
+from app.ai.evaluation.regression import (
+    RegressionChecker,
+    load_baseline_report,
+    print_regression_summary,
+)
 from app.ai.evaluation.runners import (
     AgentEvalRunner,
     EndToEndEvalRunner,
@@ -36,6 +41,7 @@ from app.core.config import Settings, get_settings
 
 DEFAULT_DATASET = Path("tests/data/evaluation/sample.yaml")
 DEFAULT_OUTPUT = Path(".eval/eval-report.json")
+DEFAULT_BASELINE = Path("tests/data/evaluation/baseline-report.json")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,6 +70,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--use-judge",
         action="store_true",
         help="Enable LLM-as-judge for e2e faithfulness/hallucination checks.",
+    )
+    parser.add_argument(
+        "--check-regression",
+        type=Path,
+        default=None,
+        metavar="BASELINE",
+        help="Compare this run against a baseline report; non-zero exit on regression.",
+    )
+    parser.add_argument(
+        "--update-baseline",
+        nargs="?",
+        const=DEFAULT_BASELINE,
+        default=None,
+        type=Path,
+        metavar="PATH",
+        help=(
+            "Write a git-tracked baseline report (requires --level all and "
+            "enabled agent/workflow runtimes with Postgres/pgvector)."
+        ),
     )
     return parser
 
@@ -289,7 +314,38 @@ def _skipped_result(*, case_id: str, level: EvalLevel, reason: str):
     )
 
 
+def _skipped_agent_workflow_results(report: EvalRunReport) -> list[str]:
+    reasons: list[str] = []
+    for result in report.results:
+        if result.level in {"agent", "workflow"} and result.skipped:
+            skip_reason = result.skip_reason or "skipped"
+            reasons.append(f"{result.case_id}: {skip_reason}")
+    return reasons
+
+
+def _baseline_eligible_environment(report: EvalRunReport) -> str | None:
+    env = report.run_environment
+    if env is None:
+        return "run_environment was not captured"
+    if not env.agent_runtime_enabled:
+        return "AGENT_RUNTIME_ENABLED=false"
+    if not env.workflow_engine_enabled:
+        return "WORKFLOW_ENGINE_ENABLED=false"
+    if not env.postgres_available:
+        return "Postgres unavailable"
+    if not env.pgvector_available:
+        return "pgvector extension unavailable"
+    return None
+
+
 async def run_eval(args: argparse.Namespace) -> int:
+    if args.update_baseline is not None and args.level != "all":
+        print(
+            "--update-baseline requires --level all.",
+            file=sys.stderr,
+        )
+        return 2
+
     get_settings.cache_clear()
     settings = get_settings()
     levels = _levels_to_run(args.level)
@@ -302,9 +358,66 @@ async def run_eval(args: argparse.Namespace) -> int:
     )
     if early_exit is not None:
         return early_exit
+
     print_console_summary(report)
     write_json_report(report, args.output)
     print(f"\nJSON report written to: {args.output}")
+
+    if args.update_baseline is not None:
+        return _handle_update_baseline(report, args.update_baseline)
+
+    if args.check_regression is not None:
+        return _handle_check_regression(report, settings, args.check_regression)
+
+    return 0 if report.all_passed() else 1
+
+
+def _handle_update_baseline(report: EvalRunReport, baseline_path: Path) -> int:
+    env_error = _baseline_eligible_environment(report)
+    if env_error is not None:
+        print(
+            f"Refusing to update baseline: {env_error}",
+            file=sys.stderr,
+        )
+        return 2
+
+    skipped = _skipped_agent_workflow_results(report)
+    if skipped:
+        print(
+            "Refusing to update baseline: agent/workflow cases were skipped:",
+            file=sys.stderr,
+        )
+        for reason in skipped:
+            print(f"  - {reason}", file=sys.stderr)
+        return 2
+
+    if not report.all_passed():
+        print(
+            "Refusing to update baseline: current run has failing cases.",
+            file=sys.stderr,
+        )
+        return 1
+
+    write_json_report(report, baseline_path)
+    print(f"\nBaseline updated: {baseline_path}")
+    return 0
+
+
+def _handle_check_regression(
+    report: EvalRunReport,
+    settings: Settings,
+    baseline_path: Path,
+) -> int:
+    baseline = load_baseline_report(baseline_path)
+    result = RegressionChecker.compare(
+        report,
+        baseline,
+        pass_rate_tolerance_pct=settings.observability_regression_pass_rate_tolerance_pct,
+        latency_tolerance_pct=settings.observability_regression_latency_tolerance_pct,
+    )
+    print_regression_summary(result)
+    if result.has_regression:
+        return 1
     return 0 if report.all_passed() else 1
 
 

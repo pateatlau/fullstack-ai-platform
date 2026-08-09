@@ -99,6 +99,26 @@ async def test_agent_eval_runner_uses_case_model_and_temperature_overrides() -> 
 
 
 @pytest.mark.anyio
+async def test_agent_eval_runner_passes_with_multi_tool_calls() -> None:
+    runner = AgentEvalRunner(
+        settings=_settings(),
+        prompt_manager=create_prompt_manager(),
+    )
+
+    result = await runner.run_case(
+        _agent_case(
+            id="agent_multi_echo",
+            goal="Echo twice",
+            expected_tool_calls=("echo", "echo"),
+            expected_outcome="done twice",
+        )
+    )
+
+    assert result.passed is True
+    assert result.tool_calls_correct is True
+
+
+@pytest.mark.anyio
 async def test_agent_eval_runner_records_error_without_fabricated_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

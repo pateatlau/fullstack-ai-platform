@@ -22,6 +22,8 @@ def _args(**overrides: object):
         "dataset": DATASET,
         "output": Path(".eval/test-eval-report.json"),
         "use_judge": False,
+        "check_regression": None,
+        "update_baseline": None,
     }
     base.update(overrides)
     return Namespace(**base)
@@ -39,7 +41,7 @@ async def test_cli_level_prompt_runs_offline(
 
     assert exit_code == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["summary"]["passed"] >= 2
+    assert payload["summary"]["passed"] >= 5
     assert payload["schema_version"] == 2
     assert payload["run_environment"] is not None
 
@@ -56,7 +58,7 @@ async def test_cli_level_agent_runs_when_flag_on(
     exit_code = await run_eval(_args(level="agent", output=output))
 
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert len(payload["results"]) == 1
+    assert len(payload["results"]) == 2
     assert payload["results"][0]["level"] == "agent"
     assert exit_code in {0, 1}
 
@@ -119,7 +121,7 @@ async def test_cli_level_all_smoke(
 
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert "results" in payload
-    assert len(payload["results"]) == 7
+    assert len(payload["results"]) == 16
     assert payload["run_environment"] is not None
     assert exit_code in {0, 1}
 

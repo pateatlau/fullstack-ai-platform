@@ -19,7 +19,7 @@ def test_load_valid_sample_yaml() -> None:
     dataset = load_dataset(DATA_DIR / "sample.yaml")
 
     assert dataset.path.name == "sample.yaml"
-    assert len(dataset.cases) == 7
+    assert len(dataset.cases) == 16
     levels = {case.level for case in dataset.cases}
     assert levels == {"prompt", "retrieval", "e2e", "agent", "workflow"}
 
