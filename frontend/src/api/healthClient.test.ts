@@ -21,6 +21,8 @@ describe('healthClient', () => {
           rag_enabled: true,
           voice_enabled: false,
           memory_enabled: true,
+          workflow_engine_enabled: false,
+          observability_enabled: true,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),
@@ -34,6 +36,7 @@ describe('healthClient', () => {
     expect(health.rag_enabled).toBe(true)
     expect(health.voice_enabled).toBe(false)
     expect(health.memory_enabled).toBe(true)
+    expect(health.observability_enabled).toBe(true)
     expect(fetchMock).toHaveBeenCalledWith('/api/health')
   })
 })
