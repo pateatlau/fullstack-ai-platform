@@ -20,6 +20,24 @@ from sqlalchemy.ext.asyncio import (
 from app.core.config import Settings, get_settings
 
 
+async def dispose_engine_cache() -> None:
+    """Dispose the cached engine (if any) and clear factory caches.
+
+    Required when the app lifespan or an HTTP test client shuts down on one
+    anyio event loop and a later test runs on a fresh loop — a disposed engine
+    left in ``lru_cache`` raises "attached to a different loop".
+    """
+    cache_clear = getattr(get_engine, "cache_clear", None)
+    if callable(cache_clear):
+        if get_engine.cache_info().currsize:
+            await get_engine().dispose()
+        cache_clear()
+
+    sessionmaker_cache_clear = getattr(get_sessionmaker, "cache_clear", None)
+    if callable(sessionmaker_cache_clear):
+        sessionmaker_cache_clear()
+
+
 @lru_cache
 def get_engine() -> AsyncEngine:
     """Return the process-wide async engine (created once)."""

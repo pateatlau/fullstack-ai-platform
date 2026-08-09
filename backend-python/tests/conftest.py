@@ -21,6 +21,34 @@ from app.core.config import Settings, get_settings
 from app.middleware.rate_limit import reset_rate_limiter
 
 
+def _reset_observability_and_db_caches() -> None:
+    """Clear process singletons so anyio's per-test loops never reuse stale state."""
+    import asyncio
+
+    from app.ai.observability.cost.calculator import CostRegistry
+    from app.ai.observability.metrics.instruments import MetricInstruments
+    from app.ai.observability.metrics.meter import MeterRegistry
+    from app.ai.observability.tracing.provider import TracerRegistry
+    from app.db.engine import dispose_engine_cache, get_engine, get_sessionmaker
+
+    TracerRegistry.reset_for_tests()
+    MeterRegistry.reset_for_tests()
+    CostRegistry.reset_for_tests()
+    MetricInstruments.reset_for_tests()
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(dispose_engine_cache())
+    else:
+        engine_cache_clear = getattr(get_engine, "cache_clear", None)
+        if callable(engine_cache_clear):
+            engine_cache_clear()
+        sessionmaker_cache_clear = getattr(get_sessionmaker, "cache_clear", None)
+        if callable(sessionmaker_cache_clear):
+            sessionmaker_cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def _isolate_rate_limit_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     # Prevent the shared test client IP bucket from tripping default limits.
@@ -30,11 +58,13 @@ def _isolate_rate_limit_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]
     monkeypatch.setenv("CHAT_PERSISTENCE_ENABLED", "false")
     monkeypatch.setenv("MEMORY_ENABLED", "false")
     monkeypatch.setenv("WORKFLOW_ENGINE_ENABLED", "false")
+    monkeypatch.setenv("OBSERVABILITY_ENABLED", "false")
     reset_rate_limiter()
     get_settings.cache_clear()
     yield
     reset_rate_limiter()
     get_settings.cache_clear()
+    _reset_observability_and_db_caches()
 
 
 @pytest.fixture
