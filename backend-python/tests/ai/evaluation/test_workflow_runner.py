@@ -299,6 +299,11 @@ async def test_workflow_eval_runner_rolls_back_on_failure(
     session = AsyncMock()
     manager = MagicMock()
     manager.create_definition = AsyncMock(side_effect=RuntimeError("create failed"))
+    cleanup = AsyncMock()
+    monkeypatch.setattr(
+        "app.ai.evaluation.runners._cleanup_eval_workflow_owner",
+        cleanup,
+    )
 
     async def fake_create_user(self: WorkflowEvalRunner) -> uuid.UUID:
         return uuid.uuid4()
@@ -315,3 +320,4 @@ async def test_workflow_eval_runner_rolls_back_on_failure(
     assert result.passed is False
     assert result.error == "create failed"
     session.rollback.assert_awaited_once()
+    cleanup.assert_awaited_once()

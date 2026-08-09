@@ -14,6 +14,7 @@ from app.ai.evaluation.runners import (
     EndToEndEvalRunner,
     PromptEvalRunner,
     RetrievalEvalRunner,
+    WorkflowEvalRunner,
     pgvector_available,
 )
 from app.ai.interfaces.vector_store import ScoredChunk
@@ -60,6 +61,40 @@ def _e2e_case(case_id: str) -> EvalCase:
     case = next(item for item in dataset.cases if item.id == case_id)
     assert case.level == "e2e"
     return case
+
+
+def _workflow_case(case_id: str) -> EvalCase:
+    dataset = load_dataset(DATASET)
+    case = next(item for item in dataset.cases if item.id == case_id)
+    assert case.level == "workflow"
+    return case
+
+
+async def _count_eval_workflow_users(session) -> int:
+    from sqlalchemy import func, select
+
+    from app.db.models import User
+
+    count = await session.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(User.external_auth_id.like("eval-workflow-%"))
+    )
+    return int(count or 0)
+
+
+async def _count_eval_workflow_runs(session) -> int:
+    from sqlalchemy import func, select
+
+    from app.db.models import User, WorkflowRunRecord
+
+    count = await session.scalar(
+        select(func.count())
+        .select_from(WorkflowRunRecord)
+        .join(User, WorkflowRunRecord.owner_id == User.id)
+        .where(User.external_auth_id.like("eval-workflow-%"))
+    )
+    return int(count or 0)
 
 
 def test_prompt_eval_runner_pass_and_fail() -> None:
@@ -320,3 +355,22 @@ async def test_pgvector_available_false_when_query_fails() -> None:
     session = AsyncMock()
     session.scalar = AsyncMock(side_effect=RuntimeError("db down"))
     assert await pgvector_available(session) is False
+
+
+@pytest.mark.anyio
+async def test_workflow_eval_integration_cleans_up_persisted_records(
+    pgvector_session,
+) -> None:
+    settings = _settings(workflow_engine_enabled=True)
+    runner = WorkflowEvalRunner(session=pgvector_session, settings=settings)
+
+    users_before = await _count_eval_workflow_users(pgvector_session)
+    runs_before = await _count_eval_workflow_runs(pgvector_session)
+
+    await runner.run_case(_workflow_case("workflow_echo_complete"))
+
+    users_after = await _count_eval_workflow_users(pgvector_session)
+    runs_after = await _count_eval_workflow_runs(pgvector_session)
+
+    assert users_after == users_before
+    assert runs_after == runs_before

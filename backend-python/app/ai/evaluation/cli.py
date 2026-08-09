@@ -7,7 +7,12 @@ import asyncio
 import sys
 from pathlib import Path
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import NullPool
 
 from app.ai.evaluation.datasets import EvalLevel, filter_cases, load_dataset
@@ -108,23 +113,40 @@ def _all_level_prerequisite_error(
     return None
 
 
-async def _probe_postgres(settings: Settings) -> tuple[bool, bool, AsyncSession | None]:
+async def _probe_postgres(
+    settings: Settings,
+) -> tuple[bool, bool, AsyncSession | None, AsyncEngine | None]:
+    """Return postgres/pgvector availability and an open session when Postgres is up."""
     engine = create_async_engine(settings.database_url, poolclass=NullPool)
+    session: AsyncSession | None = None
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
-        session: AsyncSession = factory()
-        try:
-            if not await postgres_available(session):
-                return False, False, None
-            pgvector_ok = await pgvector_available(session)
-            return True, pgvector_ok, session
-        except Exception:
+        session = factory()
+        if not await postgres_available(session):
             await session.close()
-            raise
+            await engine.dispose()
+            return False, False, None, None
+        pgvector_ok = await pgvector_available(session)
+        return True, pgvector_ok, session, engine
     except Exception:
+        if session is not None:
+            await session.close()
         await engine.dispose()
-        return False, False, None
-    # Engine disposal for successful probe is handled by caller.
+        return False, False, None, None
+
+
+async def _dispose_db_resources(
+    session: AsyncSession | None,
+    engine: AsyncEngine | None,
+    *,
+    rollback: bool = False,
+) -> None:
+    if session is not None:
+        if rollback:
+            await session.rollback()
+        await session.close()
+    if engine is not None:
+        await engine.dispose()
 
 
 async def _run_with_session(
@@ -145,20 +167,11 @@ async def _run_with_session(
     postgres_ok = False
     pgvector_ok = False
     session: AsyncSession | None = None
-    engine = None
+    engine: AsyncEngine | None = None
 
     db_levels = levels & {"retrieval", "e2e", "workflow"}
     if db_levels:
-        engine = create_async_engine(settings.database_url, poolclass=NullPool)
-        try:
-            factory = async_sessionmaker(engine, expire_on_commit=False)
-            session = factory()
-            postgres_ok = await postgres_available(session)
-            if postgres_ok:
-                pgvector_ok = await pgvector_available(session)
-        except Exception:
-            postgres_ok = False
-            pgvector_ok = False
+        postgres_ok, pgvector_ok, session, engine = await _probe_postgres(settings)
 
     report.run_environment = EvalRunEnvironment(
         agent_runtime_enabled=settings.agent_runtime_enabled,
@@ -175,10 +188,7 @@ async def _run_with_session(
         )
         if prerequisite_error is not None:
             print(prerequisite_error, file=sys.stderr)
-            if session is not None:
-                await session.close()
-            if engine is not None:
-                await engine.dispose()
+            await _dispose_db_resources(session, engine)
             return report, 2
 
     if "prompt" in levels:
@@ -197,9 +207,6 @@ async def _run_with_session(
     if not db_levels:
         return report, None
 
-    assert session is not None
-    assert engine is not None
-
     if not postgres_ok:
         for level in sorted(db_levels):
             for case in filter_cases(dataset, level):  # type: ignore[arg-type]
@@ -211,10 +218,11 @@ async def _run_with_session(
                     )
                 )
         report.skipped_levels.append(
-            "retrieval/e2e/workflow skipped — Postgres unavailable"
+            f"{'/'.join(sorted(db_levels))} skipped — Postgres unavailable"
         )
-        await session.close()
-        await engine.dispose()
+        return report, None
+
+    if session is None or engine is None:
         return report, None
 
     if levels & {"retrieval", "e2e"} and not pgvector_ok:
@@ -264,9 +272,7 @@ async def _run_with_session(
             for case in filter_cases(dataset, "workflow"):
                 report.results.append(await workflow_runner.run_case(case))
 
-    await session.rollback()
-    await session.close()
-    await engine.dispose()
+    await _dispose_db_resources(session, engine, rollback=True)
     return report, None
 
 

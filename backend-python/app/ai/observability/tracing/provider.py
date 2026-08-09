@@ -68,10 +68,18 @@ class TracerRegistry:
         return trace.get_tracer(name)
 
     @classmethod
+    def _shutdown_active_provider(cls) -> None:
+        provider = trace.get_tracer_provider()
+        shutdown = getattr(provider, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+
+    @classmethod
     def reset_for_tests(cls) -> None:
         """Reset registry state — test helper only."""
         import opentelemetry.trace as ot_trace
 
+        cls._shutdown_active_provider()
         cls._initialized = False
         cls._enabled = False
         ot_trace._TRACER_PROVIDER = ot_trace._PROXY_TRACER_PROVIDER

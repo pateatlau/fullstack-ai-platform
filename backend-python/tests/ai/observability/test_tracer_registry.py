@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -74,3 +77,16 @@ def test_get_tracer_delegates_to_registry() -> None:
     span = tracer.start_span("delegation_probe")
     assert not span.get_span_context().is_valid
     span.end()
+
+
+def test_reset_for_tests_shuts_down_active_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shutdown = MagicMock()
+    provider = MagicMock()
+    provider.shutdown = shutdown
+    monkeypatch.setattr(trace, "get_tracer_provider", lambda: provider)
+
+    TracerRegistry.reset_for_tests()
+
+    shutdown.assert_called_once()

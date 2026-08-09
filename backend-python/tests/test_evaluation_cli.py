@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.ai.evaluation.cli import run_eval
+from app.ai.evaluation.runners import pgvector_available
 from app.core.config import Settings, get_settings
 
 DATASET = Path("tests/data/evaluation/sample.yaml")
@@ -120,4 +121,53 @@ async def test_cli_level_all_smoke(
     assert "results" in payload
     assert len(payload["results"]) == 7
     assert payload["run_environment"] is not None
+    assert exit_code in {0, 1}
+
+
+@pytest.mark.anyio
+async def test_cli_level_workflow_leaves_no_eval_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, db_session
+) -> None:
+    from sqlalchemy import func, select
+
+    from app.db.models import User, WorkflowRunRecord
+
+    if not await pgvector_available(db_session):
+        pytest.skip("pgvector extension not available")
+
+    async def count_eval_users() -> int:
+        value = await db_session.scalar(
+            select(func.count())
+            .select_from(User)
+            .where(User.external_auth_id.like("eval-workflow-%"))
+        )
+        return int(value or 0)
+
+    async def count_eval_runs() -> int:
+        value = await db_session.scalar(
+            select(func.count())
+            .select_from(WorkflowRunRecord)
+            .join(User, WorkflowRunRecord.owner_id == User.id)
+            .where(User.external_auth_id.like("eval-workflow-%"))
+        )
+        return int(value or 0)
+
+    output = tmp_path / "workflow-report.json"
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    get_settings.cache_clear()
+    monkeypatch.setenv("WORKFLOW_ENGINE_ENABLED", "true")
+
+    users_before = await count_eval_users()
+    runs_before = await count_eval_runs()
+
+    exit_code = await run_eval(_args(level="workflow", output=output))
+
+    if exit_code == 2:
+        pytest.skip("Postgres prerequisites unavailable for workflow eval")
+
+    users_after = await count_eval_users()
+    runs_after = await count_eval_runs()
+
+    assert users_after == users_before
+    assert runs_after == runs_before
     assert exit_code in {0, 1}

@@ -2,7 +2,7 @@
 epic: v2-07
 title: Observability & Evaluation
 status: in_progress
-version: 1.18
+version: 1.19
 depends_on: [v2-06]
 provides:
   [
@@ -788,12 +788,12 @@ _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post
 | Backend tests / coverage | 1551 passed, 89.05% `app/`                                                                                                                                                                      |
 | Frontend tests           | 268 passed (43 files); lint + build pass                                                                                                                                                        |
 | Integration tests        | Workflow suite 241 passed; router 23; tool 11; streaming 26                                                                                                                                     |
-| Eval CLI                 | 7/7 passed (`sample.yaml`; report schema v2; `--level all` requires agent/workflow flags + Postgres/pgvector)                                                                                  |
+| Eval CLI                 | Unit + CLI smoke pass (`sample.yaml`; report schema v2; `--level all` prerequisite gate); full agent/workflow Postgres integration sign-off pending |
 | Chat pipeline            | Stable — `ChatService` + `UnifiedChatService`, Memory fully wired                                                                                                                               |
 | Agent Framework          | Completed (Epic 01); `AGENT_RUNTIME_ENABLED` behind flag                                                                                                                                        |
 | Memory subsystem         | Completed (Epic 05); `MEMORY_ENABLED` behind flag                                                                                                                                               |
 | Workflow Engine          | Completed (Epic 06); `WORKFLOW_ENGINE_ENABLED` behind flag                                                                                                                                      |
-| Observability            | Phases 4–7 complete (spans, cost/metrics, REST API + `/metrics`, agent/workflow eval); Phases 8–10 remain |
+| Observability            | Phases 4–6 complete (spans, cost/metrics, REST API + `/metrics`); Phase 7 in progress (agent/workflow eval unit + CLI checks done; Postgres integration checks pending); Phases 8–10 remain |
 
 ---
 
@@ -808,7 +808,7 @@ _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post
 | 4     | RAG, Memory, Voice & Workflow Tracing         | L      | Completed   |
 | 5     | Token & Cost Metrics                          | L      | Completed   |
 | 6     | Observability REST API & `/metrics`           | M      | Completed   |
-| 7     | Evaluation Framework: Agent & Workflow Levels | L      | Completed   |
+| 7     | Evaluation Framework: Agent & Workflow Levels | L      | In Progress |
 | 8     | Prompt Regression & Benchmark Datasets        | M      | Not Started |
 | 9     | Frontend Observability Dashboard              | S      | Not Started |
 | 10    | Validation & Release                          | M      | Not Started |
@@ -1512,6 +1512,7 @@ Extend the existing V1 evaluation harness with `agent` and `workflow` eval level
 - [x] Add dataset parsing tests for the new case types.
 - [x] Add CLI tests for `--level agent`/`--level workflow`/`--level all`.
 - [x] Add reproducibility metadata tests: each new runner populates `model`/`temperature`/`prompt_version` (and `model_version`/`seed` when available) on its `EvalCaseResult`, and leaves them `None` (not a placeholder value) when unavailable.
+- [ ] Add Postgres integration tests for `AgentEvalRunner` and `WorkflowEvalRunner` (real runtime with flags on; verify pass/fail outcomes and teardown leaves no eval artifacts).
 
 **Verify**
 
@@ -1519,7 +1520,7 @@ Extend the existing V1 evaluation harness with `agent` and `workflow` eval level
 
 Additional verification:
 
-- [x] `make eval --level agent` and `make eval --level workflow` run real cases when their flags are on.
+- [ ] `make eval --level agent` and `make eval --level workflow` run real cases when their flags are on and Postgres/pgvector are available.
 - [x] Both targeted levels skip cleanly when their flag is off; `--level all` hard-fails instead of skipping when agent/workflow prerequisites are missing.
 - [x] Existing `prompt`/`retrieval`/`e2e` levels are unaffected.
 
@@ -1529,7 +1530,7 @@ Additional verification:
 
 **Exit Criteria**
 
-- Agent/workflow eval tests pass.
+- Agent/workflow unit + CLI tests pass; Postgres integration checks pass.
 - Ready for regression detection and benchmark dataset expansion (Phase 8).
 
 **Completion Record**
@@ -1537,10 +1538,11 @@ Additional verification:
 | Metric                    | Result                                                                                                      |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | Lint / typecheck          | ✅ PASS (pre-commit)                                                                                        |
-| Phase 7 unit tests        | ✅ 36 passed (`tests/ai/evaluation/`, `tests/test_evaluation_*.py`)                                         |
+| Phase 7 unit tests        | ✅ 47 passed (`tests/ai/evaluation/`, `tests/test_evaluation_*.py`; includes CLI smoke; Postgres integration sign-off still pending) |
+| Phase 7 CLI checks        | ✅ `--level agent`/`workflow`/`all` smoke tests; prerequisite gate exit 2; flag-off skip behaviour verified |
+| Agent/workflow integration | ⏳ Pending — `make eval --level agent`/`workflow` against Postgres/pgvector not yet signed off            |
 | Report schema             | ✅ v2 (`run_environment`, reproducibility metadata, agent/workflow result fields)                            |
 | Sample dataset            | ✅ 7 cases (`prompt`=2, `retrieval`=2, `e2e`=1, `agent`=1, `workflow`=1)                                  |
-| CLI levels                | ✅ `--level agent`, `--level workflow`, `--level all` (prerequisite gate exit 2)                            |
 | Existing levels unchanged | ✅ `prompt`/`retrieval`/`e2e` runners and offline prompt eval verified                                    |
 | User confirmation         | ⏳ Pending                                                                                                  |
 
@@ -2003,5 +2005,6 @@ No prompt, tool, or message content is ever attached to a span, metric, or log f
 | 1.14    | 2026-08-07 | Phase 2 complete: TracingLLMProvider, ProviderFactory wrapping, PromptManager prompt_span wiring, token-count span attribute allowlist, 13 unit tests. Part II only.                                                                                                                                                                                                                                                                                                                                                          |
 | 1.15    | 2026-08-08 | Phase 3 complete: ToolExecutor tool_span, DefaultAgent agent_span (iteration + tool_call), fail-open telemetry tests, 8 unit tests. Part II only.                                                                                                                                                                                                                                                                                                                                                                             |
 | 1.16    | 2026-08-08 | Phase 4 complete: RAG/memory/voice/workflow span wiring, workflow background SpanContext snapshot + span links, resume/reconcile fresh-root spans, 14 unit tests (53 total observability). Part II only.                                                                                                                                                                                                                                                                                                                      |
-| 1.17    | 2026-08-08 | Phase 7 complete: `AgentEvalRunner`/`WorkflowEvalRunner`, eval schema v2 + `run_environment`, CLI `--level agent`/`workflow`/`all` prerequisite gate, 36 eval tests, `sample.yaml` expanded to 7 cases. Part II only.                                                                                                                                                                                                                                                                                                        |
+| 1.17    | 2026-08-08 | Phase 7 implementation landed: `AgentEvalRunner`/`WorkflowEvalRunner`, eval schema v2 + `run_environment`, CLI `--level agent`/`workflow`/`all` prerequisite gate, 36 eval unit/CLI tests, `sample.yaml` expanded to 7 cases. Integration checks tracked separately. Part II only.                                                                                                                                                                                                                                                                                                             |
 | 1.18    | 2026-08-08 | Phases 5–6 completion records: cost/metrics (24 tests, `0008` migration, `model_pricing.yaml`); REST API + `/metrics` (15 router tests); `ObservabilityStore` collapsed to `UsageAggregator`. Part II only.                                                                                                                                                                                                                                                                                                                   |
+| 1.19    | 2026-08-09 | Phase 7 status corrected: **In Progress** until agent/workflow Postgres integration checks pass; baseline Observability summary and completion record distinguish unit/CLI vs integration. Part II only.                                                                                                                                                                                                                                                                                                                         |

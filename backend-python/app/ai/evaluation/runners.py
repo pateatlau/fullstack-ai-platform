@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
 
-from sqlalchemy import text
+from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent.models.context import AgentContext
@@ -60,6 +60,7 @@ from app.ai.vectorstores.pgvector import PgVectorStore
 from app.core.config import Settings
 from app.db.documents import SqlDocumentStore
 from app.db.identity import SqlUserStore
+from app.db.models import User
 from app.providers.base import (
     ChatMessageInput,
     LLMProvider,
@@ -642,6 +643,7 @@ class WorkflowEvalRunner:
                 skip_reason="WORKFLOW_ENGINE_ENABLED=false",
             )
 
+        owner_id: uuid.UUID | None = None
         try:
             owner_id = await self._create_user()
             definition = _workflow_definition_from_case(case, owner_id=owner_id)
@@ -692,6 +694,9 @@ class WorkflowEvalRunner:
                 latency_ms=latency_ms,
                 error=str(exc),
             )
+        finally:
+            if owner_id is not None:
+                await _cleanup_eval_workflow_owner(self.session, owner_id)
 
     async def _create_user(self) -> uuid.UUID:
         user = await SqlUserStore(self.session).create(
@@ -701,6 +706,18 @@ class WorkflowEvalRunner:
             picture=None,
         )
         return user.id
+
+
+async def _cleanup_eval_workflow_owner(
+    session: AsyncSession,
+    owner_id: uuid.UUID,
+) -> None:
+    """Delete eval-scoped workflow artifacts committed during ``run_case``."""
+    try:
+        await session.execute(delete(User).where(User.id == owner_id))
+        await session.commit()
+    except Exception:
+        await session.rollback()
 
 
 async def postgres_available(session: AsyncSession) -> bool:

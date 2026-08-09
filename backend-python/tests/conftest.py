@@ -12,7 +12,7 @@ os.environ.setdefault("CHAT_PERSISTENCE_ENABLED", "false")
 os.environ.setdefault("CHAT_STREAMING_ENABLED", "true")
 
 import pytest
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -21,32 +21,41 @@ from app.core.config import Settings, get_settings
 from app.middleware.rate_limit import reset_rate_limiter
 
 
-def _reset_observability_and_db_caches() -> None:
-    """Clear process singletons so anyio's per-test loops never reuse stale state."""
-    import asyncio
-
+def _reset_observability_registries() -> None:
+    """Clear observability singletons between tests."""
     from app.ai.observability.cost.calculator import CostRegistry
     from app.ai.observability.metrics.instruments import MetricInstruments
     from app.ai.observability.metrics.meter import MeterRegistry
     from app.ai.observability.tracing.provider import TracerRegistry
-    from app.db.engine import dispose_engine_cache, get_engine, get_sessionmaker
 
     TracerRegistry.reset_for_tests()
     MeterRegistry.reset_for_tests()
     CostRegistry.reset_for_tests()
     MetricInstruments.reset_for_tests()
 
+
+def _dispose_engine_cache_sync_fallback() -> None:
+    """Dispose cached engines from sync teardown when no anyio loop is active."""
+    import asyncio
+
+    from app.db.engine import dispose_engine_cache
+
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         asyncio.run(dispose_engine_cache())
-    else:
-        engine_cache_clear = getattr(get_engine, "cache_clear", None)
-        if callable(engine_cache_clear):
-            engine_cache_clear()
-        sessionmaker_cache_clear = getattr(get_sessionmaker, "cache_clear", None)
-        if callable(sessionmaker_cache_clear):
-            sessionmaker_cache_clear()
+
+
+@pytest.fixture(autouse=True)
+async def _dispose_engine_cache_after_test(
+    anyio_backend: object,
+) -> AsyncIterator[None]:
+    """Await engine disposal on the owning anyio loop after each test."""
+    del anyio_backend  # wires fixture through anyio's pytest plugin
+    from app.db.engine import dispose_engine_cache
+
+    yield
+    await dispose_engine_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -64,7 +73,8 @@ def _isolate_rate_limit_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]
     yield
     reset_rate_limiter()
     get_settings.cache_clear()
-    _reset_observability_and_db_caches()
+    _reset_observability_registries()
+    _dispose_engine_cache_sync_fallback()
 
 
 @pytest.fixture

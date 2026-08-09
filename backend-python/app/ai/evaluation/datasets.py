@@ -105,6 +105,7 @@ def load_workflow_fixture(filename: str) -> dict[str, object]:
     raw = _read_dataset_file(path)
     if not isinstance(raw, dict):
         raise EvalDatasetError(f"Workflow fixture '{filename}' root must be a mapping.")
+    _validate_workflow_definition_spec(raw, context=f"Workflow fixture '{filename}'")
     return raw
 
 
@@ -272,7 +273,7 @@ def _parse_agent_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
         )
 
     temperature = raw.get("temperature")
-    if temperature is not None and not isinstance(temperature, (int, float)):
+    if temperature is not None and type(temperature) not in (int, float):
         raise EvalDatasetError(
             f"Case '{case_id}': temperature must be a number when provided."
         )
@@ -324,7 +325,9 @@ def _parse_workflow_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
         )
 
     if inline_definition is not None:
-        _validate_workflow_definition_spec(inline_definition, case_id=case_id)
+        _validate_workflow_definition_spec(
+            inline_definition, context=f"Case '{case_id}'"
+        )
 
     return EvalCase(
         id=case_id,
@@ -337,32 +340,22 @@ def _parse_workflow_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
 
 
 def _validate_workflow_definition_spec(
-    spec: dict[str, object], *, case_id: str
+    spec: dict[str, object], *, context: str
 ) -> None:
     for key in ("name", "entry_node_id", "nodes", "edges"):
         if key not in spec:
-            raise EvalDatasetError(
-                f"Case '{case_id}': workflow_definition missing required field '{key}'."
-            )
+            raise EvalDatasetError(f"{context}: missing required field '{key}'.")
     nodes = spec.get("nodes")
     edges = spec.get("edges")
     if not isinstance(nodes, list) or not nodes:
-        raise EvalDatasetError(
-            f"Case '{case_id}': workflow_definition.nodes must be a non-empty list."
-        )
+        raise EvalDatasetError(f"{context}: nodes must be a non-empty list.")
     if not isinstance(edges, list):
-        raise EvalDatasetError(
-            f"Case '{case_id}': workflow_definition.edges must be a list."
-        )
+        raise EvalDatasetError(f"{context}: edges must be a list.")
     for index, node in enumerate(nodes):
         if not isinstance(node, dict):
-            raise EvalDatasetError(
-                f"Case '{case_id}': workflow_definition.nodes[{index}] must be a mapping."
-            )
+            raise EvalDatasetError(f"{context}: nodes[{index}] must be a mapping.")
         if "id" not in node or "type" not in node:
-            raise EvalDatasetError(
-                f"Case '{case_id}': workflow nodes require id and type."
-            )
+            raise EvalDatasetError(f"{context}: workflow nodes require id and type.")
 
 
 def _parse_uuid_list(value: object, *, case_id: str) -> tuple[uuid.UUID, ...]:
