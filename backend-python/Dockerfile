@@ -32,8 +32,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/pyproject.toml /app/uv.lock* ./
 
-# Copy application code
+# Copy application code and git-tracked runtime config (e.g. model pricing for observability)
 COPY app ./app
+COPY config ./config
 
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app
