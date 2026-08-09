@@ -24,11 +24,11 @@ export interface UsageSummaryParams {
   group_by?: UsageGroupBy
 }
 
-/** ISO date string (YYYY-MM-DD) for trailing ``days`` ending today (UTC). */
+/** Inclusive UTC date range of ``days`` calendar days ending today. */
 export function defaultTrailingDateRange(days = 30): { since: string; until: string } {
   const until = new Date()
   const since = new Date(until)
-  since.setUTCDate(since.getUTCDate() - days)
+  since.setUTCDate(since.getUTCDate() - Math.max(0, days - 1))
   return {
     since: since.toISOString().slice(0, 10),
     until: until.toISOString().slice(0, 10),

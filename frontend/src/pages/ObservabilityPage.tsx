@@ -31,7 +31,7 @@ function StatusBanner({ tone, message }: StatusBannerProps) {
     <div
       className={`rounded-lg border px-3 py-2 text-sm ${toneClass}`}
       role={tone === 'error' ? 'alert' : 'status'}
-      aria-live="polite"
+      aria-live={tone === 'error' ? 'assertive' : 'polite'}
     >
       {message}
     </div>
