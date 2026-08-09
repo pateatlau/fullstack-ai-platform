@@ -2,7 +2,7 @@
 epic: v2-07
 title: Observability & Evaluation
 status: in_progress
-version: 1.19
+version: 1.20
 depends_on: [v2-06]
 provides:
   [
@@ -793,7 +793,7 @@ _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post
 | Agent Framework          | Completed (Epic 01); `AGENT_RUNTIME_ENABLED` behind flag                                                                                                                                        |
 | Memory subsystem         | Completed (Epic 05); `MEMORY_ENABLED` behind flag                                                                                                                                               |
 | Workflow Engine          | Completed (Epic 06); `WORKFLOW_ENGINE_ENABLED` behind flag                                                                                                                                      |
-| Observability            | Phases 4–6 complete (spans, cost/metrics, REST API + `/metrics`); Phase 7 in progress (agent/workflow eval unit + CLI checks done; Postgres integration checks pending); Phases 8–10 remain |
+| Observability            | Phases 4–9 complete (spans, cost/metrics, REST API + `/metrics`, agent/workflow eval, regression baseline, frontend dashboard); Phase 7 Postgres integration checks and Phase 10 validation remain |
 
 ---
 
@@ -809,8 +809,8 @@ _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post
 | 5     | Token & Cost Metrics                          | L      | Completed   |
 | 6     | Observability REST API & `/metrics`           | M      | Completed   |
 | 7     | Evaluation Framework: Agent & Workflow Levels | L      | In Progress |
-| 8     | Prompt Regression & Benchmark Datasets        | M      | Not Started |
-| 9     | Frontend Observability Dashboard              | S      | Not Started |
+| 8     | Prompt Regression & Benchmark Datasets        | M      | Completed   |
+| 9     | Frontend Observability Dashboard              | S      | Completed   |
 | 10    | Validation & Release                          | M      | Not Started |
 
 ---
@@ -1568,33 +1568,33 @@ Add automated regression detection against a git-tracked baseline, and broaden t
 
 ## Regression Checking
 
-- [ ] Implement `RegressionChecker.compare(...)` with an **environment comparability gate** first: reject when `run_environment` differs between current and baseline, or when the baseline contains skipped `agent`/`workflow` cases.
-- [ ] Detect hard regressions: any case passing in the baseline that now fails.
-- [ ] Detect soft regressions: per-level pass-rate drop or mean-latency increase beyond configured tolerance.
-- [ ] Surface `environment_mismatch` in `RegressionResult` (distinct from metric regressions) with the differing fields listed.
-- [ ] Ensure `RegressionResult` is JSON-serializable and prints a clear console summary.
-- [ ] Include each flagged case's reproducibility metadata (Phase 7: `model`, `model_version`, `temperature`, `seed`, `prompt_version`) from both the current and baseline result in the printed/JSON `RegressionResult`, so a regression can be explained by "what changed" rather than left ambiguous.
+- [x] Implement `RegressionChecker.compare(...)` with an **environment comparability gate** first: reject when `run_environment` differs between current and baseline, or when the baseline contains skipped `agent`/`workflow` cases.
+- [x] Detect hard regressions: any case passing in the baseline that now fails.
+- [x] Detect soft regressions: per-level pass-rate drop or mean-latency increase beyond configured tolerance.
+- [x] Surface `environment_mismatch` in `RegressionResult` (distinct from metric regressions) with the differing fields listed.
+- [x] Ensure `RegressionResult` is JSON-serializable and prints a clear console summary.
+- [x] Include each flagged case's reproducibility metadata (Phase 7: `model`, `model_version`, `temperature`, `seed`, `prompt_version`) from both the current and baseline result in the printed/JSON `RegressionResult`, so a regression can be explained by "what changed" rather than left ambiguous.
 
 ## Baseline Management
 
-- [ ] Generate the initial `baseline-report.json` from `make eval --level all` with agent/workflow runtimes enabled and Postgres/pgvector available (prerequisites enforced — no skipped agent/workflow rows).
-- [ ] `--update-baseline` uses the same `--level all` prerequisite gate; refuse to write a baseline when environment checks fail or any agent/workflow case would be skipped.
-- [ ] Add `--check-regression <baseline_path>` to compare a new run against it; non-zero exit on regression.
-- [ ] Add `--update-baseline` as an explicit, separate CLI action (never automatic on a normal `make eval` run).
+- [x] Generate the initial `baseline-report.json` from `make eval --level all` with agent/workflow runtimes enabled and Postgres/pgvector available (prerequisites enforced — no skipped agent/workflow rows).
+- [x] `--update-baseline` uses the same `--level all` prerequisite gate; refuse to write a baseline when environment checks fail or any agent/workflow case would be skipped.
+- [x] Add `--check-regression <baseline_path>` to compare a new run against it; non-zero exit on regression.
+- [x] Add `--update-baseline` as an explicit, separate CLI action (never automatic on a normal `make eval` run).
 
 ## Benchmark Dataset Expansion
 
-- [ ] Add prompt-level cases covering additional prompt categories/versions in active use.
-- [ ] Add retrieval/e2e cases covering additional document fixtures and answer-match modes.
-- [ ] Add agent-level cases covering multi-tool-call scenarios.
-- [ ] Add workflow-level cases covering sequential, conditional, and approval-node graphs.
+- [x] Add prompt-level cases covering additional prompt categories/versions in active use.
+- [x] Add retrieval/e2e cases covering additional document fixtures and answer-match modes.
+- [x] Add agent-level cases covering multi-tool-call scenarios.
+- [x] Add workflow-level cases covering sequential, conditional, and approval-node graphs.
 
 ## Testing
 
-- [ ] Add `RegressionChecker` tests (environment mismatch, skipped-agent/workflow baseline rejection, no regression, hard regression, pass-rate regression, latency regression).
-- [ ] Add a test asserting a `RegressionResult` surfaces reproducibility metadata (e.g., a regression caused by a `model` or `prompt_version` change is visibly attributable, not just "case X failed").
-- [ ] Add CLI tests for `--check-regression` and `--update-baseline`.
-- [ ] Add dataset validation tests for every newly added case.
+- [x] Add `RegressionChecker` tests (environment mismatch, skipped-agent/workflow baseline rejection, no regression, hard regression, pass-rate regression, latency regression).
+- [x] Add a test asserting a `RegressionResult` surfaces reproducibility metadata (e.g., a regression caused by a `model` or `prompt_version` change is visibly attributable, not just "case X failed").
+- [x] Add CLI tests for `--check-regression` and `--update-baseline`.
+- [x] Add dataset validation tests for every newly added case.
 
 **Verify**
 
@@ -1603,9 +1603,9 @@ Add automated regression detection against a git-tracked baseline, and broaden t
 
 Additional verification:
 
-- [ ] A deliberately failing case is correctly flagged as a hard regression.
-- [ ] A deliberately slower fake provider is correctly flagged as a latency regression.
-- [ ] The expanded dataset exercises every eval level with realistic cases.
+- [x] A deliberately failing case is correctly flagged as a hard regression.
+- [x] A deliberately slower fake provider is correctly flagged as a latency regression.
+- [x] The expanded dataset exercises every eval level with realistic cases.
 
 **Acceptance**
 
@@ -1619,7 +1619,15 @@ Additional verification:
 
 **Completion Record**
 
-_Filled upon phase completion._
+| Metric                    | Result                                                                                                      |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Lint / typecheck          | ✅ PASS (pre-commit)                                                                                        |
+| Phase 8 regression tests  | ✅ 20 passed (`tests/ai/evaluation/test_regression.py`)                                                     |
+| `RegressionChecker`       | ✅ Environment gate, hard/soft regressions, reproducibility metadata in findings                            |
+| Baseline                  | ✅ Git-tracked `tests/data/evaluation/baseline-report.json` (schema v2, 15 cases)                             |
+| CLI                       | ✅ `--check-regression` / `--update-baseline` with `--level all` prerequisite gate                          |
+| Sample dataset            | ✅ 15 cases (`prompt`=5, `retrieval`=3, `e2e`=2, `agent`=1, `workflow`=4)                                   |
+| User confirmation         | ⏳ Pending                                                                                                  |
 
 ---
 
@@ -1641,37 +1649,37 @@ Implement a read-only dashboard surfacing the caller's own usage/cost summary, s
 
 ## Dashboard UI
 
-- [ ] Add an Observability section to the authenticated app.
-- [ ] Display Observability feature availability (via `observability_enabled`).
-- [ ] Display usage/cost summary (requests, tokens, estimated cost) grouped by day, provider, and model.
-- [ ] Support selecting a date range (default: trailing 30 days).
+- [x] Add an Observability section to the authenticated app.
+- [x] Display Observability feature availability (via `observability_enabled`).
+- [x] Display usage/cost summary (requests, tokens, estimated cost) grouped by day, provider, and model.
+- [x] Support selecting a date range (default: trailing 30 days).
 
 ## API Integration
 
-- [ ] Create `frontend/src/api/observabilityClient.ts`.
-- [ ] Create `frontend/src/types/observability.ts`.
-- [ ] Create `frontend/src/pages/ObservabilityPage.tsx` (authenticated route).
-- [ ] Extend `frontend/src/api/healthClient.ts` with `observability_enabled`.
-- [ ] Wire navigation link in the authenticated app shell.
+- [x] Create `frontend/src/api/observabilityClient.ts`.
+- [x] Create `frontend/src/types/observability.ts`.
+- [x] Create `frontend/src/pages/ObservabilityPage.tsx` (authenticated route).
+- [x] Extend `frontend/src/api/healthClient.ts` with `observability_enabled`.
+- [x] Wire navigation link in the authenticated app shell.
 
 ## Feature Flag Integration
 
-- [ ] Hide Observability controls when `OBSERVABILITY_ENABLED=false`.
-- [ ] Preserve existing authenticated user experience.
-- [ ] Preserve guest user experience.
+- [x] Hide Observability controls when `OBSERVABILITY_ENABLED=false`.
+- [x] Preserve existing authenticated user experience.
+- [x] Preserve guest user experience.
 
 ## Error Handling
 
-- [ ] Handle API failures gracefully.
-- [ ] Handle empty-usage-history states with a clear message.
-- [ ] Preserve existing application behaviour during frontend failures.
+- [x] Handle API failures gracefully.
+- [x] Handle empty-usage-history states with a clear message.
+- [x] Preserve existing application behaviour during frontend failures.
 
 ## Testing
 
-- [ ] Add component tests.
-- [ ] Add API integration tests.
-- [ ] Add feature flag tests.
-- [ ] Add accessibility tests.
+- [x] Add component tests.
+- [x] Add API integration tests.
+- [x] Add feature flag tests.
+- [x] Add accessibility tests.
 
 **Verify**
 
@@ -1681,9 +1689,9 @@ Implement a read-only dashboard surfacing the caller's own usage/cost summary, s
 
 Additional verification:
 
-- [ ] Observability page renders successfully.
-- [ ] Usage/cost summaries load correctly for each `group_by` mode.
-- [ ] Feature flag regression passes.
+- [x] Observability page renders successfully.
+- [x] Usage/cost summaries load correctly for each `group_by` mode.
+- [x] Feature flag regression passes.
 
 **Acceptance**
 
@@ -1705,7 +1713,15 @@ Additional verification:
 
 **Completion Record**
 
-_Filled upon phase completion._
+| Metric                    | Result                                                                                                      |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Frontend lint             | ✅ PASS                                                                                                     |
+| Phase 9 frontend tests    | ✅ 11 passed (`ObservabilityPage.test.tsx`, `observabilityClient.test.ts`; 279 total frontend)              |
+| Production build          | ✅ PASS (`npm run build`)                                                                                   |
+| Dashboard                 | ✅ `/observability` — date range, `group_by` day/provider/model, totals table, empty/error states           |
+| Feature flag              | ✅ Nav link + page hidden when `observability_enabled=false`; guest/protected-route behaviour unchanged     |
+| Health integration        | ✅ `observability_enabled` on `/api/health` via `healthClient` + `useChatStreamingEnabled`                  |
+| User confirmation         | ⏳ Pending                                                                                                  |
 
 ---
 
@@ -2008,3 +2024,4 @@ No prompt, tool, or message content is ever attached to a span, metric, or log f
 | 1.17    | 2026-08-08 | Phase 7 implementation landed: `AgentEvalRunner`/`WorkflowEvalRunner`, eval schema v2 + `run_environment`, CLI `--level agent`/`workflow`/`all` prerequisite gate, 36 eval unit/CLI tests, `sample.yaml` expanded to 7 cases. Integration checks tracked separately. Part II only.                                                                                                                                                                                                                                                                                                             |
 | 1.18    | 2026-08-08 | Phases 5–6 completion records: cost/metrics (24 tests, `0008` migration, `model_pricing.yaml`); REST API + `/metrics` (15 router tests); `ObservabilityStore` collapsed to `UsageAggregator`. Part II only.                                                                                                                                                                                                                                                                                                                   |
 | 1.19    | 2026-08-09 | Phase 7 status corrected: **In Progress** until agent/workflow Postgres integration checks pass; baseline Observability summary and completion record distinguish unit/CLI vs integration. Part II only.                                                                                                                                                                                                                                                                                                                         |
+| 1.20    | 2026-08-10 | Phases 8–9 complete: `RegressionChecker` + git-tracked baseline (20 regression tests, 15-case dataset); frontend Observability dashboard at `/observability` (11 new frontend tests, 279 total). Part II only.                                                                                                                                                                                                                                                                                                                    |

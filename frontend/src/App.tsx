@@ -6,6 +6,7 @@ import { DocumentsPage } from './pages/DocumentsPage'
 import { MemorySettingsPage } from './pages/MemorySettingsPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { WorkflowsPage } from './pages/WorkflowsPage'
+import { ObservabilityPage } from './pages/ObservabilityPage'
 
 function App() {
   return (
@@ -35,6 +36,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <WorkflowsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/observability"
+              element={
+                <ProtectedRoute>
+                  <ObservabilityPage />
                 </ProtectedRoute>
               }
             />
