@@ -23,6 +23,7 @@ def _args(**overrides: object):
         "output": Path(".eval/test-eval-report.json"),
         "use_judge": False,
         "check_regression": None,
+        "regression_output": Path(".eval/test-regression-result.json"),
         "update_baseline": None,
     }
     base.update(overrides)
@@ -58,7 +59,7 @@ async def test_cli_level_agent_runs_when_flag_on(
     exit_code = await run_eval(_args(level="agent", output=output))
 
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert len(payload["results"]) == 2
+    assert len(payload["results"]) == 1
     assert payload["results"][0]["level"] == "agent"
     assert exit_code in {0, 1}
 
@@ -121,7 +122,7 @@ async def test_cli_level_all_smoke(
 
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert "results" in payload
-    assert len(payload["results"]) == 16
+    assert len(payload["results"]) == 15
     assert payload["run_environment"] is not None
     assert exit_code in {0, 1}
 

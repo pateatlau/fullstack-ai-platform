@@ -78,6 +78,7 @@ DOCUMENT_FIXTURES_ROOT = (
     Path(__file__).resolve().parents[3] / "tests" / "data" / "documents"
 )
 EMBEDDING_DIMENSIONS = 1536
+_AGENT_EVAL_SUPPORTED_TOOLS: frozenset[str] = frozenset({"echo"})
 
 
 class _FakeEmbeddingProvider:
@@ -801,12 +802,9 @@ def _build_agent_eval_provider(
     model: str,
     temperature: float,
 ) -> _AgentEvalProvider:
-    expected_tools = (
-        list(case.expected_tool_calls) if case.expected_tool_calls else ["echo"]
-    )
+    expected_tools = _agent_eval_expected_tool_calls(case)
     tool_completions: list[ProviderToolCompletion] = []
     for index, _tool_name in enumerate(expected_tools):
-        # Eval harness only registers echo — always script echo invocations.
         tool_completions.append(
             ProviderToolCompletion(
                 content="Calling echo.",
@@ -836,6 +834,26 @@ def _build_agent_eval_provider(
         model=model,
         temperature=temperature,
     )
+
+
+def _agent_eval_expected_tool_calls(case: EvalCase) -> list[str]:
+    """Return scripted tool-call sequence for an agent eval case."""
+    expected_tools = (
+        list(case.expected_tool_calls) if case.expected_tool_calls else ["echo"]
+    )
+    unsupported = [
+        tool_name
+        for tool_name in expected_tools
+        if tool_name not in _AGENT_EVAL_SUPPORTED_TOOLS
+    ]
+    if unsupported:
+        unsupported_text = ", ".join(sorted(set(unsupported)))
+        supported_text = ", ".join(sorted(_AGENT_EVAL_SUPPORTED_TOOLS))
+        raise ValueError(
+            f"Agent eval case '{case.id}' lists unsupported expected_tool_calls "
+            f"({unsupported_text}); harness only supports: {supported_text}."
+        )
+    return expected_tools
 
 
 def _workflow_definition_from_case(

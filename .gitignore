@@ -36,8 +36,8 @@ __MACOSX/
 coverage.xml
 htmlcov/
 
-# Evaluation CLI output
-backend-python/.eval/eval-report.json
+# Evaluation CLI output (git-tracked baseline lives under tests/data/evaluation/)
+backend-python/.eval/
 
 # Python packaging/build
 build/

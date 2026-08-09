@@ -140,29 +140,6 @@
       "tool_calls_correct": true
     },
     {
-      "case_id": "agent_multi_echo_tools",
-      "correctness": null,
-      "error": null,
-      "faithfulness": null,
-      "hallucination": null,
-      "latency_ms": 0,
-      "latency_warning": null,
-      "level": "agent",
-      "model": "gpt-4o-mini",
-      "model_version": null,
-      "passed": true,
-      "precision": null,
-      "prompt_version": null,
-      "recall": null,
-      "retrieved_count": null,
-      "seed": null,
-      "skip_reason": null,
-      "skipped": false,
-      "temperature": 0.7,
-      "terminal_status": null,
-      "tool_calls_correct": true
-    },
-    {
       "case_id": "retrieval_finds_fixture",
       "correctness": null,
       "error": null,
@@ -394,13 +371,13 @@
   "summary": {
     "failed": 0,
     "mean_latency_ms": {
-      "agent": 0.5,
+      "agent": 1.0,
       "e2e": 14.0,
       "prompt": 0.2,
       "retrieval": 14.333333333333334,
       "workflow": 109.0
     },
-    "passed": 16,
+    "passed": 15,
     "retrieval": {
       "mean_precision": 1.0,
       "mean_recall": 0.6666666666666666

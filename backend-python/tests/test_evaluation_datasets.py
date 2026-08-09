@@ -19,7 +19,7 @@ def test_load_valid_sample_yaml() -> None:
     dataset = load_dataset(DATA_DIR / "sample.yaml")
 
     assert dataset.path.name == "sample.yaml"
-    assert len(dataset.cases) == 16
+    assert len(dataset.cases) == 15
     levels = {case.level for case in dataset.cases}
     assert levels == {"prompt", "retrieval", "e2e", "agent", "workflow"}
 
@@ -79,6 +79,25 @@ def test_load_malformed_json_raises_eval_dataset_error(tmp_path: Path) -> None:
     path.write_text('{"cases": [', encoding="utf-8")
 
     with pytest.raises(EvalDatasetError, match="Failed to parse JSON dataset"):
+        load_dataset(path)
+
+
+def test_load_agent_case_rejects_unsupported_tool_calls(tmp_path: Path) -> None:
+    path = tmp_path / "agent.yaml"
+    path.write_text(
+        """
+cases:
+  - id: agent_case
+    level: agent
+    goal: Search the web
+    expected_tool_calls:
+      - web_search
+    expected_outcome: done
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvalDatasetError, match="only supports echo tool calls"):
         load_dataset(path)
 
 

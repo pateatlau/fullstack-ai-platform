@@ -278,6 +278,16 @@ def _parse_agent_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
             f"Case '{case_id}': temperature must be a number when provided."
         )
 
+    unsupported_tools = [
+        tool_name for tool_name in expected_tool_calls if tool_name != "echo"
+    ]
+    if unsupported_tools:
+        unsupported_text = ", ".join(sorted(set(unsupported_tools)))
+        raise EvalDatasetError(
+            f"Case '{case_id}': agent eval harness only supports echo tool calls; "
+            f"unsupported expected_tool_calls: {unsupported_text}."
+        )
+
     return EvalCase(
         id=case_id,
         level="agent",

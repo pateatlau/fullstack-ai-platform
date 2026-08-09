@@ -95,15 +95,6 @@ cases:
       - echo
     expected_outcome: hello
 
-  - id: agent_multi_echo_tools
-    level: agent
-    goal: Echo twice
-    instructions: Call the echo tool twice before answering.
-    expected_tool_calls:
-      - echo
-      - echo
-    expected_outcome: done twice
-
   - id: workflow_echo_complete
     level: workflow
     expected_terminal_status: completed

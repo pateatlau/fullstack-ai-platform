@@ -23,12 +23,8 @@ _ALL_LEVELS: tuple[EvalLevel, ...] = (
     "workflow",
 )
 
-_ENVIRONMENT_FIELDS: tuple[str, ...] = (
-    "agent_runtime_enabled",
-    "workflow_engine_enabled",
-    "postgres_available",
-    "pgvector_available",
-)
+_DB_LEVELS: frozenset[EvalLevel] = frozenset({"retrieval", "e2e", "workflow"})
+_MIN_LATENCY_BASELINE_MS = 1.0
 
 
 @dataclass(frozen=True)
@@ -97,11 +93,13 @@ class RegressionChecker:
         *,
         pass_rate_tolerance_pct: float,
         latency_tolerance_pct: float,
+        latency_floor_ms: float,
     ) -> RegressionResult:
         baseline_invalid_reasons = _baseline_invalid_reasons(baseline)
         environment_diff_fields = _environment_diff_fields(
             current.run_environment,
             baseline.run_environment,
+            relevant_fields=_relevant_environment_fields(current),
         )
 
         result = RegressionResult(
@@ -120,6 +118,7 @@ class RegressionChecker:
             baseline,
             pass_rate_tolerance_pct=pass_rate_tolerance_pct,
             latency_tolerance_pct=latency_tolerance_pct,
+            latency_floor_ms=latency_floor_ms,
         )
         return result
 
@@ -199,9 +198,24 @@ def _baseline_invalid_reasons(baseline: EvalRunReport) -> list[str]:
     return reasons
 
 
+def _relevant_environment_fields(report: EvalRunReport) -> tuple[str, ...]:
+    """Return prerequisite env fields that matter for the levels in ``report``."""
+    levels = {result.level for result in report.results}
+    fields: list[str] = []
+    if "agent" in levels:
+        fields.append("agent_runtime_enabled")
+    if "workflow" in levels:
+        fields.append("workflow_engine_enabled")
+    if levels & _DB_LEVELS:
+        fields.extend(["postgres_available", "pgvector_available"])
+    return tuple(fields)
+
+
 def _environment_diff_fields(
     current: EvalRunEnvironment | None,
     baseline: EvalRunEnvironment | None,
+    *,
+    relevant_fields: tuple[str, ...],
 ) -> list[str]:
     if current is None or baseline is None:
         missing = []
@@ -212,7 +226,7 @@ def _environment_diff_fields(
         return missing
 
     diffs: list[str] = []
-    for field_name in _ENVIRONMENT_FIELDS:
+    for field_name in relevant_fields:
         current_value = getattr(current, field_name)
         baseline_value = getattr(baseline, field_name)
         if current_value != baseline_value:
@@ -260,6 +274,7 @@ def _detect_soft_regressions(
     *,
     pass_rate_tolerance_pct: float,
     latency_tolerance_pct: float,
+    latency_floor_ms: float,
 ) -> list[SoftRegressionFinding]:
     findings: list[SoftRegressionFinding] = []
 
@@ -284,12 +299,16 @@ def _detect_soft_regressions(
         if (
             baseline_latency is not None
             and current_latency is not None
-            and baseline_latency > 0
+            and baseline_latency >= _MIN_LATENCY_BASELINE_MS
         ):
             increase_pct = (
                 (current_latency - baseline_latency) / baseline_latency
             ) * 100.0
-            if increase_pct > latency_tolerance_pct:
+            latency_delta_ms = current_latency - baseline_latency
+            if (
+                increase_pct > latency_tolerance_pct
+                and latency_delta_ms > latency_floor_ms
+            ):
                 findings.append(
                     SoftRegressionFinding(
                         level=level,

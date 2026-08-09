@@ -242,13 +242,15 @@ def load_json_report(path: Path) -> EvalRunReport:
         raise ValueError(f"Report missing results list: {path}")
 
     results: list[EvalCaseResult] = []
-    for item in results_raw:
+    for index, item in enumerate(results_raw):
         if not isinstance(item, dict):
             raise ValueError(f"Report result entry must be an object: {path}")
+        case_id = _require_result_case_id(item.get("case_id"), path=path, index=index)
+        level = _require_result_level(item.get("level"), path=path, index=index)
         results.append(
             EvalCaseResult(
-                case_id=str(item["case_id"]),
-                level=item["level"],  # type: ignore[arg-type]
+                case_id=case_id,
+                level=level,
                 passed=bool(item.get("passed", False)),
                 latency_ms=int(item.get("latency_ms", 0)),
                 precision=_optional_float(item.get("precision")),
@@ -295,6 +297,21 @@ def load_json_report(path: Path) -> EvalRunReport:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+_ALLOWED_RESULT_LEVELS: frozenset[EvalLevel] = frozenset(_ALL_LEVELS)
+
+
+def _require_result_case_id(value: object, *, path: Path, index: int) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Report result[{index}] missing or invalid case_id: {path}")
+    return value
+
+
+def _require_result_level(value: object, *, path: Path, index: int) -> EvalLevel:
+    if value not in _ALLOWED_RESULT_LEVELS:
+        raise ValueError(f"Report result[{index}] has invalid level: {path}")
+    return value  # type: ignore[return-value]
 
 
 def _optional_bool(value: object) -> bool | None:

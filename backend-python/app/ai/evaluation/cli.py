@@ -26,6 +26,7 @@ from app.ai.evaluation.regression import (
     RegressionChecker,
     load_baseline_report,
     print_regression_summary,
+    write_regression_result,
 )
 from app.ai.evaluation.runners import (
     AgentEvalRunner,
@@ -42,6 +43,7 @@ from app.core.config import Settings, get_settings
 DEFAULT_DATASET = Path("tests/data/evaluation/sample.yaml")
 DEFAULT_OUTPUT = Path(".eval/eval-report.json")
 DEFAULT_BASELINE = Path("tests/data/evaluation/baseline-report.json")
+DEFAULT_REGRESSION_OUTPUT = Path(".eval/regression-result.json")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -77,6 +79,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="BASELINE",
         help="Compare this run against a baseline report; non-zero exit on regression.",
+    )
+    parser.add_argument(
+        "--regression-output",
+        type=Path,
+        default=DEFAULT_REGRESSION_OUTPUT,
+        help="JSON regression findings output path (used with --check-regression).",
     )
     parser.add_argument(
         "--update-baseline",
@@ -367,7 +375,12 @@ async def run_eval(args: argparse.Namespace) -> int:
         return _handle_update_baseline(report, args.update_baseline)
 
     if args.check_regression is not None:
-        return _handle_check_regression(report, settings, args.check_regression)
+        return _handle_check_regression(
+            report,
+            settings,
+            args.check_regression,
+            args.regression_output,
+        )
 
     return 0 if report.all_passed() else 1
 
@@ -407,15 +420,24 @@ def _handle_check_regression(
     report: EvalRunReport,
     settings: Settings,
     baseline_path: Path,
+    regression_output_path: Path,
 ) -> int:
-    baseline = load_baseline_report(baseline_path)
+    try:
+        baseline = load_baseline_report(baseline_path)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
     result = RegressionChecker.compare(
         report,
         baseline,
         pass_rate_tolerance_pct=settings.observability_regression_pass_rate_tolerance_pct,
         latency_tolerance_pct=settings.observability_regression_latency_tolerance_pct,
+        latency_floor_ms=settings.observability_regression_latency_floor_ms,
     )
     print_regression_summary(result)
+    write_regression_result(result, regression_output_path)
+    print(f"\nRegression JSON written to: {regression_output_path}")
     if result.has_regression:
         return 1
     return 0 if report.all_passed() else 1

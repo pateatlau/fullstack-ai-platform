@@ -238,6 +238,7 @@ class Settings(BaseSettings):
     # Evaluation regression tolerances (Phase 8).
     observability_regression_pass_rate_tolerance_pct: float = Field(default=5.0, ge=0.0)
     observability_regression_latency_tolerance_pct: float = Field(default=20.0, ge=0.0)
+    observability_regression_latency_floor_ms: float = Field(default=10.0, ge=0.0)
 
     @field_validator("log_level", mode="before")
     @classmethod
