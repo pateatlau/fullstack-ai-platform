@@ -39,3 +39,34 @@ cases:
     document_fixture: sample.txt
     expected_answer: 'plain text fixture content'
     expected_answer_match: fuzzy
+
+  - id: agent_echo_tool
+    level: agent
+    goal: Echo hello
+    instructions: Use the echo tool to repeat the message.
+    expected_tool_calls:
+      - echo
+    expected_outcome: hello
+
+  - id: workflow_echo_complete
+    level: workflow
+    expected_terminal_status: completed
+    trigger_input:
+      topic: eval-topic
+    workflow_definition:
+      name: Eval Echo Workflow
+      entry_node_id: start
+      nodes:
+        - id: start
+          type: task
+          config:
+            tool_name: echo
+            arguments_template:
+              message: hello
+        - id: end
+          type: terminal
+          config: {}
+      edges:
+        - id: e1
+          from_node_id: start
+          to_node_id: end

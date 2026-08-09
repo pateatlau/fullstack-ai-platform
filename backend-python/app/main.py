@@ -22,7 +22,7 @@ from app.core.config import get_settings
 from app.core.cors import CORS_EXPOSE_HEADER_NAMES, DEV_ORIGIN_REGEX
 from app.core.errors import error_response, register_exception_handlers
 from app.core.logging import bind_context, get_logger, setup_logging
-from app.db.engine import get_engine
+from app.db.engine import dispose_engine_cache
 from app.middleware.correlation_id import correlation_id_middleware
 from app.middleware.rate_limit import rate_limit_middleware
 from app.routers import (
@@ -103,7 +103,7 @@ async def lifespan(_: FastAPI):
                 exc_info=True,
             )
 
-    await get_engine().dispose()
+    await dispose_engine_cache()
 
 
 app = FastAPI(title="Chatbot Backend", version="0.1.0", lifespan=lifespan)

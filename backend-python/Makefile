@@ -30,6 +30,7 @@ test-cov:
 		--cov-fail-under=80
 
 eval:
+	# --level all requires AGENT_RUNTIME_ENABLED, WORKFLOW_ENGINE_ENABLED, Postgres, pgvector
 	$(UV) run python -m app.ai.evaluation.cli --level all
 
 db-migrate:

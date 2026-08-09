@@ -14,6 +14,7 @@ from app.ai.evaluation.runners import (
     EndToEndEvalRunner,
     PromptEvalRunner,
     RetrievalEvalRunner,
+    WorkflowEvalRunner,
     pgvector_available,
 )
 from app.ai.interfaces.vector_store import ScoredChunk
@@ -62,6 +63,40 @@ def _e2e_case(case_id: str) -> EvalCase:
     return case
 
 
+def _workflow_case(case_id: str) -> EvalCase:
+    dataset = load_dataset(DATASET)
+    case = next(item for item in dataset.cases if item.id == case_id)
+    assert case.level == "workflow"
+    return case
+
+
+async def _count_eval_workflow_users(session) -> int:
+    from sqlalchemy import func, select
+
+    from app.db.models import User
+
+    count = await session.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(User.external_auth_id.like("eval-workflow-%"))
+    )
+    return int(count or 0)
+
+
+async def _count_eval_workflow_runs(session) -> int:
+    from sqlalchemy import func, select
+
+    from app.db.models import User, WorkflowRunRecord
+
+    count = await session.scalar(
+        select(func.count())
+        .select_from(WorkflowRunRecord)
+        .join(User, WorkflowRunRecord.owner_id == User.id)
+        .where(User.external_auth_id.like("eval-workflow-%"))
+    )
+    return int(count or 0)
+
+
 def test_prompt_eval_runner_pass_and_fail() -> None:
     manager = create_prompt_manager()
     runner = PromptEvalRunner(prompt_manager=manager)
@@ -82,6 +117,16 @@ def test_prompt_eval_runner_pass_and_fail() -> None:
     )
     failed = runner.run_case(failing_case)
     assert failed.passed is False
+
+
+def test_prompt_eval_runner_populates_prompt_version() -> None:
+    manager = create_prompt_manager()
+    runner = PromptEvalRunner(prompt_manager=manager)
+
+    result = runner.run_case(_prompt_case("rag_answer_renders"))
+
+    assert result.prompt_version == "1"
+    assert result.model is None
 
 
 @pytest.mark.anyio
@@ -233,6 +278,10 @@ async def test_end_to_end_eval_runner_with_mocked_llm(
     assert result.passed is True
     assert result.correctness is True
     assert result.latency_ms >= 0
+    assert result.model == "gpt-4o-mini"
+    assert result.temperature == 0.7
+    assert result.model_version is None
+    assert result.seed is None
 
 
 def test_report_json_serialization(tmp_path: Path) -> None:
@@ -245,9 +294,10 @@ def test_report_json_serialization(tmp_path: Path) -> None:
     write_json_report(report, output)
 
     payload = output.read_text(encoding="utf-8")
-    assert '"schema_version": 1' in payload
+    assert '"schema_version": 2' in payload
     assert '"dataset_path"' in payload
     assert '"settings_snapshot"' in payload
+    assert '"run_environment"' in payload
 
 
 @pytest.fixture
@@ -305,3 +355,22 @@ async def test_pgvector_available_false_when_query_fails() -> None:
     session = AsyncMock()
     session.scalar = AsyncMock(side_effect=RuntimeError("db down"))
     assert await pgvector_available(session) is False
+
+
+@pytest.mark.anyio
+async def test_workflow_eval_integration_cleans_up_persisted_records(
+    pgvector_session,
+) -> None:
+    settings = _settings(workflow_engine_enabled=True)
+    runner = WorkflowEvalRunner(session=pgvector_session, settings=settings)
+
+    users_before = await _count_eval_workflow_users(pgvector_session)
+    runs_before = await _count_eval_workflow_runs(pgvector_session)
+
+    await runner.run_case(_workflow_case("workflow_echo_complete"))
+
+    users_after = await _count_eval_workflow_users(pgvector_session)
+    runs_after = await _count_eval_workflow_runs(pgvector_session)
+
+    assert users_after == users_before
+    assert runs_after == runs_before

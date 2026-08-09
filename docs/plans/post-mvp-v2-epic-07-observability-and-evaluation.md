@@ -2,7 +2,7 @@
 epic: v2-07
 title: Observability & Evaluation
 status: in_progress
-version: 1.16
+version: 1.19
 depends_on: [v2-06]
 provides:
   [
@@ -788,12 +788,12 @@ _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post
 | Backend tests / coverage | 1551 passed, 89.05% `app/`                                                                                                                                                                      |
 | Frontend tests           | 268 passed (43 files); lint + build pass                                                                                                                                                        |
 | Integration tests        | Workflow suite 241 passed; router 23; tool 11; streaming 26                                                                                                                                     |
-| Eval CLI                 | 5/5 passed                                                                                                                                                                                      |
+| Eval CLI                 | Unit + CLI smoke pass (`sample.yaml`; report schema v2; `--level all` prerequisite gate); full agent/workflow Postgres integration sign-off pending |
 | Chat pipeline            | Stable — `ChatService` + `UnifiedChatService`, Memory fully wired                                                                                                                               |
 | Agent Framework          | Completed (Epic 01); `AGENT_RUNTIME_ENABLED` behind flag                                                                                                                                        |
 | Memory subsystem         | Completed (Epic 05); `MEMORY_ENABLED` behind flag                                                                                                                                               |
 | Workflow Engine          | Completed (Epic 06); `WORKFLOW_ENGINE_ENABLED` behind flag                                                                                                                                      |
-| Observability            | Phase 4 complete — full span coverage (LLM, prompt, tool, agent, RAG, memory, voice, workflow); cost, REST API, eval extensions remain Phase 5+ |
+| Observability            | Phases 4–6 complete (spans, cost/metrics, REST API + `/metrics`); Phase 7 in progress (agent/workflow eval unit + CLI checks done; Postgres integration checks pending); Phases 8–10 remain |
 
 ---
 
@@ -806,9 +806,9 @@ _Reverified in Phase 0 (2026-08-07). See [Phase 0 baseline audit](../audits/post
 | 2     | LLM Provider & Prompt Tracing                 | M      | Completed   |
 | 3     | Tool & Agent Tracing                          | M      | Completed   |
 | 4     | RAG, Memory, Voice & Workflow Tracing         | L      | Completed   |
-| 5     | Token & Cost Metrics                          | L      | Not Started |
-| 6     | Observability REST API & `/metrics`           | M      | Not Started |
-| 7     | Evaluation Framework: Agent & Workflow Levels | L      | Not Started |
+| 5     | Token & Cost Metrics                          | L      | Completed   |
+| 6     | Observability REST API & `/metrics`           | M      | Completed   |
+| 7     | Evaluation Framework: Agent & Workflow Levels | L      | In Progress |
 | 8     | Prompt Regression & Benchmark Datasets        | M      | Not Started |
 | 9     | Frontend Observability Dashboard              | S      | Not Started |
 | 10    | Validation & Release                          | M      | Not Started |
@@ -1297,39 +1297,39 @@ Turn existing `ProviderUsage` token counts into an approximate, versioned dollar
 
 ## Cost Calculation
 
-- [ ] Add `backend-python/config/model_pricing.yaml` — canonical rate table per Part I § ModelPricingTable schema (`pricing_version` + `models[]` with `provider`, `model`, `input_usd_per_1k`, `output_usd_per_1k`).
-- [ ] Implement `ModelPricingTable` — load the YAML file at startup; enforce validation rules and **version lock** (`file.pricing_version == settings.observability_cost_pricing_version`); reject duplicate `(provider, model)` and invalid rates.
-- [ ] Add `observability_cost_pricing_file` and `observability_cost_pricing_version` to `app/core/config.py` and `.env.example` (version documents active table; rates are file-only, not env-overridable).
-- [ ] Implement `CostCalculator.price(provider, model, usage: ProviderUsage) -> tuple[float | None, str | None]` (cost, pricing_version).
-- [ ] Return `(None, None)` for unknown provider/model or missing usage fields — never raise.
-- [ ] Verify (by design, not by code) that no code path recalculates or overwrites a previously persisted `cost_usd`/`pricing_version` when `ModelPricingTable` changes — pricing updates apply to new rows only, per Part I § Pricing table lifecycle.
+- [x] Add `backend-python/config/model_pricing.yaml` — canonical rate table per Part I § ModelPricingTable schema (`pricing_version` + `models[]` with `provider`, `model`, `input_usd_per_1k`, `output_usd_per_1k`).
+- [x] Implement `ModelPricingTable` — load the YAML file at startup; enforce validation rules and **version lock** (`file.pricing_version == settings.observability_cost_pricing_version`); reject duplicate `(provider, model)` and invalid rates.
+- [x] Add `observability_cost_pricing_file` and `observability_cost_pricing_version` to `app/core/config.py` and `.env.example` (version documents active table; rates are file-only, not env-overridable).
+- [x] Implement `CostCalculator.price(provider, model, usage: ProviderUsage) -> tuple[float | None, str | None]` (cost, pricing_version).
+- [x] Return `(None, None)` for unknown provider/model or missing usage fields — never raise.
+- [x] Verify (by design, not by code) that no code path recalculates or overwrites a previously persisted `cost_usd`/`pricing_version` when `ModelPricingTable` changes — pricing updates apply to new rows only, per Part I § Pricing table lifecycle.
 
 ## Persistence
 
-- [ ] Add `cost_usd numeric(12,6) NULL`, `pricing_version text NULL` to `UsageEvent` ORM model.
-- [ ] Create Alembic migration `0008_observability_usage_cost` (additive, nullable columns; new indexes per Part I).
-- [ ] Extend `SqlUsageStore.record()` to invoke `CostCalculator.price(...)` internally and persist `cost_usd`/`pricing_version` alongside caller-supplied `session_id`, owner (`user_id`/`guest_id`), `message_id`, and terminal token counts — exactly one row per call (default behaviour unchanged when Observability is disabled — both cost fields remain `NULL`).
-- [ ] Verify existing `usage_events` writers (`ChatService`, `ToolChatService`) require no call-site changes — they continue passing terminal usage and identity fields; cost logic stays inside `record()`.
+- [x] Add `cost_usd numeric(12,6) NULL`, `pricing_version text NULL` to `UsageEvent` ORM model.
+- [x] Create Alembic migration `0008_observability_usage_cost` (additive, nullable columns; new indexes per Part I).
+- [x] Extend `SqlUsageStore.record()` to invoke `CostCalculator.price(...)` internally and persist `cost_usd`/`pricing_version` alongside caller-supplied `session_id`, owner (`user_id`/`guest_id`), `message_id`, and terminal token counts — exactly one row per call (default behaviour unchanged when Observability is disabled — both cost fields remain `NULL`).
+- [x] Verify existing `usage_events` writers (`ChatService`, `ToolChatService`) require no call-site changes — they continue passing terminal usage and identity fields; cost logic stays inside `record()`.
 
 ## Metrics Instruments
 
-- [ ] Implement counters: `llm_requests_total`, `tool_calls_total`, `agent_iterations_total`, `workflow_runs_started`, `workflow_runs_completed`, `workflow_runs_failed`, `workflow_retry_count`.
-- [ ] Implement histograms: `llm_token_usage`, `tool_call_latency_ms`, `workflow_node_execution_latency_ms`, `workflow_checkpoint_latency_ms`.
-- [ ] Implement gauges/up-down counters: `workflow_approval_pending_count`, `workflow_parallel_branch_count`.
-- [ ] Record `llm_cost_usd_total` as a counter incremented by each priced usage event.
-- [ ] Implement `normalize_metric_label()` and value registries per Part I § Metric Cardinality Policy (`app/ai/observability/metrics/labels.py`).
-- [ ] Restrict every instrument's label keys to the Part I allowlist; route all label values through `normalize_metric_label()` (unknown/plugin/MCP → `other`).
-- [ ] Add a metric cardinality guard test: (1) every instrument's label-key set is a subset of the allowlist; (2) no forbidden keys (`user_id`, `session_id`, `trace_id`, etc.); (3) sample raw inputs (unknown model, MCP tool, bad node type) normalize to registry values or `other`, never raw unbounded strings.
-- [ ] Wire instrument recording into the Phase 2–4 span helpers (one place per domain, not duplicated per call site) — the same helper call attaches high-cardinality identifiers to the **span** and only normalized registry values to the **metric**.
+- [x] Implement counters: `llm_requests_total`, `tool_calls_total`, `agent_iterations_total`, `workflow_runs_started`, `workflow_runs_completed`, `workflow_runs_failed`, `workflow_retry_count`.
+- [x] Implement histograms: `llm_token_usage`, `tool_call_latency_ms`, `workflow_node_execution_latency_ms`, `workflow_checkpoint_latency_ms`.
+- [x] Implement gauges/up-down counters: `workflow_approval_pending_count`, `workflow_parallel_branch_count`.
+- [x] Record `llm_cost_usd_total` as a counter incremented by each priced usage event.
+- [x] Implement `normalize_metric_label()` and value registries per Part I § Metric Cardinality Policy (`app/ai/observability/metrics/labels.py`).
+- [x] Restrict every instrument's label keys to the Part I allowlist; route all label values through `normalize_metric_label()` (unknown/plugin/MCP → `other`).
+- [x] Add a metric cardinality guard test: (1) every instrument's label-key set is a subset of the allowlist; (2) no forbidden keys (`user_id`, `session_id`, `trace_id`, etc.); (3) sample raw inputs (unknown model, MCP tool, bad node type) normalize to registry values or `other`, never raw unbounded strings.
+- [x] Wire instrument recording into the Phase 2–4 span helpers (one place per domain, not duplicated per call site) — the same helper call attaches high-cardinality identifiers to the **span** and only normalized registry values to the **metric**.
 
 ## Testing
 
-- [ ] Add `ModelPricingTable` loader tests (valid file, duplicate key rejection, negative rate rejection, version-mismatch startup failure).
-- [ ] Add `CostCalculator` tests (known model, unknown model, missing usage fields, unknown provider).
-- [ ] Add migration upgrade/downgrade smoke test.
-- [ ] Add `SqlUsageStore.record()` tests asserting `cost_usd`/`pricing_version` persistence and `NULL` fallback.
-- [ ] Add a pricing-version-change test: updating `ModelPricingTable` does not alter previously persisted `cost_usd`/`pricing_version` rows; only new rows use the new table.
-- [ ] Add metrics-instrument tests using an in-memory metric reader (counters/histograms increment correctly; emitted label values are registry members only).
+- [x] Add `ModelPricingTable` loader tests (valid file, duplicate key rejection, negative rate rejection, version-mismatch startup failure).
+- [x] Add `CostCalculator` tests (known model, unknown model, missing usage fields, unknown provider).
+- [x] Add migration upgrade/downgrade smoke test.
+- [x] Add `SqlUsageStore.record()` tests asserting `cost_usd`/`pricing_version` persistence and `NULL` fallback.
+- [x] Add a pricing-version-change test: updating `ModelPricingTable` does not alter previously persisted `cost_usd`/`pricing_version` rows; only new rows use the new table.
+- [x] Add metrics-instrument tests using an in-memory metric reader (counters/histograms increment correctly; emitted label values are registry members only).
 
 **Verify**
 
@@ -1337,9 +1337,9 @@ Turn existing `ProviderUsage` token counts into an approximate, versioned dollar
 
 Additional verification:
 
-- [ ] `usage_events` rows are priced correctly for known models.
-- [ ] Unknown/unsupported models never block a usage write.
-- [ ] Every metric name declared in Epic 06 § Observability is emitted.
+- [x] `usage_events` rows are priced correctly for known models.
+- [x] Unknown/unsupported models never block a usage write.
+- [x] Every metric name declared in Epic 06 § Observability is emitted.
 
 **Acceptance**
 
@@ -1360,7 +1360,15 @@ Additional verification:
 
 **Completion Record**
 
-_Filled upon phase completion._
+| Metric              | Result                                                                                                      |
+| ------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Lint / typecheck    | ✅ PASS (pre-commit)                                                                                        |
+| Phase 5 unit tests  | ✅ 24 passed (`test_cost_calculator.py`, `test_usage_cost_persistence.py`, `test_metrics_instruments.py`)   |
+| Pricing table       | ✅ `config/model_pricing.yaml` + version lock via `observability_cost_pricing_version`                    |
+| Migration           | ✅ `0008_observability_usage_cost` (`cost_usd`, `pricing_version` on `usage_events`)                        |
+| Cost boundary       | ✅ `SqlUsageStore.record()` — no call-site changes to chat/tool writers                                     |
+| Metric cardinality  | ✅ Allowlisted label keys + `normalize_metric_label()` registry tests                                       |
+| User confirmation   | ⏳ Pending                                                                                                  |
 
 ---
 
@@ -1384,35 +1392,35 @@ Expose owner-scoped usage/cost summaries and a Prometheus exposition endpoint pe
 
 ## Aggregation
 
-- [ ] Implement `UsageAggregator` — owner-scoped queries over `usage_events` grouped by `day` | `provider` | `model`, with a `since`/`until` date range.
-- [ ] Implement `ObservabilityStore` as the thin read façade the router depends on.
-- [ ] Ensure queries use the new `(user_id, created_at)` / `(provider, model, created_at)` indexes.
-- [ ] Before wiring the router: re-evaluate whether `ObservabilityStore` adds any logic beyond delegating to `UsageAggregator` (per Part I § Storage Architecture). If it does not, collapse it and have the router depend on `UsageAggregator` directly; if it does (e.g., response DTO shaping, multi-source aggregation), keep it. Record the decision in this phase's Completion Record.
+- [x] Implement `UsageAggregator` — owner-scoped queries over `usage_events` grouped by `day` | `provider` | `model`, with a `since`/`until` date range.
+- [x] Collapse provisional `ObservabilityStore` — router depends on `UsageAggregator` directly (no pass-through façade; see Completion Record).
+- [x] Ensure queries use the new `(user_id, created_at)` / `(provider, model, created_at)` indexes.
+- [x] Before wiring the router: re-evaluate whether `ObservabilityStore` adds any logic beyond delegating to `UsageAggregator` (per Part I § Storage Architecture). If it does not, collapse it and have the router depend on `UsageAggregator` directly; if it does (e.g., response DTO shaping, multi-source aggregation), keep it. Record the decision in this phase's Completion Record.
 
 ## Schemas & Router
 
-- [ ] Define request/response schemas for the usage summary endpoint; never expose other owners' data or internal trace/span IDs.
-- [ ] Implement `GET /api/observability/usage` — `Depends(get_current_caller)`, owner-scoped.
-- [ ] Implement `GET /metrics` — Prometheus text exposition from `MeterRegistry`'s Prometheus reader; unauthenticated (matches `/api/health` pattern); no owner-identifying labels.
-- [ ] Return `503 feature_disabled` from `/api/observability/usage` and `404` from `/metrics` when `OBSERVABILITY_ENABLED=false`.
-- [ ] Mount the router in `app/main.py`.
+- [x] Define request/response schemas for the usage summary endpoint; never expose other owners' data or internal trace/span IDs.
+- [x] Implement `GET /api/observability/usage` — `Depends(get_current_caller)`, owner-scoped.
+- [x] Implement `GET /metrics` — Prometheus text exposition from `MeterRegistry`'s Prometheus reader; unauthenticated (matches `/api/health` pattern); no owner-identifying labels.
+- [x] Return `503 feature_disabled` from `/api/observability/usage` and `404` from `/metrics` when `OBSERVABILITY_ENABLED=false`.
+- [x] Mount the router in `app/main.py`.
 
 ## Health
 
-- [ ] Extend `app/routers/health.py` with `observability_enabled`.
+- [x] Extend `app/routers/health.py` with `observability_enabled`.
 
 ## Error Handling
 
-- [ ] Map validation errors (bad date range, invalid `group_by`) → `422`.
-- [ ] Map generic errors → `500` with a safe message.
+- [x] Map validation errors (bad date range, invalid `group_by`) → `422`.
+- [x] Map generic errors → `500` with a safe message.
 
 ## Testing
 
-- [ ] Add router tests for the usage endpoint (happy path, date-range filtering, each `group_by` mode).
-- [ ] Add owner-isolation tests (caller only ever sees their own rows).
-- [ ] Add feature-flag-off tests (`503` on usage endpoint, `404` on `/metrics`).
-- [ ] Add `/metrics` content tests (Prometheus format, no owner labels).
-- [ ] Add health endpoint tests.
+- [x] Add router tests for the usage endpoint (happy path, date-range filtering, each `group_by` mode).
+- [x] Add owner-isolation tests (caller only ever sees their own rows).
+- [x] Add feature-flag-off tests (`503` on usage endpoint, `404` on `/metrics`).
+- [x] Add `/metrics` content tests (Prometheus format, no owner labels).
+- [x] Add health endpoint tests.
 
 **Verify**
 
@@ -1420,10 +1428,10 @@ Expose owner-scoped usage/cost summaries and a Prometheus exposition endpoint pe
 
 Additional verification:
 
-- [ ] Usage summaries match Part I contract for every `group_by` mode.
-- [ ] `/metrics` is scrape-able Prometheus text format.
-- [ ] Owner isolation holds.
-- [ ] Health endpoint reports `observability_enabled` correctly.
+- [x] Usage summaries match Part I contract for every `group_by` mode.
+- [x] `/metrics` is scrape-able Prometheus text format.
+- [x] Owner isolation holds.
+- [x] Health endpoint reports `observability_enabled` correctly.
 
 **Acceptance**
 
@@ -1438,7 +1446,15 @@ Additional verification:
 
 **Completion Record**
 
-_Filled upon phase completion._
+| Metric                   | Result                                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| Lint / typecheck         | ✅ PASS (pre-commit)                                                                                        |
+| Phase 6 integration tests | ✅ 15 passed (`tests/test_observability_router.py`)                                                      |
+| Usage API                | ✅ `GET /api/observability/usage` — owner-scoped, `group_by` day/provider/model, date range                 |
+| Prometheus               | ✅ `GET /metrics` — unauthenticated exposition; `404` when flag off; no owner labels                        |
+| Health                   | ✅ `observability_enabled` on `/api/health`                                                                 |
+| `ObservabilityStore`     | ✅ Collapsed — router depends on `UsageAggregator` directly (no pass-through façade)                        |
+| User confirmation        | ⏳ Pending                                                                                                  |
 
 ---
 
@@ -1462,40 +1478,41 @@ Extend the existing V1 evaluation harness with `agent` and `workflow` eval level
 
 ## Dataset Schema
 
-- [ ] Extend `EvalLevel` to `Literal["prompt", "retrieval", "e2e", "agent", "workflow"]`.
-- [ ] Add `_parse_agent_case` — goal/instructions, expected tool calls, expected outcome.
-- [ ] Add `_parse_workflow_case` — inline workflow definition (or fixture reference), trigger input, expected terminal status.
-- [ ] Extend `EvalCaseResult` with `tool_calls_correct: bool | None` and `terminal_status: str | None`.
-- [ ] Extend `EvalCaseResult`/`EvalRunReport` with reproducibility metadata fields per Part I § Evaluation Framework Extension: `model`, `model_version`, `temperature`, `seed`, `prompt_version` (each `| None` — never fabricated when a runner/provider doesn't expose one). Add top-level `run_environment` (`agent_runtime_enabled`, `workflow_engine_enabled`, `postgres_available`, `pgvector_available`). Bump `REPORT_SCHEMA_VERSION`.
-- [ ] Populate these fields from each runner (`PromptEvalRunner` → `prompt_version`; `AgentEvalRunner`/`EndToEndEvalRunner` → `model`/`temperature`/`model_version` from the fake or real provider call; `WorkflowEvalRunner` → `model`/`prompt_version` when the run includes `llm`/`agent` nodes).
+- [x] Extend `EvalLevel` to `Literal["prompt", "retrieval", "e2e", "agent", "workflow"]`.
+- [x] Add `_parse_agent_case` — goal/instructions, expected tool calls, expected outcome.
+- [x] Add `_parse_workflow_case` — inline workflow definition (or fixture reference), trigger input, expected terminal status.
+- [x] Extend `EvalCaseResult` with `tool_calls_correct: bool | None` and `terminal_status: str | None`.
+- [x] Extend `EvalCaseResult`/`EvalRunReport` with reproducibility metadata fields per Part I § Evaluation Framework Extension: `model`, `model_version`, `temperature`, `seed`, `prompt_version` (each `| None` — never fabricated when a runner/provider doesn't expose one). Add top-level `run_environment` (`agent_runtime_enabled`, `workflow_engine_enabled`, `postgres_available`, `pgvector_available`). Bump `REPORT_SCHEMA_VERSION`.
+- [x] Populate these fields from each runner (`PromptEvalRunner` → `prompt_version`; `AgentEvalRunner`/`EndToEndEvalRunner` → `model`/`temperature`/`model_version` from the fake or real provider call; `WorkflowEvalRunner` → `model`/`prompt_version` when the run includes `llm`/`agent` nodes).
 
 ## Agent Runner
 
-- [ ] Implement `AgentEvalRunner` using a fake provider/tools (same pattern as `_EvalLLMProvider`/`_FakeEmbeddingProvider`).
-- [ ] Assert the agent reaches the expected outcome and/or calls the expected tools.
-- [ ] Skip (not fail) with a clear reason when `AGENT_RUNTIME_ENABLED=false`.
+- [x] Implement `AgentEvalRunner` using a fake provider/tools (same pattern as `_EvalLLMProvider`/`_FakeEmbeddingProvider`).
+- [x] Assert the agent reaches the expected outcome and/or calls the expected tools.
+- [x] Skip (not fail) with a clear reason when `AGENT_RUNTIME_ENABLED=false`.
 
 ## Workflow Runner
 
-- [ ] Implement `WorkflowEvalRunner` using `WorkflowManager` against a real (test) Postgres session, same availability check as `RetrievalEvalRunner`/`EndToEndEvalRunner`.
-- [ ] Create a minimal workflow definition from the case, start a run, drive it to a terminal status.
-- [ ] Assert the terminal status and (optionally) node output match expectations.
-- [ ] Skip (not fail) with a clear reason when `WORKFLOW_ENGINE_ENABLED=false` or Postgres/pgvector is unavailable.
+- [x] Implement `WorkflowEvalRunner` using `WorkflowManager` against a real (test) Postgres session, same availability check as `RetrievalEvalRunner`/`EndToEndEvalRunner`.
+- [x] Create a minimal workflow definition from the case, start a run, drive it to a terminal status.
+- [x] Assert the terminal status and (optionally) node output match expectations.
+- [x] Skip (not fail) with a clear reason when `WORKFLOW_ENGINE_ENABLED=false` or Postgres/pgvector is unavailable.
 
 ## CLI & Reporting
 
-- [ ] Add `--level agent` / `--level workflow` to `build_parser()`; `--level all` includes both **and enforces prerequisites** (`AGENT_RUNTIME_ENABLED`, `WORKFLOW_ENGINE_ENABLED`, Postgres + pgvector available) — exit non-zero with a clear message if any required prerequisite is missing (no skipped agent/workflow cases).
-- [ ] Capture `run_environment` once per run and persist it in JSON output / `baseline-report.json`.
-- [ ] Extend `print_console_summary` / `_serialize_report` with `agent`/`workflow` sections.
-- [ ] Update `Makefile` `eval` target documentation if the default level set changes (default stays `all`).
+- [x] Add `--level agent` / `--level workflow` to `build_parser()`; `--level all` includes both **and enforces prerequisites** (`AGENT_RUNTIME_ENABLED`, `WORKFLOW_ENGINE_ENABLED`, Postgres + pgvector available) — exit non-zero with a clear message if any required prerequisite is missing (no skipped agent/workflow cases).
+- [x] Capture `run_environment` once per run and persist it in JSON output / `baseline-report.json`.
+- [x] Extend `print_console_summary` / `_serialize_report` with `agent`/`workflow` sections.
+- [x] Update `Makefile` `eval` target documentation if the default level set changes (default stays `all`).
 
 ## Testing
 
-- [ ] Add `AgentEvalRunner` tests (pass, fail, flag-off skip).
-- [ ] Add `WorkflowEvalRunner` tests (pass, fail, flag-off skip, Postgres-unavailable skip).
-- [ ] Add dataset parsing tests for the new case types.
-- [ ] Add CLI tests for `--level agent`/`--level workflow`/`--level all`.
-- [ ] Add reproducibility metadata tests: each new runner populates `model`/`temperature`/`prompt_version` (and `model_version`/`seed` when available) on its `EvalCaseResult`, and leaves them `None` (not a placeholder value) when unavailable.
+- [x] Add `AgentEvalRunner` tests (pass, fail, flag-off skip).
+- [x] Add `WorkflowEvalRunner` tests (pass, fail, flag-off skip, Postgres-unavailable skip).
+- [x] Add dataset parsing tests for the new case types.
+- [x] Add CLI tests for `--level agent`/`--level workflow`/`--level all`.
+- [x] Add reproducibility metadata tests: each new runner populates `model`/`temperature`/`prompt_version` (and `model_version`/`seed` when available) on its `EvalCaseResult`, and leaves them `None` (not a placeholder value) when unavailable.
+- [ ] Add Postgres integration tests for `AgentEvalRunner` and `WorkflowEvalRunner` (real runtime with flags on; verify pass/fail outcomes and teardown leaves no eval artifacts).
 
 **Verify**
 
@@ -1503,9 +1520,9 @@ Extend the existing V1 evaluation harness with `agent` and `workflow` eval level
 
 Additional verification:
 
-- [ ] `make eval --level agent` and `make eval --level workflow` run real cases when their flags are on.
-- [ ] Both targeted levels skip cleanly when their flag is off; `--level all` hard-fails instead of skipping when agent/workflow prerequisites are missing.
-- [ ] Existing `prompt`/`retrieval`/`e2e` levels are unaffected.
+- [ ] `make eval --level agent` and `make eval --level workflow` run real cases when their flags are on and Postgres/pgvector are available.
+- [x] Both targeted levels skip cleanly when their flag is off; `--level all` hard-fails instead of skipping when agent/workflow prerequisites are missing.
+- [x] Existing `prompt`/`retrieval`/`e2e` levels are unaffected.
 
 **Acceptance**
 
@@ -1513,12 +1530,21 @@ Additional verification:
 
 **Exit Criteria**
 
-- Agent/workflow eval tests pass.
+- Agent/workflow unit + CLI tests pass; Postgres integration checks pass.
 - Ready for regression detection and benchmark dataset expansion (Phase 8).
 
 **Completion Record**
 
-_Filled upon phase completion._
+| Metric                    | Result                                                                                                      |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Lint / typecheck          | ✅ PASS (pre-commit)                                                                                        |
+| Phase 7 unit tests        | ✅ 47 passed (`tests/ai/evaluation/`, `tests/test_evaluation_*.py`; includes CLI smoke; Postgres integration sign-off still pending) |
+| Phase 7 CLI checks        | ✅ `--level agent`/`workflow`/`all` smoke tests; prerequisite gate exit 2; flag-off skip behaviour verified |
+| Agent/workflow integration | ⏳ Pending — `make eval --level agent`/`workflow` against Postgres/pgvector not yet signed off            |
+| Report schema             | ✅ v2 (`run_environment`, reproducibility metadata, agent/workflow result fields)                            |
+| Sample dataset            | ✅ 7 cases (`prompt`=2, `retrieval`=2, `e2e`=1, `agent`=1, `workflow`=1)                                  |
+| Existing levels unchanged | ✅ `prompt`/`retrieval`/`e2e` runners and offline prompt eval verified                                    |
+| User confirmation         | ⏳ Pending                                                                                                  |
 
 ---
 
@@ -1979,3 +2005,6 @@ No prompt, tool, or message content is ever attached to a span, metric, or log f
 | 1.14    | 2026-08-07 | Phase 2 complete: TracingLLMProvider, ProviderFactory wrapping, PromptManager prompt_span wiring, token-count span attribute allowlist, 13 unit tests. Part II only.                                                                                                                                                                                                                                                                                                                                                          |
 | 1.15    | 2026-08-08 | Phase 3 complete: ToolExecutor tool_span, DefaultAgent agent_span (iteration + tool_call), fail-open telemetry tests, 8 unit tests. Part II only.                                                                                                                                                                                                                                                                                                                                                                             |
 | 1.16    | 2026-08-08 | Phase 4 complete: RAG/memory/voice/workflow span wiring, workflow background SpanContext snapshot + span links, resume/reconcile fresh-root spans, 14 unit tests (53 total observability). Part II only.                                                                                                                                                                                                                                                                                                                      |
+| 1.17    | 2026-08-08 | Phase 7 implementation landed: `AgentEvalRunner`/`WorkflowEvalRunner`, eval schema v2 + `run_environment`, CLI `--level agent`/`workflow`/`all` prerequisite gate, 36 eval unit/CLI tests, `sample.yaml` expanded to 7 cases. Integration checks tracked separately. Part II only.                                                                                                                                                                                                                                                                                                             |
+| 1.18    | 2026-08-08 | Phases 5–6 completion records: cost/metrics (24 tests, `0008` migration, `model_pricing.yaml`); REST API + `/metrics` (15 router tests); `ObservabilityStore` collapsed to `UsageAggregator`. Part II only.                                                                                                                                                                                                                                                                                                                   |
+| 1.19    | 2026-08-09 | Phase 7 status corrected: **In Progress** until agent/workflow Postgres integration checks pass; baseline Observability summary and completion record distinguish unit/CLI vs integration. Part II only.                                                                                                                                                                                                                                                                                                                         |

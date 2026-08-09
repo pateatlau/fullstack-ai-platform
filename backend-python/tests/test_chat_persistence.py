@@ -330,11 +330,9 @@ async def app_persistence(
         yield provider
     finally:
         get_settings.cache_clear()
-        from app.db.engine import get_engine, get_sessionmaker
+        from app.db.engine import dispose_engine_cache
 
-        await get_engine().dispose()
-        get_engine.cache_clear()
-        get_sessionmaker.cache_clear()
+        await dispose_engine_cache()
 
 
 @pytest.mark.anyio
