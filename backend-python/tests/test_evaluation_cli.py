@@ -22,6 +22,9 @@ def _args(**overrides: object):
         "dataset": DATASET,
         "output": Path(".eval/test-eval-report.json"),
         "use_judge": False,
+        "check_regression": None,
+        "regression_output": Path(".eval/test-regression-result.json"),
+        "update_baseline": None,
     }
     base.update(overrides)
     return Namespace(**base)
@@ -39,7 +42,7 @@ async def test_cli_level_prompt_runs_offline(
 
     assert exit_code == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["summary"]["passed"] >= 2
+    assert payload["summary"]["passed"] >= 5
     assert payload["schema_version"] == 2
     assert payload["run_environment"] is not None
 
@@ -119,7 +122,7 @@ async def test_cli_level_all_smoke(
 
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert "results" in payload
-    assert len(payload["results"]) == 7
+    assert len(payload["results"]) == 15
     assert payload["run_environment"] is not None
     assert exit_code in {0, 1}
 

@@ -22,6 +22,40 @@ cases:
       You produce concise summaries of conversations, preserving key facts and
       decisions.
 
+  - id: rag_query_rewrite_snapshot
+    level: prompt
+    prompt_category: rag
+    prompt_name: query_rewrite
+    prompt_version: '1'
+    prompt_variables:
+      question: 'What does it say about fixtures?'
+    expected_render_contains:
+      - 'Rewrite the user question'
+      - 'What does it say about fixtures?'
+
+  - id: chat_default_system_snapshot
+    level: prompt
+    prompt_category: chat
+    prompt_name: default_system
+    prompt_version: '1'
+    prompt_variables: {}
+    expected_render_exact: 'You are a helpful assistant.'
+
+  - id: agent_planner_snapshot
+    level: prompt
+    prompt_category: agent
+    prompt_name: planner
+    prompt_version: '1'
+    prompt_variables:
+      current_date: '2026-08-09'
+      tool_list: '- echo: repeats a message'
+      iteration: 1
+      max_iterations: 5
+    expected_render_contains:
+      - 'ReAct-style planning agent'
+      - 'echo: repeats a message'
+      - 'iteration: 1 of 5'
+
   - id: retrieval_finds_fixture
     level: retrieval
     question: 'What content is in the plain text fixture?'
@@ -33,12 +67,25 @@ cases:
     question: 'What content is available in my documents?'
     relevant_chunk_ids: []
 
+  - id: retrieval_markdown_fixture
+    level: retrieval
+    question: 'What markdown content is available?'
+    document_fixture: sample.md
+    relevant_chunk_ids: []
+
   - id: e2e_fixture_answer
     level: e2e
     question: 'What does the plain text fixture contain?'
     document_fixture: sample.txt
     expected_answer: 'plain text fixture content'
     expected_answer_match: fuzzy
+
+  - id: e2e_markdown_exact_match
+    level: e2e
+    question: 'What markdown content is in the document?'
+    document_fixture: sample.md
+    expected_answer: 'Markdown fixture paragraph.'
+    expected_answer_match: exact
 
   - id: agent_echo_tool
     level: agent
@@ -69,4 +116,122 @@ cases:
       edges:
         - id: e1
           from_node_id: start
+          to_node_id: end
+
+  - id: workflow_sequential_tasks
+    level: workflow
+    expected_terminal_status: completed
+    trigger_input: {}
+    workflow_definition:
+      name: Sequential Eval Workflow
+      entry_node_id: first
+      nodes:
+        - id: first
+          type: task
+          config:
+            tool_name: echo
+            arguments_template:
+              message: step-one
+        - id: second
+          type: task
+          config:
+            tool_name: echo
+            arguments_template:
+              message: step-two
+        - id: end
+          type: terminal
+          config: {}
+      edges:
+        - id: e1
+          from_node_id: first
+          to_node_id: second
+        - id: e2
+          from_node_id: second
+          to_node_id: end
+
+  - id: workflow_conditional_router
+    level: workflow
+    expected_terminal_status: completed
+    trigger_input:
+      tier: premium
+    workflow_definition:
+      name: Conditional Eval Workflow
+      entry_node_id: route
+      nodes:
+        - id: route
+          type: router
+          config: {}
+        - id: high_path
+          type: task
+          config:
+            tool_name: echo
+            arguments_template:
+              message: high
+        - id: low_path
+          type: task
+          config:
+            tool_name: echo
+            arguments_template:
+              message: low
+        - id: end
+          type: terminal
+          config: {}
+      edges:
+        - id: high
+          from_node_id: route
+          to_node_id: high_path
+          condition:
+            field: trigger_input.tier
+            operator: eq
+            value: premium
+        - id: low
+          from_node_id: route
+          to_node_id: low_path
+          condition:
+            field: trigger_input.tier
+            operator: eq
+            value: standard
+        - id: e1
+          from_node_id: high_path
+          to_node_id: end
+        - id: e2
+          from_node_id: low_path
+          to_node_id: end
+
+  - id: workflow_approval_pause
+    level: workflow
+    expected_terminal_status: waiting_approval
+    trigger_input: {}
+    workflow_definition:
+      name: Approval Eval Workflow
+      entry_node_id: start
+      nodes:
+        - id: start
+          type: task
+          config:
+            tool_name: echo
+            arguments_template:
+              message: prep
+        - id: approve
+          type: approval
+          config:
+            approved_edge_id: approved
+        - id: after
+          type: task
+          config:
+            tool_name: echo
+            arguments_template:
+              message: after
+        - id: end
+          type: terminal
+          config: {}
+      edges:
+        - id: e1
+          from_node_id: start
+          to_node_id: approve
+        - id: approved
+          from_node_id: approve
+          to_node_id: after
+        - id: e3
+          from_node_id: after
           to_node_id: end

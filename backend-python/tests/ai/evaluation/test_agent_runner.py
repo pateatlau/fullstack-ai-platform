@@ -57,13 +57,45 @@ async def test_agent_eval_runner_passes_with_expected_tools_and_outcome() -> Non
 
 
 @pytest.mark.anyio
-async def test_agent_eval_runner_fails_when_tool_calls_mismatch() -> None:
+async def test_agent_eval_runner_rejects_unsupported_expected_tools() -> None:
     runner = AgentEvalRunner(
         settings=_settings(),
         prompt_manager=create_prompt_manager(),
     )
 
     result = await runner.run_case(_agent_case(expected_tool_calls=("web_search",)))
+
+    assert result.passed is False
+    assert result.error is not None
+    assert "unsupported expected_tool_calls" in result.error
+    assert "web_search" in result.error
+    assert "echo" in result.error
+
+
+@pytest.mark.anyio
+async def test_agent_eval_runner_fails_when_tool_calls_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ai.evaluation import runners as runners_module
+
+    original_build = runners_module._build_agent_eval_provider
+
+    def _short_circuit_provider(case, *, model, temperature):  # type: ignore[no-untyped-def]
+        provider = original_build(case, model=model, temperature=temperature)
+        provider.tools_invoked = ["echo"]
+        return provider
+
+    monkeypatch.setattr(
+        runners_module,
+        "_build_agent_eval_provider",
+        _short_circuit_provider,
+    )
+    runner = AgentEvalRunner(
+        settings=_settings(),
+        prompt_manager=create_prompt_manager(),
+    )
+
+    result = await runner.run_case(_agent_case(expected_tool_calls=("echo", "echo")))
 
     assert result.passed is False
     assert result.tool_calls_correct is False
@@ -96,6 +128,46 @@ async def test_agent_eval_runner_uses_case_model_and_temperature_overrides() -> 
 
     assert result.model == "gpt-4o"
     assert result.temperature == 0.2
+
+
+@pytest.mark.anyio
+async def test_agent_eval_runner_passes_with_multi_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ai.evaluation import runners as runners_module
+
+    captured_provider = None
+    original_build = runners_module._build_agent_eval_provider
+
+    def _capture_provider(case, *, model, temperature):  # type: ignore[no-untyped-def]
+        nonlocal captured_provider
+        captured_provider = original_build(case, model=model, temperature=temperature)
+        return captured_provider
+
+    monkeypatch.setattr(
+        runners_module,
+        "_build_agent_eval_provider",
+        _capture_provider,
+    )
+    runner = AgentEvalRunner(
+        settings=_settings(),
+        prompt_manager=create_prompt_manager(),
+    )
+
+    result = await runner.run_case(
+        _agent_case(
+            id="agent_multi_echo",
+            goal="Echo twice",
+            expected_tool_calls=("echo", "echo"),
+            expected_outcome="done twice",
+        )
+    )
+
+    assert captured_provider is not None
+    assert len(captured_provider.tools_invoked) == 2
+    assert captured_provider.tools_invoked == ["echo", "echo"]
+    assert result.passed is True
+    assert result.tool_calls_correct is True
 
 
 @pytest.mark.anyio

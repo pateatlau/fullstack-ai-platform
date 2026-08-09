@@ -78,6 +78,7 @@ DOCUMENT_FIXTURES_ROOT = (
     Path(__file__).resolve().parents[3] / "tests" / "data" / "documents"
 )
 EMBEDDING_DIMENSIONS = 1536
+_AGENT_EVAL_SUPPORTED_TOOLS: frozenset[str] = frozenset({"echo"})
 
 
 class _FakeEmbeddingProvider:
@@ -175,6 +176,7 @@ class _AgentEvalProvider:
         self._tool_call_index = 0
         self.model = model
         self.temperature = temperature
+        self.tools_invoked: list[str] = []
 
     async def stream_chat(
         self,
@@ -214,7 +216,10 @@ class _AgentEvalProvider:
         max_tokens: int | None = None,
     ) -> ProviderToolCompletion:
         del messages, model, tools, temperature, max_tokens
-        return self._next_tool_completion()
+        completion = self._next_tool_completion()
+        for tool_call in completion.tool_calls:
+            self.tools_invoked.append(tool_call.name)
+        return completion
 
     def _next_tool_completion(self) -> ProviderToolCompletion:
         if not self._tool_completions:
@@ -586,7 +591,7 @@ class AgentEvalRunner:
 
             tool_calls_correct = None
             if case.expected_tool_calls:
-                tool_calls_correct = list(response.tools_used) == list(
+                tool_calls_correct = provider.tools_invoked == list(
                     case.expected_tool_calls
                 )
 
@@ -797,17 +802,22 @@ def _build_agent_eval_provider(
     model: str,
     temperature: float,
 ) -> _AgentEvalProvider:
-    tool_completions: list[ProviderToolCompletion] = [
-        ProviderToolCompletion(
-            content="Calling echo.",
-            tool_calls=[
-                ProviderToolCall(
-                    id="call-echo",
-                    name="echo",
-                    arguments={"message": case.goal or "hello"},
-                )
-            ],
-        ),
+    expected_tools = _agent_eval_expected_tool_calls(case)
+    tool_completions: list[ProviderToolCompletion] = []
+    for index, _tool_name in enumerate(expected_tools):
+        tool_completions.append(
+            ProviderToolCompletion(
+                content="Calling echo.",
+                tool_calls=[
+                    ProviderToolCall(
+                        id=f"call-echo-{index}",
+                        name="echo",
+                        arguments={"message": case.goal or "hello"},
+                    )
+                ],
+            )
+        )
+    tool_completions.append(
         ProviderToolCompletion(
             content=case.expected_outcome or "Done.",
             tool_calls=[],
@@ -818,12 +828,32 @@ def _build_agent_eval_provider(
                 total_tokens=2,
             ),
         ),
-    ]
+    )
     return _AgentEvalProvider(
         tool_completions=tool_completions,
         model=model,
         temperature=temperature,
     )
+
+
+def _agent_eval_expected_tool_calls(case: EvalCase) -> list[str]:
+    """Return scripted tool-call sequence for an agent eval case."""
+    expected_tools = (
+        list(case.expected_tool_calls) if case.expected_tool_calls else ["echo"]
+    )
+    unsupported = [
+        tool_name
+        for tool_name in expected_tools
+        if tool_name not in _AGENT_EVAL_SUPPORTED_TOOLS
+    ]
+    if unsupported:
+        unsupported_text = ", ".join(sorted(set(unsupported)))
+        supported_text = ", ".join(sorted(_AGENT_EVAL_SUPPORTED_TOOLS))
+        raise ValueError(
+            f"Agent eval case '{case.id}' lists unsupported expected_tool_calls "
+            f"({unsupported_text}); harness only supports: {supported_text}."
+        )
+    return expected_tools
 
 
 def _workflow_definition_from_case(
