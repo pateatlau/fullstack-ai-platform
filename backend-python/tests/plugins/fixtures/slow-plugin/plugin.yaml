@@ -1,0 +1,5 @@
+plugin_id: com.test.slow
+name: Slow Plugin
+version: 1.0.0
+api_version: "1"
+entrypoint: slow_plugin.register:register
