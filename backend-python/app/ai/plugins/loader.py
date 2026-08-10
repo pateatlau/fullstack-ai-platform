@@ -23,6 +23,9 @@ from app.ai.plugins.manifest import (
 from app.ai.plugins.models import PluginLoadFailureReason, PluginLoadReport
 from app.ai.plugins.registrar import PluginRegistrar
 from app.ai.plugins.registry import PluginRegistry
+from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
+from app.ai.prompts.repository import PromptRepository
+from app.ai.tools.registry import ToolRegistry
 from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -46,9 +49,16 @@ class PluginLoader:
         self,
         settings: Settings,
         registry: PluginRegistry,
+        *,
+        tool_registry: ToolRegistry | None = None,
+        prompt_repository: PromptRepository | None = None,
+        workflow_plugin_registry: WorkflowPluginRegistry | None = None,
     ) -> None:
         self._settings = settings
         self._registry = registry
+        self._tool_registry = tool_registry
+        self._prompt_repository = prompt_repository
+        self._workflow_plugin_registry = workflow_plugin_registry
 
     def discover(self) -> list[DiscoveryCandidate]:
         """Return discovery candidates in deterministic load order."""
@@ -242,6 +252,9 @@ class PluginLoader:
         registrar = PluginRegistrar(
             plugin_id=manifest.plugin_id,
             plugin_dir=plugin_dir,
+            tool_registry=self._tool_registry,
+            prompt_repository=self._prompt_repository,
+            workflow_plugin_registry=self._workflow_plugin_registry,
         )
         wait_timeout_seconds = self._settings.plugin_registration_wait_timeout_seconds
         registration_error: BaseException | None = None

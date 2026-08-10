@@ -51,6 +51,8 @@ from app.ai.rag.rerank import CohereReranker
 from app.ai.rag.retriever import Retriever
 from app.ai.rag.rewrite import LLMQueryRewriter
 from app.ai.rag.service import RAGService
+from app.ai.plugins.registry import PluginRegistry
+from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.implementations.web_search import (
     WebSearchClient,
@@ -83,6 +85,18 @@ def get_prompt_manager() -> PromptManager:
 def get_tool_registry() -> ToolRegistry:
     """Return the process-wide ``ToolRegistry`` singleton."""
     return ToolRegistry()
+
+
+@lru_cache
+def get_plugin_registry() -> PluginRegistry:
+    """Return the process-wide ``PluginRegistry`` singleton."""
+    return PluginRegistry()
+
+
+@lru_cache
+def get_workflow_plugin_registry() -> WorkflowPluginRegistry:
+    """Return the process-wide ``WorkflowPluginRegistry`` singleton."""
+    return WorkflowPluginRegistry()
 
 
 @lru_cache

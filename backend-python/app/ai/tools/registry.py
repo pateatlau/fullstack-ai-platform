@@ -32,6 +32,10 @@ class ToolRegistry:
             )
         self._tools[tool.name] = _RegisteredTool(definition=tool, handler=handler)
 
+    def unregister(self, name: str) -> None:
+        """Remove a tool registration (used for atomic plugin commit rollback)."""
+        self._tools.pop(name, None)
+
     def get(self, name: str) -> ToolDefinition | None:
         registered = self._tools.get(name)
         return registered.definition if registered is not None else None

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.ai.plugins.loader import PluginLoader
+from app.ai.plugins.bootstrap import load_plugins as orchestrate_load_plugins
 from app.ai.plugins.models import PluginLoadReport
 from app.ai.plugins.registry import PluginRegistry
+from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
+from app.ai.tools.registry import ToolRegistry
 from app.core.config import Settings
 
 FIXTURES_ROOT = Path(__file__).resolve().parents[2] / "plugins" / "fixtures"
@@ -27,8 +29,20 @@ def plugin_settings(
     )
 
 
-def load_plugins(settings: Settings) -> tuple[PluginLoadReport, PluginRegistry]:
-    registry = PluginRegistry()
-    loader = PluginLoader(settings, registry)
-    report = loader.load_all()
-    return report, registry
+def load_plugins(
+    settings: Settings,
+    *,
+    tool_registry: ToolRegistry | None = None,
+    plugin_registry: PluginRegistry | None = None,
+    workflow_plugin_registry: WorkflowPluginRegistry | None = None,
+) -> tuple[PluginLoadReport, PluginRegistry, ToolRegistry]:
+    registry = plugin_registry or PluginRegistry()
+    tools = tool_registry or ToolRegistry()
+    workflow_registry = workflow_plugin_registry or WorkflowPluginRegistry()
+    report = orchestrate_load_plugins(
+        settings,
+        tool_registry=tools,
+        plugin_registry=registry,
+        workflow_plugin_registry=workflow_registry,
+    )
+    return report, registry, tools
