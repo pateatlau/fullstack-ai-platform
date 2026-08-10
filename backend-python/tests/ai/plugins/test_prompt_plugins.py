@@ -178,7 +178,7 @@ class TestRegistrarPromptValidation:
             version="1",
             path="../escape.v1.j2",
         )
-        with pytest.raises(Exception, match="\\.\\."):
+        with pytest.raises(PluginRegistrationError, match="\\.\\."):
             registrar.commit()
 
     def test_commit_rolls_back_partial_registrations_on_unexpected_error(
