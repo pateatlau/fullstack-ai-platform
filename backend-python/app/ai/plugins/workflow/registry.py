@@ -36,5 +36,11 @@ class WorkflowPluginRegistry:
     ) -> Callable[..., Any] | None:
         return self._executors.get((plugin_id, node_type))
 
+    def has(self, plugin_id: str, node_type: str) -> bool:
+        return (plugin_id, node_type) in self._executors
+
+    def unregister(self, plugin_id: str, node_type: str) -> None:
+        self._executors.pop((plugin_id, node_type), None)
+
     def reset_for_tests(self) -> None:
         self._executors.clear()

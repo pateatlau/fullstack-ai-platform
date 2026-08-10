@@ -63,6 +63,7 @@ class TestEnums:
     def test_node_type_values(self) -> None:
         assert NodeType.TASK == "task"
         assert NodeType.APPROVAL == "approval"
+        assert NodeType.PLUGIN == "plugin"
         assert NodeType.TERMINAL == "terminal"
 
     def test_run_status_values(self) -> None:

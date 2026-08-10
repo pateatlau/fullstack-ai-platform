@@ -22,6 +22,7 @@ from app.ai.plugins.models import (
 )
 from app.ai.plugins.registrar import PluginRegistrar
 from app.ai.plugins.registry import PluginRegistry
+from app.ai.plugins.workflow.plugin_node import PluginNodeExecutor
 from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
 
 __all__ = [
@@ -41,6 +42,7 @@ __all__ = [
     "PluginRegistrationError",
     "PluginRegistry",
     "PluginStatus",
+    "PluginNodeExecutor",
     "WorkflowPluginRegistry",
     "load_plugins",
 ]

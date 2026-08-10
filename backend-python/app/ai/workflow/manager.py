@@ -59,6 +59,8 @@ from app.ai.workflow.nodes.approval_node import (
 from app.core.logging import get_logger
 
 if TYPE_CHECKING:
+    from app.ai.plugins.registry import PluginRegistry
+    from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
     from app.ai.tools.registry import ToolRegistry
     from app.ai.workflow.nodes.base import NodeExecutor
     from app.core.config import Settings
@@ -100,6 +102,8 @@ class WorkflowManager:
         node_executors: Mapping[NodeType, "NodeExecutor"] | None = None,
         background_store_factory: BackgroundStoreFactory | None = None,
         tool_registry: "ToolRegistry | None" = None,
+        plugin_registry: "PluginRegistry | None" = None,
+        workflow_plugin_registry: "WorkflowPluginRegistry | None" = None,
     ) -> None:
         self._store = store
         self._settings = settings
@@ -110,6 +114,7 @@ class WorkflowManager:
         #: only (production callers poll run state via ``get_run()``).
         self._last_scheduled_run_task: asyncio.Task[None] | None = None
         self._deferred_run_schedules: list[tuple[uuid.UUID, uuid.UUID]] = []
+        plugins_enabled = settings.plugins_enabled if settings is not None else False
         self._validator = GraphValidator(
             max_nodes_per_definition=(
                 settings.workflow_max_nodes_per_definition
@@ -118,6 +123,11 @@ class WorkflowManager:
             ),
             max_parallel_branches=(
                 settings.workflow_max_parallel_branches if settings is not None else 8
+            ),
+            plugins_enabled=plugins_enabled,
+            plugin_registry=plugin_registry if plugins_enabled else None,
+            workflow_plugin_registry=(
+                workflow_plugin_registry if plugins_enabled else None
             ),
         )
 

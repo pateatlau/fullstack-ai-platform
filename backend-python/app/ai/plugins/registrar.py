@@ -155,6 +155,7 @@ class PluginRegistrar:
             self._ensure_open_unlocked()
             registered_tool_names: list[str] = []
             registered_prompts: list[StagedPrompt] = []
+            registered_workflow_nodes: list[tuple[str, str]] = []
             try:
                 if self._tool_registry is not None:
                     for staged in self._staging.tools:
@@ -173,10 +174,22 @@ class PluginRegistrar:
                             source=self._resolve_prompt_source(staged),
                         )
                         registered_prompts.append(staged)
+
+                if self._workflow_plugin_registry is not None:
+                    for staged in self._staging.workflow_nodes:
+                        self._workflow_plugin_registry.register(
+                            plugin_id=self._plugin_id,
+                            node_type=staged.node_type,
+                            executor_factory=staged.executor_factory,
+                        )
+                        registered_workflow_nodes.append(
+                            (self._plugin_id, staged.node_type)
+                        )
             except Exception as exc:
                 self._rollback_registrations(
                     registered_tool_names,
                     registered_prompts,
+                    registered_workflow_nodes,
                 )
                 if isinstance(exc, PluginRegistrationError):
                     raise
@@ -234,7 +247,11 @@ class PluginRegistrar:
         self,
         registered_tool_names: list[str],
         registered_prompts: list[StagedPrompt],
+        registered_workflow_nodes: list[tuple[str, str]] | None = None,
     ) -> None:
+        if self._workflow_plugin_registry is not None:
+            for plugin_id, node_type in registered_workflow_nodes or []:
+                self._workflow_plugin_registry.unregister(plugin_id, node_type)
         if self._prompt_repository is not None:
             for staged in registered_prompts:
                 self._prompt_repository.unregister_plugin_template(

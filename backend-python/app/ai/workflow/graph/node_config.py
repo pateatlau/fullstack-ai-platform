@@ -21,6 +21,8 @@ def validate_node_configs(nodes: list[WorkflowNode]) -> None:
             _validate_agent_node_config(node.id, node.config)
         elif node.type is NodeType.APPROVAL:
             _validate_approval_node_config(node.id, node.config)
+        elif node.type is NodeType.PLUGIN:
+            _validate_plugin_node_config(node.id, node.config)
 
 
 def _validate_llm_node_config(node_id: str, config: dict[str, object]) -> None:
@@ -102,6 +104,21 @@ def _validate_approval_node_config(node_id: str, config: dict[str, object]) -> N
             raise WorkflowValidationError(
                 f"Approval node {node_id!r} config.{key} must be a non-empty string."
             )
+
+
+def _validate_plugin_node_config(node_id: str, config: dict[str, object]) -> None:
+    plugin_id = config.get("plugin_id")
+    if not isinstance(plugin_id, str) or not plugin_id.strip():
+        raise WorkflowValidationError(
+            f"Plugin node {node_id!r} requires config.plugin_id (non-empty string)."
+        )
+
+    plugin_node_type = config.get("plugin_node_type")
+    if not isinstance(plugin_node_type, str) or not plugin_node_type.strip():
+        raise WorkflowValidationError(
+            f"Plugin node {node_id!r} requires config.plugin_node_type "
+            "(non-empty string)."
+        )
 
 
 def _reject_file_template_ref(value: str, *, node_id: str, field_name: str) -> None:

@@ -1,8 +1,8 @@
 ---
 epic: v2-08
 title: Plugin Architecture
-status: not_started
-version: 1.1
+status: in_progress
+version: 1.3
 depends_on: [v2-07]
 provides:
   [
@@ -857,7 +857,7 @@ _Copy from Epic 07 Phase 10 completion record._
 | Integration tests        | Workflow **241** (207 package + 23 router + 11 workflow tool); observability router 15; streaming 26 |
 | Eval CLI                 | 15/15 `--level all`; regression check clean                             |
 | Observability            | Completed (Epic 07); `OBSERVABILITY_ENABLED` behind flag                |
-| Plugin Architecture      | Phase 0 complete — baseline audit published; no `app/ai/plugins/` package yet |
+| Plugin Architecture      | Phases 0–4 complete — SDK, tool, prompt, and workflow node plugins implemented |
 
 ---
 
@@ -866,10 +866,10 @@ _Copy from Epic 07 Phase 10 completion record._
 | Phase | Name                            | Effort | Status      |
 | ----- | ------------------------------- | ------ | ----------- |
 | 0     | Baseline Audit                  | XS     | Completed   |
-| 1     | Plugin SDK Foundation           | M      | Not Started |
-| 2     | Tool Plugins                    | M      | Not Started |
-| 3     | Prompt Plugins                  | M      | Not Started |
-| 4     | Workflow Node Plugins           | L      | Not Started |
+| 1     | Plugin SDK Foundation           | M      | Completed   |
+| 2     | Tool Plugins                    | M      | Completed   |
+| 3     | Prompt Plugins                  | M      | Completed   |
+| 4     | Workflow Node Plugins           | L      | Completed   |
 | 5     | MCP Server Plugins & Versioning | M      | Not Started |
 | 6     | Plugin REST API & Health        | S      | Not Started |
 | 7     | Plugin Observability            | S      | Not Started |
@@ -940,7 +940,7 @@ Establish a verified implementation baseline before introducing the Plugin Archi
 **Exit criteria**
 
 - [x] Baseline audit published.
-- [ ] User confirmation to proceed to Phase 1.
+- [x] User confirmation to proceed to Phase 1.
 
 **Rollback**
 
@@ -958,13 +958,14 @@ Establish a verified implementation baseline before introducing the Plugin Archi
 | Frontend tests      | ✅ 281 passed (46 files); build pass          |
 | Baseline audit      | ✅ [Published](../audits/post-mvp-v2-epic8-phase-0-baseline-audit.md) |
 | Phase 0 status      | ✅ Completed                                |
-| Phase 1 authorized  | ⬜ Pending user confirmation                |
+| Phase 1 authorized  | ✅ Authorized                               |
 
 ---
 
 # Phase 1 — Plugin SDK Foundation
 
 **Effort:** M
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -986,42 +987,42 @@ Introduce the core plugin package: manifest model, loader skeleton, registry, re
 
 ## Package Structure
 
-- [ ] Create `app/ai/plugins/` per Part I package layout.
-- [ ] Export public API from `__init__.py`.
-- [ ] Verify import cycle freedom.
+- [x] Create `app/ai/plugins/` per Part I package layout.
+- [x] Export public API from `__init__.py`.
+- [x] Verify import cycle freedom.
 
 ## Manifest & Validation
 
-- [ ] Implement `PluginManifest` Pydantic model matching Part I schema (including optional `author`/`homepage`/`repository`/`documentation`/`license`, reserved `dependencies`, reserved `metadata`).
-- [ ] Implement YAML loader with field-level error messages (no secret leakage in errors).
-- [ ] Validate `api_version` against `SUPPORTED_PLUGIN_API_VERSIONS`; on mismatch build `PluginLoadFailureReason(code=unsupported_api_version, expected_api_versions=…, manifest_api_version=…)`.
-- [ ] Validate semver for `version`.
-- [ ] Parse `dependencies` into `PluginDependency` list; do not resolve or reorder loads in V2.
+- [x] Implement `PluginManifest` Pydantic model matching Part I schema (including optional `author`/`homepage`/`repository`/`documentation`/`license`, reserved `dependencies`, reserved `metadata`).
+- [x] Implement YAML loader with field-level error messages (no secret leakage in errors).
+- [x] Validate `api_version` against `SUPPORTED_PLUGIN_API_VERSIONS`; on mismatch build `PluginLoadFailureReason(code=unsupported_api_version, expected_api_versions=…, manifest_api_version=…)`.
+- [x] Validate semver for `version`.
+- [x] Parse `dependencies` into `PluginDependency` list; do not resolve or reorder loads in V2.
 
 ## Loader & Registry
 
-- [ ] Implement directory scan (immediate children containing `plugin.yaml`).
-- [ ] Apply `plugin_allowlist` when non-empty.
-- [ ] Sort manifests by `plugin_id` for deterministic load order.
-- [ ] Import entrypoint via `importlib`; append plugin directory to `sys.path` once.
-- [ ] Measure `load_duration_ms` (monotonic clock) around validate + import + `register()` (includes time spent waiting on timeout).
-- [ ] Run `register(registrar)` in a worker thread with `plugin_load_timeout_seconds` wall-clock limit (`concurrent.futures` or equivalent); on normal return call `registrar.commit()` then `mark_loaded()`; on exception call `registrar.rollback()` then `mark_failed()` with `registration_error` (or other code); on timeout call `registrar.rollback()`, close the registrar to reject late staging, then `mark_failed()` with `PluginLoadFailureReason(code="timeout", …)` — never call `commit()`.
-- [ ] Record success/failure in `PluginRegistry` with `load_duration_ms` and structured `PluginLoadFailureReason`; wrap each plugin load in try/except — `load_all()` never raises uncaught exceptions.
+- [x] Implement directory scan (immediate children containing `plugin.yaml`).
+- [x] Apply `plugin_allowlist` when non-empty.
+- [x] Sort manifests by `plugin_id` for deterministic load order.
+- [x] Import entrypoint via `importlib`; append plugin directory to `sys.path` once.
+- [x] Measure `load_duration_ms` (monotonic clock) around validate + import + `register()` (includes time spent waiting on timeout).
+- [x] Run `register(registrar)` in a worker thread with `plugin_load_timeout_seconds` wall-clock limit (`concurrent.futures` or equivalent); on normal return call `registrar.commit()` then `mark_loaded()`; on exception call `registrar.rollback()` then `mark_failed()` with `registration_error` (or other code); on timeout call `registrar.rollback()`, close the registrar to reject late staging, then `mark_failed()` with `PluginLoadFailureReason(code="timeout", …)` — never call `commit()`.
+- [x] Record success/failure in `PluginRegistry` with `load_duration_ms` and structured `PluginLoadFailureReason`; wrap each plugin load in try/except — `load_all()` never raises uncaught exceptions.
 
 ## Registrar Stub
 
-- [ ] Implement `PluginRegistrar` with methods: `register_tool`, `register_prompt_template`, `register_workflow_node_type`, `register_mcp_server`, plus `commit()` / `rollback()`.
-- [ ] Phase 1: `register_*()` append to internal staging lists; `commit()` promotes staged contributions (assertions in tests); `rollback()` clears staging. Platform registry wiring deferred to Phases 2–5.
+- [x] Implement `PluginRegistrar` with methods: `register_tool`, `register_prompt_template`, `register_workflow_node_type`, `register_mcp_server`, plus `commit()` / `rollback()`.
+- [x] Phase 1: `register_*()` append to internal staging lists; `commit()` promotes staged contributions (assertions in tests); `rollback()` clears staging. Platform registry wiring deferred to Phases 2–5.
 
 ## Configuration
 
-- [ ] Add `PLUGINS_ENABLED` (default `false`) and plugin path settings to `app/core/config.py`.
-- [ ] Document settings in `backend-python/.env.example`.
+- [x] Add `PLUGINS_ENABLED` (default `false`) and plugin path settings to `app/core/config.py`.
+- [x] Document settings in `backend-python/.env.example`.
 
 ## Testing
 
-- [ ] Fixture plugin with no-op `register()`.
-- [ ] Tests: valid manifest, invalid api_version (assert structured failure reason fields), duplicate plugin_id, entrypoint ImportError, registrar timeout, allowlist filtering, optional author metadata round-trip, `dependencies`/`metadata` parsed but ignored for load order.
+- [x] Fixture plugin with no-op `register()`.
+- [x] Tests: valid manifest, invalid api_version (assert structured failure reason fields), duplicate plugin_id, entrypoint ImportError, registrar timeout, allowlist filtering, optional author metadata round-trip, `dependencies`/`metadata` parsed but ignored for load order.
 
 **Verify**
 
@@ -1037,20 +1038,31 @@ Introduce the core plugin package: manifest model, loader skeleton, registry, re
 
 **Exit criteria**
 
-- Foundation tests pass.
-- Public manifest/registrar/loader APIs frozen.
-- User confirmation to proceed to Phase 2.
+- [x] Foundation tests pass.
+- [x] Public manifest/registrar/loader APIs frozen.
+- [x] User confirmation to proceed to Phase 2.
 
 **Rollback**
 
 - Remove `app/ai/plugins/` package and config flags.
 - Verify application builds without plugin modules.
 
+**Completion Record**
+
+| Metric             | Result                                |
+| ------------------ | ------------------------------------- |
+| Lint               | ✅ PASS                               |
+| Typecheck          | ✅ PASS                               |
+| Plugin SDK tests   | ✅ PASS (`tests/ai/plugins/test_plugin_sdk.py`) |
+| Phase 1 status     | ✅ Completed                          |
+| Phase 2 authorized | ✅ Authorized                         |
+
 ---
 
 # Phase 2 — Tool Plugins
 
 **Effort:** M
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1068,23 +1080,23 @@ Wire `PluginRegistrar.register_tool()` into the process-wide `ToolRegistry` with
 
 ## Registration Wiring
 
-- [ ] Enforce tool name prefix `{plugin_id}.` — raise `PluginRegistrationError` if violated.
-- [ ] Stage tool definitions/handlers during `register_tool()`; `commit()` writes all staged tools to `ToolRegistry`; `rollback()` clears staging without touching live registries (no platform writes occur until `commit()`).
-- [ ] Track tool contributions on `PluginRecord` for inventory API.
+- [x] Enforce tool name prefix `{plugin_id}.` — raise `PluginRegistrationError` if violated.
+- [x] Stage tool definitions/handlers during `register_tool()`; `commit()` writes all staged tools to `ToolRegistry`; `rollback()` clears staging without touching live registries (no platform writes occur until `commit()`).
+- [x] Track tool contributions on `PluginRecord` for inventory API.
 
 ## Startup Integration
 
-- [ ] Implement `load_plugins(settings, tool_registry=..., prompt_repository=..., workflow_plugin_registry=..., plugin_registry=...)` — single shared `WorkflowPluginRegistry` instance created/obtained from DI before the load loop and injected into each `PluginRegistrar`.
-- [ ] Call from `lifespan` when `PLUGINS_ENABLED=true` before `register_production_tools()`.
-- [ ] Ensure flag off skips `load_plugins()` entirely.
+- [x] Implement `load_plugins(settings, tool_registry=..., prompt_repository=..., workflow_plugin_registry=..., plugin_registry=...)` — single shared `WorkflowPluginRegistry` instance created/obtained from DI before the load loop and injected into each `PluginRegistrar`.
+- [x] Call from `lifespan` when `PLUGINS_ENABLED=true` before `register_production_tools()`.
+- [x] Ensure flag off skips `load_plugins()` entirely.
 
 ## Testing
 
-- [ ] Fixture plugin registering `tests.plugins.fixtures.tool-plugin` echo tool.
-- [ ] Test: tool callable through `ToolExecutor` with fake authorizer context.
-- [ ] Test: unprefixed name rejected.
-- [ ] Test: duplicate tool name fails plugin, subsequent plugins still load.
-- [ ] Test: flag off — tool not registered.
+- [x] Fixture plugin registering `tests.plugins.fixtures.tool-plugin` echo tool.
+- [x] Test: tool callable through `ToolExecutor` with fake authorizer context.
+- [x] Test: unprefixed name rejected.
+- [x] Test: duplicate tool name fails plugin, subsequent plugins still load.
+- [x] Test: flag off — tool not registered.
 
 **Verify**
 
@@ -1098,8 +1110,8 @@ Wire `PluginRegistrar.register_tool()` into the process-wide `ToolRegistry` with
 
 **Exit criteria**
 
-- Tool plugin integration tests pass.
-- User confirmation to proceed to Phase 3.
+- [x] Tool plugin integration tests pass.
+- [x] User confirmation to proceed to Phase 3.
 
 **Rollback**
 
@@ -1107,11 +1119,22 @@ Wire `PluginRegistrar.register_tool()` into the process-wide `ToolRegistry` with
 - Disable `PLUGINS_ENABLED`.
 - Re-run tool platform tests.
 
+**Completion Record**
+
+| Metric              | Result                                          |
+| ------------------- | ----------------------------------------------- |
+| Lint                | ✅ PASS                                         |
+| Typecheck           | ✅ PASS                                         |
+| Tool plugin tests   | ✅ PASS (`tests/ai/plugins/test_tool_plugins.py`) |
+| Phase 2 status      | ✅ Completed                                    |
+| Phase 3 authorized  | ✅ Authorized                                   |
+
 ---
 
 # Phase 3 — Prompt Plugins
 
 **Effort:** M
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1128,21 +1151,21 @@ Allow plugins to register Jinja2 prompt templates under `plugin/{plugin_id}` nam
 
 ## PromptRepository Extension
 
-- [ ] Add in-memory overlay keyed by `(category, name, version)` where category is `plugin/{plugin_id}`.
-- [ ] Extend `get_template()` to consult overlay after filesystem lookup (or before — document order; plugin must not override built-in categories outside `plugin/`).
-- [ ] Reuse existing Jinja2 `Environment` / `StrictUndefined` rules.
+- [x] Add in-memory overlay keyed by `(category, name, version)` where category is `plugin/{plugin_id}`.
+- [x] Extend `get_template()` to consult overlay after filesystem lookup (or before — document order; plugin must not override built-in categories outside `plugin/`).
+- [x] Reuse existing Jinja2 `Environment` / `StrictUndefined` rules.
 
 ## Registrar Wiring
 
-- [ ] Resolve `path` relative to plugin directory; reject path traversal (`..`).
-- [ ] Record prompt contributions on `PluginRecord`.
+- [x] Resolve `path` relative to plugin directory; reject path traversal (`..`).
+- [x] Record prompt contributions on `PluginRecord`.
 
 ## Testing
 
-- [ ] Fixture prompt plugin registers greeting template.
-- [ ] Test render via `PromptManager.render("plugin/…", ...)`.
-- [ ] Test collision with existing built-in prompt fails plugin load.
-- [ ] Test `prompt_span` still wraps render (Observability on/off).
+- [x] Fixture prompt plugin registers greeting template.
+- [x] Test render via `PromptManager.render("plugin/…", ...)`.
+- [x] Test collision with existing built-in prompt fails plugin load.
+- [x] Test `prompt_span` still wraps render (Observability on/off).
 
 **Verify**
 
@@ -1155,18 +1178,29 @@ Allow plugins to register Jinja2 prompt templates under `plugin/{plugin_id}` nam
 
 **Exit criteria**
 
-- Prompt plugin tests pass.
-- User confirmation to proceed to Phase 4.
+- [x] Prompt plugin tests pass.
+- [x] User confirmation to proceed to Phase 4.
 
 **Rollback**
 
 - Revert `PromptRepository` overlay; disable flag.
+
+**Completion Record**
+
+| Metric               | Result                                              |
+| -------------------- | --------------------------------------------------- |
+| Lint                 | ✅ PASS                                             |
+| Typecheck            | ✅ PASS                                             |
+| Prompt plugin tests  | ✅ PASS (`tests/ai/plugins/test_prompt_plugins.py`) |
+| Phase 3 status       | ✅ Completed                                        |
+| Phase 4 authorized   | ✅ Authorized                                       |
 
 ---
 
 # Phase 4 — Workflow Node Plugins
 
 **Effort:** L
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1185,33 +1219,33 @@ Add `NodeType.PLUGIN`, implement `PluginNodeExecutor`, extend `GraphValidator`, 
 
 ## Models & Registry
 
-- [ ] Add `NodeType.PLUGIN = "plugin"`.
-- [ ] Document required `config` keys: `plugin_id`, `plugin_node_type`.
-- [ ] Implement `WorkflowPluginRegistry` with register/get methods; process-wide singleton via `get_workflow_plugin_registry()` (empty stub when flag off).
+- [x] Add `NodeType.PLUGIN = "plugin"`.
+- [x] Document required `config` keys: `plugin_id`, `plugin_node_type`.
+- [x] Implement `WorkflowPluginRegistry` with register/get methods; process-wide singleton via `get_workflow_plugin_registry()` (empty stub when flag off).
 
 ## PluginNodeExecutor
 
-- [ ] Validate config keys present; map missing `WorkflowPluginRegistry` entry → `WorkflowNodeExecutionError`.
-- [ ] Delegate to plugin executor implementing `NodeExecutor` Protocol.
-- [ ] Propagate `NodeExecutionRequest.execution_receipt_id` to tool calls inside plugin nodes when applicable.
+- [x] Validate config keys present; map missing `WorkflowPluginRegistry` entry → `WorkflowNodeExecutionError`.
+- [x] Delegate to plugin executor implementing `NodeExecutor` Protocol.
+- [x] Propagate `NodeExecutionRequest.execution_receipt_id` to tool calls inside plugin nodes when applicable.
 
 ## Graph Validation
 
-- [ ] When `PLUGINS_ENABLED=false`, reject workflow definitions containing `type: plugin` at create/update with clear validation error.
-- [ ] When flag on, verify `plugin_id` is **loaded** in `PluginRegistry` and `(plugin_id, plugin_node_type)` exists in the shared `WorkflowPluginRegistry`.
+- [x] When `PLUGINS_ENABLED=false`, reject workflow definitions containing `type: plugin` at create/update with clear validation error.
+- [x] When flag on, verify `plugin_id` is **loaded** in `PluginRegistry` and `(plugin_id, plugin_node_type)` exists in the shared `WorkflowPluginRegistry`.
 
 ## DI Wiring
 
-- [ ] `load_plugins()` receives the same `WorkflowPluginRegistry` instance passed into each `PluginRegistrar`; `commit()` writes executor factories there.
-- [ ] Pass that same singleton into `_create_workflow_manager()` / `GraphValidator` (not via `PluginRegistry`).
-- [ ] Ensure eval/workflow tests can inject fixture `WorkflowPluginRegistry`.
+- [x] `load_plugins()` receives the same `WorkflowPluginRegistry` instance passed into each `PluginRegistrar`; `commit()` writes executor factories there.
+- [x] Pass that same singleton into `_create_workflow_manager()` / `GraphValidator` (not via `PluginRegistry`).
+- [x] Ensure eval/workflow tests can inject fixture `WorkflowPluginRegistry`.
 
 ## Testing
 
-- [ ] Fixture workflow plugin registering `echo` node type copying a context key.
-- [ ] End-to-end workflow run with single PLUGIN node → terminal success.
-- [ ] Test unknown plugin_id / node_type fails validation.
-- [ ] Test flag off rejects plugin node definitions.
+- [x] Fixture workflow plugin registering `echo` node type copying a context key.
+- [x] End-to-end workflow run with single PLUGIN node → terminal success.
+- [x] Test unknown plugin_id / node_type fails validation.
+- [x] Test flag off rejects plugin node definitions.
 
 **Verify**
 
@@ -1224,13 +1258,25 @@ Add `NodeType.PLUGIN`, implement `PluginNodeExecutor`, extend `GraphValidator`, 
 
 **Exit criteria**
 
-- Workflow plugin tests pass.
-- User confirmation to proceed to Phase 5.
+- [x] Workflow plugin tests pass.
+- [ ] User confirmation to proceed to Phase 5.
 
 **Rollback**
 
 - Remove `NodeType.PLUGIN` wiring from manager; disable flag.
 - Re-run workflow test suite.
+
+**Completion Record**
+
+| Metric                 | Result                                                                 |
+| ---------------------- | ---------------------------------------------------------------------- |
+| Lint                   | ✅ PASS                                                                |
+| Typecheck              | ✅ PASS                                                                |
+| Workflow plugin tests  | ✅ 8 passed (`tests/ai/plugins/test_workflow_plugins.py`)              |
+| Workflow suite         | ✅ 215 passed (`tests/ai/workflow/`)                                   |
+| Plugin test suite      | ✅ 46 passed (`tests/ai/plugins/`)                                     |
+| Phase 4 status         | ✅ Completed                                                           |
+| Phase 5 authorized     | ⬜ Pending user confirmation                                           |
 
 ---
 
@@ -1699,3 +1745,4 @@ Execution of plugin tools and workflow nodes continues to emit existing `tool_sp
 | 1       | 2026-08-10 | Initial epic draft — Part I design + Part II 11-phase execution plan (Phases 0–10). Not started. |
 | 1.1     | 2026-08-10 | Reserved manifest fields (`dependencies`, author metadata, `metadata`); `PluginRecord.load_duration_ms`; structured `PluginLoadFailureReason` for API version diagnostics; § Future Enhancements (isolated loading, richer lifecycle states). Part I + Phases 1, 5–7, 9 sync. |
 | 1.2     | 2026-08-10 | Phase 0 complete: baseline audit published; phase table + Phase 0 completion record updated. PR review clarifications (GraphValidator path, SemVer, coverage, workflow test scope, manifest fields, atomic registration, malformed manifests, REST metadata omission, WorkflowPluginRegistry ownership, load metrics label contract). Part II only. |
+| 1.3     | 2026-08-11 | Phases 1–4 complete: plugin SDK foundation, tool plugins, prompt plugins, workflow node plugins. Phase status table, step checklists, exit criteria, and completion records updated. Epic status → `in_progress`. |
