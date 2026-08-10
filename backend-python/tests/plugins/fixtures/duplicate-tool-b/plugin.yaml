@@ -1,0 +1,7 @@
+plugin_id: com.test
+name: Duplicate Tool B
+version: 1.0.0
+api_version: "1"
+entrypoint: duplicate_tool_plugin.register:register
+contributions:
+  - tool

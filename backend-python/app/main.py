@@ -9,7 +9,9 @@ from starlette.types import Message
 
 from app.ai.deps import (
     get_mcp_server_registry,
+    get_plugin_registry,
     get_tool_registry,
+    get_workflow_plugin_registry,
     reconcile_workflow_runs_at_startup,
 )
 from app.ai.observability.metrics.meter import MeterRegistry
@@ -17,6 +19,7 @@ from app.ai.observability.cost.calculator import CostRegistry
 from app.ai.observability.metrics.instruments import MetricInstruments
 from app.ai.observability.metrics.labels import set_model_registry
 from app.ai.observability.tracing.provider import TracerRegistry
+from app.ai.plugins import load_plugins
 from app.ai.tools.registration import register_mcp_tools, register_production_tools
 from app.core.config import get_settings
 from app.core.cors import CORS_EXPOSE_HEADER_NAMES, DEV_ORIGIN_REGEX
@@ -52,6 +55,20 @@ async def lifespan(_: FastAPI):
         set_model_registry(calculator.pricing_table.model_registry)
     MetricInstruments.initialize()
     settings.log_development_warnings(logger)
+
+    if settings.plugins_enabled:
+        report = load_plugins(
+            settings,
+            tool_registry=get_tool_registry(),
+            workflow_plugin_registry=get_workflow_plugin_registry(),
+            plugin_registry=get_plugin_registry(),
+        )
+        logger.info(
+            "Plugin load complete",
+            plugins_loaded=report.loaded_count,
+            plugins_failed=report.failed_count,
+            total_load_duration_ms=report.total_load_duration_ms,
+        )
 
     # Register V1 production tools
     if settings.tools_enabled:

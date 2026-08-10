@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.ai.plugins.bootstrap import load_plugins
 from app.ai.plugins.constants import PLUGIN_API_VERSION, SUPPORTED_PLUGIN_API_VERSIONS
 from app.ai.plugins.exceptions import (
     PluginError,
@@ -21,6 +22,7 @@ from app.ai.plugins.models import (
 )
 from app.ai.plugins.registrar import PluginRegistrar
 from app.ai.plugins.registry import PluginRegistry
+from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
 
 __all__ = [
     "PLUGIN_API_VERSION",
@@ -39,4 +41,6 @@ __all__ = [
     "PluginRegistrationError",
     "PluginRegistry",
     "PluginStatus",
+    "WorkflowPluginRegistry",
+    "load_plugins",
 ]

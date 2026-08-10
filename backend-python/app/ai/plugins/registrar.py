@@ -11,6 +11,9 @@ from typing import Any
 from app.ai.interfaces.tool_handler import ToolHandler
 from app.ai.plugins.exceptions import PluginRegistrationError
 from app.ai.plugins.models import PluginContributionKind
+from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
+from app.ai.prompts.repository import PromptRepository
+from app.ai.tools.registry import ToolAlreadyRegisteredError, ToolRegistry
 from app.ai.tools.schemas import ToolDefinition
 
 
@@ -51,9 +54,20 @@ class CommittedContributions:
 class PluginRegistrar:
     """Stages plugin contributions until ``commit()`` promotes them."""
 
-    def __init__(self, *, plugin_id: str, plugin_dir: Path) -> None:
+    def __init__(
+        self,
+        *,
+        plugin_id: str,
+        plugin_dir: Path,
+        tool_registry: ToolRegistry | None = None,
+        prompt_repository: PromptRepository | None = None,
+        workflow_plugin_registry: WorkflowPluginRegistry | None = None,
+    ) -> None:
         self._plugin_id = plugin_id
         self._plugin_dir = plugin_dir
+        self._tool_registry = tool_registry
+        self._prompt_repository = prompt_repository
+        self._workflow_plugin_registry = workflow_plugin_registry
         self._lock = threading.Lock()
         self._closed = False
         self._committed = False
@@ -83,6 +97,11 @@ class PluginRegistrar:
     ) -> None:
         with self._lock:
             self._ensure_open_unlocked()
+            required_prefix = f"{self._plugin_id}."
+            if not definition.name.startswith(required_prefix):
+                raise PluginRegistrationError(
+                    f"Tool name '{definition.name}' must start with '{required_prefix}'."
+                )
             self._staging.tools.append(
                 StagedTool(definition=definition, handler=handler)
             )
@@ -134,6 +153,21 @@ class PluginRegistrar:
     def commit(self) -> None:
         with self._lock:
             self._ensure_open_unlocked()
+            registered_tool_names: list[str] = []
+            try:
+                if self._tool_registry is not None:
+                    for staged in self._staging.tools:
+                        self._tool_registry.register(
+                            staged.definition,
+                            staged.handler,
+                        )
+                        registered_tool_names.append(staged.definition.name)
+            except ToolAlreadyRegisteredError as exc:
+                if self._tool_registry is not None:
+                    for name in registered_tool_names:
+                        self._tool_registry.unregister(name)
+                raise PluginRegistrationError(str(exc)) from exc
+
             self._committed_contributions = CommittedContributions(
                 tools=list(self._staging.tools),
                 prompts=list(self._staging.prompts),

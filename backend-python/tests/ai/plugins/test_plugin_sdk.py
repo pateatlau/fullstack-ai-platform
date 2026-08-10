@@ -128,7 +128,7 @@ class TestRegistrarStaging:
 
 class TestPluginLoader:
     def test_flag_off_returns_empty_report(self) -> None:
-        report, registry = load_plugins(plugin_settings(enabled=False))
+        report, registry, _tools = load_plugins(plugin_settings(enabled=False))
         assert report.loaded_count == 0
         assert report.failed_count == 0
         assert registry.list_records() == []
@@ -136,7 +136,7 @@ class TestPluginLoader:
     def test_loads_minimal_plugin(self) -> None:
         plugin_dir = str((FIXTURES_ROOT / "minimal-plugin").resolve())
         sys_path_before = list(sys.path)
-        report, registry = load_plugins(
+        report, registry, _tools = load_plugins(
             plugin_settings(
                 allowlist=["com.test.minimal"],
             )
@@ -150,7 +150,7 @@ class TestPluginLoader:
         assert record.load_duration_ms >= 0
 
     def test_unsupported_api_version_failure_reason(self) -> None:
-        _, registry = load_plugins(
+        _, registry, _tools = load_plugins(
             plugin_settings(
                 allowlist=["com.test.unsupported"],
             )
@@ -164,7 +164,7 @@ class TestPluginLoader:
         assert record.failure.manifest_api_version == "2"
 
     def test_duplicate_plugin_id_fails_second(self) -> None:
-        _, registry = load_plugins(
+        _, registry, _tools = load_plugins(
             plugin_settings(
                 directories=[str(FIXTURES_ROOT)],
                 allowlist=["com.test.duplicate"],
@@ -181,7 +181,7 @@ class TestPluginLoader:
         assert PluginStatus.FAILED in statuses
 
     def test_entrypoint_import_error(self) -> None:
-        _, registry = load_plugins(
+        _, registry, _tools = load_plugins(
             plugin_settings(
                 allowlist=["com.test.bad-entrypoint"],
             )
@@ -192,7 +192,7 @@ class TestPluginLoader:
         assert record.failure.code == "entrypoint_import_error"
 
     def test_registration_timeout(self) -> None:
-        report, registry = load_plugins(
+        report, registry, _tools = load_plugins(
             plugin_settings(
                 allowlist=["com.test.slow"],
                 timeout_seconds=1,
@@ -208,7 +208,7 @@ class TestPluginLoader:
         assert record.load_duration_ms < 1800
 
     def test_allowlist_excludes_plugin(self) -> None:
-        _, registry = load_plugins(
+        _, registry, _tools = load_plugins(
             plugin_settings(
                 allowlist=["com.other.plugin"],
             )
@@ -220,7 +220,7 @@ class TestPluginLoader:
 
     def test_manifest_not_found_record(self, tmp_path: Path) -> None:
         (tmp_path / "empty-plugin").mkdir()
-        _, registry = load_plugins(
+        _, registry, _tools = load_plugins(
             plugin_settings(directories=[str(tmp_path)]),
         )
         assert len(registry.list_records()) == 1
@@ -230,7 +230,7 @@ class TestPluginLoader:
         assert record.failure.code == "manifest_not_found"
 
     def test_rich_metadata_on_loaded_record(self) -> None:
-        _, registry = load_plugins(
+        _, registry, _tools = load_plugins(
             plugin_settings(
                 allowlist=["com.test.rich"],
             )
@@ -243,7 +243,7 @@ class TestPluginLoader:
         assert record.metadata["team"] == "platform"
 
     def test_staging_plugin_contributions(self) -> None:
-        _, registry = load_plugins(
+        _, registry, _tools = load_plugins(
             plugin_settings(
                 allowlist=["com.test.staging"],
             )
@@ -277,7 +277,7 @@ class TestPluginLoader:
             "entrypoint: mod:register\n",
             encoding="utf-8",
         )
-        _, registry = load_plugins(
+        _, registry, _tools = load_plugins(
             plugin_settings(directories=[str(tmp_path)]),
         )
         record = registry.list_records()[0]
