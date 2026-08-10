@@ -130,7 +130,7 @@ Configured plugin directories (filesystem)
             │
    ┌────────┼────────────┬─────────────────┐
    ▼        ▼            ▼                 ▼
-ToolRegistry  PromptRepository  NodeExecutor map  McpConnectionConfig[]
+ToolRegistry  PromptRepository  WorkflowPluginRegistry  McpConnectionConfig[]
    │              │                  │                  │
    │              │                  │                  │
    ▼              ▼                  ▼                  ▼
@@ -147,7 +147,7 @@ ToolExecutor   PromptManager   WorkflowExecutor   register_mcp_tools()
 **Startup order (when flags on):**
 
 1. Bootstrap observability/tracing (unchanged from Epic 07).
-2. **`load_plugins()`** — discover manifests, import entrypoints, populate `PluginRegistry` and registries.
+2. **`load_plugins()`** — discover manifests, import entrypoints, populate `PluginRegistry`, `WorkflowPluginRegistry`, and other platform registries.
 3. **`register_production_tools()`** — V1 tools (unchanged).
 4. **`register_mcp_tools()`** — env `mcp_servers` **plus** plugin-declared MCP servers (dedupe by server name; env wins on conflict).
 
@@ -168,9 +168,9 @@ When `PLUGINS_ENABLED=false`, steps 2 and plugin MCP contributions are skipped e
 | Workflow contributions | New `NodeType.PLUGIN = "plugin"`; node `config` requires `plugin_id` + `plugin_node_type` strings; executor map keyed by `(plugin_id, plugin_node_type)`                                    | Dynamic enum extension → forbidden          |
 | MCP contributions      | Plugin declares zero or more `McpConnectionConfig`-compatible dicts; merged before `register_mcp_tools`; duplicate `name` vs env config → **env wins**, plugin entry skipped with warning   | Plugin-only secret vault → Epic 11          |
 | Versioning             | Manifest fields: `version` (semver), `api_version` (platform plugin API string); loader rejects unsupported `api_version`                                                                   | Multi-version side-by-side plugins → future |
-| Failure mode           | Per-plugin fail-open: log warning, record failure in `PluginRegistry`, continue startup; never crash the process for one plugin                                                             | Fail-fast mode → future opt-in setting      |
+| Failure mode           | Per-plugin fail-open: log warning, record failure in `PluginRegistry`, continue startup; never crash the process for one plugin; **failed plugins roll back all staged/partial contributions before `mark_failed()`** | Fail-fast mode → future opt-in setting      |
 | Authorization          | Tool plugins inherit `ToolAuthorizer` (same as V1/MCP tools); no plugin-specific bypass                                                                                                     | Per-plugin RBAC → Epic 11                   |
-| Observability          | `plugin_span(plugin_id, kind)` when enabled; load counters `plugins_loaded_total` / `plugin_load_failures_total`; metric registries unchanged except optional entries for reference plugins | Per-plugin billing → future                 |
+| Observability          | `plugin_span(plugin_id, …)` when enabled; load counters `plugins_loaded_total` / `plugin_load_failures_total` with shared bounded `failure_code` label (`none` on success); `plugin_id` span-only | Per-plugin billing → future                 |
 | REST API               | Read-only inventory; authenticated callers only; no install/uninstall over HTTP                                                                                                             | Admin CRUD → Epic 11                        |
 | Persistence            | No DB tables for plugins in v1; inventory reflects in-memory `PluginRegistry` at startup                                                                                                    | Durable plugin installations → future       |
 | Manifest extensibility | Optional reserved fields (`dependencies`, author metadata, `metadata`) parsed and stored; **ignored for load ordering** in V2                                                                | Plugin-to-plugin deps resolution → future   |
@@ -214,19 +214,21 @@ mcp_servers: # optional; only when contributions include mcp_server
     command: uvx
     args: ['mcp-server-echo']
     transport: stdio
-min_platform_version: '0.1.0' # optional informational; not enforced in v1
+# --- Optional platform hint (informational only; not enforced in V2) ---
+min_platform_version: '0.1.0' # optional string; stored on PluginManifest; no load gate
 ```
 
 **Validation rules (fail the plugin, not the process):**
 
 - `plugin_id` — non-empty, matches `^[a-z][a-z0-9.-]*$`, unique among loaded plugins
-- `version` — valid semver (PEP 440 subset: `major.minor.patch` with optional pre-release)
+- `version` — valid SemVer 2.0.0 string (`MAJOR.MINOR.PATCH`, optional `-pre-release` and `+build` metadata); format validation only in V2 (no version ordering or constraint evaluation)
 - `api_version` — must equal a value in `SUPPORTED_PLUGIN_API_VERSIONS` (initially `{"1"}`)
 - `entrypoint` — `module:attr` form; module importable from the plugin directory on `sys.path`
 - `contributions` — if present, each item ∈ `{tool, prompt, workflow_node, mcp_server}`
 - `mcp_servers` — each entry validates as `McpConnectionConfig` when MCP contribution is declared
 - `dependencies` — if present, each entry must have `plugin_id` (non-empty string) and optional `version` constraint string; **parsed and stored on `PluginManifest` but not evaluated in V2** (no load-order changes, no transitive loading)
 - `author`, `homepage`, `repository`, `documentation`, `license` — optional strings; surfaced in inventory when present
+- `min_platform_version` — optional string; parsed and stored on `PluginManifest`; **informational only in V2** — not compared to the running platform version and does not affect load success/failure (compatibility is gated by `api_version` only)
 - `metadata` — optional JSON object (string keys, JSON-serializable values); stored verbatim; **not interpreted by the loader in V2**
 
 **Reserved fields policy:** Unknown top-level manifest keys are rejected at parse time (strict schema) — except `metadata`, which is the designated extension point. Future manifest fields require a Part I update and `PLUGIN_API_VERSION` bump.
@@ -243,20 +245,23 @@ lifespan startup
   └─ PLUGINS_ENABLED=true
         │
         ├─ For each path in plugin_directories:
-        │     scan immediate child dirs for plugin.yaml
+        │     scan immediate child dirs as discovery candidates (one record each)
         │
         ├─ If plugin_allowlist non-empty → filter to listed plugin_ids
         │
-        ├─ For each manifest (deterministic sorted order by plugin_id):
-        │     validate schema + api_version
+        ├─ For each discovery candidate (deterministic sorted order; see § PluginRecord):
+        │     if plugin.yaml missing → mark_failed (code=manifest_not_found); identity fields null
+        │     else parse + validate schema + api_version
+        │     on parse/validation failure → mark_failed (code=invalid_manifest); identity fields null or partial
         │     on api_version mismatch → mark_failed with PluginLoadFailureReason
         │         (code=unsupported_api_version, expected=SUPPORTED, actual=manifest.api_version)
         │     record load_start = monotonic clock
         │     import entrypoint module (plugin dir appended to sys.path)
-        │     invoke register(PluginRegistrar)
+        │     create per-plugin PluginRegistrar (staging context)
+        │     invoke register(PluginRegistrar) under plugin_load_timeout_seconds guard
+        │     on success → registrar.commit() → PluginRegistry.mark_loaded(manifest, contributions, load_duration_ms)
+        │     on failure/timeout → registrar.rollback() → log warning; PluginRegistry.mark_failed(manifest, reason, load_duration_ms)
         │     record load_duration_ms
-        │     on success → PluginRegistry.mark_loaded(manifest, contributions, load_duration_ms)
-        │     on failure → log warning; PluginRegistry.mark_failed(manifest, reason, load_duration_ms)
         │
         └─ Return PluginLoadReport (counts, failures, total_load_duration_ms)
 
@@ -266,40 +271,57 @@ register_mcp_tools(..., extra_servers=PluginRegistry.list_mcp_servers())
 
 **Determinism:** Plugins load in ascending `plugin_id` order so registration conflicts are reproducible. First successful registration wins; later duplicate tool names raise inside `ToolRegistry` and fail that plugin only.
 
+**Atomic registration:** `PluginRegistrar.register_*()` calls stage contributions only; `commit()` promotes staged tools, prompts, workflow executors, and MCP entries to platform registries after `register()` returns without error. Any exception, validation error, or timeout during `register()` triggers `rollback()` before `mark_failed()` — a failed plugin must leave no partial live registry side effects.
+
+**Registration timeout (V2, in-process):** `register(registrar)` runs in a **worker thread**; the loader waits up to `plugin_load_timeout_seconds` (wall clock) for it to return. This is the enforceable V2 boundary — Python cannot safely interrupt arbitrary synchronous plugin code in-process. On timeout: do **not** call `commit()`; call `registrar.rollback()` to discard staged contributions; mark the plugin `failed` with `PluginLoadFailureReason(code="timeout", message="Plugin registration exceeded {N}s timeout")` (no paths/stack traces); continue loading other plugins. The worker thread may still run until `register()` returns (daemon thread); the registrar enters a **closed** state after timeout so late `register_*()` calls raise `PluginRegistrationError` and cannot mutate staging. Because platform registries are written only in `commit()`, a timed-out plugin leaves **no live shared registry side effects** unless plugin code bypasses `PluginRegistrar` (unsupported). `load_all()` catches timeout and all other per-plugin errors internally — **never** raises uncaught exceptions to lifespan.
+
 **sys.path hygiene:** Each plugin directory is appended once before its entrypoint import; paths are not removed (acceptable for process lifetime; see § Future Enhancements for isolated loading).
 
 ---
 
 ## PluginRecord & Load Diagnostics
 
-Each discovered plugin produces one **`PluginRecord`** in `PluginRegistry` — regardless of outcome.
+Each **discovery candidate** (immediate child directory under a configured plugin directory) produces exactly one **`PluginRecord`** in `PluginRegistry` — regardless of outcome. Missing or malformed manifests still yield a failed record; they are never skipped silently.
 
 | Field | Type | Notes |
 | ----- | ---- | ----- |
-| `plugin_id` | `str` | From manifest |
-| `name` | `str` | From manifest |
-| `version` | `str` | Semver from manifest |
-| `api_version` | `str` | From manifest |
+| `plugin_id` | `str \| None` | From manifest when valid; `null` when `plugin.yaml` is missing or required identity fields fail validation |
+| `name` | `str \| None` | From manifest when valid; `null` when unavailable (REST may display `"Unknown plugin"` placeholder) |
+| `version` | `str \| None` | Semver from manifest when valid; `null` when missing or invalid |
+| `api_version` | `str \| None` | From manifest when valid; `null` when missing or invalid |
 | `status` | `PluginStatus` | V2: `loaded` \| `failed` only |
 | `contributions` | `list[PluginContributionKind]` | Populated on success; empty on failure |
-| `load_duration_ms` | `float` | Wall time for validate + import + `register()`; always set (0.0 if failed before timing started) |
-| `author`, `homepage`, `repository`, `documentation`, `license` | `str \| None` | Optional manifest metadata |
-| `dependencies` | `list[PluginDependency]` | Parsed from manifest; **informational in V2** |
-| `metadata` | `dict[str, object]` | Opaque extension bag from manifest |
+| `load_duration_ms` | `float` | Wall time for validate + import + `register()` + `commit()`/`rollback()`; always set (`0.0` if failed before timing started) |
+| `author`, `homepage`, `repository`, `documentation`, `license` | `str \| None` | Optional manifest metadata; all `null` when manifest not successfully parsed |
+| `dependencies` | `list[PluginDependency]` | Parsed from manifest when valid; empty when manifest missing/malformed; **informational in V2** |
+| `metadata` | `dict[str, object]` | Opaque extension bag from manifest; `{}` when manifest not successfully parsed; **stored internally; omitted from REST** |
 | `failure` | `PluginLoadFailureReason \| None` | Set when `status=failed` |
+
+**Missing or malformed manifests:**
+
+| Situation | Record identity fields | `failure.code` | Load steps skipped |
+| --------- | ---------------------- | -------------- | ------------------ |
+| Child dir has no `plugin.yaml` | `plugin_id`, `name`, `version`, `api_version` all `null` | `manifest_not_found` | import, `register()`, `commit()` |
+| `plugin.yaml` unreadable or fails strict schema / required-field validation | Partial values when safely parsed (e.g. invalid `plugin_id` → `plugin_id=null`); otherwise `null` | `invalid_manifest` | import, `register()`, `commit()` unless schema sufficient to proceed |
+| Valid manifest, later failure (API version, entrypoint, registration, timeout) | Identity fields from manifest | per existing codes | failure point determines skipped steps |
+| `register()` exceeds `plugin_load_timeout_seconds` | Identity fields from manifest | `timeout` | `commit()` skipped; `rollback()` clears staging; `status=failed` |
+
+Internal discovery ordering uses `plugin_id` when present; records with `plugin_id=null` sort after resolvable ids (stable discovery ordinal tie-break). **Never** persist or expose filesystem paths, directory names, or `plugin.yaml` locations in `PluginRecord`, logs safe fields, REST, health, or spans.
 
 **`PluginLoadFailureReason`** (structured, JSON-serializable):
 
 | Field | Purpose |
 | ----- | ------- |
-| `code` | Machine-readable reason: `unsupported_api_version`, `invalid_manifest`, `entrypoint_import_error`, `registration_error`, `timeout`, `allowlist_excluded`, … |
-| `message` | Short human-readable summary (no stack traces, no filesystem paths) |
+| `code` | Machine-readable reason: `manifest_not_found`, `invalid_manifest`, `unsupported_api_version`, `entrypoint_import_error`, `registration_error`, `timeout`, `allowlist_excluded`, … |
+| `message` | Short human-readable summary (no stack traces, no filesystem paths). When `code=timeout`: include configured limit only (e.g. `"Plugin registration exceeded 30s timeout"`) |
 | `expected_api_versions` | Populated when `code=unsupported_api_version` — copy of `SUPPORTED_PLUGIN_API_VERSIONS` |
 | `manifest_api_version` | Populated when `code=unsupported_api_version` — the manifest's `api_version` value |
 
 Startup structured logs and `plugin_span` attributes reuse the same `code` + duration fields. Operators diagnose API mismatches from logs/registry without reading raw exceptions.
 
-**REST exposure (safe subset):** List/detail responses include `load_duration_ms`, optional author metadata, and when failed: `failure.code`, `failure.message`, and for API mismatches only `failure.expected_api_versions` + `failure.manifest_api_version`. Never expose stack traces, `sys.path` entries, or entrypoint module paths.
+**REST exposure (safe subset):** `GET /api/plugins` includes **all** records (loaded and failed), including those with `plugin_id=null`. Nullable identity fields serialize as JSON `null`; UI may substitute `"Unknown plugin"` for display only. `GET /api/plugins/{plugin_id}` returns detail when `plugin_id` is non-null and matches; otherwise **404** (unresolvable failed records are list-only). List/detail responses include `load_duration_ms`, bounded author/discovery fields when parsed, detail-only informational `dependencies`, and when failed: `failure.code`, `failure.message`, and for API mismatches only `failure.expected_api_versions` + `failure.manifest_api_version`. The manifest **`metadata` bag is omitted** from all REST responses (stored internally on `PluginRecord` only). Never expose stack traces, directory names, `plugin.yaml` paths, `sys.path` entries, or entrypoint module paths.
+
+**Health (`GET /api/health`):** `plugins_failed_count` includes manifest discovery/parse failures (`manifest_not_found`, `invalid_manifest`) plus all other failed records; `plugins_loaded_count` counts only `status=loaded`. Aggregate counts only — no per-plugin paths or failure stack traces.
 
 ---
 
@@ -384,7 +406,7 @@ registrar.register_workflow_node_type(
 
 - `plugin_node_type` is a short identifier unique within the plugin (not globally prefixed)
 - Executor must satisfy `NodeExecutor` Protocol (`app.ai.workflow.nodes.base`)
-- `GraphValidator` (extended) verifies `plugin_id` is loaded and `(plugin_id, plugin_node_type)` exists in the executor registry
+- `GraphValidator` (extended) verifies `plugin_id` is **loaded** in `PluginRegistry` and `(plugin_id, plugin_node_type)` exists in the shared **`WorkflowPluginRegistry`**
 - Side-effecting plugin nodes should respect `NodeExecutionRequest.execution_receipt_id` when performing external IO (same guidance as Epic 06 task/LLM/agent nodes)
 - Plugin node executors are merged into `WorkflowManager`'s `node_executors` map under `NodeType.PLUGIN` via a dispatching `PluginNodeExecutor` that routes by config keys
 
@@ -422,6 +444,7 @@ Discovery and tool registration follow Epic 03 exactly — no parallel MCP path.
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Platform plugin API    | Constant `PLUGIN_API_VERSION = "1"`; `SUPPORTED_PLUGIN_API_VERSIONS = frozenset({"1"})`                                                                        |
 | Manifest `api_version` | Must be ∈ `SUPPORTED_PLUGIN_API_VERSIONS` or plugin load fails with `PluginLoadFailureReason(code=unsupported_api_version, …)`                               |
+| Manifest `min_platform_version` | Optional string on `PluginManifest`; informational in inventory only — **not enforced** in V2 (no comparison to running platform version)                    |
 | Manifest `version`     | Semver string for inventory/display; no automatic migration                                                                                                    |
 | Manifest `dependencies` | Reserved; stored on `PluginManifest` / `PluginRecord` but **not resolved** in V2 — no transitive load, no semver constraint evaluation                        |
 | Workflow definitions   | Reference plugin nodes by `plugin_id` + `plugin_node_type`; if plugin not loaded at startup, graph validation fails at definition create/update time           |
@@ -553,17 +576,18 @@ app/
         │                        #   PluginLoadFailureReason, PluginDependency, PluginContributionKind
         ├── exceptions.py        # PluginLoadError, PluginManifestError, …
         └── workflow/
-            └── plugin_node.py   # PluginNodeExecutor dispatcher
+            ├── registry.py        # WorkflowPluginRegistry — (plugin_id, node_type) → executor factory
+            └── plugin_node.py     # PluginNodeExecutor dispatcher
 
 app/routers/plugins.py           # NEW — authenticated inventory API
 app/schemas/plugins.py           # NEW — response schemas
 app/core/config.py               # extend — PLUGINS_ENABLED, plugin_directories, plugin_allowlist
 app/main.py                      # modify — load_plugins in lifespan before tool/MCP registration
-app/ai/deps.py                   # extend — get_plugin_registry, wire PluginNodeExecutor
+app/ai/deps.py                   # extend — get_plugin_registry, get_workflow_plugin_registry, wire PluginNodeExecutor
 app/ai/tools/registration.py     # modify — accept optional plugin MCP server list (no behaviour change when flag off)
 app/ai/prompts/repository.py     # extend — register_plugin_template(), list_plugin_templates()
 app/ai/workflow/models/definition.py  # modify — NodeType.PLUGIN
-app/ai/workflow/validation/graph_validator.py  # extend — validate plugin node references
+app/ai/workflow/graph/validator.py           # extend — validate plugin node references
 app/ai/workflow/engine/executor.py # unchanged dispatch via node_executors map
 app/ai/observability/tracing/spans.py  # extend — plugin_span (Phase 7)
 
@@ -589,6 +613,7 @@ tests/plugins/fixtures/          # minimal plugins for unit tests (not loaded in
 - `PluginManifest`
 - `PluginLoader`
 - `PluginRegistry`
+- `WorkflowPluginRegistry`
 - `PluginRegistrar`
 - `PluginNodeExecutor`
 - `PluginsStore` (thin read façade for router)
@@ -601,11 +626,12 @@ tests/plugins/fixtures/          # minimal plugins for unit tests (not loaded in
 | Component                   | Responsibility                                                             | Inputs                          | Outputs                    | Dependencies                                                    |
 | --------------------------- | -------------------------------------------------------------------------- | ------------------------------- | -------------------------- | --------------------------------------------------------------- |
 | `PluginLoader`              | Discover manifests, validate, import entrypoints, invoke registration      | Settings paths, allowlist       | `PluginLoadReport`         | `importlib`, YAML                                               |
-| `PluginRegistrar`           | Typed facade writing into platform registries                              | Registration calls from plugins | Side effects on registries | `ToolRegistry`, `PromptRepository`, workflow registry, MCP list |
+| `PluginRegistrar`           | Typed facade writing into platform registries; **sole writer** to `WorkflowPluginRegistry` via staged `register_workflow_node_type()` → `commit()` | Registration calls from plugins | Side effects on registries | `ToolRegistry`, `PromptRepository`, `WorkflowPluginRegistry`, MCP pending list |
 | `PluginRegistry`            | Process-wide inventory of loaded/failed plugins, load timing, failure reasons, aggregated MCP configs | Loader results                  | Query API for store/router | —                                                               |
-| `PluginNodeExecutor`        | Dispatch `NodeType.PLUGIN` executions to plugin-provided executors         | `WorkflowNode`, context         | Node output dict           | Plugin workflow registry                                        |
+| `WorkflowPluginRegistry`    | Process-wide map `(plugin_id, plugin_node_type)` → executor factory; populated at plugin load, immutable after startup | `PluginRegistrar.commit()`      | Lookup for dispatch/validation | — (singleton via `app/ai/deps.py`)                              |
+| `PluginNodeExecutor`        | Dispatch `NodeType.PLUGIN` executions to plugin-provided executors         | `WorkflowNode`, context         | Node output dict           | `WorkflowPluginRegistry`                                        |
 | `PluginsStore`              | Router-facing read model                                                   | `PluginRegistry`                | Inventory DTOs             | `PluginRegistry`                                                |
-| `GraphValidator` (extended) | Reject definitions referencing unknown plugin/node types                   | `WorkflowDefinition`            | Validation errors          | `PluginRegistry`                                                |
+| `GraphValidator` (extended) | Reject definitions referencing unknown plugin/node types                   | `WorkflowDefinition`            | Validation errors          | `PluginRegistry` (load status), `WorkflowPluginRegistry` (node types) |
 
 ---
 
@@ -636,7 +662,7 @@ Unlike Workflows (new orchestration surface) or Observability (cross-cutting spa
 
 - **Tool plugins** — populate `ToolRegistry` before `register_production_tools`; production tools still register after plugins so core names cannot be shadowed accidentally (production registration would fail on collision anyway).
 - **Prompt plugins** — extend `PromptRepository` with an in-memory overlay map; `PromptManager.render()` unchanged for callers.
-- **Workflow plugins** — inject `PluginNodeExecutor` into `node_executors[NodeType.PLUGIN]` in `_create_workflow_manager()`; other node types untouched.
+- **Workflow plugins** — single shared `WorkflowPluginRegistry` singleton (via `get_workflow_plugin_registry()` in `app/ai/deps.py`); `PluginRegistrar.commit()` is the sole writer; `PluginNodeExecutor` and `GraphValidator` read the same instance; inject `PluginNodeExecutor` into `node_executors[NodeType.PLUGIN]` in `_create_workflow_manager()`; `PluginRegistry` tracks load status only (not executor map ownership).
 - **MCP plugins** — pass aggregated server list into existing `register_mcp_tools()`; no fork of MCP client code.
 
 **Flag off:** No plugin scan, no `sys.path` mutation, `PluginRegistry` reports zero plugins, Plugin REST routes return `503 feature_disabled`, reference plugin directories ignored, workflow graphs cannot use `NodeType.PLUGIN` (validation error if flag off and type present — defensive).
@@ -651,12 +677,12 @@ Authenticated-only (`Depends(get_current_caller)`). Router: `app/routers/plugins
 
 | Method | Path                       | Purpose                                                                                                                                                                                                 |
 | ------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/plugins`             | List plugins with `plugin_id`, `name`, `version`, `api_version`, `contributions`, `status` (`loaded` \| `failed`), `load_duration_ms`, optional author metadata, and safe `failure` object when failed |
-| `GET`  | `/api/plugins/{plugin_id}` | Detail for one plugin including contribution summary, `dependencies` (informational), and structured `failure` when failed                                                                              |
+| `GET`  | `/api/plugins`             | List all plugin records (`plugin_id` nullable) with `name`, `version`, `api_version`, `contributions`, `status` (`loaded` \| `failed`), `load_duration_ms`, optional author/discovery fields (`author`, `homepage`, `repository`, `documentation`, `license`), and safe `failure` object when failed — **excludes** manifest `metadata` bag |
+| `GET`  | `/api/plugins/{plugin_id}` | Detail for one plugin when `plugin_id` is non-null and known; **404** otherwise. Same bounded fields as list plus informational `dependencies` (`plugin_id`, optional `version` constraint per entry). **Omits** manifest `metadata` bag — opaque keys are stored on `PluginRecord` only, never returned verbatim |
 
-**Health:** extend `GET /api/health` with `plugins_enabled: bool`, `plugins_loaded_count: int`, and `plugins_failed_count: int` (0 when flag off).
+**Health:** extend `GET /api/health` with `plugins_enabled: bool`, `plugins_loaded_count: int`, and `plugins_failed_count: int` (0 when flag off). Failed count includes `manifest_not_found` and `invalid_manifest` records.
 
-**Response rules:** Never expose filesystem paths, env var values, MCP credentials, handler source code, stack traces, entrypoint module paths, or prompt template bodies — metadata only. `failure` objects follow § PluginRecord & Load Diagnostics safe subset.
+**Response rules:** Responses expose inventory fields only — never filesystem paths, env var values, MCP credentials, handler source code, stack traces, entrypoint module paths, prompt template bodies, or the manifest **`metadata` bag** (may contain secrets or personal data). `failure` objects follow § PluginRecord & Load Diagnostics safe subset. `PluginsStore` maps `PluginRecord` → bounded list/detail DTOs with an explicit field allowlist; do not serialize `PluginRecord.metadata` to JSON.
 
 ---
 
@@ -672,7 +698,8 @@ Authenticated-only (`Depends(get_current_caller)`). Router: `app/routers/plugins
 | `PluginLoader`                                                                                                                 | Class          |
 | `PluginLoadReport`, `PluginRecord`, `PluginStatus`, `PluginLoadFailureReason`, `PluginDependency`                              | Models         |
 | `PluginLoadError`, `PluginManifestError`, `PluginRegistrationError`                                                            | Exception      |
-| `load_plugins(settings, *, tool_registry, prompt_repository, workflow_plugin_registry, registrar_factory) -> PluginLoadReport` | Function       |
+| `WorkflowPluginRegistry`                                                                                                       | Class          |
+| `load_plugins(settings, *, tool_registry, prompt_repository, workflow_plugin_registry, plugin_registry, …) -> PluginLoadReport` | Function       |
 | `PluginNodeExecutor`                                                                                                           | Class          |
 | Plugins REST router export                                                                                                     | FastAPI router |
 
@@ -687,7 +714,7 @@ Internal (may evolve): YAML parser details, `sys.path` management, `PluginsStore
 | `PLUGINS_ENABLED`             | **`false`**                                          |
 | `plugin_directories`          | `["plugins"]` (relative to `backend-python/`)        |
 | `plugin_allowlist`            | `[]` (empty → all discovered plugins allowed)        |
-| `plugin_load_timeout_seconds` | `30` (per-plugin entrypoint registration wall clock) |
+| `plugin_load_timeout_seconds` | `30` (wall-clock limit for `register(registrar)` in a worker thread; see § Registration timeout) |
 
 Existing flags (`MCP_ENABLED`, `WORKFLOW_ENGINE_ENABLED`, `TOOLS_ENABLED`, `OBSERVABILITY_ENABLED`, …) unchanged.
 
@@ -731,7 +758,7 @@ These items require explicit Part I updates and should remain `TODO(future):` du
 - Plugin MCP servers merge with env config per locked decision (env wins on name conflict)
 - No prompt/tool/workflow template bodies or secrets in REST responses or span attributes
 - Every `PluginRecord` includes `load_duration_ms`; API version failures include structured `PluginLoadFailureReason` with expected vs manifest api_version
-- Manifest `dependencies` and `metadata` parse successfully and appear in inventory; dependency resolution is not performed in V2
+- Manifest `dependencies` and `metadata` parse successfully and are stored on `PluginRecord`; `dependencies` appear in detail REST only; `metadata` is **not** exposed via REST
 - Coverage ≥80% on `app/` and `app/ai/plugins/`
 
 ---
@@ -827,10 +854,10 @@ _Copy from Epic 07 Phase 10 completion record._
 | ------------------------ | ----------------------------------------------------------------------- |
 | Backend tests / coverage | 1691 passed, 89.21% `app/`                                              |
 | Frontend tests           | 281 passed (46 files); lint + build pass                                |
-| Integration tests        | Workflow 241; router 23; tool 11; observability router 15; streaming 26 |
+| Integration tests        | Workflow **241** (207 package + 23 router + 11 workflow tool); observability router 15; streaming 26 |
 | Eval CLI                 | 15/15 `--level all`; regression check clean                             |
 | Observability            | Completed (Epic 07); `OBSERVABILITY_ENABLED` behind flag                |
-| Plugin Architecture      | Not implemented — no `app/ai/plugins/` package                          |
+| Plugin Architecture      | Phase 0 complete — baseline audit published; no `app/ai/plugins/` package yet |
 
 ---
 
@@ -838,7 +865,7 @@ _Copy from Epic 07 Phase 10 completion record._
 
 | Phase | Name                            | Effort | Status      |
 | ----- | ------------------------------- | ------ | ----------- |
-| 0     | Baseline Audit                  | XS     | Not Started |
+| 0     | Baseline Audit                  | XS     | Completed   |
 | 1     | Plugin SDK Foundation           | M      | Not Started |
 | 2     | Tool Plugins                    | M      | Not Started |
 | 3     | Prompt Plugins                  | M      | Not Started |
@@ -855,6 +882,7 @@ _Copy from Epic 07 Phase 10 completion record._
 # Phase 0 — Baseline Audit
 
 **Effort:** XS
+**Status:** Completed (2026-08-10 — see [post-mvp-v2-epic8-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic8-phase-0-baseline-audit.md))
 
 **Objective**
 
@@ -872,28 +900,28 @@ Establish a verified implementation baseline before introducing the Plugin Archi
 
 ## Platform Verification
 
-- [ ] Confirm Epic 07 Phase 10 complete / authorized for Epic 08.
-- [ ] Inventory `app/ai/tools/registration.py` startup order in `app/main.py`.
-- [ ] Inventory `ToolRegistry`, `PromptRepository`, `_create_workflow_manager()` node executor map.
-- [ ] Inventory `register_mcp_tools()` and env-based `mcp_servers`.
-- [ ] Verify chat, RAG, MCP, memory, voice, agent, tool, workflow, and observability pipelines operational.
+- [x] Confirm Epic 07 Phase 10 complete / authorized for Epic 08.
+- [x] Inventory `app/ai/tools/registration.py` startup order in `app/main.py`.
+- [x] Inventory `ToolRegistry`, `PromptRepository`, `_create_workflow_manager()` node executor map.
+- [x] Inventory `register_mcp_tools()` and env-based `mcp_servers`.
+- [x] Verify chat, RAG, MCP, memory, voice, agent, tool, workflow, and observability pipelines operational.
 
 ## Architecture Review
 
-- [ ] Review frozen Part I architecture.
-- [ ] Confirm `NodeType` enum current values and extension approach for `PLUGIN`.
-- [ ] Identify collision rules for tool names and prompt identities.
-- [ ] Confirm no `app/ai/plugins/` package exists.
+- [x] Review frozen Part I architecture.
+- [x] Confirm `NodeType` enum current values and extension approach for `PLUGIN`.
+- [x] Identify collision rules for tool names and prompt identities.
+- [x] Confirm no `app/ai/plugins/` package exists.
 
 ## Dependency Verification
 
-- [ ] Verify PyYAML (or existing YAML loader) availability for manifest parsing.
-- [ ] Verify DI and feature flag patterns in `app/ai/deps.py` / `app/core/config.py`.
+- [x] Verify PyYAML (or existing YAML loader) availability for manifest parsing.
+- [x] Verify DI and feature flag patterns in `app/ai/deps.py` / `app/core/config.py`.
 
 ## Baseline Quality Validation
 
-- [ ] Execute lint, typecheck, unit tests, integration tests, eval suite.
-- [ ] Record baseline metrics in audit doc.
+- [x] Execute lint, typecheck, unit tests, integration tests, eval suite.
+- [x] Record baseline metrics in audit doc.
 
 **Verify**
 
@@ -911,12 +939,26 @@ Establish a verified implementation baseline before introducing the Plugin Archi
 
 **Exit criteria**
 
-- Baseline audit published.
-- User confirmation to proceed to Phase 1.
+- [x] Baseline audit published.
+- [ ] User confirmation to proceed to Phase 1.
 
 **Rollback**
 
-- No rollback required (no code changes).
+- [x] No rollback required (no code changes).
+
+**Completion Record**
+
+| Metric              | Result                                      |
+| ------------------- | ------------------------------------------- |
+| Lint                | ✅ PASS                                     |
+| Format check        | ✅ PASS                                     |
+| Typecheck           | ✅ PASS                                     |
+| Backend tests       | ✅ 1691 passed, 89.17% `app/` coverage      |
+| Eval CLI            | ✅ 15/15 (`--level all`)                    |
+| Frontend tests      | ✅ 281 passed (46 files); build pass          |
+| Baseline audit      | ✅ [Published](../audits/post-mvp-v2-epic8-phase-0-baseline-audit.md) |
+| Phase 0 status      | ✅ Completed                                |
+| Phase 1 authorized  | ⬜ Pending user confirmation                |
 
 ---
 
@@ -962,14 +1004,14 @@ Introduce the core plugin package: manifest model, loader skeleton, registry, re
 - [ ] Apply `plugin_allowlist` when non-empty.
 - [ ] Sort manifests by `plugin_id` for deterministic load order.
 - [ ] Import entrypoint via `importlib`; append plugin directory to `sys.path` once.
-- [ ] Measure `load_duration_ms` (monotonic clock) around validate + import + `register()`.
-- [ ] Invoke `register(registrar)` inside timeout guard (`plugin_load_timeout_seconds`).
-- [ ] Record success/failure in `PluginRegistry` with `load_duration_ms` and structured `PluginLoadFailureReason`; never raise uncaught exceptions from `load_all()`.
+- [ ] Measure `load_duration_ms` (monotonic clock) around validate + import + `register()` (includes time spent waiting on timeout).
+- [ ] Run `register(registrar)` in a worker thread with `plugin_load_timeout_seconds` wall-clock limit (`concurrent.futures` or equivalent); on normal return call `registrar.commit()` then `mark_loaded()`; on exception call `registrar.rollback()` then `mark_failed()` with `registration_error` (or other code); on timeout call `registrar.rollback()`, close the registrar to reject late staging, then `mark_failed()` with `PluginLoadFailureReason(code="timeout", …)` — never call `commit()`.
+- [ ] Record success/failure in `PluginRegistry` with `load_duration_ms` and structured `PluginLoadFailureReason`; wrap each plugin load in try/except — `load_all()` never raises uncaught exceptions.
 
 ## Registrar Stub
 
-- [ ] Implement `PluginRegistrar` with methods: `register_tool`, `register_prompt_template`, `register_workflow_node_type`, `register_mcp_server`.
-- [ ] Phase 1: store contributions in internal lists on the registrar instance (assertions in tests); actual registry wiring deferred to Phases 2–5.
+- [ ] Implement `PluginRegistrar` with methods: `register_tool`, `register_prompt_template`, `register_workflow_node_type`, `register_mcp_server`, plus `commit()` / `rollback()`.
+- [ ] Phase 1: `register_*()` append to internal staging lists; `commit()` promotes staged contributions (assertions in tests); `rollback()` clears staging. Platform registry wiring deferred to Phases 2–5.
 
 ## Configuration
 
@@ -1027,12 +1069,12 @@ Wire `PluginRegistrar.register_tool()` into the process-wide `ToolRegistry` with
 ## Registration Wiring
 
 - [ ] Enforce tool name prefix `{plugin_id}.` — raise `PluginRegistrationError` if violated.
-- [ ] Call `ToolRegistry.register(definition, handler)` inside registrar.
+- [ ] Stage tool definitions/handlers during `register_tool()`; `commit()` writes all staged tools to `ToolRegistry`; `rollback()` clears staging without touching live registries (no platform writes occur until `commit()`).
 - [ ] Track tool contributions on `PluginRecord` for inventory API.
 
 ## Startup Integration
 
-- [ ] Implement `load_plugins(settings, tool_registry=..., prompt_repository=..., workflow_plugin_registry=..., mcp_pending=...)`.
+- [ ] Implement `load_plugins(settings, tool_registry=..., prompt_repository=..., workflow_plugin_registry=..., plugin_registry=...)` — single shared `WorkflowPluginRegistry` instance created/obtained from DI before the load loop and injected into each `PluginRegistrar`.
 - [ ] Call from `lifespan` when `PLUGINS_ENABLED=true` before `register_production_tools()`.
 - [ ] Ensure flag off skips `load_plugins()` entirely.
 
@@ -1133,10 +1175,10 @@ Add `NodeType.PLUGIN`, implement `PluginNodeExecutor`, extend `GraphValidator`, 
 **Deliverables**
 
 - `NodeType.PLUGIN` in `definition.py`
-- `app/ai/plugins/workflow/plugin_node.py` — dispatcher executor
-- `WorkflowPluginRegistry` (mapping `(plugin_id, node_type)` → executor factory)
+- `app/ai/plugins/workflow/registry.py` — `WorkflowPluginRegistry` (mapping `(plugin_id, node_type)` → executor factory)
+- `app/ai/plugins/workflow/plugin_node.py` — `PluginNodeExecutor` dispatcher
 - Extended `GraphValidator` for plugin node references
-- `_create_workflow_manager()` updated to include `NodeType.PLUGIN: PluginNodeExecutor(...)`
+- `get_workflow_plugin_registry()` in `app/ai/deps.py`; `_create_workflow_manager()` wires `NodeType.PLUGIN: PluginNodeExecutor(...)` with the shared singleton
 - Workflow integration tests
 
 **Steps**
@@ -1145,23 +1187,24 @@ Add `NodeType.PLUGIN`, implement `PluginNodeExecutor`, extend `GraphValidator`, 
 
 - [ ] Add `NodeType.PLUGIN = "plugin"`.
 - [ ] Document required `config` keys: `plugin_id`, `plugin_node_type`.
-- [ ] Implement `WorkflowPluginRegistry` with register/get methods.
+- [ ] Implement `WorkflowPluginRegistry` with register/get methods; process-wide singleton via `get_workflow_plugin_registry()` (empty stub when flag off).
 
 ## PluginNodeExecutor
 
-- [ ] Validate config keys present; map missing registry entry → `WorkflowNodeExecutionError`.
+- [ ] Validate config keys present; map missing `WorkflowPluginRegistry` entry → `WorkflowNodeExecutionError`.
 - [ ] Delegate to plugin executor implementing `NodeExecutor` Protocol.
 - [ ] Propagate `NodeExecutionRequest.execution_receipt_id` to tool calls inside plugin nodes when applicable.
 
 ## Graph Validation
 
 - [ ] When `PLUGINS_ENABLED=false`, reject workflow definitions containing `type: plugin` at create/update with clear validation error.
-- [ ] When flag on, verify plugin loaded and node type registered.
+- [ ] When flag on, verify `plugin_id` is **loaded** in `PluginRegistry` and `(plugin_id, plugin_node_type)` exists in the shared `WorkflowPluginRegistry`.
 
 ## DI Wiring
 
-- [ ] Pass shared `WorkflowPluginRegistry` from `PluginRegistry` into `_create_workflow_manager()`.
-- [ ] Ensure eval/workflow tests can inject fixture registry.
+- [ ] `load_plugins()` receives the same `WorkflowPluginRegistry` instance passed into each `PluginRegistrar`; `commit()` writes executor factories there.
+- [ ] Pass that same singleton into `_create_workflow_manager()` / `GraphValidator` (not via `PluginRegistry`).
+- [ ] Ensure eval/workflow tests can inject fixture `WorkflowPluginRegistry`.
 
 ## Testing
 
@@ -1269,8 +1312,8 @@ Expose read-only plugin inventory via authenticated REST endpoints and health ch
 
 ## API Implementation
 
-- [ ] `GET /api/plugins` — list loaded and failed plugins (metadata + `load_duration_ms` + safe `failure` object).
-- [ ] `GET /api/plugins/{plugin_id}` — detail or `404`; include informational `dependencies` and `metadata` when present.
+- [ ] `GET /api/plugins` — list all records including `plugin_id=null` manifest failures (metadata + `load_duration_ms` + safe `failure` object).
+- [ ] `GET /api/plugins/{plugin_id}` — detail or `404` when `plugin_id` is null/unknown; include informational `dependencies`; **omit** manifest `metadata` bag (assert DTO allowlist excludes `PluginRecord.metadata`).
 - [ ] Return `503 feature_disabled` when `PLUGINS_ENABLED=false`.
 
 ## Health Extension
@@ -1284,7 +1327,7 @@ Expose read-only plugin inventory via authenticated REST endpoints and health ch
 ## Testing
 
 - [ ] Router tests with flag on/off.
-- [ ] Assert responses exclude paths, credentials, template bodies, stack traces.
+- [ ] Assert responses exclude paths, credentials, template bodies, stack traces, and manifest `metadata` keys/values; assert `manifest_not_found` / `invalid_manifest` records expose no directory or file paths.
 - [ ] Assert api_version failure exposes safe `failure.expected_api_versions` + `failure.manifest_api_version`.
 - [ ] Assert `load_duration_ms` present on loaded and failed records.
 
@@ -1320,7 +1363,7 @@ Add plugin load spans/metrics and ensure execution continues to use existing dom
 
 - `plugin_span(plugin_id, kind)` in `app/ai/observability/tracing/spans.py`
 - Load instrumentation in `PluginLoader`
-- Counters: `plugins_loaded_total`, `plugin_load_failures_total` (labels: `kind`, `status` — bounded)
+- Counters: `plugins_loaded_total`, `plugin_load_failures_total` — shared bounded label contract (see § Metrics below; `failure_code` only)
 - Tests
 
 **Steps**
@@ -1332,7 +1375,20 @@ Add plugin load spans/metrics and ensure execution continues to use existing dom
 
 ## Metrics
 
-- [ ] Record load success/failure counters with bounded labels per Epic 07 cardinality policy.
+**Load counter label contract (both counters):** one shared label dimension — `failure_code` (bounded registry; `plugin_id` is **span-only**, never a metric label).
+
+| Label | Allowed values | Usage |
+| ----- | -------------- | ----- |
+| `failure_code` | `none`, `manifest_not_found`, `invalid_manifest`, `unsupported_api_version`, `entrypoint_import_error`, `registration_error`, `timeout`, `allowlist_excluded`, `other` | Shared by **both** counters; normalize via `normalize_metric_label("failure_code", …)` (extend `app/ai/observability/metrics/labels.py`) |
+
+| Counter | Increment when | `failure_code` value |
+| ------- | -------------- | -------------------- |
+| `plugins_loaded_total` | Plugin load succeeds (`status=loaded`) | `none` |
+| `plugin_load_failures_total` | Plugin load fails (`mark_failed`) | `PluginLoadFailureReason.code`, mapped to registry (`unknown` → `other`) |
+
+No other metric labels on these counters (`kind`, `status`, `contribution_kind`, and `plugin_id` are **span attributes only**).
+
+- [ ] Record load success/failure counters using the contract above; extend `ALLOWED_LABEL_KEYS` / `FAILURE_CODE_REGISTRY` in `labels.py`.
 - [ ] Do not add unbounded `plugin_id` metric labels — use span attributes only.
 
 ## Testing
@@ -1579,9 +1635,9 @@ Metrics/spans this epic adds (when respective flags enabled):
 
 | Field                        | Purpose                                                                                         |
 | ---------------------------- | ----------------------------------------------------------------------------------------------- |
-| `plugin.load` span           | Per-plugin registration; attributes include `load_duration_ms`, `failure_code` when failed      |
-| `plugins_loaded_total`       | Successful plugin loads                                                                         |
-| `plugin_load_failures_total` | Failed plugin loads (bounded `failure_code` label — `unsupported_api_version`, `other`, …)    |
+| `plugin.load` span           | Per-plugin registration; attributes: `plugin_id`, `contribution_kind`, `status`, `load_duration_ms`, `failure_code` when failed (span-only — not metric labels except as below) |
+| `plugins_loaded_total`       | Successful plugin loads — label `failure_code=none`                                             |
+| `plugin_load_failures_total` | Failed plugin loads — label `failure_code` ∈ bounded registry (same dimension as success counter) |
 | `plugins_enabled`            | Health field                                                                                    |
 | `plugins_failed_count`       | Health field                                                                                    |
 
@@ -1616,7 +1672,7 @@ Execution of plugin tools and workflow nodes continues to emit existing `tool_sp
 | `app/ai/tools/registration.py`                            | modify | Core     | 5       |
 | `app/ai/prompts/repository.py`                            | modify | Core     | 3       |
 | `app/ai/workflow/models/definition.py`                    | modify | Core     | 4       |
-| `app/ai/workflow/validation/graph_validator.py`           | modify | Core     | 4       |
+| `app/ai/workflow/graph/validator.py`                      | modify | Core     | 4       |
 | `app/ai/deps.py`                                          | modify | Adapter  | 4, 6    |
 | `app/ai/observability/tracing/spans.py`                   | modify | Core     | 7       |
 | `app/ai/observability/metrics/instruments.py`             | modify | Core     | 7       |
@@ -1642,3 +1698,4 @@ Execution of plugin tools and workflow nodes continues to emit existing `tool_sp
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
 | 1       | 2026-08-10 | Initial epic draft — Part I design + Part II 11-phase execution plan (Phases 0–10). Not started. |
 | 1.1     | 2026-08-10 | Reserved manifest fields (`dependencies`, author metadata, `metadata`); `PluginRecord.load_duration_ms`; structured `PluginLoadFailureReason` for API version diagnostics; § Future Enhancements (isolated loading, richer lifecycle states). Part I + Phases 1, 5–7, 9 sync. |
+| 1.2     | 2026-08-10 | Phase 0 complete: baseline audit published; phase table + Phase 0 completion record updated. PR review clarifications (GraphValidator path, SemVer, coverage, workflow test scope, manifest fields, atomic registration, malformed manifests, REST metadata omission, WorkflowPluginRegistry ownership, load metrics label contract). Part II only. |

@@ -11,11 +11,11 @@
 
 ## Executive Summary
 
-Baseline audit before implementing Epic 08 (Plugin Architecture). All quality gates pass at or above Epic 07 Phase 10 metrics. Epic 07 is complete with release summary published. **No plugin implementation exists** — clean baseline. All four registry extension points (`ToolRegistry`, `PromptRepository`, workflow node executors, MCP registration) are inventoried and verified present. **Phase 0 complete.** Phase 1 requires separate user confirmation.
+Baseline audit before implementing Epic 08 (Plugin Architecture). All quality gates pass; test count matches Epic 07 Phase 10 (1691 passed). Coverage is **89.17%** (−0.04 pp vs Epic 07 **89.21%**); still above the **80%** gate. Epic 07 is complete with release summary published. **No plugin implementation exists** — clean baseline. All four registry extension points (`ToolRegistry`, `PromptRepository`, workflow node executors, MCP registration) are inventoried and verified present. **Phase 0 complete.** Phase 1 requires separate user confirmation.
 
 **Key findings:**
 
-- ✅ Backend gates pass: lint, format-check, typecheck, **1691 tests**, **89.17%** `app/` coverage, eval **15/15**
+- ✅ Backend gates pass: lint, format-check, typecheck, **1691 tests**, **89.17%** `app/` coverage (−0.04 pp vs Epic 07 89.21%; ≥80% gate met), eval **15/15**
 - ✅ Frontend gates pass: lint, **281 tests** (46 files), build successful
 - ✅ Epic 07 complete: `app/ai/observability/` (15 modules, 16 test files); `OBSERVABILITY_ENABLED` present (default `false`); release summary published
 - ✅ Extension points verified: `ToolRegistry`, `PromptRepository`, `_create_workflow_manager()` node map, `register_mcp_tools()`, DI singletons in `app/ai/deps.py`
@@ -40,7 +40,7 @@ Baseline audit before implementing Epic 08 (Plugin Architecture). All quality ga
 - `app/ai/observability/` — 15 Python modules (tracing, metrics, cost, aggregation)
 - `app/routers/observability.py` — authenticated usage REST API (route-level `503` when flag off)
 - `tests/ai/observability/` — 16 test modules
-- Epic 07 Phase 10 baseline: 1691 passed, 89.21%; current run: **1691 passed, 89.17%** (no regression)
+- Epic 07 Phase 10 baseline: 1691 passed, 89.21%; Phase 0 run: **1691 passed, 89.17%** (−0.04 pp; same `make test-cov` command; ≥80% gate met)
 
 **Recommendation:** Epic 08 **Phase 0** is complete. Do not start Phase 1 until the user explicitly confirms.
 
@@ -223,7 +223,7 @@ Current `node_executors` map (`NodeType` → executor):
 
 **Current values** (`app/ai/workflow/models/definition.py`):
 
-```
+```text
 TASK | LLM | AGENT | ROUTER | FORK | JOIN | APPROVAL | TERMINAL
 ```
 
@@ -335,17 +335,19 @@ Automated test evidence only — no live manual smoke tests in this audit:
 | Chat (plain + persistence) | `tests/test_chat_persistence.py`, `test_summarization_and_linking.py` | — |
 | Streaming SSE | `tests/test_unified_chat.py`, `tests/test_chat_stream.py` | 9 (chat_stream) + unified chat |
 | RAG | `tests/test_rag_api.py`, `tests/ai/rag/` | — |
-| Tools / web search | `tests/test_tool_platform.py`, `tests/test_phase4_chat_tools.py` | **14** (tool platform) |
+| Workflow package | `tests/ai/workflow/` | **207** |
+| Workflow router | `tests/test_workflow_router.py` | **23** |
+| Workflow execution tool | `tests/test_workflow_tool.py` | **11** |
+| **Workflow integration total** | `tests/ai/workflow/` + router + workflow tool | **241** |
+| Tools / web search | `tests/test_tool_platform.py`, `tests/test_phase4_chat_tools.py` | **14** (tool platform; separate from workflow tool above) |
 | MCP | `tests/ai/mcp/` | — |
 | Agent runtime | `tests/ai/agent/` | 13+ modules |
 | Memory | `tests/ai/memory/`, `tests/test_memory_router.py` | — |
 | Voice | `tests/ai/voice/`, `tests/test_voice_router.py` | — |
-| Workflow | `tests/ai/workflow/` | **207 passed** |
-| Workflow router | `tests/test_workflow_router.py` | **23** |
 | Observability router | `tests/test_observability_router.py` | **15** |
 | Observability package | `tests/ai/observability/` | 16 test files |
 
-Epic 08 plan baseline cited workflow **241** tests; current `tests/ai/workflow/` collects **207** (suite still green — likely doc drift from Epic 07; no failures observed).
+Epic 08 plan baseline **241** matches the workflow integration total above: **207** (`tests/ai/workflow/`) + **23** (`tests/test_workflow_router.py`) + **11** (`tests/test_workflow_tool.py`). The **11** “tool” count in the plan refers to the workflow execution tool suite, not `tests/test_tool_platform.py` (14 tests).
 
 ---
 
