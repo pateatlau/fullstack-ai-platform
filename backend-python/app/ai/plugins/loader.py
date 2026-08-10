@@ -5,8 +5,8 @@ from __future__ import annotations
 import importlib
 import logging
 import sys
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,7 +54,10 @@ class PluginLoader:
 
         for directory in self._resolve_plugin_directories():
             if not directory.is_dir():
-                logger.warning("Plugin directory does not exist; skipping.")
+                logger.warning(
+                    "Plugin directory does not exist; skipping: %s",
+                    directory,
+                )
                 continue
             for child in sorted(directory.iterdir(), key=lambda path: path.name):
                 if child.is_dir():
@@ -214,7 +217,7 @@ class PluginLoader:
 
         plugin_dir_str = str(plugin_dir.resolve())
         if plugin_dir_str not in sys.path:
-            sys.path.insert(0, plugin_dir_str)
+            sys.path.append(plugin_dir_str)
 
         module_name, attr_name = manifest.entrypoint.split(":", 1)
         try:
@@ -251,39 +254,52 @@ class PluginLoader:
             plugin_dir=plugin_dir,
         )
         timeout_seconds = self._settings.plugin_load_timeout_seconds
+        registration_error: BaseException | None = None
+        registration_complete = threading.Event()
 
-        try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(register_fn, registrar)
-                try:
-                    future.result(timeout=timeout_seconds)
-                except FuturesTimeoutError:
-                    registrar.close()
-                    self._registry.mark_failed(
-                        manifest=manifest,
-                        failure=PluginLoadFailureReason(
-                            code="timeout",
-                            message=(
-                                f"Plugin registration exceeded "
-                                f"{timeout_seconds}s timeout"
-                            ),
-                        ),
-                        load_duration_ms=_elapsed_ms(load_start),
-                    )
-                    return
-        except PluginRegistrationError as exc:
-            registrar.rollback()
+        def _run_registration() -> None:
+            nonlocal registration_error
+            try:
+                register_fn(registrar)
+            except BaseException as exc:
+                registration_error = exc
+            finally:
+                registration_complete.set()
+
+        # Daemon thread: on timeout we return without waiting for register() to finish.
+        thread = threading.Thread(
+            target=_run_registration,
+            name=f"plugin-register-{manifest.plugin_id}",
+            daemon=True,
+        )
+        thread.start()
+
+        if not registration_complete.wait(timeout=timeout_seconds):
+            registrar.close()
             self._registry.mark_failed(
                 manifest=manifest,
                 failure=PluginLoadFailureReason(
-                    code="registration_error",
-                    message=str(exc),
+                    code="timeout",
+                    message=(
+                        f"Plugin registration exceeded {timeout_seconds}s timeout"
+                    ),
                 ),
                 load_duration_ms=_elapsed_ms(load_start),
             )
             return
-        except Exception:
+
+        if registration_error is not None:
             registrar.rollback()
+            if isinstance(registration_error, PluginRegistrationError):
+                self._registry.mark_failed(
+                    manifest=manifest,
+                    failure=PluginLoadFailureReason(
+                        code="registration_error",
+                        message=str(registration_error),
+                    ),
+                    load_duration_ms=_elapsed_ms(load_start),
+                )
+                return
             logger.warning(
                 "Plugin registration failed.",
                 extra={"plugin_id": manifest.plugin_id},

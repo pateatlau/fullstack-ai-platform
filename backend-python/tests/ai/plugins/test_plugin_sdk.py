@@ -187,7 +187,7 @@ class TestPluginLoader:
         assert record.failure.code == "entrypoint_import_error"
 
     def test_registration_timeout(self) -> None:
-        _, registry = load_plugins(
+        report, registry = load_plugins(
             plugin_settings(
                 allowlist=["com.test.slow"],
                 timeout_seconds=1,
@@ -198,6 +198,9 @@ class TestPluginLoader:
         assert record.failure is not None
         assert record.failure.code == "timeout"
         assert "1s timeout" in record.failure.message
+        # Slow plugin sleeps 2s; load must not block until it finishes.
+        assert report.total_load_duration_ms < 1800
+        assert record.load_duration_ms < 1800
 
     def test_allowlist_excludes_plugin(self) -> None:
         _, registry = load_plugins(
