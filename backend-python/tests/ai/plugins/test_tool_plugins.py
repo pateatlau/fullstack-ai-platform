@@ -74,7 +74,7 @@ class TestRegistrarToolPrefix:
 
 class TestToolPluginLoad:
     def test_tool_registered_in_registry(self, tool_registry: ToolRegistry) -> None:
-        _, registry, tools = load_plugins(
+        _, registry, tools, _prompts = load_plugins(
             plugin_settings(allowlist=["com.test.tool"]),
             tool_registry=tool_registry,
         )
@@ -86,7 +86,7 @@ class TestToolPluginLoad:
         assert tools.get_handler(TOOL_NAME) is not None
 
     def test_unprefixed_tool_fails_plugin(self, tool_registry: ToolRegistry) -> None:
-        _, registry, tools = load_plugins(
+        _, registry, tools, _prompts = load_plugins(
             plugin_settings(allowlist=["com.test.bad-prefix"]),
             tool_registry=tool_registry,
         )
@@ -102,7 +102,7 @@ class TestToolPluginLoad:
         self,
         tool_registry: ToolRegistry,
     ) -> None:
-        _, registry, tools = load_plugins(
+        _, registry, tools, _prompts = load_plugins(
             plugin_settings(
                 allowlist=["com", "com.test"],
             ),

@@ -10,6 +10,7 @@ from starlette.types import Message
 from app.ai.deps import (
     get_mcp_server_registry,
     get_plugin_registry,
+    get_prompt_repository,
     get_tool_registry,
     get_workflow_plugin_registry,
     reconcile_workflow_runs_at_startup,
@@ -60,6 +61,7 @@ async def lifespan(_: FastAPI):
         report = load_plugins(
             settings,
             tool_registry=get_tool_registry(),
+            prompt_repository=get_prompt_repository(),
             workflow_plugin_registry=get_workflow_plugin_registry(),
             plugin_registry=get_plugin_registry(),
         )

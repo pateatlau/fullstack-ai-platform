@@ -1,0 +1,7 @@
+plugin_id: com.test.prompt.collision
+name: Prompt Collision Plugin
+version: 1.0.0
+api_version: "1"
+entrypoint: collision_plugin.register:register
+contributions:
+  - prompt

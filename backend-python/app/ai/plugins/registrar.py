@@ -12,6 +12,7 @@ from app.ai.interfaces.tool_handler import ToolHandler
 from app.ai.plugins.exceptions import PluginRegistrationError
 from app.ai.plugins.models import PluginContributionKind
 from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
+from app.ai.prompts.exceptions import PromptTemplateAlreadyRegisteredError
 from app.ai.prompts.repository import PromptRepository
 from app.ai.tools.registry import ToolAlreadyRegisteredError, ToolRegistry
 from app.ai.tools.schemas import ToolDefinition
@@ -154,6 +155,7 @@ class PluginRegistrar:
         with self._lock:
             self._ensure_open_unlocked()
             registered_tool_names: list[str] = []
+            registered_prompts: list[StagedPrompt] = []
             try:
                 if self._tool_registry is not None:
                     for staged in self._staging.tools:
@@ -162,7 +164,27 @@ class PluginRegistrar:
                             staged.handler,
                         )
                         registered_tool_names.append(staged.definition.name)
+
+                if self._prompt_repository is not None:
+                    for staged in self._staging.prompts:
+                        self._prompt_repository.register_plugin_template(
+                            plugin_id=self._plugin_id,
+                            name=staged.name,
+                            version=staged.version,
+                            source=self._resolve_prompt_source(staged),
+                        )
+                        registered_prompts.append(staged)
             except ToolAlreadyRegisteredError as exc:
+                self._rollback_prompt_registrations(registered_prompts)
+                if self._tool_registry is not None:
+                    for name in registered_tool_names:
+                        self._tool_registry.unregister(name)
+                raise PluginRegistrationError(str(exc)) from exc
+            except (
+                PromptTemplateAlreadyRegisteredError,
+                PluginRegistrationError,
+            ) as exc:
+                self._rollback_prompt_registrations(registered_prompts)
                 if self._tool_registry is not None:
                     for name in registered_tool_names:
                         self._tool_registry.unregister(name)
@@ -200,6 +222,31 @@ class PluginRegistrar:
         if committed.mcp_servers:
             kinds.append(PluginContributionKind.MCP_SERVER)
         return kinds
+
+    def _resolve_prompt_source(self, staged: StagedPrompt) -> str:
+        if staged.source is not None:
+            return staged.source
+        assert staged.path is not None
+        normalized = staged.path.replace("\\", "/")
+        if ".." in normalized.split("/"):
+            raise PluginRegistrationError("Template path must not contain '..'.")
+        template_path = (self._plugin_dir / staged.path).resolve()
+        plugin_root = self._plugin_dir.resolve()
+        if not template_path.is_relative_to(plugin_root):
+            raise PluginRegistrationError("Template path escapes plugin directory.")
+        if not template_path.is_file():
+            raise PluginRegistrationError("Template file not found.")
+        return template_path.read_text(encoding="utf-8")
+
+    def _rollback_prompt_registrations(self, registered: list[StagedPrompt]) -> None:
+        if self._prompt_repository is None:
+            return
+        for staged in registered:
+            self._prompt_repository.unregister_plugin_template(
+                plugin_id=self._plugin_id,
+                name=staged.name,
+                version=staged.version,
+            )
 
     def _ensure_open_unlocked(self) -> None:
         if self._closed:
