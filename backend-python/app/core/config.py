@@ -231,7 +231,9 @@ class Settings(BaseSettings):
     plugins_enabled: bool = False
     plugin_directories: list[str] = Field(default_factory=lambda: ["plugins"])
     plugin_allowlist: list[str] = Field(default_factory=list)
-    plugin_load_timeout_seconds: int = Field(default=30, ge=1)
+    # Cooperative loader wait for register(registrar) in a daemon thread; does not
+    # interrupt in-process plugin code (see Epic 08 § Registration timeout).
+    plugin_registration_wait_timeout_seconds: int = Field(default=30, ge=1)
 
     # OpenTelemetry configuration (honoured only when OBSERVABILITY_ENABLED=true).
     otel_service_name: str = "fullstack-ai-platform"

@@ -23,7 +23,7 @@ def plugin_settings(
         plugins_enabled=enabled,
         plugin_directories=directories or [str(FIXTURES_ROOT)],
         plugin_allowlist=allowlist or [],
-        plugin_load_timeout_seconds=timeout_seconds,
+        plugin_registration_wait_timeout_seconds=timeout_seconds,
     )
 
 

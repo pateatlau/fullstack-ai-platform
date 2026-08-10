@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import importlib
+import importlib.machinery
+import importlib.util
 import logging
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 from app.ai.plugins.exceptions import PluginRegistrationError
 from app.ai.plugins.manifest import (
@@ -215,14 +218,12 @@ class PluginLoader:
 
         seen_plugin_ids.add(manifest.plugin_id)
 
-        plugin_dir_str = str(plugin_dir.resolve())
-        if plugin_dir_str not in sys.path:
-            sys.path.append(plugin_dir_str)
-
-        module_name, attr_name = manifest.entrypoint.split(":", 1)
         try:
-            module = importlib.import_module(module_name)
-            register_fn = getattr(module, attr_name)
+            register_fn = _load_entrypoint_callable(
+                plugin_dir=plugin_dir,
+                plugin_id=manifest.plugin_id,
+                entrypoint=manifest.entrypoint,
+            )
         except Exception:
             logger.warning(
                 "Plugin entrypoint import failed.",
@@ -238,22 +239,11 @@ class PluginLoader:
             )
             return
 
-        if not callable(register_fn):
-            self._registry.mark_failed(
-                manifest=manifest,
-                failure=PluginLoadFailureReason(
-                    code="entrypoint_import_error",
-                    message="Plugin entrypoint is not callable.",
-                ),
-                load_duration_ms=_elapsed_ms(load_start),
-            )
-            return
-
         registrar = PluginRegistrar(
             plugin_id=manifest.plugin_id,
             plugin_dir=plugin_dir,
         )
-        timeout_seconds = self._settings.plugin_load_timeout_seconds
+        wait_timeout_seconds = self._settings.plugin_registration_wait_timeout_seconds
         registration_error: BaseException | None = None
         registration_complete = threading.Event()
 
@@ -266,7 +256,8 @@ class PluginLoader:
             finally:
                 registration_complete.set()
 
-        # Daemon thread: on timeout we return without waiting for register() to finish.
+        # Cooperative wait: loader stops waiting after N seconds; register() may
+        # continue in the daemon thread until it returns (in-process V2 boundary).
         thread = threading.Thread(
             target=_run_registration,
             name=f"plugin-register-{manifest.plugin_id}",
@@ -274,14 +265,15 @@ class PluginLoader:
         )
         thread.start()
 
-        if not registration_complete.wait(timeout=timeout_seconds):
+        if not registration_complete.wait(timeout=wait_timeout_seconds):
             registrar.close()
             self._registry.mark_failed(
                 manifest=manifest,
                 failure=PluginLoadFailureReason(
                     code="timeout",
                     message=(
-                        f"Plugin registration exceeded {timeout_seconds}s timeout"
+                        "Plugin registration did not complete within "
+                        f"{wait_timeout_seconds}s wait limit"
                     ),
                 ),
                 load_duration_ms=_elapsed_ms(load_start),
@@ -346,3 +338,96 @@ class PluginLoader:
 
 def _elapsed_ms(start: float) -> float:
     return round((time.monotonic() - start) * 1000.0, 3)
+
+
+def _sanitize_plugin_id(plugin_id: str) -> str:
+    return plugin_id.replace(".", "_").replace("-", "_")
+
+
+def _resolve_entrypoint_module_file(plugin_dir: Path, module_name: str) -> Path:
+    if not module_name or any(part in {"", ".."} for part in module_name.split(".")):
+        raise ValueError("Invalid entrypoint module name.")
+
+    module_file = plugin_dir.joinpath(*module_name.split(".")).with_suffix(".py")
+    if not module_file.is_file():
+        raise FileNotFoundError("Entrypoint module file not found.")
+
+    plugin_root = plugin_dir.resolve()
+    if not module_file.resolve().is_relative_to(plugin_root):
+        raise ValueError("Entrypoint module escapes plugin directory.")
+    return module_file
+
+
+def _register_plugin_package_modules(
+    *,
+    plugin_dir: Path,
+    plugin_id: str,
+    module_name: str,
+) -> str:
+    unique_root = f"_plugin_{_sanitize_plugin_id(plugin_id)}"
+    parts = module_name.split(".")
+    for index in range(1, len(parts)):
+        pkg_relative = parts[:index]
+        unique_pkg_name = f"{unique_root}.{'.'.join(pkg_relative)}"
+        if unique_pkg_name in sys.modules:
+            continue
+        pkg_dir = plugin_dir.joinpath(*pkg_relative)
+        spec = importlib.machinery.ModuleSpec(
+            unique_pkg_name,
+            loader=None,
+            is_package=True,
+        )
+        package = importlib.util.module_from_spec(spec)
+        package.__path__ = [str(pkg_dir)]  # type: ignore[attr-defined]
+        sys.modules[unique_pkg_name] = package
+    return f"{unique_root}.{module_name}"
+
+
+def _load_entrypoint_module(
+    *,
+    plugin_dir: Path,
+    plugin_id: str,
+    module_name: str,
+) -> ModuleType:
+    module_file = _resolve_entrypoint_module_file(plugin_dir, module_name)
+    full_module_name = _register_plugin_package_modules(
+        plugin_dir=plugin_dir,
+        plugin_id=plugin_id,
+        module_name=module_name,
+    )
+    cached = sys.modules.get(full_module_name)
+    if cached is not None:
+        return cached
+
+    spec = importlib.util.spec_from_file_location(full_module_name, module_file)
+    if spec is None or spec.loader is None:
+        raise ImportError("Unable to create entrypoint module spec.")
+
+    module = importlib.util.module_from_spec(spec)
+    parts = module_name.split(".")
+    module.__package__ = (
+        ".".join(full_module_name.split(".")[:-1]) if len(parts) > 1 else ""
+    )
+    sys.modules[full_module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_entrypoint_callable(
+    *,
+    plugin_dir: Path,
+    plugin_id: str,
+    entrypoint: str,
+) -> Callable[..., object]:
+    module_name, attr_name = entrypoint.split(":", 1)
+    if not attr_name:
+        raise ValueError("Invalid entrypoint callable name.")
+    module = _load_entrypoint_module(
+        plugin_dir=plugin_dir,
+        plugin_id=plugin_id,
+        module_name=module_name,
+    )
+    register_fn = getattr(module, attr_name)
+    if not callable(register_fn):
+        raise TypeError("Plugin entrypoint is not callable.")
+    return register_fn

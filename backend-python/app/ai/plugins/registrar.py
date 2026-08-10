@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +54,7 @@ class PluginRegistrar:
     def __init__(self, *, plugin_id: str, plugin_dir: Path) -> None:
         self._plugin_id = plugin_id
         self._plugin_dir = plugin_dir
+        self._lock = threading.Lock()
         self._closed = False
         self._committed = False
         self._staging = CommittedContributions()
@@ -79,8 +81,11 @@ class PluginRegistrar:
         definition: ToolDefinition,
         handler: ToolHandler,
     ) -> None:
-        self._ensure_open()
-        self._staging.tools.append(StagedTool(definition=definition, handler=handler))
+        with self._lock:
+            self._ensure_open_unlocked()
+            self._staging.tools.append(
+                StagedTool(definition=definition, handler=handler)
+            )
 
     def register_prompt_template(
         self,
@@ -90,18 +95,19 @@ class PluginRegistrar:
         source: str | None = None,
         path: str | None = None,
     ) -> None:
-        self._ensure_open()
-        if source is None and path is None:
-            raise PluginRegistrationError(
-                "register_prompt_template requires source or path."
+        with self._lock:
+            self._ensure_open_unlocked()
+            if source is None and path is None:
+                raise PluginRegistrationError(
+                    "register_prompt_template requires source or path."
+                )
+            if source is not None and path is not None:
+                raise PluginRegistrationError(
+                    "register_prompt_template accepts source or path, not both."
+                )
+            self._staging.prompts.append(
+                StagedPrompt(name=name, version=version, source=source, path=path)
             )
-        if source is not None and path is not None:
-            raise PluginRegistrationError(
-                "register_prompt_template accepts source or path, not both."
-            )
-        self._staging.prompts.append(
-            StagedPrompt(name=name, version=version, source=source, path=path)
-        )
 
     def register_workflow_node_type(
         self,
@@ -110,40 +116,42 @@ class PluginRegistrar:
         executor_factory: Callable[..., Any],
         config_schema: dict[str, Any] | None = None,
     ) -> None:
-        self._ensure_open()
-        self._staging.workflow_nodes.append(
-            StagedWorkflowNode(
-                node_type=node_type,
-                executor_factory=executor_factory,
-                config_schema=config_schema or {},
+        with self._lock:
+            self._ensure_open_unlocked()
+            self._staging.workflow_nodes.append(
+                StagedWorkflowNode(
+                    node_type=node_type,
+                    executor_factory=executor_factory,
+                    config_schema=config_schema or {},
+                )
             )
-        )
 
     def register_mcp_server(self, config: dict[str, Any]) -> None:
-        self._ensure_open()
-        self._staging.mcp_servers.append(StagedMcpServer(config=dict(config)))
+        with self._lock:
+            self._ensure_open_unlocked()
+            self._staging.mcp_servers.append(StagedMcpServer(config=dict(config)))
 
     def commit(self) -> None:
-        if self._closed:
-            raise PluginRegistrationError("Registrar is closed.")
-        if self._committed:
-            raise PluginRegistrationError("Registrar already committed.")
-        self._committed_contributions = CommittedContributions(
-            tools=list(self._staging.tools),
-            prompts=list(self._staging.prompts),
-            workflow_nodes=list(self._staging.workflow_nodes),
-            mcp_servers=list(self._staging.mcp_servers),
-        )
-        self._staging = CommittedContributions()
-        self._committed = True
+        with self._lock:
+            self._ensure_open_unlocked()
+            self._committed_contributions = CommittedContributions(
+                tools=list(self._staging.tools),
+                prompts=list(self._staging.prompts),
+                workflow_nodes=list(self._staging.workflow_nodes),
+                mcp_servers=list(self._staging.mcp_servers),
+            )
+            self._staging = CommittedContributions()
+            self._committed = True
 
     def rollback(self) -> None:
-        self._staging = CommittedContributions()
+        with self._lock:
+            self._staging = CommittedContributions()
 
     def close(self) -> None:
-        """Reject further staging (e.g. after registration timeout)."""
-        self._closed = True
-        self.rollback()
+        """Reject further staging (e.g. after registration wait timeout)."""
+        with self._lock:
+            self._closed = True
+            self._staging = CommittedContributions()
 
     def contribution_kinds(self) -> list[PluginContributionKind]:
         """Contribution kinds present after ``commit()``."""
@@ -159,7 +167,7 @@ class PluginRegistrar:
             kinds.append(PluginContributionKind.MCP_SERVER)
         return kinds
 
-    def _ensure_open(self) -> None:
+    def _ensure_open_unlocked(self) -> None:
         if self._closed:
             raise PluginRegistrationError(
                 "Plugin registration is closed; contributions cannot be staged."

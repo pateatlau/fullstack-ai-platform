@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -133,11 +134,15 @@ class TestPluginLoader:
         assert registry.list_records() == []
 
     def test_loads_minimal_plugin(self) -> None:
+        plugin_dir = str((FIXTURES_ROOT / "minimal-plugin").resolve())
+        sys_path_before = list(sys.path)
         report, registry = load_plugins(
             plugin_settings(
                 allowlist=["com.test.minimal"],
             )
         )
+        assert plugin_dir not in sys.path
+        assert sys.path == sys_path_before
         assert report.loaded_count == 1
         record = registry.get("com.test.minimal")
         assert record is not None
@@ -197,7 +202,7 @@ class TestPluginLoader:
         assert record is not None
         assert record.failure is not None
         assert record.failure.code == "timeout"
-        assert "1s timeout" in record.failure.message
+        assert "within 1s wait limit" in record.failure.message
         # Slow plugin sleeps 2s; load must not block until it finishes.
         assert report.total_load_duration_ms < 1800
         assert record.load_duration_ms < 1800
