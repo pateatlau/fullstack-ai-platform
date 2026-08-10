@@ -1,0 +1,7 @@
+plugin_id: com.test.prompt
+name: Prompt Plugin
+version: 1.0.0
+api_version: "1"
+entrypoint: prompt_plugin.register:register
+contributions:
+  - prompt

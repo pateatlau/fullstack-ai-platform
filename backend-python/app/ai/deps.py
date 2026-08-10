@@ -37,7 +37,9 @@ from app.ai.agent.runtime.factory import create_default_agent
 from app.ai.documents.pipeline import IngestionPipeline
 from app.ai.embeddings.factory import create_embedding_provider
 from app.ai.interfaces.embedding_provider import EmbeddingProvider
-from app.ai.prompts.manager import PromptManager, create_prompt_manager
+from app.ai.prompts.manager import PromptManager
+from app.ai.prompts.repository import PromptRepository
+from app.ai.prompts.renderer import PromptRenderer
 from app.ai.rag.citations import CitationBuilder
 from app.ai.rag.compress import FaithfulContextCompressor
 from app.ai.rag.context_builder import ContextBuilder
@@ -76,9 +78,18 @@ def get_ai_settings(
 
 
 @lru_cache
+def get_prompt_repository() -> PromptRepository:
+    """Return the process-wide ``PromptRepository`` singleton."""
+    return PromptRepository()
+
+
+@lru_cache
 def get_prompt_manager() -> PromptManager:
     """Return the process-wide ``PromptManager`` singleton (template cache warm)."""
-    return create_prompt_manager()
+    return PromptManager(
+        repository=get_prompt_repository(),
+        renderer=PromptRenderer(),
+    )
 
 
 @lru_cache

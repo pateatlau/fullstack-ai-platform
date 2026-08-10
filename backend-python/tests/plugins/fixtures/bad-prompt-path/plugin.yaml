@@ -1,0 +1,7 @@
+plugin_id: com.test.prompt.badpath
+name: Bad Prompt Path Plugin
+version: 1.0.0
+api_version: "1"
+entrypoint: bad_path_plugin.register:register
+contributions:
+  - prompt

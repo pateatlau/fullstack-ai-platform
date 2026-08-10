@@ -8,6 +8,7 @@ from app.ai.plugins.bootstrap import load_plugins as orchestrate_load_plugins
 from app.ai.plugins.models import PluginLoadReport
 from app.ai.plugins.registry import PluginRegistry
 from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
+from app.ai.prompts.repository import PromptRepository
 from app.ai.tools.registry import ToolRegistry
 from app.core.config import Settings
 
@@ -33,16 +34,19 @@ def load_plugins(
     settings: Settings,
     *,
     tool_registry: ToolRegistry | None = None,
+    prompt_repository: PromptRepository | None = None,
     plugin_registry: PluginRegistry | None = None,
     workflow_plugin_registry: WorkflowPluginRegistry | None = None,
-) -> tuple[PluginLoadReport, PluginRegistry, ToolRegistry]:
+) -> tuple[PluginLoadReport, PluginRegistry, ToolRegistry, PromptRepository]:
     registry = plugin_registry or PluginRegistry()
     tools = tool_registry or ToolRegistry()
+    prompts = prompt_repository or PromptRepository()
     workflow_registry = workflow_plugin_registry or WorkflowPluginRegistry()
     report = orchestrate_load_plugins(
         settings,
         tool_registry=tools,
+        prompt_repository=prompts,
         plugin_registry=registry,
         workflow_plugin_registry=workflow_registry,
     )
-    return report, registry, tools
+    return report, registry, tools, prompts

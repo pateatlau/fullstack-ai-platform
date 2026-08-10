@@ -14,6 +14,19 @@ class PromptNotFoundError(LookupError):
         )
 
 
+class PromptTemplateAlreadyRegisteredError(ValueError):
+    """Raised when a prompt identity is already registered."""
+
+    def __init__(self, category: str, name: str, version: str) -> None:
+        self.category = category
+        self.name = name
+        self.version = version
+        super().__init__(
+            f"Prompt template already registered: category={category!r}, "
+            f"name={name!r}, version={version!r}"
+        )
+
+
 class PromptRenderError(ValueError):
     """Raised when template rendering fails (e.g. missing variables)."""
 
