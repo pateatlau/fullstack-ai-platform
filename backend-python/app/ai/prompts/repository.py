@@ -39,14 +39,16 @@ class PromptRepository:
         if cached is not None:
             return cached
 
-        overlay_source = self._plugin_overlay.get(key)
-        if overlay_source is not None:
-            template = self._environment.from_string(overlay_source)
-            self._cache[key] = template
-            return template
+        if self._template_exists_on_filesystem(category, name, version):
+            source = self._resolve_template_path(category, name, version).read_text(
+                encoding="utf-8"
+            )
+        else:
+            overlay_source = self._plugin_overlay.get(key)
+            if overlay_source is None:
+                raise PromptNotFoundError(category, name, version)
+            source = overlay_source
 
-        template_path = self._resolve_template_path(category, name, version)
-        source = template_path.read_text(encoding="utf-8")
         template = self._environment.from_string(source)
         self._cache[key] = template
         return template

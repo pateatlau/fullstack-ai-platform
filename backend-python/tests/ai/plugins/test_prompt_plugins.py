@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -11,9 +12,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from app.ai.observability.tracing.provider import TracerRegistry
 from app.ai.plugins import PluginContributionKind, PluginStatus
+from app.ai.plugins.exceptions import PluginRegistrationError
 from app.ai.plugins.registrar import PluginRegistrar
 from app.ai.prompts.manager import PromptManager
 from app.ai.prompts.repository import PromptRepository
+from app.ai.tools.registry import ToolRegistry
+from app.ai.tools.schemas import ToolDefinition, ToolExecutionContext, ToolResult
 from app.core.config import Settings
 from tests.ai.plugins.conftest import load_plugins, plugin_settings
 
@@ -29,6 +33,28 @@ def prompt_repository() -> PromptRepository:
 @pytest.fixture
 def prompt_manager(prompt_repository: PromptRepository) -> PromptManager:
     return PromptManager(repository=prompt_repository)
+
+
+class TestPromptRepositoryLookup:
+    def test_filesystem_precedence_over_plugin_overlay(self, tmp_path: Path) -> None:
+        prompts_root = tmp_path / "prompts"
+        category_dir = prompts_root / "plugin" / "com.test.precedence"
+        category_dir.mkdir(parents=True)
+        (category_dir / "greeting.v1.j2").write_text(
+            "Filesystem {{ user_name }}",
+            encoding="utf-8",
+        )
+        repository = PromptRepository(prompts_root=prompts_root)
+        repository._plugin_overlay[("plugin/com.test.precedence", "greeting", "1")] = (
+            "Overlay {{ user_name }}"
+        )
+
+        template = repository.get_template(
+            "plugin/com.test.precedence", "greeting", "1"
+        )
+        rendered = template.render({"user_name": "Win"})
+
+        assert rendered == "Filesystem Win"
 
 
 class TestPromptPluginLoad:
@@ -155,6 +181,64 @@ class TestRegistrarPromptValidation:
         with pytest.raises(Exception, match="\\.\\."):
             registrar.commit()
 
+    def test_commit_rolls_back_partial_registrations_on_unexpected_error(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        tool_registry = ToolRegistry()
+        prompt_repository = PromptRepository()
+        registrar = PluginRegistrar(
+            plugin_id="com.test.rollback",
+            plugin_dir=tmp_path,
+            tool_registry=tool_registry,
+            prompt_repository=prompt_repository,
+        )
+
+        class _Handler:
+            async def execute(
+                self,
+                args: dict[str, object],
+                context: ToolExecutionContext,
+            ) -> ToolResult:
+                del args, context
+                return ToolResult(success=True)
+
+        tool_name = "com.test.rollback.echo"
+        registrar.register_tool(
+            ToolDefinition(name=tool_name, description="echo", parameters={}),
+            _Handler(),
+        )
+        registrar.register_prompt_template(
+            name="first",
+            version="1",
+            source="First {{ name }}",
+        )
+        registrar.register_prompt_template(
+            name="second",
+            version="1",
+            source="Second {{ name }}",
+        )
+
+        original_register = prompt_repository.register_plugin_template
+
+        def _register_with_failure(**kwargs: object) -> None:
+            if kwargs.get("name") == "second":
+                raise OSError("Simulated template read failure")
+            original_register(**kwargs)  # type: ignore[arg-type]
+
+        with (
+            patch.object(
+                prompt_repository,
+                "register_plugin_template",
+                side_effect=_register_with_failure,
+            ),
+            pytest.raises(PluginRegistrationError, match="Simulated template read"),
+        ):
+            registrar.commit()
+
+        assert tool_registry.get(tool_name) is None
+        assert prompt_repository.list_plugin_templates() == []
+
 
 class TestPromptPluginObservability:
     @pytest.fixture(autouse=True)
@@ -203,17 +287,22 @@ class TestPromptPluginObservability:
         prompt_manager: PromptManager,
         prompt_repository: PromptRepository,
     ) -> None:
-        exporter = InMemorySpanExporter()
-        TracerRegistry.reset_for_tests()
-        load_plugins(
-            plugin_settings(allowlist=[PLUGIN_ID]),
-            prompt_repository=prompt_repository,
+        TracerRegistry.initialize(
+            Settings(openai_api_key="test-key", observability_enabled=False),
         )
-        rendered = prompt_manager.render(
-            GREETING_CATEGORY,
-            "greeting",
-            "1",
-            {"user_name": "Off"},
-        )
+        assert TracerRegistry.is_enabled() is False
+
+        with patch("app.ai.observability.tracing.spans.get_tracer") as get_tracer_mock:
+            load_plugins(
+                plugin_settings(allowlist=[PLUGIN_ID]),
+                prompt_repository=prompt_repository,
+            )
+            rendered = prompt_manager.render(
+                GREETING_CATEGORY,
+                "greeting",
+                "1",
+                {"user_name": "Off"},
+            )
+
         assert rendered == "Hello Off!"
-        assert len(exporter.get_finished_spans()) == 0
+        get_tracer_mock.assert_not_called()
