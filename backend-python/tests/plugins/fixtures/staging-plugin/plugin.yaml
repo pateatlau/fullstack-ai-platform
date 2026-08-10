@@ -1,0 +1,8 @@
+plugin_id: com.test.staging
+name: Staging Plugin
+version: 1.0.0
+api_version: "1"
+entrypoint: staging_plugin.register:register
+contributions:
+  - tool
+  - prompt

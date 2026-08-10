@@ -224,6 +224,17 @@ class Settings(BaseSettings):
     # Flag-off keeps all Epic 06 pipeline paths unchanged.
     observability_enabled: bool = False
 
+    # V2 Epic 8 Phase 1: Plugin architecture flag (default false).
+    # When true: discover and load plugins from configured directories at startup.
+    # Tool/prompt/workflow/MCP registry wiring and REST API follow in later phases.
+    # Flag-off keeps all Epic 07 pipeline paths unchanged.
+    plugins_enabled: bool = False
+    plugin_directories: list[str] = Field(default_factory=lambda: ["plugins"])
+    plugin_allowlist: list[str] = Field(default_factory=list)
+    # Cooperative loader wait for register(registrar) in a daemon thread; does not
+    # interrupt in-process plugin code (see Epic 08 § Registration timeout).
+    plugin_registration_wait_timeout_seconds: int = Field(default=30, ge=1)
+
     # OpenTelemetry configuration (honoured only when OBSERVABILITY_ENABLED=true).
     otel_service_name: str = "fullstack-ai-platform"
     # Empty string selects the console span exporter (dev default).

@@ -1,0 +1,5 @@
+plugin_id: com.test.bad-entrypoint
+name: Bad Entrypoint Plugin
+version: 1.0.0
+api_version: "1"
+entrypoint: missing_module.register:register

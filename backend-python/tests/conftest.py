@@ -68,6 +68,7 @@ def _isolate_rate_limit_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]
     monkeypatch.setenv("MEMORY_ENABLED", "false")
     monkeypatch.setenv("WORKFLOW_ENGINE_ENABLED", "false")
     monkeypatch.setenv("OBSERVABILITY_ENABLED", "false")
+    monkeypatch.setenv("PLUGINS_ENABLED", "false")
     reset_rate_limiter()
     get_settings.cache_clear()
     yield
