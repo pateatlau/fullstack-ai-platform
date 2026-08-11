@@ -42,6 +42,7 @@ def _environment(
         agent_runtime_enabled=agent_runtime_enabled,
         workflow_engine_enabled=workflow_engine_enabled,
         plugins_enabled=plugins_enabled,
+        hitl_enabled=False,
         postgres_available=postgres_available,
         pgvector_available=pgvector_available,
     )

@@ -106,6 +106,45 @@ async def test_cli_level_all_hard_fails_without_prerequisites(
 
 
 @pytest.mark.anyio
+async def test_cli_level_hitl_skips_when_flag_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "hitl-skip-report.json"
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    get_settings.cache_clear()
+    monkeypatch.setenv("HITL_ENABLED", "false")
+
+    exit_code = await run_eval(_args(level="hitl", output=output))
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["results"]
+    assert all(result["skipped"] for result in payload["results"])
+    assert exit_code == 0
+
+
+@pytest.mark.anyio
+async def test_cli_level_hitl_agent_runs_when_flag_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "hitl-agent-report.json"
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    get_settings.cache_clear()
+    monkeypatch.setenv("HITL_ENABLED", "true")
+    monkeypatch.setenv("AGENT_RUNTIME_ENABLED", "true")
+
+    exit_code = await run_eval(_args(level="hitl", output=output))
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    agent_results = [
+        result
+        for result in payload["results"]
+        if result["case_id"].startswith("hitl_agent")
+    ]
+    assert len(agent_results) == 3
+    assert exit_code in {0, 1}
+
+
+@pytest.mark.anyio
 async def test_cli_level_all_smoke(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

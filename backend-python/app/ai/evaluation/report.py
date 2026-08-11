@@ -23,6 +23,7 @@ _ALL_LEVELS: tuple[EvalLevel, ...] = (
     "agent",
     "workflow",
     "plugin",
+    "hitl",
 )
 
 
@@ -33,6 +34,7 @@ class EvalRunEnvironment:
     agent_runtime_enabled: bool
     workflow_engine_enabled: bool
     plugins_enabled: bool
+    hitl_enabled: bool
     postgres_available: bool
     pgvector_available: bool
 
@@ -146,6 +148,7 @@ def print_console_summary(report: EvalRunReport) -> None:
         print(f"    agent_runtime_enabled: {env.agent_runtime_enabled}")
         print(f"    workflow_engine_enabled: {env.workflow_engine_enabled}")
         print(f"    plugins_enabled: {env.plugins_enabled}")
+        print(f"    hitl_enabled: {env.hitl_enabled}")
         print(f"    postgres_available: {env.postgres_available}")
         print(f"    pgvector_available: {env.pgvector_available}")
 
@@ -237,6 +240,7 @@ def load_json_report(path: Path) -> EvalRunReport:
             agent_runtime_enabled=bool(env_raw.get("agent_runtime_enabled")),
             workflow_engine_enabled=bool(env_raw.get("workflow_engine_enabled")),
             plugins_enabled=bool(env_raw.get("plugins_enabled")),
+            hitl_enabled=bool(env_raw.get("hitl_enabled")),
             postgres_available=bool(env_raw.get("postgres_available")),
             pgvector_available=bool(env_raw.get("pgvector_available")),
         )
