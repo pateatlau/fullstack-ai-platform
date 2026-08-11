@@ -2,7 +2,7 @@
 epic: v2-09
 title: Human-in-the-Loop
 status: in_progress
-version: 1.7
+version: 1.8
 depends_on: [v2-06, v2-07, v2-08]
 provides:
   [
@@ -976,7 +976,7 @@ _Re-verified in Epic 09 Phase 0 (2026-08-11); source of truth: [post-mvp-v2-epic
 | 3     | Agent Approval Decision & Resume           | L      | Completed   |
 | 4     | Workflow Approval Enhancements             | M      | Completed   |
 | 5     | Workflow Graph Guard & MCP/Plugin Coverage | M      | Completed   |
-| 6     | Unified Approval REST API & Audit          | S      | Not Started |
+| 6     | Unified Approval REST API & Audit          | S      | Completed   |
 | 7     | HITL Observability                         | S      | Not Started |
 | 8     | Reference Scenarios & Eval Cases           | M      | Not Started |
 | 9     | Frontend Approval Inbox & Audit UI         | S      | Not Started |
@@ -1463,7 +1463,7 @@ Add the `GraphValidator` reachability guard so approval-required tools cannot be
 **Exit criteria**
 
 - [x] Graph guard and coverage tests pass.
-- [ ] User confirmation to proceed to Phase 6.
+- [x] User confirmation to proceed to Phase 6.
 
 **Rollback**
 
@@ -1478,14 +1478,14 @@ Add the `GraphValidator` reachability guard so approval-required tools cannot be
 | Graph guard tests         | ✅ 37 passed (`test_graph_validator` + `test_coverage_mcp_plugin`) |
 | MCP/plugin coverage tests | ✅ included in verify suite above                              |
 | Phase 5 status            | ✅ Completed                                                   |
-| Phase 6 authorized        | ⬜ Pending user confirmation                                   |
+| Phase 6 authorized        | ✅ User confirmed                                              |
 
 ---
 
 # Phase 6 — Unified Approval REST API & Audit
 
 **Effort:** S
-**Status:** Not Started
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1502,27 +1502,27 @@ Expose the read-only, cross-surface approval inbox/audit API and extend health w
 
 ## API Implementation
 
-- [ ] `GET /api/approvals` — merge `agent_tool_approvals` (owner-scoped) and workflow approval node executions (owner-scoped via `WorkflowStore`) into `ApprovalAuditEntry[]`; support `status`/`kind` filters and pagination. `status`/`kind` filter values are additive-extensible for future richer filtering (edited-state, plugin/MCP origin) — `TODO(future):` per Part I § Future Enhancements, not implemented in this phase.
-- [ ] `GET /api/approvals/{id}` — detail; `404` when not found or not owned; include `approval_correlation_id` and `revision_count`.
-- [ ] `GET /api/approvals/{id}/revisions` — full `ApprovalRevision[]` for either kind, ordered by `revision_number`; `404` when not found or not owned.
-- [ ] Return `503 feature_disabled` when `HITL_ENABLED=false`.
-- [ ] Include `decide_url` per entry (kind-specific action endpoint).
+- [x] `GET /api/approvals` — merge `agent_tool_approvals` (owner-scoped) and workflow approval node executions (owner-scoped via `WorkflowStore`) into `ApprovalAuditEntry[]`; support `status`/`kind` filters and pagination. `status`/`kind` filter values are additive-extensible for future richer filtering (edited-state, plugin/MCP origin) — `TODO(future):` per Part I § Future Enhancements, not implemented in this phase.
+- [x] `GET /api/approvals/{id}` — detail; `404` when not found or not owned; include `approval_correlation_id` and `revision_count`.
+- [x] `GET /api/approvals/{id}/revisions` — full `ApprovalRevision[]` for either kind, ordered by `revision_number`; `404` when not found or not owned.
+- [x] Return `503 feature_disabled` when `HITL_ENABLED=false`.
+- [x] Include `decide_url` per entry (kind-specific action endpoint).
 
 ## Health Extension
 
-- [ ] Add `hitl_enabled`, `hitl_pending_approvals_count` to health payload.
+- [x] Add `hitl_enabled`, `hitl_pending_approvals_count` to health payload.
 
 ## Mount Router
 
-- [ ] Include router in `app/main.py`.
+- [x] Include router in `app/main.py`.
 
 ## Testing
 
-- [ ] Router tests with flag on/off.
-- [ ] Assert list is owner-scoped (no cross-user visibility).
-- [ ] Assert responses exclude secrets/paths beyond documented bounds.
-- [ ] Assert pagination and filter params behave correctly across mixed-kind result sets.
-- [ ] Assert `GET /api/approvals/{id}/revisions` returns revisions in order and 404s for non-owned ids.
+- [x] Router tests with flag on/off.
+- [x] Assert list is owner-scoped (no cross-user visibility).
+- [x] Assert responses exclude secrets/paths beyond documented bounds.
+- [x] Assert pagination and filter params behave correctly across mixed-kind result sets.
+- [x] Assert `GET /api/approvals/{id}/revisions` returns revisions in order and 404s for non-owned ids.
 
 **Verify**
 
@@ -1535,7 +1535,7 @@ Expose the read-only, cross-surface approval inbox/audit API and extend health w
 
 **Exit criteria**
 
-- [ ] Router tests pass.
+- [x] Router tests pass.
 - [ ] User confirmation to proceed to Phase 7.
 
 **Rollback**
@@ -1544,15 +1544,16 @@ Expose the read-only, cross-surface approval inbox/audit API and extend health w
 
 **Completion Record**
 
-| Metric                 | Result          |
-| ---------------------- | --------------- |
-| Lint                   | Pending Phase 6 |
-| Typecheck              | Pending Phase 6 |
-| Approvals router tests | Pending Phase 6 |
-| Revisions endpoint tests | Pending Phase 6 |
-| Health tests           | Pending Phase 6 |
-| Phase 6 status         | Not Started     |
-| Phase 7 authorized     | Pending         |
+| Metric                   | Result                                                         |
+| ------------------------ | -------------------------------------------------------------- |
+| Lint                     | ✅ PASS                                                        |
+| Typecheck                | ✅ PASS — 0 errors (changed modules)                           |
+| Approvals router tests   | ✅ 8 passed (`tests/test_approvals_router.py`)                 |
+| Approvals store tests    | ✅ 1 passed (`tests/ai/hitl/test_approvals_store.py`)          |
+| Revisions endpoint tests | ✅ included in router verify suite above                       |
+| Health tests             | ✅ updated (`test_health`, `test_health_includes_hitl_fields`) |
+| Phase 6 status           | ✅ Completed                                                   |
+| Phase 7 authorized       | ⬜ Pending user confirmation                                   |
 
 ---
 
@@ -1991,3 +1992,4 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 | 1.5     | 2026-08-11 | Phase 3 agent approval decision & resume complete — `AgentApprovalService.revise()`/`decide()`/`approve_and_resume()`, `AgentExecutor.resume_from_approval()`, REST endpoints (`POST …/revise`, `POST …/decide`, `GET …/revisions`), `ChatStore.update_message`, 29-test verify suite; PR hardening (SSE stream cleanup, revision row lock, `AgentApprovalStore` protocol). Part II only. |
 | 1.6     | 2026-08-11 | Phase 4 workflow approval enhancements complete — `edited_arguments`/`reason` on workflow decisions, `ApprovalDecisionRequest`, `ApprovalRevision` append on edit, `ApprovalResult` from `apply_decision`, optional approve/reject body; 39-test verify suite. Part II only. |
 | 1.7     | 2026-08-11 | Phase 5 workflow graph guard & MCP/plugin coverage complete — `GraphValidator` HITL reachability guard (flag-gated), `WorkflowManager` wiring, MCP/plugin `requires_approval` integration tests; 37-test verify suite. Part II only. |
+| 1.8     | 2026-08-11 | Phase 6 unified approval REST API & audit complete — `ApprovalsStore` aggregation, `GET /api/approvals` list/detail, cross-kind revisions endpoint, health HITL fields, 8-test router verify suite + store integration test. Part II only. |

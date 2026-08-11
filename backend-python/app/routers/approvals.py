@@ -6,9 +6,9 @@ import asyncio
 import contextlib
 import uuid
 from collections.abc import AsyncIterator
-from typing import NoReturn
+from typing import Literal, NoReturn
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from app.ai.agent.adapters.chat_adapter import _chat_agent_system_prompt
@@ -20,7 +20,11 @@ from app.ai.agent.models.request import AgentRequest
 from app.ai.agent.runtime.default_agent import DefaultAgent
 from app.ai.agent.streaming.adapter import sse_frame_from_agent_event
 from app.ai.agent.streaming.publisher import QueueStreamPublisher
-from app.ai.deps import get_agent_approval_service, get_agent_runtime
+from app.ai.deps import (
+    get_agent_approval_service,
+    get_agent_runtime,
+    get_approvals_store,
+)
 from app.ai.hitl.exceptions import (
     ApprovalDecisionConflictError,
     ApprovalNotFoundError,
@@ -29,6 +33,7 @@ from app.ai.hitl.exceptions import (
 )
 from app.ai.hitl.models import AgentToolApproval, ApprovalKind, ApprovalStatus
 from app.ai.hitl.service import AgentApprovalService
+from app.ai.hitl.store import ApprovalsStore
 from app.ai.tools.schemas import ToolExecutionContext
 from app.core.caller import CallerContext, require_authenticated_caller
 from app.core.config import Settings, get_settings
@@ -37,10 +42,14 @@ from app.core.logging import bind_context
 from app.db.models import ChatMessage
 from app.middleware.correlation_id import get_request_id
 from app.schemas.approvals import (
+    ApprovalAuditEntryResponse,
+    ApprovalAuditListResponse,
     ApprovalDecideRequest,
     ApprovalResultResponse,
     ApprovalRevisionResponse,
     ApprovalReviseRequest,
+    DEFAULT_APPROVALS_LIST_LIMIT,
+    MAX_APPROVALS_LIST_LIMIT,
 )
 from app.schemas.chat import ErrorFrame
 from app.services.chat_service import format_sse
@@ -116,6 +125,63 @@ def _build_resume_request(
     )
 
 
+@router.get("/api/approvals", response_model=ApprovalAuditListResponse)
+async def list_approvals(
+    caller: CallerContext = Depends(require_authenticated_caller),
+    settings: Settings = Depends(get_settings),
+    approvals_store: ApprovalsStore = Depends(get_approvals_store),
+    status: Literal["pending", "approved", "rejected", "expired", "cancelled"]
+    | None = Query(default=None),
+    kind: Literal["agent_tool", "workflow_node"] | None = Query(default=None),
+    limit: int = Query(
+        default=DEFAULT_APPROVALS_LIST_LIMIT,
+        ge=1,
+        le=MAX_APPROVALS_LIST_LIMIT,
+    ),
+    offset: int = Query(default=0, ge=0),
+) -> ApprovalAuditListResponse:
+    assert caller.user_id is not None
+    bind_context(user_id=str(caller.user_id))
+    _require_hitl_enabled(settings)
+
+    parsed_status = ApprovalStatus(status) if status is not None else None
+    parsed_kind = ApprovalKind(kind) if kind is not None else None
+    entries, total = await approvals_store.list_for_owner(
+        caller.user_id,
+        status=parsed_status,
+        kind=parsed_kind,
+        limit=limit,
+        offset=offset,
+    )
+    return ApprovalAuditListResponse(
+        approvals=[ApprovalAuditEntryResponse.from_domain(item) for item in entries],
+        limit=limit,
+        offset=offset,
+        total=total,
+    )
+
+
+@router.get("/api/approvals/{approval_id}", response_model=ApprovalAuditEntryResponse)
+async def get_approval(
+    approval_id: uuid.UUID,
+    caller: CallerContext = Depends(require_authenticated_caller),
+    settings: Settings = Depends(get_settings),
+    approvals_store: ApprovalsStore = Depends(get_approvals_store),
+) -> ApprovalAuditEntryResponse:
+    assert caller.user_id is not None
+    bind_context(user_id=str(caller.user_id))
+    _require_hitl_enabled(settings)
+
+    entry = await approvals_store.get_for_owner(approval_id, owner_id=caller.user_id)
+    if entry is None:
+        raise AppError(
+            code="approval_not_found",
+            message=f"Approval {approval_id} not found or not owned by caller.",
+            status_code=404,
+        )
+    return ApprovalAuditEntryResponse.from_domain(entry)
+
+
 @router.post(
     "/api/approvals/{approval_id}/revise",
     response_model=ApprovalRevisionResponse,
@@ -152,17 +218,16 @@ async def list_approval_revisions(
     approval_id: uuid.UUID,
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
-    approval_service: AgentApprovalService = Depends(get_agent_approval_service),
+    approvals_store: ApprovalsStore = Depends(get_approvals_store),
 ) -> list[ApprovalRevisionResponse]:
     assert caller.user_id is not None
     bind_context(user_id=str(caller.user_id))
     _require_hitl_enabled(settings)
 
     try:
-        revisions = await approval_service.list_revisions(
+        revisions = await approvals_store.list_revisions_for_owner(
             approval_id,
             owner_id=caller.user_id,
-            approval_kind=ApprovalKind.AGENT_TOOL,
         )
     except HitlError as exc:
         _raise_hitl_error(exc)

@@ -11,15 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.hitl.exceptions import ApprovalDecisionConflictError, ApprovalNotFoundError
 from app.ai.hitl.models import (
     AgentToolApproval,
+    ApprovalAuditEntry,
     ApprovalKind,
     ApprovalRevision,
     ApprovalStatus,
     ProposedToolCall,
 )
+from app.ai.workflow.models import ApprovalDecision, NodeStatus, NodeType
 from app.db.models import (
     AgentToolApprovalRecord,
     ApprovalRevisionRecord,
     WorkflowNodeExecutionRecord,
+    WorkflowRunRecord,
 )
 
 
@@ -300,6 +303,320 @@ class AgentToolApprovalStore:
             .order_by(ApprovalRevisionRecord.revision_number.asc())
         )
         return [_revision_to_domain(row) for row in rows]
+
+
+class ApprovalsStore:
+    """Read-only aggregation across agent-tool and workflow-node approvals."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+        self._agent_store = AgentToolApprovalStore(session)
+
+    async def list_for_owner(
+        self,
+        owner_id: uuid.UUID,
+        *,
+        status: ApprovalStatus | None = None,
+        kind: ApprovalKind | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[ApprovalAuditEntry], int]:
+        entries: list[ApprovalAuditEntry] = []
+
+        if kind is None or kind is ApprovalKind.AGENT_TOOL:
+            agent_rows = await self._agent_store.list_for_owner(
+                owner_id,
+                status=status,
+            )
+            for approval in agent_rows:
+                entries.append(_agent_audit_entry(approval, revision_count=0))
+
+        if kind is None or kind is ApprovalKind.WORKFLOW_NODE:
+            workflow_rows = await self._list_workflow_approvals_for_owner(
+                owner_id,
+                status=status,
+            )
+            for execution, run_id in workflow_rows:
+                entries.append(
+                    _workflow_audit_entry(execution, run_id=run_id, revision_count=0)
+                )
+
+        entries.sort(key=lambda item: item.requested_at, reverse=True)
+        revision_counts = await self._revision_counts_for_entries(entries)
+        entries = [
+            entry.model_copy(
+                update={
+                    "revision_count": revision_counts.get((entry.id, entry.kind), 0)
+                }
+            )
+            for entry in entries
+        ]
+        total = len(entries)
+        page = entries[offset : offset + limit]
+        return page, total
+
+    async def get_for_owner(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+    ) -> ApprovalAuditEntry | None:
+        agent = await self._agent_store.get_for_owner(approval_id, owner_id=owner_id)
+        if agent is not None:
+            revision_count = await self._revision_count(
+                approval_id,
+                approval_kind=ApprovalKind.AGENT_TOOL,
+            )
+            return _agent_audit_entry(agent, revision_count=revision_count)
+
+        workflow = await self._get_workflow_approval_for_owner(
+            approval_id,
+            owner_id=owner_id,
+        )
+        if workflow is None:
+            return None
+        execution, run_id = workflow
+        revision_count = await self._revision_count(
+            approval_id,
+            approval_kind=ApprovalKind.WORKFLOW_NODE,
+        )
+        return _workflow_audit_entry(
+            execution,
+            run_id=run_id,
+            revision_count=revision_count,
+        )
+
+    async def list_revisions_for_owner(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+    ) -> list[ApprovalRevision]:
+        entry = await self.get_for_owner(approval_id, owner_id=owner_id)
+        if entry is None:
+            raise ApprovalNotFoundError(
+                f"Approval {approval_id} not found or not owned by caller."
+            )
+        return await self._agent_store.list_revisions(
+            approval_id,
+            approval_kind=entry.kind,
+        )
+
+    async def count_pending(self) -> int:
+        agent_pending = await self._session.scalar(
+            select(func.count())
+            .select_from(AgentToolApprovalRecord)
+            .where(AgentToolApprovalRecord.status == ApprovalStatus.PENDING.value)
+        )
+        workflow_pending = await self._session.scalar(
+            select(func.count())
+            .select_from(WorkflowNodeExecutionRecord)
+            .join(
+                WorkflowRunRecord,
+                WorkflowRunRecord.id == WorkflowNodeExecutionRecord.run_id,
+            )
+            .where(
+                WorkflowNodeExecutionRecord.node_type == NodeType.APPROVAL.value,
+                WorkflowNodeExecutionRecord.status == NodeStatus.WAITING_APPROVAL.value,
+                WorkflowNodeExecutionRecord.decision.is_(None),
+            )
+        )
+        return int(agent_pending or 0) + int(workflow_pending or 0)
+
+    async def _list_workflow_approvals_for_owner(
+        self,
+        owner_id: uuid.UUID,
+        *,
+        status: ApprovalStatus | None,
+    ) -> list[tuple[WorkflowNodeExecutionRecord, uuid.UUID]]:
+        stmt = (
+            select(WorkflowNodeExecutionRecord, WorkflowRunRecord.id)
+            .join(
+                WorkflowRunRecord,
+                WorkflowRunRecord.id == WorkflowNodeExecutionRecord.run_id,
+            )
+            .where(
+                WorkflowRunRecord.owner_id == owner_id,
+                WorkflowNodeExecutionRecord.node_type == NodeType.APPROVAL.value,
+            )
+            .order_by(WorkflowNodeExecutionRecord.started_at.desc())
+        )
+        stmt = _apply_workflow_status_filter(stmt, status)
+        rows = await self._session.execute(stmt)
+        return [(execution, run_id) for execution, run_id in rows.all()]
+
+    async def _get_workflow_approval_for_owner(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+    ) -> tuple[WorkflowNodeExecutionRecord, uuid.UUID] | None:
+        row = await self._session.execute(
+            select(WorkflowNodeExecutionRecord, WorkflowRunRecord.id)
+            .join(
+                WorkflowRunRecord,
+                WorkflowRunRecord.id == WorkflowNodeExecutionRecord.run_id,
+            )
+            .where(
+                WorkflowNodeExecutionRecord.id == approval_id,
+                WorkflowRunRecord.owner_id == owner_id,
+                WorkflowNodeExecutionRecord.node_type == NodeType.APPROVAL.value,
+            )
+        )
+        result = row.one_or_none()
+        if result is None:
+            return None
+        execution, run_id = result
+        return execution, run_id
+
+    async def _revision_count(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        approval_kind: ApprovalKind,
+    ) -> int:
+        count = await self._session.scalar(
+            select(func.count())
+            .select_from(ApprovalRevisionRecord)
+            .where(
+                ApprovalRevisionRecord.approval_id == approval_id,
+                ApprovalRevisionRecord.approval_kind == approval_kind.value,
+            )
+        )
+        return int(count or 0)
+
+    async def _revision_counts_for_entries(
+        self,
+        entries: list[ApprovalAuditEntry],
+    ) -> dict[tuple[uuid.UUID, ApprovalKind], int]:
+        if not entries:
+            return {}
+        keys = {(entry.id, entry.kind) for entry in entries}
+        approval_ids = [entry.id for entry in entries]
+        rows = await self._session.execute(
+            select(
+                ApprovalRevisionRecord.approval_id,
+                ApprovalRevisionRecord.approval_kind,
+                func.count(),
+            )
+            .where(ApprovalRevisionRecord.approval_id.in_(approval_ids))
+            .group_by(
+                ApprovalRevisionRecord.approval_id,
+                ApprovalRevisionRecord.approval_kind,
+            )
+        )
+        counts: dict[tuple[uuid.UUID, ApprovalKind], int] = {}
+        for approval_id, approval_kind, count in rows.all():
+            key = (approval_id, ApprovalKind(approval_kind))
+            if key in keys:
+                counts[key] = int(count)
+        return counts
+
+
+def _agent_decide_url(approval_id: uuid.UUID) -> str:
+    return f"/api/approvals/{approval_id}/decide"
+
+
+def _workflow_decide_url(*, run_id: uuid.UUID, node_execution_id: uuid.UUID) -> str:
+    return f"/api/workflow-runs/{run_id}/nodes/{node_execution_id}/approve"
+
+
+def _agent_audit_entry(
+    approval: AgentToolApproval,
+    *,
+    revision_count: int,
+) -> ApprovalAuditEntry:
+    edited = approval.edited_calls is not None or revision_count > 0
+    return ApprovalAuditEntry(
+        id=approval.id,
+        kind=ApprovalKind.AGENT_TOOL,
+        approval_correlation_id=approval.approval_correlation_id,
+        status=approval.status.value,
+        tool_calls=list(approval.proposed_calls),
+        session_id=approval.session_id,
+        requested_at=approval.requested_at,
+        decided_at=approval.decided_at,
+        decided_by=approval.decided_by,
+        decision=(
+            approval.status.value
+            if approval.status in {ApprovalStatus.APPROVED, ApprovalStatus.REJECTED}
+            else None
+        ),
+        reason=approval.reason,
+        edited=edited,
+        revision_count=revision_count,
+        decide_url=_agent_decide_url(approval.id),
+    )
+
+
+def _workflow_audit_entry(
+    row: WorkflowNodeExecutionRecord,
+    *,
+    run_id: uuid.UUID,
+    revision_count: int,
+) -> ApprovalAuditEntry:
+    edited = row.edited_arguments is not None or revision_count > 0
+    decision = row.decision
+    audit_status = _workflow_audit_status(row.status, decision)
+    requested_at = (
+        row.started_at or row.completed_at or datetime.datetime.now(datetime.UTC)
+    )
+    return ApprovalAuditEntry(
+        id=row.id,
+        kind=ApprovalKind.WORKFLOW_NODE,
+        approval_correlation_id=row.id,
+        status=audit_status,
+        workflow_run_id=run_id,
+        workflow_node_id=row.node_id,
+        requested_at=requested_at,
+        decided_at=row.decided_at,
+        decided_by=row.decided_by,
+        decision=decision,
+        reason=row.reason,
+        edited=edited,
+        revision_count=revision_count,
+        decide_url=_workflow_decide_url(run_id=run_id, node_execution_id=row.id),
+    )
+
+
+def _workflow_audit_status(status: str, decision: str | None) -> str:
+    if decision == ApprovalDecision.APPROVED.value:
+        return ApprovalStatus.APPROVED.value
+    if decision == ApprovalDecision.REJECTED.value:
+        return ApprovalStatus.REJECTED.value
+    if status == NodeStatus.CANCELLED.value:
+        return ApprovalStatus.CANCELLED.value
+    if status == NodeStatus.WAITING_APPROVAL.value:
+        return ApprovalStatus.PENDING.value
+    return ApprovalStatus.PENDING.value
+
+
+def _apply_workflow_status_filter(
+    stmt,
+    status: ApprovalStatus | None,
+):
+    if status is None:
+        return stmt
+    if status is ApprovalStatus.PENDING:
+        return stmt.where(
+            WorkflowNodeExecutionRecord.status == NodeStatus.WAITING_APPROVAL.value,
+            WorkflowNodeExecutionRecord.decision.is_(None),
+        )
+    if status is ApprovalStatus.APPROVED:
+        return stmt.where(
+            WorkflowNodeExecutionRecord.decision == ApprovalDecision.APPROVED.value
+        )
+    if status is ApprovalStatus.REJECTED:
+        return stmt.where(
+            WorkflowNodeExecutionRecord.decision == ApprovalDecision.REJECTED.value
+        )
+    if status is ApprovalStatus.CANCELLED:
+        return stmt.where(
+            WorkflowNodeExecutionRecord.status == NodeStatus.CANCELLED.value
+        )
+    if status is ApprovalStatus.EXPIRED:
+        return stmt.where(WorkflowNodeExecutionRecord.id.is_(None))
+    return stmt
 
 
 def _to_domain(row: AgentToolApprovalRecord) -> AgentToolApproval:

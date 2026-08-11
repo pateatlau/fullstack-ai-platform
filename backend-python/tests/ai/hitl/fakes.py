@@ -8,6 +8,7 @@ import uuid
 from app.ai.hitl.exceptions import ApprovalDecisionConflictError, ApprovalNotFoundError
 from app.ai.hitl.models import (
     AgentToolApproval,
+    ApprovalAuditEntry,
     ApprovalKind,
     ApprovalRevision,
     ApprovalStatus,
@@ -206,3 +207,74 @@ class InMemoryApprovalStore:
         self.rows = [
             updated if existing.id == updated.id else existing for existing in self.rows
         ]
+
+
+class FakeApprovalsStore:
+    """In-memory unified approvals read store for router tests."""
+
+    def __init__(
+        self,
+        *,
+        entries: list[ApprovalAuditEntry] | None = None,
+        revisions: dict[uuid.UUID, list[ApprovalRevision]] | None = None,
+        pending_count: int = 0,
+    ) -> None:
+        self.entries = list(entries or [])
+        self.revisions = revisions or {}
+        self.pending_count = pending_count
+        self.last_list_kwargs: dict[str, object] | None = None
+
+    async def list_for_owner(
+        self,
+        owner_id: uuid.UUID,
+        *,
+        status: ApprovalStatus | None = None,
+        kind: ApprovalKind | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[ApprovalAuditEntry], int]:
+        del owner_id
+        self.last_list_kwargs = {
+            "status": status,
+            "kind": kind,
+            "limit": limit,
+            "offset": offset,
+        }
+        filtered = list(self.entries)
+        if status is not None:
+            filtered = [item for item in filtered if item.status == status.value]
+        if kind is not None:
+            filtered = [item for item in filtered if item.kind == kind]
+        filtered.sort(key=lambda item: item.requested_at, reverse=True)
+        total = len(filtered)
+        return filtered[offset : offset + limit], total
+
+    async def get_for_owner(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+    ) -> ApprovalAuditEntry | None:
+        del owner_id
+        for entry in self.entries:
+            if entry.id == approval_id:
+                return entry
+        return None
+
+    async def list_revisions_for_owner(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+    ) -> list[ApprovalRevision]:
+        if await self.get_for_owner(approval_id, owner_id=owner_id) is None:
+            raise ApprovalNotFoundError(
+                f"Approval {approval_id} not found or not owned by caller."
+            )
+        return sorted(
+            self.revisions.get(approval_id, []),
+            key=lambda item: item.revision_number,
+        )
+
+    async def count_pending(self) -> int:
+        return self.pending_count

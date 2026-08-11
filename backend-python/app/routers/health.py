@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.ai.deps import get_plugin_registry
+from app.ai.deps import get_approvals_store, get_plugin_registry
+from app.ai.hitl.store import ApprovalsStore
 from app.ai.plugins.registry import PluginRegistry
 from app.core.config import APP_VERSION, Settings, get_settings
 from app.core.errors import DATABASE_ERROR_MESSAGE, error_response
@@ -16,8 +17,13 @@ router = APIRouter()
 async def health(
     settings: Settings = Depends(get_settings),
     plugin_registry: PluginRegistry = Depends(get_plugin_registry),
+    approvals_store: ApprovalsStore = Depends(get_approvals_store),
 ) -> dict[str, object]:
     plugins_enabled = settings.plugins_enabled
+    hitl_enabled = settings.hitl_enabled
+    hitl_pending_approvals_count = (
+        await approvals_store.count_pending() if hitl_enabled else 0
+    )
     return {
         "status": "ok",
         "provider": settings.llm_provider,
@@ -29,6 +35,8 @@ async def health(
         "memory_enabled": settings.memory_enabled,
         "workflow_engine_enabled": settings.workflow_engine_enabled,
         "observability_enabled": settings.observability_enabled,
+        "hitl_enabled": hitl_enabled,
+        "hitl_pending_approvals_count": hitl_pending_approvals_count,
         "plugins_enabled": plugins_enabled,
         "plugins_loaded_count": (
             plugin_registry.loaded_count if plugins_enabled else 0

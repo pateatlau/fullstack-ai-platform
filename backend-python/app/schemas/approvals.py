@@ -9,11 +9,15 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.ai.hitl.models import (
+    ApprovalAuditEntry,
     ApprovalKind,
     ApprovalResult,
     ApprovalRevision,
     ProposedToolCall,
 )
+
+DEFAULT_APPROVALS_LIST_LIMIT = 50
+MAX_APPROVALS_LIST_LIMIT = 100
 
 
 class ApprovalReviseRequest(BaseModel):
@@ -51,6 +55,53 @@ class ApprovalResultResponse(BaseModel):
             decided_at=result.decided_at,
             approval_correlation_id=result.approval_correlation_id,
         )
+
+
+class ApprovalAuditEntryResponse(BaseModel):
+    id: uuid.UUID
+    kind: ApprovalKind
+    approval_correlation_id: uuid.UUID
+    status: str
+    tool_calls: list[ProposedToolCall] | None = None
+    workflow_run_id: uuid.UUID | None = None
+    workflow_node_id: str | None = None
+    session_id: uuid.UUID | None = None
+    requested_at: datetime.datetime
+    decided_at: datetime.datetime | None = None
+    decided_by: uuid.UUID | None = None
+    decision: str | None = None
+    reason: str | None = None
+    edited: bool = False
+    revision_count: int = 0
+    decide_url: str
+
+    @classmethod
+    def from_domain(cls, entry: ApprovalAuditEntry) -> ApprovalAuditEntryResponse:
+        return cls(
+            id=entry.id,
+            kind=entry.kind,
+            approval_correlation_id=entry.approval_correlation_id,
+            status=entry.status,
+            tool_calls=entry.tool_calls,
+            workflow_run_id=entry.workflow_run_id,
+            workflow_node_id=entry.workflow_node_id,
+            session_id=entry.session_id,
+            requested_at=entry.requested_at,
+            decided_at=entry.decided_at,
+            decided_by=entry.decided_by,
+            decision=entry.decision,
+            reason=entry.reason,
+            edited=entry.edited,
+            revision_count=entry.revision_count,
+            decide_url=entry.decide_url,
+        )
+
+
+class ApprovalAuditListResponse(BaseModel):
+    approvals: list[ApprovalAuditEntryResponse]
+    limit: int
+    offset: int
+    total: int
 
 
 class ApprovalRevisionResponse(BaseModel):

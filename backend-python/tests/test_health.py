@@ -29,6 +29,8 @@ async def test_health_returns_expected_shape() -> None:
         "memory_enabled": settings.memory_enabled,
         "workflow_engine_enabled": settings.workflow_engine_enabled,
         "observability_enabled": settings.observability_enabled,
+        "hitl_enabled": settings.hitl_enabled,
+        "hitl_pending_approvals_count": 0,
         "plugins_enabled": plugins_enabled,
         "plugins_loaded_count": (
             plugin_registry.loaded_count if plugins_enabled else 0

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
     from app.ai.hitl.policy import ApprovalPolicy
+    from app.ai.hitl.store import ApprovalsStore
     from app.ai.hitl.service import AgentApprovalService
     from app.ai.mcp.registry import McpServerRegistry
     from app.ai.memory.context_builder import MemoryContextBuilder
@@ -184,6 +185,15 @@ def get_agent_approval_service(
         tool_registry=tool_registry,
         tool_executor=tool_executor,
     )
+
+
+def get_approvals_store(
+    session: AsyncSession = Depends(get_db_session),
+) -> "ApprovalsStore":
+    """Return a request-scoped unified approvals read store."""
+    from app.ai.hitl.store import ApprovalsStore
+
+    return ApprovalsStore(session)
 
 
 def get_agent_runtime(
