@@ -16,6 +16,7 @@ class AgentExecutionStatus(StrEnum):
     PLANNING = "planning"
     EXECUTING = "executing"
     REFLECTING = "reflecting"
+    WAITING_APPROVAL = "waiting_approval"
     COMPLETED = "completed"
     FAILED = "failed"
 
@@ -42,10 +43,12 @@ VALID_TRANSITIONS: dict[AgentExecutionStatus, frozenset[AgentExecutionStatus]] =
         {
             AgentExecutionStatus.PLANNING,
             AgentExecutionStatus.REFLECTING,
+            AgentExecutionStatus.WAITING_APPROVAL,
             AgentExecutionStatus.COMPLETED,
             AgentExecutionStatus.FAILED,
         }
     ),
+    AgentExecutionStatus.WAITING_APPROVAL: frozenset({AgentExecutionStatus.PLANNING}),
     AgentExecutionStatus.REFLECTING: frozenset(
         {
             AgentExecutionStatus.PLANNING,

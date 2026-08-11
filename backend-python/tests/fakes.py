@@ -390,6 +390,7 @@ class FakeChatStore:
         status: str = "complete",
         finish_reason: str | None = None,
         client_message_id: str | None = None,
+        pending_approval_id: uuid.UUID | None = None,
     ) -> ChatMessage:
         message = ChatMessage(
             id=uuid.uuid4(),
@@ -402,6 +403,7 @@ class FakeChatStore:
             status=status,
             finish_reason=finish_reason,
             client_message_id=client_message_id,
+            pending_approval_id=pending_approval_id,
             created_at=datetime.datetime.now(datetime.timezone.utc),
         )
         self.messages.append(message)

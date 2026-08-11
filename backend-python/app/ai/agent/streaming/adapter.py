@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.ai.agent.models.events import (
     AgentStreamEvent,
     AgentStreamEventType,
+    ApprovalRequiredEventPayload,
     CompleteEventPayload,
     ErrorEventPayload,
     StartEventPayload,
@@ -13,16 +14,24 @@ from app.ai.agent.models.events import (
     ToolStartEventPayload,
 )
 from app.schemas.chat import (
+    ApprovalRequiredFrame,
     DeltaFrame,
     EndFrame,
     ErrorFrame,
+    ProposedToolCallFrame,
     StartFrame,
     ToolEndFrame,
     ToolStartFrame,
 )
 
 SseMappableFrame = (
-    StartFrame | DeltaFrame | EndFrame | ErrorFrame | ToolStartFrame | ToolEndFrame
+    StartFrame
+    | DeltaFrame
+    | EndFrame
+    | ErrorFrame
+    | ToolStartFrame
+    | ToolEndFrame
+    | ApprovalRequiredFrame
 )
 
 # Agent-only events (planning, reflection) have no V1.1 SSE frame equivalent.
@@ -102,6 +111,21 @@ def sse_frame_from_agent_event(
                 id=frame_id,
                 code=payload.code,
                 message=payload.message,
+            ),
+        )
+
+    if event.type == AgentStreamEventType.APPROVAL_REQUIRED:
+        payload = ApprovalRequiredEventPayload.model_validate(event.payload)
+        return (
+            "approval_required",
+            ApprovalRequiredFrame(
+                id=frame_id,
+                approval_id=payload.approval_id,
+                approval_correlation_id=payload.approval_correlation_id,
+                proposed_calls=[
+                    ProposedToolCallFrame.model_validate(item)
+                    for item in payload.proposed_calls
+                ],
             ),
         )
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 
 from app.ai.agent.exceptions import AgentError
 from app.ai.agent.executor.finalizer import finalize_execution
@@ -19,6 +20,7 @@ from app.ai.agent.models.plan import ExecutionPlan, PlannedStep, StepAction
 from app.ai.agent.models.request import AgentRequest
 from app.ai.agent.models.response import AgentResponse
 from app.ai.agent.models.state import AgentExecutionState, AgentExecutionStatus
+from app.ai.hitl.exceptions import AgentApprovalPauseError
 from app.ai.agent.planner.parser import build_iteration_limit_plan
 from app.ai.agent.reflection.engine import ReflectionEngine
 from app.ai.agent.scratchpad.scratchpad import Scratchpad
@@ -32,6 +34,7 @@ from app.ai.observability.tracing.spans import (
 )
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext, ToolResult
 from app.ai.prompts.manager import PromptManager
+from app.core.caller import CallerContext
 from app.core.logging import get_logger
 from app.providers.base import LLMProvider
 
@@ -70,17 +73,18 @@ class AgentExecutor:
         """Execute the full ReAct loop until finalize or iteration limit."""
         config = request.config or AgentConfig()
         last_planner_content: str | None = None
+        provider_name = _provider_name_from_request(request)
+
+        state = AgentStateManager.create_initial_state(
+            context,
+            config,
+            scratchpad_store=self._scratchpad_store,
+        )
+        scratchpad = self._scratchpad_store.require(context.execution_id)
+        if len(scratchpad) == 0:
+            scratchpad.extend_messages(request.messages)
 
         try:
-            state = AgentStateManager.create_initial_state(
-                context,
-                config,
-                scratchpad_store=self._scratchpad_store,
-            )
-            scratchpad = self._scratchpad_store.require(context.execution_id)
-            if len(scratchpad) == 0:
-                scratchpad.extend_messages(request.messages)
-
             await self._publisher.publish(AgentStreamEvent.start(context.execution_id))
 
             state = AgentStateManager.transition(state, AgentExecutionStatus.PLANNING)
@@ -138,6 +142,8 @@ class AgentExecutor:
                         state=state,
                         tool_context=tool_context,
                         scratchpad=scratchpad,
+                        request=request,
+                        provider_name=provider_name,
                     )
                     tool_calls_count += _count_tool_calls(tool_results)
                     state, should_finalize, retry_plan = await self._maybe_reflect(
@@ -156,6 +162,8 @@ class AgentExecutor:
                             state=state,
                             tool_context=tool_context,
                             scratchpad=scratchpad,
+                            request=request,
+                            provider_name=provider_name,
                         )
                         tool_calls_count += _count_tool_calls(retry_results)
                     if should_finalize:
@@ -212,6 +220,18 @@ class AgentExecutor:
                 state=state,
                 scratchpad=scratchpad,
                 last_planner_content=last_planner_content,
+            )
+        except AgentApprovalPauseError as exc:
+            state = AgentStateManager.transition(
+                state,
+                AgentExecutionStatus.WAITING_APPROVAL,
+            )
+            return AgentResponse(
+                content="",
+                tools_used=list(state.tools_used),
+                iterations=state.current_iteration,
+                finish_reason="waiting_approval",
+                metadata={"approval_id": str(exc.approval.id)},
             )
         except AgentError as exc:
             await self._publisher.publish(
@@ -283,6 +303,8 @@ class AgentExecutor:
             state=state,
             tool_context=tool_context,
             scratchpad=scratchpad,
+            request=request,
+            provider_name=_provider_name_from_request(request),
         )
         return AgentResponse(
             content="",
@@ -429,6 +451,8 @@ class AgentExecutor:
         state: AgentExecutionState,
         tool_context: ToolExecutionContext,
         scratchpad: Scratchpad,
+        request: AgentRequest,
+        provider_name: str | None = None,
     ) -> tuple[AgentExecutionState, AggregatedToolResults | None]:
         tool_steps = [
             step for step in plan.steps if step.action == StepAction.TOOL_CALL
@@ -446,6 +470,12 @@ class AgentExecutor:
             tool_steps,
             execution_id=context.execution_id,
             tool_context=tool_context,
+            scratchpad=scratchpad,
+            state=state,
+            session_id=context.session_id,
+            owner_id=_resolve_owner_id(context.caller),
+            provider=provider_name,
+            model=request.model,
         )
         _record_tool_results(scratchpad, results.records)
 
@@ -540,3 +570,16 @@ def _assistant_tool_call_message(
             for call in tool_calls
         ],
     }
+
+
+def _resolve_owner_id(caller: CallerContext | None) -> uuid.UUID | None:
+    if caller is None or caller.user_id is None:
+        return None
+    return caller.user_id
+
+
+def _provider_name_from_request(request: AgentRequest) -> str | None:
+    provider = request.provider
+    if provider is None:
+        return None
+    return str(provider)

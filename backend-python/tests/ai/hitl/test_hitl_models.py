@@ -187,7 +187,9 @@ class TestPublicApiExports:
         )
 
         assert hitl.ApprovalPolicy is not None
-        assert issubclass(hitl.ApprovalNotFoundError, HitlError)
+        assert hitl.AgentApprovalService is not None
+        assert hitl.AgentToolApprovalStore is not None
+        assert issubclass(hitl.AgentApprovalPauseError, HitlError)
         assert issubclass(hitl.ApprovalDecisionConflictError, HitlError)
         assert issubclass(hitl.ApprovalValidationError, HitlError)
         assert issubclass(ApprovalNotFoundError, HitlError)

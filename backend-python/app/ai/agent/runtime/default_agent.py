@@ -18,6 +18,8 @@ from app.ai.agent.models.response import AgentResponse
 from app.ai.agent.planner.react_planner import ReActPlanner
 from app.ai.agent.scratchpad.store import ScratchpadStore, get_scratchpad_store
 from app.ai.agent.streaming.publisher import NoOpStreamPublisher, QueueStreamPublisher
+from app.ai.hitl.policy import ApprovalPolicy
+from app.ai.hitl.service import AgentApprovalService
 from app.ai.prompts.manager import PromptManager
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
@@ -41,12 +43,16 @@ class DefaultAgent:
         prompt_manager: PromptManager,
         tool_executor: ToolExecutor,
         scratchpad_store: ScratchpadStore | None = None,
+        approval_policy: ApprovalPolicy | None = None,
+        approval_service: AgentApprovalService | None = None,
     ) -> None:
         self._settings = settings
         self._tool_registry = tool_registry
         self._prompt_manager = prompt_manager
         self._tool_executor = tool_executor
         self._scratchpad_store = scratchpad_store or get_scratchpad_store()
+        self._approval_policy = approval_policy
+        self._approval_service = approval_service
 
     async def run(
         self,
@@ -111,8 +117,12 @@ class DefaultAgent:
         provider = ProviderFactory.get_provider(request.provider, self._settings)
         tool_runner = ToolRunner(
             tool_executor=self._tool_executor,
+            tool_registry=self._tool_registry,
             stream_publisher=publisher,
             parallel_tools_enabled=config.parallel_tools_enabled,
+            hitl_enabled=self._settings.hitl_enabled,
+            approval_policy=self._approval_policy,
+            approval_service=self._approval_service,
         )
         planner = ReActPlanner(
             provider=provider,

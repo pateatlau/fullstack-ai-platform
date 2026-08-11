@@ -162,6 +162,11 @@ class ChatMessage(Base):
     )
     finish_reason: Mapped[str | None] = mapped_column(nullable=True)
     client_message_id: Mapped[str | None] = mapped_column(nullable=True)
+    pending_approval_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_tool_approvals.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
     )
@@ -173,7 +178,8 @@ class ChatMessage(Base):
             name="role_valid",
         ),
         CheckConstraint(
-            "status IN ('complete', 'stopped', 'error', 'interrupted')",
+            "status IN ('complete', 'stopped', 'error', 'interrupted', "
+            "'waiting_approval', 'rejected')",
             name="status_valid",
         ),
         # Idempotent append when a client_message_id is supplied (plan Section 2.5).
@@ -684,4 +690,61 @@ class WorkflowNodeExecutionRecord(Base):
             name="uq_workflow_node_executions_run_node_attempt",
         ),
         Index("ix_workflow_node_executions_run_status", "run_id", "status"),
+    )
+
+
+class AgentToolApprovalRecord(Base):
+    """Persisted agent tool-call approval pause snapshot (Epic 09)."""
+
+    __tablename__ = "agent_tool_approvals"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    execution_id: Mapped[str] = mapped_column(nullable=False)
+    approval_correlation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(nullable=False)
+    proposed_calls: Mapped[list[object]] = mapped_column(JSONB, nullable=False)
+    edited_calls: Mapped[list[object] | None] = mapped_column(JSONB, nullable=True)
+    reason: Mapped[str | None] = mapped_column(nullable=True)
+    paused_scratchpad: Mapped[list[object]] = mapped_column(JSONB, nullable=False)
+    paused_state: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    pending_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    requested_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
+    )
+    decided_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected', 'expired', 'cancelled')",
+            name="agent_tool_approval_status_valid",
+        ),
+        Index("ix_agent_tool_approvals_owner_status", "owner_id", "status"),
+        Index("ix_agent_tool_approvals_session_id", "session_id"),
     )

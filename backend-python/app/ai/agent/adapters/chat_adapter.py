@@ -280,6 +280,7 @@ def build_agent_context(
     *,
     caller: CallerContext | None,
     allowed_tool_names: frozenset[str] | None,
+    session_id: uuid.UUID | None = None,
 ) -> AgentContext:
     """Build execution-scoped context for one chat-backed agent run."""
     return AgentContext(
@@ -287,4 +288,5 @@ def build_agent_context(
         request_id=get_request_id(),
         caller=caller,
         allowed_tool_names=allowed_tool_names or frozenset({WEB_SEARCH_TOOL_NAME}),
+        session_id=session_id,
     )

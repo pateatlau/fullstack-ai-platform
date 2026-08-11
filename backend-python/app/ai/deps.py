@@ -17,6 +17,8 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
+    from app.ai.hitl.policy import ApprovalPolicy
+    from app.ai.hitl.service import AgentApprovalService
     from app.ai.mcp.registry import McpServerRegistry
     from app.ai.memory.context_builder import MemoryContextBuilder
     from app.ai.memory.manager import MemoryManager
@@ -155,11 +157,38 @@ def get_tool_executor(
     return _create_tool_executor(registry=registry, settings=settings)
 
 
+def get_approval_policy(
+    settings: Settings = Depends(get_ai_settings),
+) -> "ApprovalPolicy":
+    """Return the process-wide approval policy from settings."""
+    from app.ai.hitl.policy import ApprovalPolicy
+
+    return ApprovalPolicy(
+        required_tool_names=frozenset(settings.hitl_required_tool_names),
+    )
+
+
+def get_agent_approval_service(
+    session: AsyncSession = Depends(get_db_session),
+) -> "AgentApprovalService":
+    """Return a request-scoped agent approval orchestrator."""
+    from app.ai.hitl.service import AgentApprovalService
+    from app.ai.hitl.store import AgentToolApprovalStore
+    from app.db.chat import SqlChatStore
+
+    return AgentApprovalService(
+        approval_store=AgentToolApprovalStore(session),
+        chat_store=SqlChatStore(session),
+    )
+
+
 def get_agent_runtime(
     settings: Settings = Depends(get_ai_settings),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
     prompt_manager: PromptManager = Depends(get_prompt_manager),
     tool_executor: ToolExecutor = Depends(get_tool_executor),
+    approval_policy: "ApprovalPolicy" = Depends(get_approval_policy),
+    approval_service: "AgentApprovalService" = Depends(get_agent_approval_service),
 ) -> DefaultAgent:
     """Return a request-scoped :class:`DefaultAgent` wired to AI dependencies."""
     return create_default_agent(
@@ -167,6 +196,8 @@ def get_agent_runtime(
         tool_registry=tool_registry,
         prompt_manager=prompt_manager,
         tool_executor=tool_executor,
+        approval_policy=approval_policy if settings.hitl_enabled else None,
+        approval_service=approval_service if settings.hitl_enabled else None,
     )
 
 

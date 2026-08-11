@@ -170,6 +170,7 @@ class SqlChatStore:
         status: str = "complete",
         finish_reason: str | None = None,
         client_message_id: str | None = None,
+        pending_approval_id: uuid.UUID | None = None,
     ) -> ChatMessage:
         message = ChatMessage(
             session_id=session_id,
@@ -181,6 +182,7 @@ class SqlChatStore:
             status=status,
             finish_reason=finish_reason,
             client_message_id=client_message_id,
+            pending_approval_id=pending_approval_id,
         )
         self._session.add(message)
         await self._session.flush()

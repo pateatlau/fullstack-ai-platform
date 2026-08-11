@@ -8,7 +8,9 @@ from app.core.config import Settings
 
 Role = Literal["system", "user", "assistant"]
 ProviderName = Literal["openai", "gemini", "groq", "anthropic"]
-MessageStatus = Literal["complete", "stopped", "error", "interrupted"]
+MessageStatus = Literal[
+    "complete", "stopped", "error", "interrupted", "waiting_approval", "rejected"
+]
 
 
 def _max_message_length() -> int:
@@ -180,6 +182,23 @@ class ToolEndFrame(BaseModel):
     tool_name: str
     call_id: str
     success: bool
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ProposedToolCallFrame(BaseModel):
+    """One planned tool invocation surfaced in an approval-required SSE frame."""
+
+    name: str
+    arguments: dict[str, object] = Field(default_factory=dict)
+    call_id: str
+
+
+class ApprovalRequiredFrame(BaseModel):
+    type: Literal["approval_required"] = "approval_required"
+    id: str
+    approval_id: uuid.UUID
+    approval_correlation_id: uuid.UUID
+    proposed_calls: list[ProposedToolCallFrame] = Field(default_factory=list)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

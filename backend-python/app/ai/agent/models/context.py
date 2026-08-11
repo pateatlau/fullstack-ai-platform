@@ -16,6 +16,7 @@ class AgentContext(BaseModel):
     request_id: str | None = None
     caller: CallerContext | None = None
     allowed_tool_names: frozenset[str] | None = None
+    session_id: uuid.UUID | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
 
     model_config = {"arbitrary_types_allowed": True}
