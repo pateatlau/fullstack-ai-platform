@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from opentelemetry import metrics
@@ -40,6 +41,8 @@ from app.ai.tools.schemas import (
     ToolExecutionContext,
     ToolResult,
 )
+from app.ai.tools.stubs.echo import ECHO_TOOL_DEFINITION, echo_handler
+from app.providers.base import ProviderToolCall, ProviderToolCompletion
 from app.ai.workflow.manager import WorkflowManager
 from app.ai.workflow.models import ApprovalDecision, NodeType, RunStatus
 from app.ai.workflow.nodes.approval_node import ApprovalNodeExecutor
@@ -111,6 +114,12 @@ def _registry() -> ToolRegistry:
         ),
         _SensitiveHandler(),
     )
+    return registry
+
+
+def _registry_with_echo() -> ToolRegistry:
+    registry = _registry()
+    registry.register(ECHO_TOOL_DEFINITION, echo_handler())
     return registry
 
 
@@ -315,6 +324,54 @@ async def test_decide_reject_emits_span_and_decision_metrics(
     assert _metric_present(reader, "hitl_approval_decision_latency_ms")
 
 
+async def test_decide_reject_records_metrics_before_placeholder_update_fails(
+    observability_stack: tuple[InMemorySpanExporter, InMemoryMetricReader],
+) -> None:
+    _, reader = observability_stack
+    owner_id = uuid.uuid4()
+    store = InMemoryApprovalStore()
+    chat_store = FakeChatStore()
+
+    class _FailingUpdateChatStore(FakeChatStore):
+        async def update_message(self, message_id: uuid.UUID, **kwargs: object):
+            del message_id, kwargs
+            raise RuntimeError("update failed")
+
+    failing_chat_store = _FailingUpdateChatStore()
+    service = _service(store, failing_chat_store, _registry())
+    session = await chat_store.create_session(user_id=owner_id)
+    approval = await store.create(
+        session_id=session.id,
+        owner_id=owner_id,
+        execution_id="exec-reject-metrics",
+        approval_correlation_id=uuid.uuid4(),
+        proposed_calls=[
+            ProposedToolCall(
+                name="delete_file", arguments={"path": "/tmp/x"}, call_id="c1"
+            )
+        ],
+        paused_scratchpad=[],
+        paused_state={
+            "execution_id": "exec-reject-metrics",
+            "status": "waiting_approval",
+        },
+    )
+    await store.link_pending_message(
+        approval.id,
+        pending_message_id=uuid.uuid4(),
+    )
+
+    with pytest.raises(RuntimeError, match="update failed"):
+        await service.decide(
+            approval.id,
+            owner_id=owner_id,
+            decision="rejected",
+        )
+
+    assert _metric_sum(reader, "agent_tool_approval_pending_count") == -1.0
+    assert _metric_sum(reader, "approval_decisions_total") == 1.0
+
+
 async def test_approve_and_resume_links_tool_span_correlation_id(
     observability_stack: tuple[InMemorySpanExporter, InMemoryMetricReader],
 ) -> None:
@@ -376,6 +433,103 @@ async def test_approve_and_resume_links_tool_span_correlation_id(
     assert _metric_present(reader, "hitl_tool_execution_latency_ms")
 
 
+async def test_resume_does_not_leak_approval_correlation_id_to_later_tools(
+    observability_stack: tuple[InMemorySpanExporter, InMemoryMetricReader],
+) -> None:
+    exporter, reader = observability_stack
+    owner_id = uuid.uuid4()
+    store = InMemoryApprovalStore()
+    chat_store = FakeChatStore()
+    registry = _registry_with_echo()
+    service = _service(store, chat_store, registry)
+    scratchpad_store = ScratchpadStore()
+    session = await chat_store.create_session(user_id=owner_id)
+    correlation_id = uuid.uuid4()
+    approval = await store.create(
+        session_id=session.id,
+        owner_id=owner_id,
+        execution_id="exec-resume-leak",
+        approval_correlation_id=correlation_id,
+        proposed_calls=[
+            ProposedToolCall(
+                name="delete_file", arguments={"path": "/tmp/x"}, call_id="c1"
+            )
+        ],
+        paused_scratchpad=[],
+        paused_state={"execution_id": "exec-resume-leak", "status": "waiting_approval"},
+    )
+    caller = CallerContext.for_user(owner_id)
+    provider = FakeProvider(
+        tool_completions=[
+            ProviderToolCompletion(
+                content="Echo next.",
+                tool_calls=[
+                    ProviderToolCall(
+                        id="tc-echo",
+                        name="echo",
+                        arguments={"message": "hi"},
+                    )
+                ],
+            ),
+            ProviderToolCompletion(
+                content="Done.", finish_reason="stop", tool_calls=[]
+            ),
+        ]
+    )
+    tool_executor = ToolExecutor(registry=registry, settings=Settings())
+    runner = ToolRunner(
+        tool_executor=tool_executor,
+        tool_registry=registry,
+        stream_publisher=NoOpStreamPublisher(),
+        hitl_enabled=False,
+    )
+    executor = AgentExecutor(
+        planner=ReActPlanner(
+            provider=provider,
+            tool_registry=registry,
+            prompt_manager=create_prompt_manager(),
+            scratchpad_store=scratchpad_store,
+        ),
+        provider=provider,
+        tool_runner=runner,
+        stream_publisher=NoOpStreamPublisher(),
+        scratchpad_store=scratchpad_store,
+        prompt_manager=create_prompt_manager(),
+    )
+
+    await service.approve_and_resume(
+        approval.id,
+        owner_id=owner_id,
+        executor=executor,
+        request=AgentRequest(
+            messages=[AgentMessage(role="user", content="delete")],
+            model="gpt-4o-mini",
+            config=AgentConfig(max_iterations=3),
+        ),
+        context=AgentContext(
+            execution_id="exec-resume-leak",
+            caller=caller,
+            session_id=session.id,
+        ),
+        tool_context=ToolExecutionContext(caller=caller),
+        stream_publisher=InMemoryStreamPublisher(),
+    )
+
+    tool_spans = [
+        span for span in exporter.get_finished_spans() if span.name == "tool.execute"
+    ]
+    assert len(tool_spans) == 2
+    correlated = [
+        span
+        for span in tool_spans
+        if dict(span.attributes or {}).get("approval_correlation_id")
+        == str(correlation_id)
+    ]
+    assert len(correlated) == 1
+    assert dict(correlated[0].attributes or {})["tool_name"] == "delete_file"
+    assert _metric_sum(reader, "hitl_tool_execution_latency_ms") >= 0.0
+
+
 async def test_workflow_apply_decision_emits_span_and_metrics(
     observability_stack: tuple[InMemorySpanExporter, InMemoryMetricReader],
 ) -> None:
@@ -421,6 +575,46 @@ async def test_workflow_apply_decision_emits_span_and_metrics(
     assert _metric_sum(reader, "approval_decisions_total") >= 1.0
     assert _metric_present(reader, "hitl_approval_decision_latency_ms")
     assert _metric_present(reader, "hitl_resume_latency_ms")
+
+
+async def test_workflow_apply_decision_records_metrics_before_continue_fails(
+    observability_stack: tuple[InMemorySpanExporter, InMemoryMetricReader],
+) -> None:
+    _, reader = observability_stack
+    owner_id = uuid.uuid4()
+    store = FakeWorkflowStore()
+    definition = await store.create_definition(_approval_linear_definition(owner_id))
+    manager = WorkflowManager(
+        store,
+        node_executors={
+            NodeType.TASK: FakeTaskExecutor(),
+            NodeType.APPROVAL: ApprovalNodeExecutor(),
+        },
+    )
+    run = await manager.start_run(
+        definition.id, owner_id=owner_id, idempotency_key="key-obs-fail"
+    )
+    await _await_scheduled(manager)
+    with_executions = await store.get_run_with_executions(run.id, owner_id=owner_id)
+    assert with_executions is not None
+    approval_execution = next(
+        execution for execution in with_executions[1] if execution.node_id == "approve"
+    )
+
+    with patch(
+        "app.ai.workflow.manager.WorkflowExecutor.continue_from_approval",
+        new=AsyncMock(side_effect=RuntimeError("continue failed")),
+    ):
+        with pytest.raises(RuntimeError, match="continue failed"):
+            await manager.apply_decision(
+                run.id,
+                approval_execution.id,
+                owner_id=owner_id,
+                decision=ApprovalDecision.APPROVED,
+            )
+
+    assert _metric_sum(reader, "approval_decisions_total") >= 1.0
+    assert not _metric_present(reader, "hitl_resume_latency_ms")
 
 
 def test_hitl_metric_helpers_record_both_kinds(

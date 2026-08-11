@@ -8,6 +8,8 @@ import uuid
 from typing import TYPE_CHECKING, Literal, Protocol
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+
     from app.ai.agent.executor.agent_executor import AgentExecutor
 
 from app.ai.agent.executor.result_aggregator import (
@@ -39,12 +41,14 @@ from app.ai.hitl.models import (
 )
 from app.ai.observability.metrics.instruments import (
     record_agent_tool_approval_pending_delta,
+    record_hitl_decision_metrics,
+    record_hitl_resume_latency_ms,
 )
 from app.ai.observability.tracing.spans import (
     approval_span,
     elapsed_ms_since,
+    hitl_decision_latency_ms,
     record_approval_span_outcome,
-    record_hitl_terminal_decision,
 )
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
@@ -58,6 +62,40 @@ def normalize_hitl_reason(reason: str | None, *, max_length: int) -> str | None:
     if reason is None:
         return None
     return reason if len(reason) <= max_length else reason[:max_length]
+
+
+def _emit_agent_decision_metrics(
+    span: Span | None,
+    *,
+    decided: AgentToolApproval,
+    decision: Literal["approved", "rejected"],
+    edited: bool,
+) -> int | None:
+    """Record terminal decision metrics immediately after a successful CAS write."""
+    record_agent_tool_approval_pending_delta(-1)
+    assert decided.decided_at is not None
+    decision_latency_ms = hitl_decision_latency_ms(
+        decided.requested_at,
+        decided.decided_at,
+    )
+    if decision_latency_ms is not None:
+        record_hitl_decision_metrics(
+            kind=ApprovalKind.AGENT_TOOL.value,
+            decision=decision,
+            decision_latency_ms=decision_latency_ms,
+        )
+    record_approval_span_outcome(
+        span,
+        approval_status=(
+            ApprovalStatus.APPROVED.value
+            if decision == "approved"
+            else ApprovalStatus.REJECTED.value
+        ),
+        approval_decision=decision,
+        decision_latency_ms=decision_latency_ms,
+        edited=edited,
+    )
+    return decision_latency_ms
 
 
 class AgentApprovalStore(Protocol):
@@ -330,23 +368,18 @@ class AgentApprovalService:
                     decided_by=owner_id,
                     reason=reason,
                 )
+                _emit_agent_decision_metrics(
+                    span,
+                    decided=decided,
+                    decision="rejected",
+                    edited=_has_edits(decided),
+                )
                 await self._update_placeholder_message(
                     decided,
                     content="",
                     status="rejected",
                     finish_reason="rejected",
                     clear_pending=True,
-                )
-                record_agent_tool_approval_pending_delta(-1)
-                assert decided.decided_at is not None
-                record_hitl_terminal_decision(
-                    span,
-                    kind=ApprovalKind.AGENT_TOOL.value,
-                    decision="rejected",
-                    approval_status=ApprovalStatus.REJECTED.value,
-                    requested_at=decided.requested_at,
-                    decided_at=decided.decided_at,
-                    edited=_has_edits(decided),
                 )
             return _build_approval_result(
                 decided,
@@ -376,15 +409,10 @@ class AgentApprovalService:
                     edited_payload=edited_calls,
                     note=reason,
                 )
-            record_agent_tool_approval_pending_delta(-1)
-            assert decided.decided_at is not None
-            record_hitl_terminal_decision(
+            _emit_agent_decision_metrics(
                 span,
-                kind=ApprovalKind.AGENT_TOOL.value,
+                decided=decided,
                 decision="approved",
-                approval_status=ApprovalStatus.APPROVED.value,
-                requested_at=decided.requested_at,
-                decided_at=decided.decided_at,
                 edited=_has_edits(decided),
             )
         return _build_approval_result(
@@ -441,6 +469,12 @@ class AgentApprovalService:
                     edited_payload=edited_calls,
                     note=reason,
                 )
+            _emit_agent_decision_metrics(
+                span,
+                decided=decided,
+                decision="approved",
+                edited=_has_edits(decided),
+            )
             result = _build_approval_result(
                 decided,
                 final_payload=_resolve_final_payload(decided),
@@ -461,7 +495,7 @@ class AgentApprovalService:
                 scratchpad.append(entry)
 
             state = AgentExecutionState.model_validate(decided.paused_state)
-            exec_context = tool_context.model_copy(
+            approved_context = tool_context.model_copy(
                 update={
                     "session_id": decided.session_id,
                     "approval_correlation_id": decided.approval_correlation_id,
@@ -471,7 +505,7 @@ class AgentApprovalService:
                 tool_results = await self._execute_approved_calls(
                     calls,
                     execution_id=decided.execution_id,
-                    tool_context=exec_context,
+                    tool_context=approved_context,
                     scratchpad=scratchpad,
                     stream_publisher=stream_publisher,
                 )
@@ -488,13 +522,17 @@ class AgentApprovalService:
                 state = AgentStateManager.record_tool_used(state, tool_name)
 
             last_planner_content = _extract_last_planner_content(scratchpad)
+            # Correlation applies only to the approved gated execution (Stage 3).
+            resume_context = approved_context.model_copy(
+                update={"approval_correlation_id": None}
+            )
             try:
                 response = await executor.resume_from_approval(
                     request,
                     context,
                     scratchpad=scratchpad,
                     state=state,
-                    tool_context=exec_context,
+                    tool_context=resume_context,
                     tool_results=tool_results,
                     last_planner_content=last_planner_content,
                 )
@@ -537,17 +575,9 @@ class AgentApprovalService:
                 )
                 await self._chat_store.mark_last_message_at(decided.session_id)
 
-            record_agent_tool_approval_pending_delta(-1)
-            assert decided.decided_at is not None
-            record_hitl_terminal_decision(
-                span,
+            record_hitl_resume_latency_ms(
                 kind=ApprovalKind.AGENT_TOOL.value,
-                decision="approved",
-                approval_status=ApprovalStatus.APPROVED.value,
-                requested_at=decided.requested_at,
-                decided_at=decided.decided_at,
-                edited=_has_edits(decided),
-                resume_latency_ms=elapsed_ms_since(resume_start),
+                latency_ms=elapsed_ms_since(resume_start),
             )
         return result, response
 
