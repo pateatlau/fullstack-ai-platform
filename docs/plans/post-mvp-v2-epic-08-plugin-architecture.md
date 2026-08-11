@@ -2,7 +2,7 @@
 epic: v2-08
 title: Plugin Architecture
 status: in_progress
-version: 1.5
+version: 1.6
 depends_on: [v2-07]
 provides:
   [
@@ -589,7 +589,7 @@ app/ai/prompts/repository.py     # extend — register_plugin_template(), list_p
 app/ai/workflow/models/definition.py  # modify — NodeType.PLUGIN
 app/ai/workflow/graph/validator.py           # extend — validate plugin node references
 app/ai/workflow/engine/executor.py # unchanged dispatch via node_executors map
-app/ai/observability/tracing/spans.py  # extend — plugin_span (Phase 7)
+app/ai/observability/tracing/spans.py  # plugin_span (Phase 7 — complete)
 
 backend-python/plugins/          # reference plugins (git-tracked)
 ├── echo-tool/
@@ -822,7 +822,7 @@ Early phases build **plugin infrastructure in isolation** (unit tests with fixtu
 | `PromptManager`, `PromptRepository`, `PromptRenderer`                   | `app/ai/prompts/`                       |
 | `WorkflowManager`, `WorkflowExecutor`, `GraphValidator`, `NodeExecutor` | `app/ai/workflow/`                      |
 | `McpServerRegistry`, `McpConnectionConfig`, `McpPermissionPolicy`       | `app/ai/mcp/`                           |
-| `plugin_span` extension point                                           | `app/ai/observability/tracing/spans.py` |
+| `plugin_span`, load metrics (`plugins_loaded_total`, `plugin_load_failures_total`) | `app/ai/observability/tracing/spans.py`, `app/ai/observability/metrics/` |
 | `get_current_caller`, `CallerContext`                                   | `app/core/caller.py`                    |
 | Feature flag infrastructure                                             | `app/core/config.py`                    |
 | DI factories                                                            | `app/ai/deps.py`                        |
@@ -857,7 +857,7 @@ _Copy from Epic 07 Phase 10 completion record._
 | Integration tests        | Workflow **241** (207 package + 23 router + 11 workflow tool); observability router 15; streaming 26 |
 | Eval CLI                 | 15/15 `--level all`; regression check clean                             |
 | Observability            | Completed (Epic 07); `OBSERVABILITY_ENABLED` behind flag                |
-| Plugin Architecture      | Phases 0–6 complete — SDK, tool, prompt, workflow node, MCP server plugins, and REST inventory API implemented |
+| Plugin Architecture      | Phases 0–7 complete — SDK, tool, prompt, workflow node, MCP server plugins, REST inventory API, and plugin load observability implemented |
 
 ---
 
@@ -872,7 +872,7 @@ _Copy from Epic 07 Phase 10 completion record._
 | 4     | Workflow Node Plugins           | L      | Completed   |
 | 5     | MCP Server Plugins & Versioning | M      | Completed   |
 | 6     | Plugin REST API & Health        | S      | Completed   |
-| 7     | Plugin Observability            | S      | Not Started |
+| 7     | Plugin Observability            | S      | Completed   |
 | 8     | Reference Plugins & Eval Cases  | M      | Not Started |
 | 9     | Frontend Plugin Inventory       | S      | Not Started |
 | 10    | Validation & Release            | M      | Not Started |
@@ -1403,7 +1403,7 @@ Expose read-only plugin inventory via authenticated REST endpoints and health ch
 **Exit criteria**
 
 - [x] Router tests pass.
-- [ ] User confirmation to proceed to Phase 7.
+- [x] User confirmation to proceed to Phase 7.
 
 **Rollback**
 
@@ -1418,13 +1418,14 @@ Expose read-only plugin inventory via authenticated REST endpoints and health ch
 | Plugin router tests | ✅ 11 passed (`tests/test_plugins_router.py`)       |
 | Health tests        | ✅ PASS (`tests/test_health.py` — plugin fields)    |
 | Phase 6 status      | ✅ Completed                                        |
-| Phase 7 authorized  | ⬜ Pending user confirmation                        |
+| Phase 7 authorized  | ✅ Completed                                        |
 
 ---
 
 # Phase 7 — Plugin Observability
 
 **Effort:** S
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1441,8 +1442,8 @@ Add plugin load spans/metrics and ensure execution continues to use existing dom
 
 ## Span Helper
 
-- [ ] Implement `plugin_span` with fixed name `plugin.load` (attributes: `plugin_id`, `contribution_kind`, `status`, `load_duration_ms`, `failure_code` when failed).
-- [ ] Wrap each plugin entrypoint registration when `OBSERVABILITY_ENABLED=true`.
+- [x] Implement `plugin_span` with fixed name `plugin.load` (attributes: `plugin_id`, `contribution_kind`, `status`, `load_duration_ms`, `failure_code` when failed).
+- [x] Wrap each plugin entrypoint registration when `OBSERVABILITY_ENABLED=true`.
 
 ## Metrics
 
@@ -1459,13 +1460,13 @@ Add plugin load spans/metrics and ensure execution continues to use existing dom
 
 No other metric labels on these counters (`kind`, `status`, `contribution_kind`, and `plugin_id` are **span attributes only**).
 
-- [ ] Record load success/failure counters using the contract above; extend `ALLOWED_LABEL_KEYS` / `FAILURE_CODE_REGISTRY` in `labels.py`.
-- [ ] Do not add unbounded `plugin_id` metric labels — use span attributes only.
+- [x] Record load success/failure counters using the contract above; extend `ALLOWED_LABEL_KEYS` / `FAILURE_CODE_REGISTRY` in `labels.py`.
+- [x] Do not add unbounded `plugin_id` metric labels — use span attributes only.
 
 ## Testing
 
-- [ ] In-memory span exporter tests for successful/failed load.
-- [ ] Verify flag off → no plugin spans.
+- [x] In-memory span exporter tests for successful/failed load.
+- [x] Verify flag off → no plugin spans.
 
 **Verify**
 
@@ -1478,12 +1479,23 @@ No other metric labels on these counters (`kind`, `status`, `contribution_kind`,
 
 **Exit criteria**
 
-- Observability tests pass.
-- User confirmation to proceed to Phase 8.
+- [x] Observability tests pass.
+- [ ] User confirmation to proceed to Phase 8.
 
 **Rollback**
 
 - Remove plugin span/metric hooks only.
+
+**Completion Record**
+
+| Metric                    | Result                                                                 |
+| ------------------------- | ---------------------------------------------------------------------- |
+| Lint                      | ✅ PASS                                                                |
+| Plugin observability tests | ✅ 8 passed (`tests/ai/plugins/test_plugin_observability.py`)         |
+| Observability suite       | ✅ 87 passed (`test_plugin_observability.py` + `tests/ai/observability/`) |
+| Plugin test suite         | ✅ 65 passed (`tests/ai/plugins/`)                                     |
+| Phase 7 status            | ✅ Completed                                                           |
+| Phase 8 authorized        | ⬜ Pending user confirmation                                           |
 
 ---
 
@@ -1773,3 +1785,4 @@ Execution of plugin tools and workflow nodes continues to emit existing `tool_sp
 | 1.3     | 2026-08-11 | Phases 1–4 complete: plugin SDK foundation, tool plugins, prompt plugins, workflow node plugins. Phase status table, step checklists, exit criteria, and completion records updated. Epic status → `in_progress`. |
 | 1.4     | 2026-08-11 | Phase 5 complete: MCP server plugins, env-wins merge in `register_mcp_tools`, startup load logging, versioning hardening. Phase status table, step checklists, exit criteria, and completion record updated. |
 | 1.5     | 2026-08-11 | Phase 6 complete: authenticated plugin inventory REST API (`GET /api/plugins`, `GET /api/plugins/{plugin_id}`), `PluginsStore`, health plugin counts. Phase status table, step checklists, exit criteria, and completion record updated. |
+| 1.6     | 2026-08-11 | Phase 7 complete: `plugin_span`, `record_plugin_load_outcome`, load counters (`plugins_loaded_total`, `plugin_load_failures_total`) with bounded `failure_code` label, `PluginLoader` instrumentation. Phase status table, step checklists, exit criteria, and completion record updated. |

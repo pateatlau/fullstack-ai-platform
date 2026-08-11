@@ -275,9 +275,10 @@ class TestPromptPluginObservability:
         )
         assert rendered == "Hello Span!"
         spans = memory_exporter.get_finished_spans()
-        assert len(spans) == 1
-        assert spans[0].name == "prompt.render"
-        attributes = dict(spans[0].attributes or {})
+        prompt_spans = [span for span in spans if span.name == "prompt.render"]
+        assert len(prompt_spans) == 1
+        assert prompt_spans[0].name == "prompt.render"
+        attributes = dict(prompt_spans[0].attributes or {})
         assert attributes["category"] == GREETING_CATEGORY
         assert attributes["name"] == "greeting"
         assert attributes["version"] == "1"

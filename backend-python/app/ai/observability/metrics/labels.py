@@ -10,6 +10,7 @@ ALLOWED_LABEL_KEYS = frozenset(
         "workflow_type",
         "node_type",
         "status",
+        "failure_code",
     }
 )
 
@@ -44,6 +45,19 @@ NODE_TYPE_REGISTRY = frozenset(
 )
 WORKFLOW_TYPE_REGISTRY = frozenset({"standard", "other"})
 STATUS_REGISTRY = frozenset({"succeeded", "failed", "skipped", "other"})
+FAILURE_CODE_REGISTRY = frozenset(
+    {
+        "none",
+        "manifest_not_found",
+        "invalid_manifest",
+        "unsupported_api_version",
+        "entrypoint_import_error",
+        "registration_error",
+        "timeout",
+        "allowlist_excluded",
+        "other",
+    }
+)
 
 _OTHER = "other"
 
@@ -83,6 +97,8 @@ def normalize_metric_label(dimension: str, raw_value: str | None) -> str:
         return value if value in WORKFLOW_TYPE_REGISTRY else _OTHER
     if dimension == "status":
         return _normalize_status(value)
+    if dimension == "failure_code":
+        return value if value in FAILURE_CODE_REGISTRY else _OTHER
     return _OTHER
 
 
