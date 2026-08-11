@@ -19,9 +19,9 @@ def test_load_valid_sample_yaml() -> None:
     dataset = load_dataset(DATA_DIR / "sample.yaml")
 
     assert dataset.path.name == "sample.yaml"
-    assert len(dataset.cases) == 15
+    assert len(dataset.cases) == 18
     levels = {case.level for case in dataset.cases}
-    assert levels == {"prompt", "retrieval", "e2e", "agent", "workflow"}
+    assert levels == {"prompt", "retrieval", "e2e", "agent", "workflow", "plugin"}
 
 
 def test_load_invalid_yaml_missing_cases(tmp_path: Path) -> None:

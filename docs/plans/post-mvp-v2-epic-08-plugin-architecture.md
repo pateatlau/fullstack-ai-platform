@@ -2,7 +2,7 @@
 epic: v2-08
 title: Plugin Architecture
 status: in_progress
-version: 1.6
+version: 1.7
 depends_on: [v2-07]
 provides:
   [
@@ -857,7 +857,7 @@ _Copy from Epic 07 Phase 10 completion record._
 | Integration tests        | Workflow **241** (207 package + 23 router + 11 workflow tool); observability router 15; streaming 26 |
 | Eval CLI                 | 15/15 `--level all`; regression check clean                             |
 | Observability            | Completed (Epic 07); `OBSERVABILITY_ENABLED` behind flag                |
-| Plugin Architecture      | Phases 0–7 complete — SDK, tool, prompt, workflow node, MCP server plugins, REST inventory API, and plugin load observability implemented |
+| Plugin Architecture      | Phases 0–8 complete — SDK, tool, prompt, workflow node, MCP server plugins, REST inventory API, plugin load observability, reference plugins, and plugin eval level implemented |
 
 ---
 
@@ -873,7 +873,7 @@ _Copy from Epic 07 Phase 10 completion record._
 | 5     | MCP Server Plugins & Versioning | M      | Completed   |
 | 6     | Plugin REST API & Health        | S      | Completed   |
 | 7     | Plugin Observability            | S      | Completed   |
-| 8     | Reference Plugins & Eval Cases  | M      | Not Started |
+| 8     | Reference Plugins & Eval Cases  | M      | Completed   |
 | 9     | Frontend Plugin Inventory       | S      | Not Started |
 | 10    | Validation & Release            | M      | Not Started |
 
@@ -1480,7 +1480,7 @@ No other metric labels on these counters (`kind`, `status`, `contribution_kind`,
 **Exit criteria**
 
 - [x] Observability tests pass.
-- [ ] User confirmation to proceed to Phase 8.
+- [x] User confirmation to proceed to Phase 8.
 
 **Rollback**
 
@@ -1495,13 +1495,14 @@ No other metric labels on these counters (`kind`, `status`, `contribution_kind`,
 | Observability suite       | ✅ 88 passed (`test_plugin_observability.py` + `tests/ai/observability/`) |
 | Plugin test suite         | ✅ 66 passed (`tests/ai/plugins/`)                                     |
 | Phase 7 status            | ✅ Completed                                                           |
-| Phase 8 authorized        | ⬜ Pending user confirmation                                           |
+| Phase 8 authorized        | ✅ Completed                                                           |
 
 ---
 
 # Phase 8 — Reference Plugins & Eval Cases
 
 **Effort:** M
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1519,23 +1520,23 @@ Ship git-tracked reference plugins demonstrating each contribution kind and exte
 
 ## Reference Plugins
 
-- [ ] Implement `echo-tool` plugin (`com.example.echo`) with prefixed tool name.
-- [ ] Implement `echo-workflow-node` plugin with `echo` node type.
-- [ ] Add `plugin.yaml` files with correct `api_version`.
+- [x] Implement `echo-tool` plugin (`com.example.echo`) with prefixed tool name.
+- [x] Implement `echo-workflow-node` plugin with `echo` node type.
+- [x] Add `plugin.yaml` files with correct `api_version`.
 
 ## Eval Extension
 
-- [ ] Add eval dataset cases (or `--level plugin` smoke cases gated on `PLUGINS_ENABLED`) following existing harness patterns.
-- [ ] Document skip policy when plugins disabled (similar to agent/workflow levels).
+- [x] Add eval dataset cases (or `--level plugin` smoke cases gated on `PLUGINS_ENABLED`) following existing harness patterns.
+- [x] Document skip policy when plugins disabled (similar to agent/workflow levels).
 
 ## Documentation
 
-- [ ] Document operator steps: enable flag, configure directories, restart.
+- [x] Document operator steps: enable flag, configure directories, restart.
 
 ## Testing
 
-- [ ] Integration test loading reference plugins from `backend-python/plugins/`.
-- [ ] Eval cases pass in CI when flags enabled.
+- [x] Integration test loading reference plugins from `backend-python/plugins/`.
+- [x] Eval cases pass in CI when flags enabled.
 
 **Verify**
 
@@ -1549,12 +1550,25 @@ Ship git-tracked reference plugins demonstrating each contribution kind and exte
 
 **Exit criteria**
 
-- Reference plugin tests pass.
-- User confirmation to proceed to Phase 9.
+- [x] Reference plugin tests pass.
+- [ ] User confirmation to proceed to Phase 9.
 
 **Rollback**
 
 - Remove reference plugins from default `plugin_directories` config.
+
+**Completion Record**
+
+| Metric                    | Result                                                                 |
+| ------------------------- | ---------------------------------------------------------------------- |
+| Reference plugin tests    | ✅ 4 passed (`tests/ai/plugins/test_reference_plugins.py`)             |
+| Plugin eval runner tests  | ✅ 6 passed (`tests/ai/evaluation/test_plugin_runner.py`)              |
+| Plugin test suite         | ✅ 76 passed (`tests/ai/plugins/` + plugin eval runner)                |
+| Reference plugins shipped | ✅ `plugins/echo-tool/`, `plugins/echo-workflow-node/`                 |
+| Eval `--level plugin`     | ✅ 3 cases in `sample.yaml`; skipped when `PLUGINS_ENABLED=false`      |
+| README                    | ✅ Reference plugins + operator steps documented                         |
+| Phase 8 status            | ✅ Completed                                                           |
+| Phase 9 authorized        | ⬜ Pending user confirmation                                           |
 
 ---
 
@@ -1786,3 +1800,4 @@ Execution of plugin tools and workflow nodes continues to emit existing `tool_sp
 | 1.4     | 2026-08-11 | Phase 5 complete: MCP server plugins, env-wins merge in `register_mcp_tools`, startup load logging, versioning hardening. Phase status table, step checklists, exit criteria, and completion record updated. |
 | 1.5     | 2026-08-11 | Phase 6 complete: authenticated plugin inventory REST API (`GET /api/plugins`, `GET /api/plugins/{plugin_id}`), `PluginsStore`, health plugin counts. Phase status table, step checklists, exit criteria, and completion record updated. |
 | 1.6     | 2026-08-11 | Phase 7 complete: `plugin_span`, `record_plugin_load_outcome`, load counters (`plugins_loaded_total`, `plugin_load_failures_total`) with bounded `failure_code` label, `PluginLoader` instrumentation. Phase status table, step checklists, exit criteria, and completion record updated. |
+| 1.7     | 2026-08-11 | Phase 8 complete: git-tracked reference plugins (`echo-tool`, `echo-workflow-node`), `--level plugin` eval harness with skip policy, integration tests, README operator docs. Phase status table, step checklists, exit criteria, and completion record updated. |

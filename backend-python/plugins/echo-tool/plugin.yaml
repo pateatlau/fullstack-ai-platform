@@ -1,0 +1,11 @@
+plugin_id: com.example.echo
+name: Echo Reference Plugin
+version: 1.0.0
+api_version: "1"
+description: Reference tool and prompt plugin for Epic 08.
+entrypoint: echo_plugin.register:register
+contributions:
+  - tool
+  - prompt
+author: Example Corp
+homepage: https://example.com/plugins/echo

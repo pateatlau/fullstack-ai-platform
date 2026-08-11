@@ -21,6 +21,10 @@ from app.ai.agent.models.request import AgentRequest
 from app.ai.agent.runtime.factory import create_default_agent
 from app.ai.documents.pipeline import IngestionPipeline
 from app.ai.evaluation.datasets import EvalCase, load_workflow_fixture
+from app.ai.plugins.bootstrap import load_plugins as orchestrate_load_plugins
+from app.ai.plugins.registry import PluginRegistry
+from app.ai.plugins.workflow.plugin_node import PluginNodeExecutor
+from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
 from app.ai.evaluation.metrics import (
     TARGET_RAG_RESPONSE_MS,
     TARGET_RETRIEVAL_MS,
@@ -33,9 +37,11 @@ from app.ai.evaluation.metrics import (
 )
 from app.ai.evaluation.report import EvalCaseResult
 from app.ai.prompts.manager import PromptManager, create_prompt_manager
+from app.ai.prompts.repository import PromptRepository
 from app.ai.rag.context_builder import ContextBuilder
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
+from app.ai.tools.schemas import ToolCall, ToolExecutionContext
 from app.ai.tools.stubs.echo import ECHO_TOOL_DEFINITION, EchoToolHandler
 from app.ai.workflow.conditions.evaluator import ConditionEvaluator
 from app.ai.workflow.manager import WorkflowManager
@@ -57,6 +63,7 @@ from app.ai.rag.prompt_builder import PromptBuilder
 from app.ai.rag.retriever import Retriever
 from app.ai.rag.service import RAGService
 from app.ai.vectorstores.pgvector import PgVectorStore
+from app.core.caller import CallerContext
 from app.core.config import Settings
 from app.db.documents import SqlDocumentStore
 from app.db.identity import SqlUserStore
@@ -77,6 +84,7 @@ from app.services.knowledge_service import KnowledgeService
 DOCUMENT_FIXTURES_ROOT = (
     Path(__file__).resolve().parents[3] / "tests" / "data" / "documents"
 )
+REFERENCE_PLUGINS_ROOT = Path(__file__).resolve().parents[3] / "plugins"
 EMBEDDING_DIMENSIONS = 1536
 _AGENT_EVAL_SUPPORTED_TOOLS: frozenset[str] = frozenset({"echo"})
 
@@ -711,6 +719,323 @@ class WorkflowEvalRunner:
             picture=None,
         )
         return user.id
+
+
+@dataclass(frozen=True)
+class PluginEvalRunner:
+    """Run plugin-level cases against git-tracked reference plugins."""
+
+    settings: Settings
+    session: AsyncSession | None = None
+    plugins_root: Path = REFERENCE_PLUGINS_ROOT
+
+    async def run_case(self, case: EvalCase) -> EvalCaseResult:
+        start = time.perf_counter()
+        if not self.settings.plugins_enabled:
+            return EvalCaseResult(
+                case_id=case.id,
+                level="plugin",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="PLUGINS_ENABLED=false",
+            )
+
+        plugin_kind = case.plugin_kind
+        if plugin_kind is None:
+            return _plugin_error_result(
+                case_id=case.id,
+                start=start,
+                message="plugin_kind is required for plugin cases.",
+            )
+
+        try:
+            if plugin_kind == "tool":
+                return await self._run_tool_case(case, start=start)
+            if plugin_kind == "prompt":
+                return self._run_prompt_case(case, start=start)
+            return await self._run_workflow_case(case, start=start)
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="plugin",
+                passed=False,
+                latency_ms=latency_ms,
+                error=str(exc),
+            )
+
+    async def _run_tool_case(
+        self,
+        case: EvalCase,
+        *,
+        start: float,
+    ) -> EvalCaseResult:
+        tool_name = case.plugin_tool_name
+        if tool_name is None:
+            return _plugin_error_result(
+                case_id=case.id,
+                start=start,
+                message="plugin_tool_name is required for tool plugin cases.",
+            )
+
+        tool_registry, _prompts, _plugin_registry, _workflow_registry = (
+            _load_reference_plugin_registries(
+                settings=self.settings,
+                plugins_root=self.plugins_root,
+            )
+        )
+        tool_executor = ToolExecutor(registry=tool_registry, settings=self.settings)
+        result = await tool_executor.execute(
+            ToolCall(name=tool_name, arguments=case.plugin_tool_arguments),
+            ToolExecutionContext(caller=CallerContext.for_user(uuid.uuid4())),
+        )
+        passed = result.success
+        if passed and case.expected_tool_data is not None:
+            passed = isinstance(result.data, dict) and dict(result.data) == dict(
+                case.expected_tool_data
+            )
+
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        return EvalCaseResult(
+            case_id=case.id,
+            level="plugin",
+            passed=passed,
+            latency_ms=latency_ms,
+            correctness=passed,
+        )
+
+    def _run_prompt_case(self, case: EvalCase, *, start: float) -> EvalCaseResult:
+        _tools, prompt_repository, _plugin_registry, _workflow_registry = (
+            _load_reference_plugin_registries(
+                settings=self.settings,
+                plugins_root=self.plugins_root,
+            )
+        )
+        prompt_manager = PromptManager(repository=prompt_repository)
+        rendered = prompt_manager.render(
+            case.prompt_category or "",
+            case.prompt_name or "",
+            case.prompt_version or "",
+            case.prompt_variables,
+        )
+        passed = True
+        if case.expected_render_exact is not None:
+            passed = rendered == case.expected_render_exact
+        for substring in case.expected_render_contains:
+            if substring not in rendered:
+                passed = False
+                break
+
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        return EvalCaseResult(
+            case_id=case.id,
+            level="plugin",
+            passed=passed,
+            latency_ms=latency_ms,
+            prompt_version=case.prompt_version,
+        )
+
+    async def _run_workflow_case(
+        self,
+        case: EvalCase,
+        *,
+        start: float,
+    ) -> EvalCaseResult:
+        if not self.settings.workflow_engine_enabled:
+            return EvalCaseResult(
+                case_id=case.id,
+                level="plugin",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="WORKFLOW_ENGINE_ENABLED=false",
+            )
+        if self.session is None:
+            return EvalCaseResult(
+                case_id=case.id,
+                level="plugin",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="Postgres not available (run from backend-python with DB up)",
+            )
+        if not await pgvector_available(self.session):
+            return EvalCaseResult(
+                case_id=case.id,
+                level="plugin",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="pgvector extension not available",
+            )
+
+        owner_id: uuid.UUID | None = None
+        try:
+            owner_id = await self._create_user()
+            tool_registry, prompt_repository, plugin_registry, workflow_registry = (
+                _load_reference_plugin_registries(
+                    settings=self.settings,
+                    plugins_root=self.plugins_root,
+                )
+            )
+            definition = _workflow_definition_from_case(case, owner_id=owner_id)
+            manager = _build_plugin_eval_workflow_manager(
+                session=self.session,
+                settings=self.settings,
+                tool_registry=tool_registry,
+                prompt_repository=prompt_repository,
+                plugin_registry=plugin_registry,
+                workflow_plugin_registry=workflow_registry,
+            )
+            created = await manager.create_definition(definition)
+            await self.session.commit()
+
+            run = await manager.start_run(
+                created.id,
+                owner_id=owner_id,
+                idempotency_key=f"eval-plugin-{case.id}-{uuid.uuid4()}",
+                trigger_input=case.trigger_input,
+                defer_schedule=True,
+            )
+            await self.session.commit()
+            manager.flush_deferred_run_schedules()
+            await _await_scheduled_run(manager)
+
+            final_run = await manager.get_run(run.id, owner_id=owner_id)
+            if final_run is None:
+                raise RuntimeError(f"Workflow run {run.id} not found after execution.")
+
+            terminal_status = final_run.status.value
+            expected_status = case.expected_terminal_status or ""
+            passed = terminal_status == expected_status
+            model, prompt_version = _workflow_reproducibility_metadata(definition)
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="plugin",
+                passed=passed,
+                latency_ms=latency_ms,
+                terminal_status=terminal_status,
+                model=model,
+                prompt_version=prompt_version,
+            )
+        except Exception as exc:
+            await self.session.rollback()
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="plugin",
+                passed=False,
+                latency_ms=latency_ms,
+                error=str(exc),
+            )
+        finally:
+            if owner_id is not None and self.session is not None:
+                await _cleanup_eval_workflow_owner(self.session, owner_id)
+
+    async def _create_user(self) -> uuid.UUID:
+        if self.session is None:
+            raise RuntimeError(
+                "Postgres session is required for plugin workflow cases."
+            )
+        user = await SqlUserStore(self.session).create(
+            sub=f"eval-plugin-{uuid.uuid4()}",
+            email=None,
+            name=None,
+            picture=None,
+        )
+        return user.id
+
+
+def _plugin_error_result(*, case_id: str, start: float, message: str) -> EvalCaseResult:
+    latency_ms = int((time.perf_counter() - start) * 1000)
+    return EvalCaseResult(
+        case_id=case_id,
+        level="plugin",
+        passed=False,
+        latency_ms=latency_ms,
+        error=message,
+    )
+
+
+def _load_reference_plugin_registries(
+    *,
+    settings: Settings,
+    plugins_root: Path,
+) -> tuple[ToolRegistry, PromptRepository, PluginRegistry, WorkflowPluginRegistry]:
+    tool_registry = ToolRegistry()
+    prompt_repository = PromptRepository()
+    plugin_registry = PluginRegistry()
+    workflow_plugin_registry = WorkflowPluginRegistry()
+    plugin_settings = settings.model_copy(
+        update={
+            "plugins_enabled": True,
+            "plugin_directories": [str(plugins_root)],
+        }
+    )
+    orchestrate_load_plugins(
+        plugin_settings,
+        tool_registry=tool_registry,
+        prompt_repository=prompt_repository,
+        plugin_registry=plugin_registry,
+        workflow_plugin_registry=workflow_plugin_registry,
+    )
+    return tool_registry, prompt_repository, plugin_registry, workflow_plugin_registry
+
+
+def _build_plugin_eval_workflow_manager(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    tool_registry: ToolRegistry,
+    prompt_repository: PromptRepository,
+    plugin_registry: PluginRegistry,
+    workflow_plugin_registry: WorkflowPluginRegistry,
+) -> WorkflowManager:
+    prompt_manager = PromptManager(repository=prompt_repository)
+    tool_executor = ToolExecutor(registry=tool_registry, settings=settings)
+    agent_runtime = create_default_agent(
+        settings=settings,
+        tool_registry=tool_registry,
+        prompt_manager=prompt_manager,
+        tool_executor=tool_executor,
+    )
+    store = PostgresWorkflowStore(session=session, settings=settings)
+
+    def background_store_factory(
+        bg_session: AsyncSession,
+    ) -> PostgresWorkflowStore:
+        return PostgresWorkflowStore(session=bg_session, settings=settings)
+
+    node_executors = {
+        NodeType.TASK: TaskNodeExecutor(tool_executor),
+        NodeType.LLM: LLMNodeExecutor(
+            prompt_manager=prompt_manager,
+            settings=settings,
+        ),
+        NodeType.AGENT: AgentNodeExecutor(agent_runtime, settings=settings),
+        NodeType.ROUTER: RouterNodeExecutor(ConditionEvaluator()),
+        NodeType.FORK: ForkNodeExecutor(
+            max_parallel_branches=settings.workflow_max_parallel_branches
+        ),
+        NodeType.JOIN: JoinNodeExecutor(),
+        NodeType.APPROVAL: ApprovalNodeExecutor(),
+        NodeType.PLUGIN: PluginNodeExecutor(
+            workflow_plugin_registry=workflow_plugin_registry,
+            settings=settings,
+        ),
+    }
+
+    return WorkflowManager(
+        store=store,
+        settings=settings,
+        node_executors=node_executors,
+        background_store_factory=background_store_factory,
+        tool_registry=tool_registry,
+        plugin_registry=plugin_registry,
+        workflow_plugin_registry=workflow_plugin_registry,
+    )
 
 
 async def _cleanup_eval_workflow_owner(

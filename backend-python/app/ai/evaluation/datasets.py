@@ -10,8 +10,9 @@ from typing import Any, Literal
 
 import yaml
 
-EvalLevel = Literal["prompt", "retrieval", "e2e", "agent", "workflow"]
+EvalLevel = Literal["prompt", "retrieval", "e2e", "agent", "workflow", "plugin"]
 AnswerMatchMode = Literal["exact", "contains", "fuzzy"]
+PluginKind = Literal["tool", "prompt", "workflow"]
 
 WORKFLOW_FIXTURES_ROOT = (
     Path(__file__).resolve().parents[3] / "tests" / "data" / "evaluation" / "workflows"
@@ -50,6 +51,10 @@ class EvalCase:
     expected_terminal_status: str | None = None
     model: str | None = None
     temperature: float | None = None
+    plugin_kind: PluginKind | None = None
+    plugin_tool_name: str | None = None
+    plugin_tool_arguments: dict[str, object] = field(default_factory=dict)
+    expected_tool_data: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +149,8 @@ def _parse_case(raw: dict[str, Any], *, index: int) -> EvalCase:
         return _parse_e2e_case(raw, case_id=case_id)
     if level == "agent":
         return _parse_agent_case(raw, case_id=case_id)
+    if level == "plugin":
+        return _parse_plugin_case(raw, case_id=case_id)
     return _parse_workflow_case(raw, case_id=case_id)
 
 
@@ -301,6 +308,62 @@ def _parse_agent_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
     )
 
 
+def _parse_plugin_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
+    plugin_kind = raw.get("plugin_kind")
+    if plugin_kind not in {"tool", "prompt", "workflow"}:
+        raise EvalDatasetError(
+            f"Case '{case_id}': plugin_kind must be tool, prompt, or workflow."
+        )
+
+    if plugin_kind == "tool":
+        tool_name = _require_str(raw, "plugin_tool_name", case_id=case_id)
+        arguments = raw.get("plugin_tool_arguments", {})
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            raise EvalDatasetError(
+                f"Case '{case_id}': plugin_tool_arguments must be a mapping."
+            )
+        expected_tool_data = raw.get("expected_tool_data")
+        if expected_tool_data is not None and not isinstance(expected_tool_data, dict):
+            raise EvalDatasetError(
+                f"Case '{case_id}': expected_tool_data must be a mapping when provided."
+            )
+        return EvalCase(
+            id=case_id,
+            level="plugin",
+            plugin_kind="tool",
+            plugin_tool_name=tool_name,
+            plugin_tool_arguments=arguments,
+            expected_tool_data=expected_tool_data,
+        )
+
+    if plugin_kind == "prompt":
+        prompt_case = _parse_prompt_case(raw, case_id=case_id)
+        return EvalCase(
+            id=prompt_case.id,
+            level="plugin",
+            plugin_kind="prompt",
+            prompt_category=prompt_case.prompt_category,
+            prompt_name=prompt_case.prompt_name,
+            prompt_version=prompt_case.prompt_version,
+            prompt_variables=prompt_case.prompt_variables,
+            expected_render_contains=prompt_case.expected_render_contains,
+            expected_render_exact=prompt_case.expected_render_exact,
+        )
+
+    workflow_case = _parse_workflow_case(raw, case_id=case_id)
+    return EvalCase(
+        id=workflow_case.id,
+        level="plugin",
+        plugin_kind="workflow",
+        workflow_definition=workflow_case.workflow_definition,
+        workflow_fixture=workflow_case.workflow_fixture,
+        trigger_input=workflow_case.trigger_input,
+        expected_terminal_status=workflow_case.expected_terminal_status,
+    )
+
+
 def _parse_workflow_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
     inline_definition = raw.get("workflow_definition")
     workflow_fixture = raw.get("workflow_fixture")
@@ -427,9 +490,10 @@ def _require_level(raw: dict[str, Any], *, index: int) -> EvalLevel:
         "e2e",
         "agent",
         "workflow",
+        "plugin",
     }:
         raise EvalDatasetError(
             f"Case at index {index}: level must be prompt, retrieval, e2e, agent, "
-            "or workflow."
+            "workflow, or plugin."
         )
     return value  # type: ignore[return-value]

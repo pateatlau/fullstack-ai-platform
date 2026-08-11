@@ -1,0 +1,10 @@
+plugin_id: com.example.echo.workflow
+name: Echo Workflow Node Reference Plugin
+version: 1.0.0
+api_version: "1"
+description: Reference workflow node plugin for Epic 08.
+entrypoint: echo_workflow_plugin.register:register
+contributions:
+  - workflow_node
+author: Example Corp
+homepage: https://example.com/plugins/echo-workflow

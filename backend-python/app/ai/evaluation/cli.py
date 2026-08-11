@@ -31,6 +31,7 @@ from app.ai.evaluation.regression import (
 from app.ai.evaluation.runners import (
     AgentEvalRunner,
     EndToEndEvalRunner,
+    PluginEvalRunner,
     PromptEvalRunner,
     RetrievalEvalRunner,
     WorkflowEvalRunner,
@@ -48,13 +49,17 @@ DEFAULT_REGRESSION_OUTPUT = Path(".eval/regression-result.json")
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run prompt, retrieval, e2e, agent, and workflow eval."
+        description="Run prompt, retrieval, e2e, agent, workflow, and plugin eval."
     )
     parser.add_argument(
         "--level",
-        choices=["prompt", "retrieval", "e2e", "agent", "workflow", "all"],
+        choices=["prompt", "retrieval", "e2e", "agent", "workflow", "plugin", "all"],
         default="all",
-        help="Evaluation level to run (default: all).",
+        help=(
+            "Evaluation level to run (default: all). "
+            "Use --level plugin for reference plugin smoke cases "
+            "(skipped when PLUGINS_ENABLED=false)."
+        ),
     )
     parser.add_argument(
         "--dataset",
@@ -114,6 +119,7 @@ def _settings_snapshot(settings: Settings) -> dict[str, object]:
         "default_temperature": settings.default_temperature,
         "agent_runtime_enabled": settings.agent_runtime_enabled,
         "workflow_engine_enabled": settings.workflow_engine_enabled,
+        "plugins_enabled": settings.plugins_enabled,
     }
 
 
@@ -203,12 +209,13 @@ async def _run_with_session(
     engine: AsyncEngine | None = None
 
     db_levels = levels & {"retrieval", "e2e", "workflow"}
-    if db_levels:
+    if db_levels or "plugin" in levels:
         postgres_ok, pgvector_ok, session, engine = await _probe_postgres(settings)
 
     report.run_environment = EvalRunEnvironment(
         agent_runtime_enabled=settings.agent_runtime_enabled,
         workflow_engine_enabled=settings.workflow_engine_enabled,
+        plugins_enabled=settings.plugins_enabled,
         postgres_available=postgres_ok,
         pgvector_available=pgvector_ok,
     )
@@ -237,7 +244,16 @@ async def _run_with_session(
         for case in filter_cases(dataset, "agent"):
             report.results.append(await agent_runner.run_case(case))
 
+    if "plugin" in levels:
+        plugin_runner = PluginEvalRunner(
+            settings=settings,
+            session=session,
+        )
+        for case in filter_cases(dataset, "plugin"):
+            report.results.append(await plugin_runner.run_case(case))
+
     if not db_levels:
+        await _dispose_db_resources(session, engine, rollback=True)
         return report, None
 
     if not postgres_ok:
@@ -253,9 +269,11 @@ async def _run_with_session(
         report.skipped_levels.append(
             f"{'/'.join(sorted(db_levels))} skipped — Postgres unavailable"
         )
+        await _dispose_db_resources(session, engine, rollback=True)
         return report, None
 
     if session is None or engine is None:
+        await _dispose_db_resources(session, engine, rollback=True)
         return report, None
 
     if levels & {"retrieval", "e2e"} and not pgvector_ok:
