@@ -16,6 +16,7 @@ from app.ai.hitl.service import AgentApprovalService
 from app.ai.hitl.store import AgentToolApprovalStore
 from app.ai.tools.schemas import ToolCall
 from app.db.models import ChatSession, User
+from tests.ai.hitl.fakes import InMemoryApprovalStore
 from tests.fakes import FakeChatStore
 
 
@@ -32,74 +33,13 @@ class TestScratchpadSnapshot:
         assert restored.to_snapshot() == scratchpad.to_snapshot()
 
 
-class InMemoryApprovalStore:
-    """Minimal store fake for pause unit tests."""
-
-    def __init__(self) -> None:
-        self.rows: list[AgentToolApproval] = []
-
-    async def create(
-        self,
-        *,
-        session_id: uuid.UUID,
-        owner_id: uuid.UUID,
-        execution_id: str,
-        approval_correlation_id: uuid.UUID,
-        proposed_calls: list[ProposedToolCall],
-        paused_scratchpad: list[dict[str, object]],
-        paused_state: dict[str, object],
-    ) -> AgentToolApproval:
-        import datetime
-
-        approval_id = uuid.uuid4()
-        row = AgentToolApproval(
-            id=approval_id,
-            session_id=session_id,
-            owner_id=owner_id,
-            execution_id=execution_id,
-            approval_correlation_id=approval_correlation_id,
-            status=ApprovalStatus.PENDING,
-            proposed_calls=proposed_calls,
-            edited_calls=None,
-            reason=None,
-            paused_scratchpad=paused_scratchpad,
-            paused_state=paused_state,
-            pending_message_id=None,
-            requested_at=datetime.datetime.now(datetime.UTC),
-            decided_at=None,
-            decided_by=None,
-            created_at=datetime.datetime.now(datetime.UTC),
-            updated_at=datetime.datetime.now(datetime.UTC),
-        )
-        self.rows.append(row)
-        return row
-
-    async def link_pending_message(
-        self,
-        approval_id: uuid.UUID,
-        *,
-        pending_message_id: uuid.UUID,
-    ) -> AgentToolApproval | None:
-        for row in self.rows:
-            if row.id == approval_id:
-                updated = row.model_copy(
-                    update={"pending_message_id": pending_message_id}
-                )
-                self.rows = [
-                    updated if existing.id == approval_id else existing
-                    for existing in self.rows
-                ]
-                return updated
-        return None
-
-
 @pytest.mark.anyio
 async def test_pause_persists_approval_and_placeholder_message() -> None:
     chat_store = FakeChatStore()
     session = await chat_store.create_session(user_id=uuid.uuid4())
     approval_store = InMemoryApprovalStore()
     service = AgentApprovalService(
-        approval_store=approval_store,
+        approval_store=approval_store,  # type: ignore[arg-type]
         chat_store=chat_store,
     )
     publisher = InMemoryStreamPublisher()
@@ -147,8 +87,6 @@ async def test_pause_persists_approval_and_placeholder_message() -> None:
 async def test_raise_pause_raises_canonical_error() -> None:
     from app.ai.hitl.service import raise_pause
     import datetime
-
-    from app.ai.hitl.models import AgentToolApproval
 
     approval = AgentToolApproval(
         id=uuid.uuid4(),

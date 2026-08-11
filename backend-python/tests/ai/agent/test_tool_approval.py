@@ -33,6 +33,7 @@ from app.ai.tools.stubs.echo import ECHO_TOOL_DEFINITION, echo_handler
 from app.core.caller import CallerContext
 from app.core.config import Settings
 from app.providers.base import ProviderToolCall, ProviderToolCompletion
+from tests.ai.hitl.fakes import InMemoryApprovalStore
 from tests.fakes import FakeChatStore, FakeProvider
 
 
@@ -96,10 +97,8 @@ def tool_context() -> ToolExecutionContext:
 
 
 def _approval_service(chat_store: FakeChatStore) -> AgentApprovalService:
-    from tests.ai.hitl.test_pause import InMemoryApprovalStore
-
     return AgentApprovalService(
-        approval_store=InMemoryApprovalStore(),
+        approval_store=InMemoryApprovalStore(),  # type: ignore[arg-type]
         chat_store=chat_store,
     )
 

@@ -57,5 +57,6 @@ class ToolExecutionContext(BaseModel):
     # invocations after crash recovery (Part I § Crash-safe running). Unused by
     # ToolExecutor itself and ``None`` outside workflow node execution.
     execution_receipt_id: str | None = None
+    approval_correlation_id: uuid.UUID | None = None
 
     model_config = {"arbitrary_types_allowed": True}

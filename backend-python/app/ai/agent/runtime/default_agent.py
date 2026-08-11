@@ -79,6 +79,14 @@ class DefaultAgent:
         """Yield typed progress events until the execution completes."""
         return self._stream(request, context)
 
+    def create_streaming_executor(
+        self,
+        request: AgentRequest,
+        publisher: StreamPublisher,
+    ) -> AgentExecutor:
+        """Build an :class:`AgentExecutor` wired to a caller-supplied publisher."""
+        return self._create_executor(request, publisher)
+
     async def _stream(
         self,
         request: AgentRequest,

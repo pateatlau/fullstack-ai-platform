@@ -170,6 +170,8 @@ def get_approval_policy(
 
 def get_agent_approval_service(
     session: AsyncSession = Depends(get_db_session),
+    tool_registry: ToolRegistry = Depends(get_tool_registry),
+    tool_executor: ToolExecutor = Depends(get_tool_executor),
 ) -> "AgentApprovalService":
     """Return a request-scoped agent approval orchestrator."""
     from app.ai.hitl.service import AgentApprovalService
@@ -179,6 +181,8 @@ def get_agent_approval_service(
     return AgentApprovalService(
         approval_store=AgentToolApprovalStore(session),
         chat_store=SqlChatStore(session),
+        tool_registry=tool_registry,
+        tool_executor=tool_executor,
     )
 
 
