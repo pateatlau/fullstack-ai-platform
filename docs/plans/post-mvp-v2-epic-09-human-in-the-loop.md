@@ -968,7 +968,7 @@ _Copy from Epic 08 Phase 10 completion record._
 
 | Phase | Name                                       | Effort | Status      |
 | ----- | ------------------------------------------ | ------ | ----------- |
-| 0     | Baseline Audit                             | XS     | Not Started |
+| 0     | Baseline Audit                             | XS     | Completed   |
 | 1     | HITL Foundations                           | M      | Not Started |
 | 2     | Agent Tool-Call Approval Gate              | L      | Not Started |
 | 3     | Agent Approval Decision & Resume           | L      | Not Started |
@@ -985,7 +985,7 @@ _Copy from Epic 08 Phase 10 completion record._
 # Phase 0 — Baseline Audit
 
 **Effort:** XS
-**Status:** Not Started
+**Status:** Completed (2026-08-11 — see [post-mvp-v2-epic9-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic9-phase-0-baseline-audit.md))
 
 **Objective**
 
@@ -1003,29 +1003,29 @@ Establish a verified implementation baseline before introducing Human-in-the-Loo
 
 ## Platform Verification
 
-- [ ] Confirm Epic 08 Phase 10 complete / authorized for Epic 09.
-- [ ] Inventory `ToolRunner._execute_with_retry` / `_run_single_tool` dispatch call site (`app/ai/agent/executor/tool_runner.py`).
-- [ ] Inventory `ApprovalNodeExecutor`, `WorkflowManager.apply_decision`, `build_approval_decision_output` (`app/ai/workflow/`).
-- [ ] Inventory `GraphValidator` current validation passes (`app/ai/workflow/graph/validator.py`).
-- [ ] Inventory `ChatMessage` status CHECK constraint and message persistence flow (`app/db/models.py`, `app/services/chat_service.py::_persist_stream_result`).
-- [ ] Verify chat, RAG, MCP, memory, voice, agent, tool, workflow, plugin, and observability pipelines operational.
+- [x] Confirm Epic 08 Phase 10 complete / authorized for Epic 09.
+- [x] Inventory `ToolRunner._execute_with_retry` / `_run_single_tool` dispatch call site (`app/ai/agent/executor/tool_runner.py`).
+- [x] Inventory `ApprovalNodeExecutor`, `WorkflowManager.apply_decision`, `build_approval_decision_output` (`app/ai/workflow/`).
+- [x] Inventory `GraphValidator` current validation passes (`app/ai/workflow/graph/validator.py`).
+- [x] Inventory `ChatMessage` status CHECK constraint and message persistence flow (`app/db/models.py`, `app/services/chat_service.py::_persist_stream_result`).
+- [x] Verify chat, RAG, MCP, memory, voice, agent, tool, workflow, plugin, and observability pipelines operational.
 
 ## Architecture Review
 
-- [ ] Review frozen Part I architecture.
-- [ ] Confirm `AgentExecutionStatus` and `AgentStreamEventType` current values and extension approach.
-- [ ] Confirm `Scratchpad`/`ScratchpadEntry` are Pydantic models suitable for JSON snapshotting.
-- [ ] Confirm no `app/ai/hitl/` package exists.
+- [x] Review frozen Part I architecture.
+- [x] Confirm `AgentExecutionStatus` and `AgentStreamEventType` current values and extension approach.
+- [x] Confirm `Scratchpad`/`ScratchpadEntry` are Pydantic models suitable for JSON snapshotting.
+- [x] Confirm no `app/ai/hitl/` package exists.
 
 ## Dependency Verification
 
-- [ ] Verify DI and feature flag patterns in `app/ai/deps.py` / `app/core/config.py`.
-- [ ] Verify Alembic migration numbering (next available revision).
+- [x] Verify DI and feature flag patterns in `app/ai/deps.py` / `app/core/config.py`.
+- [x] Verify Alembic migration numbering (next available revision: **0010**).
 
 ## Baseline Quality Validation
 
-- [ ] Execute lint, typecheck, unit tests, integration tests, eval suite.
-- [ ] Record baseline metrics in audit doc.
+- [x] Execute lint, typecheck, unit tests, integration tests, eval suite.
+- [x] Record baseline metrics in audit doc.
 
 **Verify**
 
@@ -1043,26 +1043,26 @@ Establish a verified implementation baseline before introducing Human-in-the-Loo
 
 **Exit criteria**
 
-- [ ] Baseline audit published.
+- [x] Baseline audit published.
 - [ ] User confirmation to proceed to Phase 1.
 
 **Rollback**
 
-- [ ] No rollback required (no code changes).
+- [x] No rollback required (no code changes).
 
 **Completion Record**
 
-| Metric             | Result          |
-| ------------------ | --------------- |
-| Lint               | Pending Phase 0 |
-| Format check       | Pending Phase 0 |
-| Typecheck          | Pending Phase 0 |
-| Backend tests      | Pending Phase 0 |
-| Eval CLI           | Pending Phase 0 |
-| Frontend tests     | Pending Phase 0 |
-| Baseline audit     | Pending Phase 0 |
-| Phase 0 status     | Not Started     |
-| Phase 1 authorized | Pending         |
+| Metric             | Result                                      |
+| ------------------ | ------------------------------------------- |
+| Lint               | ✅ PASS                                     |
+| Format check       | ✅ PASS — 530 files                         |
+| Typecheck          | ✅ PASS — 0 errors                          |
+| Backend tests      | ✅ 1778 passed, 89.19% `app/` coverage      |
+| Eval CLI           | ✅ 15/15 (`--level all`); 3/3 (`--level plugin`) |
+| Frontend tests     | ✅ 291 passed (48 files); lint + build pass |
+| Baseline audit     | ✅ [post-mvp-v2-epic9-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic9-phase-0-baseline-audit.md) |
+| Phase 0 status     | ✅ Completed                                |
+| Phase 1 authorized | ⬜ Pending user confirmation                |
 
 ---
 
@@ -1982,3 +1982,4 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
 | 1       | 2026-08-11 | Initial epic draft — Part I design + Part II 11-phase execution plan (Phases 0–10). Not started. |
 | 1.1     | 2026-08-11 | Incorporated architecture review: added `approval_revisions` history + `POST …/revise` endpoint, canonical `ApprovalResult` DTO, `approval_correlation_id` cross-system correlation, explicit Decision Execution Stages (aligned with future Epic 10 background jobs), execution-failure-vs-decision-status semantics, reserved `cancelled` status and approval lifecycle FSM diagram, `O(V+E)` graph-guard complexity note, `approval_decisions_total`/`hitl_resume_latency_ms`/`hitl_tool_execution_latency_ms` metrics and first-class approval tracing attributes, expanded adversarial/edge-case eval scenarios (Phase 8), Migration Impact Summary, Glossary, and Implementation Risks section. No architectural redesign — additive only. Not started. |
+| 1.2     | 2026-08-11 | Phase 0 baseline audit complete — [post-mvp-v2-epic9-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic9-phase-0-baseline-audit.md). Part II only. |
