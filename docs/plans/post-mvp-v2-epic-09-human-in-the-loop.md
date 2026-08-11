@@ -971,7 +971,7 @@ _Re-verified in Epic 09 Phase 0 (2026-08-11); source of truth: [post-mvp-v2-epic
 | 0     | Baseline Audit                             | XS     | Completed   |
 | 1     | HITL Foundations                           | M      | Completed   |
 | 2     | Agent Tool-Call Approval Gate              | L      | Completed   |
-| 3     | Agent Approval Decision & Resume           | L      | Not Started |
+| 3     | Agent Approval Decision & Resume           | L      | Completed   |
 | 4     | Workflow Approval Enhancements             | M      | Not Started |
 | 5     | Workflow Graph Guard & MCP/Plugin Coverage | M      | Not Started |
 | 6     | Unified Approval REST API & Audit          | S      | Not Started |
@@ -1218,7 +1218,7 @@ Wire `ApprovalPolicy` into `ToolRunner` so an approval-required tool call pauses
 **Exit criteria**
 
 - [x] Pause path tests pass.
-- [ ] User confirmation to proceed to Phase 3.
+- [x] User confirmation to proceed to Phase 3.
 
 **Rollback**
 
@@ -1233,14 +1233,14 @@ Wire `ApprovalPolicy` into `ToolRunner` so an approval-required tool call pauses
 | Typecheck          | ✅ PASS — 0 errors                          |
 | Pause path tests   | ✅ 9 passed (`test_pause.py`, `test_tool_approval.py`) |
 | Phase 2 status     | ✅ Completed                                |
-| Phase 3 authorized | ⬜ Pending user confirmation                |
+| Phase 3 authorized | ✅ User confirmed                           |
 
 ---
 
 # Phase 3 — Agent Approval Decision & Resume
 
 **Effort:** L
-**Status:** Not Started
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1260,44 +1260,44 @@ Implement `AgentApprovalService.decide()`: record the decision via Compare-And-S
 
 ## Decision Recording (Stage 1)
 
-- [ ] Implement Compare-And-Swap (CAS) update (`UPDATE agent_tool_approvals SET status=… WHERE id=… AND status='pending'`); `409` on conflict/duplicate.
-- [ ] On reject: set `decided_by`, `decided_at`, `reason`; update linked `ChatMessage.status=rejected`; build `ApprovalResult(status=rejected, ...)`; return JSON, no resume.
-- [ ] Resolve the `ApprovalResult.final_payload` from the latest `ApprovalRevision` (if any) or the original `proposed_calls` otherwise.
+- [x] Implement Compare-And-Swap (CAS) update (`UPDATE agent_tool_approvals SET status=… WHERE id=… AND status='pending'`); `409` on conflict/duplicate.
+- [x] On reject: set `decided_by`, `decided_at`, `reason`; update linked `ChatMessage.status=rejected`; build `ApprovalResult(status=rejected, ...)`; return JSON, no resume.
+- [x] Resolve the `ApprovalResult.final_payload` from the latest `ApprovalRevision` (if any) or the original `proposed_calls` otherwise.
 
 ## Pre-Decision Revise
 
-- [ ] Implement `AgentApprovalService.revise(approval_id, edited_calls, note, owner_id)`: `422` if any call fails `ToolValidator`; otherwise Compare-And-Swap (CAS)-guarded (`WHERE status='pending'`) — `409` if the approval already has a terminal status.
-- [ ] On success, append an `ApprovalRevision` row (`revision_number` = previous max + 1) and update `agent_tool_approvals.edited_calls` to the new value in the same transaction.
-- [ ] `GET /api/approvals/{id}/revisions` returns the full ordered list for either approval kind.
+- [x] Implement `AgentApprovalService.revise(approval_id, edited_calls, note, owner_id)`: `422` if any call fails `ToolValidator`; otherwise Compare-And-Swap (CAS)-guarded (`WHERE status='pending'`) — `409` if the approval already has a terminal status.
+- [x] On success, append an `ApprovalRevision` row (`revision_number` = previous max + 1) and update `agent_tool_approvals.edited_calls` to the new value in the same transaction.
+- [x] `GET /api/approvals/{id}/revisions` returns the full ordered list for either approval kind.
 
 ## Approve Path (Stages 2–4)
 
-- [ ] Validate `edited_calls` (if present on the decide call itself) per call via `ToolValidator` against the resolved `ToolDefinition`; `422` on failure, pause remains `pending`. If omitted, use the latest `ApprovalRevision`'s payload (if any).
-- [ ] If the decide call itself supplies `edited_calls`, append one more `ApprovalRevision` before proceeding (Stage 1 completes the full edit history).
-- [ ] Rehydrate `Scratchpad` from `paused_scratchpad` and `AgentExecutionState` from `paused_state` (Stage 2 — resume scheduled).
-- [ ] Execute approved (possibly edited) calls directly via `ToolExecutor.execute()` (bypassing the gate — already satisfied), passing `approval_correlation_id` through `ToolExecutionContext` (Stage 3 — tool execution). On execution failure, leave `agent_tool_approvals.status=approved` unchanged — record the failure on the resumed turn only (see Part I § Execution Failure Semantics).
-- [ ] Append tool results to the rehydrated scratchpad (reuse `_record_tool_results` pattern).
-- [ ] Implement `AgentExecutor.resume_from_approval(scratchpad, state, request, context, tool_context)` — re-enters the loop at the `PLANNING` transition and continues to finalize or a subsequent pause (Stage 4 — continuation).
+- [x] Validate `edited_calls` (if present on the decide call itself) per call via `ToolValidator` against the resolved `ToolDefinition`; `422` on failure, pause remains `pending`. If omitted, use the latest `ApprovalRevision`'s payload (if any).
+- [x] If the decide call itself supplies `edited_calls`, append one more `ApprovalRevision` before proceeding (Stage 1 completes the full edit history).
+- [x] Rehydrate `Scratchpad` from `paused_scratchpad` and `AgentExecutionState` from `paused_state` (Stage 2 — resume scheduled).
+- [x] Execute approved (possibly edited) calls directly via `ToolExecutor.execute()` (bypassing the gate — already satisfied), passing `approval_correlation_id` through `ToolExecutionContext` (Stage 3 — tool execution). On execution failure, leave `agent_tool_approvals.status=approved` unchanged — record the failure on the resumed turn only (see Part I § Execution Failure Semantics).
+- [x] Append tool results to the rehydrated scratchpad (reuse `_record_tool_results` pattern).
+- [x] Implement `AgentExecutor.resume_from_approval(scratchpad, state, request, context, tool_context)` — re-enters the loop at the `PLANNING` transition and continues to finalize or a subsequent pause (Stage 4 — continuation).
 
 ## Streaming & Persistence
 
-- [ ] Stream the resumed loop's events (`delta`/`tool_start`/`tool_end`/`approval_required`/`end`/`error`) as the decide endpoint's SSE body.
-- [ ] On finalize, update the placeholder `ChatMessage` in place (status=complete, final content, finish_reason) rather than inserting a new row.
-- [ ] On a subsequent pause within the same resumed turn, insert a new `agent_tool_approvals` row (independent from the first, with its own `approval_correlation_id`).
+- [x] Stream the resumed loop's events (`delta`/`tool_start`/`tool_end`/`approval_required`/`end`/`error`) as the decide endpoint's SSE body.
+- [x] On finalize, update the placeholder `ChatMessage` in place (status=complete, final content, finish_reason) rather than inserting a new row.
+- [x] On a subsequent pause within the same resumed turn, insert a new `agent_tool_approvals` row (independent from the first, with its own `approval_correlation_id`).
 
 ## Testing
 
-- [ ] Test: approve as-is → tool executes with original arguments → turn finalizes.
-- [ ] Test: approve with `edited_calls` → tool executes with edited arguments; one `ApprovalRevision` recorded.
-- [ ] Test: approve with invalid `edited_calls` → `422`, pause remains `pending`, no revision appended.
-- [ ] Test: revise once, then revise again → two ordered `ApprovalRevision` rows; `edited_calls` reflects the latest.
-- [ ] Test: revise with invalid payload → `422`, no revision appended.
-- [ ] Test: revise after a terminal decision → `409`.
-- [ ] Test: reject → tool never executes; `ChatMessage.status=rejected`; `ApprovalResult.status=rejected`.
-- [ ] Test: duplicate decision → `409`.
-- [ ] Test: resumed turn hits a second approval-required call → second pause recorded with a new `approval_correlation_id`.
-- [ ] Test: approved call's execution fails (mocked `ToolExecutor` failure) → `agent_tool_approvals.status` remains `approved`; resumed `ChatMessage.status=error`.
-- [ ] Test: flag off — decide/revise endpoints return `503`.
+- [x] Test: approve as-is → tool executes with original arguments → turn finalizes.
+- [x] Test: approve with `edited_calls` → tool executes with edited arguments; one `ApprovalRevision` recorded.
+- [x] Test: approve with invalid `edited_calls` → `422`, pause remains `pending`, no revision appended.
+- [x] Test: revise once, then revise again → two ordered `ApprovalRevision` rows; `edited_calls` reflects the latest.
+- [x] Test: revise with invalid payload → `422`, no revision appended.
+- [x] Test: revise after a terminal decision → `409`.
+- [x] Test: reject → tool never executes; `ChatMessage.status=rejected`; `ApprovalResult.status=rejected`.
+- [x] Test: duplicate decision → `409`.
+- [x] Test: resumed turn hits a second approval-required call → second pause recorded with a new `approval_correlation_id`.
+- [x] Test: approved call's execution fails (mocked `ToolExecutor` failure) → `agent_tool_approvals.status` remains `approved`; resumed `ChatMessage.status=error`.
+- [x] Test: flag off — decide/revise endpoints return `503`.
 
 **Verify**
 
@@ -1313,7 +1313,7 @@ Implement `AgentApprovalService.decide()`: record the decision via Compare-And-S
 
 **Exit criteria**
 
-- [ ] Decision/resume tests pass.
+- [x] Decision/resume tests pass.
 - [ ] User confirmation to proceed to Phase 4.
 
 **Rollback**
@@ -1323,14 +1323,15 @@ Implement `AgentApprovalService.decide()`: record the decision via Compare-And-S
 
 **Completion Record**
 
-| Metric                | Result          |
-| --------------------- | --------------- |
-| Lint                  | Pending Phase 3 |
-| Typecheck             | Pending Phase 3 |
-| Decision/resume tests | Pending Phase 3 |
-| Revision history tests | Pending Phase 3 |
-| Phase 3 status        | Not Started     |
-| Phase 4 authorized    | Pending         |
+| Metric                | Result                                      |
+| --------------------- | ------------------------------------------- |
+| Lint                  | ✅ PASS                                     |
+| Typecheck             | ✅ PASS — 0 errors (`app/ai/hitl/`)         |
+| Decision/resume tests | ✅ 26 passed (Phase 3 verify suite)         |
+| Revision history tests | ✅ covered in `test_revise.py` + decide tests |
+| PR review hardening   | ✅ SSE publisher cleanup on early failure; revision row lock (`FOR UPDATE`); `AgentApprovalStore` protocol |
+| Phase 3 status        | ✅ Completed                                |
+| Phase 4 authorized    | ⬜ Pending user confirmation                |
 
 ---
 
@@ -1985,3 +1986,4 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 | 1.2     | 2026-08-11 | Phase 0 baseline audit complete — [post-mvp-v2-epic9-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic9-phase-0-baseline-audit.md). Part II only. |
 | 1.3     | 2026-08-11 | Phase 1 HITL foundations complete — `app/ai/hitl/` package, migration `0010_hitl_tables`, `ToolDefinition.requires_approval`, `HITL_ENABLED` config, foundation tests. Part II only. |
 | 1.4     | 2026-08-11 | Phase 2 agent tool-call approval gate complete — `ToolRunner` pause gate, `AgentApprovalService.pause()`, `AgentToolApprovalStore`, `approval_required` SSE, pause path tests. Part II only. |
+| 1.5     | 2026-08-11 | Phase 3 agent approval decision & resume complete — `AgentApprovalService.revise()`/`decide()`/`approve_and_resume()`, `AgentExecutor.resume_from_approval()`, REST endpoints (`POST …/revise`, `POST …/decide`, `GET …/revisions`), `ChatStore.update_message`, 26-test verify suite; PR hardening (SSE stream cleanup, revision row lock, `AgentApprovalStore` protocol). Part II only. |

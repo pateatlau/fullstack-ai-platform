@@ -98,7 +98,7 @@ def tool_context() -> ToolExecutionContext:
 
 def _approval_service(chat_store: FakeChatStore) -> AgentApprovalService:
     return AgentApprovalService(
-        approval_store=InMemoryApprovalStore(),  # type: ignore[arg-type]
+        approval_store=InMemoryApprovalStore(),
         chat_store=chat_store,
     )
 

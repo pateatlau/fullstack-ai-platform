@@ -201,10 +201,11 @@ async def _stream_approved_decision(
     agent: DefaultAgent,
 ) -> AsyncIterator[str]:
     assert caller.user_id is not None
+    owner_id = caller.user_id
     try:
         approval = await approval_service.get_owned_approval(
             approval_id,
-            owner_id=caller.user_id,
+            owner_id=owner_id,
         )
     except HitlError as exc:
         _raise_hitl_error(exc)
@@ -232,19 +233,23 @@ async def _stream_approved_decision(
     executor = agent.create_streaming_executor(request, publisher)
     response_id = str(approval_id)
 
-    task = asyncio.create_task(
-        approval_service.approve_and_resume(
-            approval_id,
-            owner_id=caller.user_id,
-            executor=executor,
-            request=request,
-            context=context,
-            tool_context=tool_context,
-            stream_publisher=publisher,
-            edited_calls=body.edited_calls,
-            reason=body.reason,
-        )
-    )
+    async def _run_approval_resume():
+        try:
+            return await approval_service.approve_and_resume(
+                approval_id,
+                owner_id=owner_id,
+                executor=executor,
+                request=request,
+                context=context,
+                tool_context=tool_context,
+                stream_publisher=publisher,
+                edited_calls=body.edited_calls,
+                reason=body.reason,
+            )
+        finally:
+            await publisher.close()
+
+    task = asyncio.create_task(_run_approval_resume())
 
     try:
         while True:
@@ -265,6 +270,7 @@ async def _stream_approved_decision(
     except HitlError as exc:
         _raise_hitl_error(exc)
     finally:
+        await publisher.close()
         if not task.done():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

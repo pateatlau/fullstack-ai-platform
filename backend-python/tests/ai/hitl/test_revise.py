@@ -73,7 +73,7 @@ async def test_revise_twice_records_ordered_revisions() -> None:
     store = InMemoryApprovalStore()
     chat_store = FakeChatStore()
     service = AgentApprovalService(
-        approval_store=store,  # type: ignore[arg-type]
+        approval_store=store,
         chat_store=chat_store,
         tool_registry=_registry(),
     )
@@ -103,7 +103,7 @@ async def test_revise_invalid_payload_raises_422() -> None:
     owner_id = uuid.uuid4()
     store = InMemoryApprovalStore()
     service = AgentApprovalService(
-        approval_store=store,  # type: ignore[arg-type]
+        approval_store=store,
         chat_store=FakeChatStore(),
         tool_registry=_registry(),
     )
@@ -130,7 +130,7 @@ async def test_revise_after_terminal_decision_raises_409() -> None:
     owner_id = uuid.uuid4()
     store = InMemoryApprovalStore()
     service = AgentApprovalService(
-        approval_store=store,  # type: ignore[arg-type]
+        approval_store=store,
         chat_store=FakeChatStore(),
         tool_registry=_registry(),
     )

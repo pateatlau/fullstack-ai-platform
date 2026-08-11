@@ -36,12 +36,75 @@ from app.ai.hitl.models import (
     ApprovalStatus,
     ProposedToolCall,
 )
-from app.ai.hitl.store import AgentToolApprovalStore
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext
 from app.ai.tools.validator import ToolValidator
 from app.db.models import ChatMessage
+
+
+class AgentApprovalStore(Protocol):
+    async def create(
+        self,
+        *,
+        session_id: uuid.UUID,
+        owner_id: uuid.UUID,
+        execution_id: str,
+        approval_correlation_id: uuid.UUID,
+        proposed_calls: list[ProposedToolCall],
+        paused_scratchpad: list[dict[str, object]],
+        paused_state: dict[str, object],
+    ) -> AgentToolApproval: ...
+
+    async def link_pending_message(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        pending_message_id: uuid.UUID,
+    ) -> AgentToolApproval | None: ...
+
+    async def require_for_owner(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+    ) -> AgentToolApproval: ...
+
+    async def cas_revise(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        edited_calls: list[ProposedToolCall],
+    ) -> AgentToolApproval: ...
+
+    async def append_revision(
+        self,
+        *,
+        approval_id: uuid.UUID,
+        approval_kind: ApprovalKind,
+        edited_by: uuid.UUID,
+        edited_payload: list[ProposedToolCall] | dict[str, object],
+        note: str | None = None,
+    ) -> ApprovalRevision: ...
+
+    async def cas_decide(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        status: ApprovalStatus,
+        decided_by: uuid.UUID,
+        reason: str | None = None,
+        edited_calls: list[ProposedToolCall] | None = None,
+    ) -> AgentToolApproval: ...
+
+    async def list_revisions(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        approval_kind: ApprovalKind,
+    ) -> list[ApprovalRevision]: ...
 
 
 class HitlChatStore(Protocol):
@@ -84,7 +147,7 @@ class AgentApprovalService:
     def __init__(
         self,
         *,
-        approval_store: AgentToolApprovalStore,
+        approval_store: AgentApprovalStore,
         chat_store: HitlChatStore,
         tool_registry: ToolRegistry | None = None,
         tool_executor: ToolExecutor | None = None,

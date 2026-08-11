@@ -125,7 +125,7 @@ def _service(
     registry: ToolRegistry,
 ) -> AgentApprovalService:
     return AgentApprovalService(
-        approval_store=store,  # type: ignore[arg-type]
+        approval_store=store,
         chat_store=chat_store,
         tool_registry=registry,
         tool_executor=ToolExecutor(registry=registry, settings=Settings()),

@@ -16,7 +16,11 @@ from app.ai.hitl.models import (
     ApprovalStatus,
     ProposedToolCall,
 )
-from app.db.models import AgentToolApprovalRecord, ApprovalRevisionRecord
+from app.db.models import (
+    AgentToolApprovalRecord,
+    ApprovalRevisionRecord,
+    WorkflowNodeExecutionRecord,
+)
 
 
 class AgentToolApprovalStore:
@@ -227,6 +231,7 @@ class AgentToolApprovalStore:
         edited_payload: list[ProposedToolCall] | dict[str, object],
         note: str | None = None,
     ) -> ApprovalRevision:
+        await self._lock_revision_parent(approval_id, approval_kind=approval_kind)
         max_number = await self._session.scalar(
             select(func.max(ApprovalRevisionRecord.revision_number)).where(
                 ApprovalRevisionRecord.approval_id == approval_id,
@@ -252,6 +257,33 @@ class AgentToolApprovalStore:
         await self._session.flush()
         await self._session.refresh(row)
         return _revision_to_domain(row)
+
+    async def _lock_revision_parent(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        approval_kind: ApprovalKind,
+    ) -> None:
+        """Serialize concurrent revision writers for one approval (``FOR UPDATE``)."""
+        if approval_kind == ApprovalKind.AGENT_TOOL:
+            row = await self._session.scalar(
+                select(AgentToolApprovalRecord)
+                .where(AgentToolApprovalRecord.id == approval_id)
+                .with_for_update()
+            )
+        elif approval_kind == ApprovalKind.WORKFLOW_NODE:
+            row = await self._session.scalar(
+                select(WorkflowNodeExecutionRecord)
+                .where(WorkflowNodeExecutionRecord.id == approval_id)
+                .with_for_update()
+            )
+        else:
+            raise ValueError(f"Unsupported approval kind: {approval_kind.value}")
+
+        if row is None:
+            raise ApprovalNotFoundError(
+                f"Approval {approval_id} not found for kind {approval_kind.value}."
+            )
 
     async def list_revisions(
         self,

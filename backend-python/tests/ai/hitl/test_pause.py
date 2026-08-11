@@ -39,7 +39,7 @@ async def test_pause_persists_approval_and_placeholder_message() -> None:
     session = await chat_store.create_session(user_id=uuid.uuid4())
     approval_store = InMemoryApprovalStore()
     service = AgentApprovalService(
-        approval_store=approval_store,  # type: ignore[arg-type]
+        approval_store=approval_store,
         chat_store=chat_store,
     )
     publisher = InMemoryStreamPublisher()
