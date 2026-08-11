@@ -253,6 +253,7 @@ async def _run_with_session(
             report.results.append(await plugin_runner.run_case(case))
 
     if not db_levels:
+        await _dispose_db_resources(session, engine, rollback=True)
         return report, None
 
     if not postgres_ok:
@@ -268,9 +269,11 @@ async def _run_with_session(
         report.skipped_levels.append(
             f"{'/'.join(sorted(db_levels))} skipped — Postgres unavailable"
         )
+        await _dispose_db_resources(session, engine, rollback=True)
         return report, None
 
     if session is None or engine is None:
+        await _dispose_db_resources(session, engine, rollback=True)
         return report, None
 
     if levels & {"retrieval", "e2e"} and not pgvector_ok:
