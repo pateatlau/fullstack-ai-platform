@@ -25,6 +25,9 @@ async def test_health_returns_expected_shape() -> None:
         "memory_enabled": get_settings().memory_enabled,
         "workflow_engine_enabled": get_settings().workflow_engine_enabled,
         "observability_enabled": get_settings().observability_enabled,
+        "plugins_enabled": get_settings().plugins_enabled,
+        "plugins_loaded_count": 0,
+        "plugins_failed_count": 0,
         "capabilities": {
             "by_provider": capabilities_by_provider(get_settings()),
         },

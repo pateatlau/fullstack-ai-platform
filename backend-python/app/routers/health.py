@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.ai.deps import get_plugin_registry
+from app.ai.plugins.registry import PluginRegistry
 from app.core.config import APP_VERSION, Settings, get_settings
 from app.core.errors import DATABASE_ERROR_MESSAGE, error_response
 from app.db.engine import get_engine
@@ -11,7 +13,11 @@ router = APIRouter()
 
 
 @router.get("/api/health")
-async def health(settings: Settings = Depends(get_settings)) -> dict[str, object]:
+async def health(
+    settings: Settings = Depends(get_settings),
+    plugin_registry: PluginRegistry = Depends(get_plugin_registry),
+) -> dict[str, object]:
+    plugins_enabled = settings.plugins_enabled
     return {
         "status": "ok",
         "provider": settings.llm_provider,
@@ -23,6 +29,13 @@ async def health(settings: Settings = Depends(get_settings)) -> dict[str, object
         "memory_enabled": settings.memory_enabled,
         "workflow_engine_enabled": settings.workflow_engine_enabled,
         "observability_enabled": settings.observability_enabled,
+        "plugins_enabled": plugins_enabled,
+        "plugins_loaded_count": (
+            plugin_registry.loaded_count if plugins_enabled else 0
+        ),
+        "plugins_failed_count": (
+            plugin_registry.failed_count if plugins_enabled else 0
+        ),
         "capabilities": {
             "by_provider": capabilities_by_provider(settings),
         },
