@@ -20,13 +20,14 @@ from app.ai.hitl.models import (
 )
 from app.ai.hitl.policy import ApprovalPolicy
 from app.ai.hitl.service import AgentApprovalService
-from app.ai.hitl.store import AgentToolApprovalStore
+from app.ai.hitl.store import AgentToolApprovalStore, ApprovalsStore
 
 __all__ = [
     "AgentApprovalPauseError",
     "AgentApprovalService",
     "AgentToolApproval",
     "AgentToolApprovalStore",
+    "ApprovalsStore",
     "ApprovalAuditEntry",
     "ApprovalDecisionConflictError",
     "ApprovalKind",

@@ -1,10 +1,37 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.ai.deps import get_plugin_registry
-from app.core.config import APP_VERSION, get_settings
+from app.ai.deps import get_approvals_store, get_plugin_registry
+from app.core.config import APP_VERSION, Settings, get_settings
 from app.main import app
 from app.providers.capabilities import capabilities_by_provider
+
+
+class _FailingApprovalsStore:
+    async def count_pending(self) -> int:
+        raise RuntimeError("database unavailable")
+
+
+@pytest.mark.anyio
+async def test_health_hitl_pending_count_defaults_to_zero_on_db_error() -> None:
+    settings = Settings(hitl_enabled=True)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_approvals_store] = lambda: _FailingApprovalsStore()
+
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.get("/api/health")
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+        app.dependency_overrides.pop(get_approvals_store, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["hitl_enabled"] is True
+    assert body["hitl_pending_approvals_count"] == 0
 
 
 @pytest.mark.anyio
@@ -29,6 +56,8 @@ async def test_health_returns_expected_shape() -> None:
         "memory_enabled": settings.memory_enabled,
         "workflow_engine_enabled": settings.workflow_engine_enabled,
         "observability_enabled": settings.observability_enabled,
+        "hitl_enabled": settings.hitl_enabled,
+        "hitl_pending_approvals_count": 0,
         "plugins_enabled": plugins_enabled,
         "plugins_loaded_count": (
             plugin_registry.loaded_count if plugins_enabled else 0
