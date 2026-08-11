@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -12,7 +13,7 @@ from fastapi import FastAPI
 
 from app.ai.deps import get_plugin_registry, get_plugins_store
 from app.ai.plugins.store import PluginsStore
-from app.core.config import Settings, get_settings
+from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.security import create_access_token
 from app.db.identity import SqlUserStore
@@ -27,13 +28,18 @@ _PLUGIN_ROUTES = [
 ]
 
 
-def _plugins_settings() -> Settings:
-    return Settings(openai_api_key="test-key", plugins_enabled=True)
-
-
 def _auth_headers(user_id: uuid.UUID) -> dict[str, str]:
     token = create_access_token(user_id=user_id, settings=get_settings())
     return {"Authorization": f"Bearer {token}"}
+
+
+def _assert_plugin_directories_omitted(
+    serialized: str,
+    plugin_directories: list[str],
+) -> None:
+    for directory in plugin_directories:
+        assert Path(directory).resolve().as_posix() not in serialized
+    assert "plugin.yaml" not in serialized
 
 
 def _build_test_app(*, include_health: bool = False) -> FastAPI:
@@ -191,9 +197,8 @@ async def test_list_plugins_includes_null_plugin_id_manifest_failures(
     user_id = await _make_user(db_session)
     headers = _auth_headers(user_id)
     (tmp_path / "empty-plugin").mkdir()
-    _, registry, _tools, _prompts = load_plugins(
-        plugin_settings(directories=[str(tmp_path)])
-    )
+    settings = plugin_settings(directories=[str(tmp_path)])
+    _, registry, _tools, _prompts = load_plugins(settings)
     _bind_plugin_registry(plugins_api_app, registry)
 
     async with AsyncClient(
@@ -209,19 +214,19 @@ async def test_list_plugins_includes_null_plugin_id_manifest_failures(
     assert record["plugin_id"] is None
     assert record["failure"]["code"] == "manifest_not_found"
     assert "load_duration_ms" in record
+    _assert_plugin_directories_omitted(json.dumps(body), settings.plugin_directories)
+    assert "empty-plugin" not in json.dumps(body)
 
 
 @pytest.mark.anyio
 async def test_plugin_responses_omit_metadata_and_paths(
     db_session,
     plugins_api_app: FastAPI,
-    tmp_path,
 ) -> None:
     user_id = await _make_user(db_session)
     headers = _auth_headers(user_id)
-    _, registry, _tools, _prompts = load_plugins(
-        plugin_settings(allowlist=["com.test.rich"])
-    )
+    settings = plugin_settings(allowlist=["com.test.rich"])
+    _, registry, _tools, _prompts = load_plugins(settings)
     _bind_plugin_registry(plugins_api_app, registry)
 
     async with AsyncClient(
@@ -242,9 +247,7 @@ async def test_plugin_responses_omit_metadata_and_paths(
     assert "metadata" not in detail_response.json()
     assert "team" not in serialized
     assert "tier" not in serialized
-    assert "fixtures" not in serialized
-    assert "plugin.yaml" not in serialized
-    assert tmp_path.as_posix() not in serialized
+    _assert_plugin_directories_omitted(serialized, settings.plugin_directories)
 
 
 @pytest.mark.anyio

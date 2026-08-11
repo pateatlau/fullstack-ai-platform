@@ -2,7 +2,7 @@
 epic: v2-08
 title: Plugin Architecture
 status: in_progress
-version: 1.4
+version: 1.5
 depends_on: [v2-07]
 provides:
   [
@@ -857,7 +857,7 @@ _Copy from Epic 07 Phase 10 completion record._
 | Integration tests        | Workflow **241** (207 package + 23 router + 11 workflow tool); observability router 15; streaming 26 |
 | Eval CLI                 | 15/15 `--level all`; regression check clean                             |
 | Observability            | Completed (Epic 07); `OBSERVABILITY_ENABLED` behind flag                |
-| Plugin Architecture      | Phases 0–5 complete — SDK, tool, prompt, workflow node, and MCP server plugins implemented |
+| Plugin Architecture      | Phases 0–6 complete — SDK, tool, prompt, workflow node, MCP server plugins, and REST inventory API implemented |
 
 ---
 
@@ -871,7 +871,7 @@ _Copy from Epic 07 Phase 10 completion record._
 | 3     | Prompt Plugins                  | M      | Completed   |
 | 4     | Workflow Node Plugins           | L      | Completed   |
 | 5     | MCP Server Plugins & Versioning | M      | Completed   |
-| 6     | Plugin REST API & Health        | S      | Not Started |
+| 6     | Plugin REST API & Health        | S      | Completed   |
 | 7     | Plugin Observability            | S      | Not Started |
 | 8     | Reference Plugins & Eval Cases  | M      | Not Started |
 | 9     | Frontend Plugin Inventory       | S      | Not Started |
@@ -1332,7 +1332,7 @@ Merge plugin-declared MCP servers into startup registration; finalize versioning
 **Exit criteria**
 
 - [x] MCP plugin tests pass.
-- [ ] User confirmation to proceed to Phase 6.
+- [x] User confirmation to proceed to Phase 6.
 
 **Rollback**
 
@@ -1348,13 +1348,14 @@ Merge plugin-declared MCP servers into startup registration; finalize versioning
 | MCP suite           | ✅ 197 passed (`tests/ai/plugins/test_mcp_plugins.py` + `tests/ai/mcp/`) |
 | Plugin test suite   | ✅ 57 passed (`tests/ai/plugins/`)                              |
 | Phase 5 status      | ✅ Completed                                                    |
-| Phase 6 authorized  | ⬜ Pending user confirmation                                    |
+| Phase 6 authorized  | ✅ Authorized                                                   |
 
 ---
 
 # Phase 6 — Plugin REST API & Health
 
 **Effort:** S
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1371,24 +1372,24 @@ Expose read-only plugin inventory via authenticated REST endpoints and health ch
 
 ## API Implementation
 
-- [ ] `GET /api/plugins` — list all records including `plugin_id=null` manifest failures (metadata + `load_duration_ms` + safe `failure` object).
-- [ ] `GET /api/plugins/{plugin_id}` — detail or `404` when `plugin_id` is null/unknown; include informational `dependencies`; **omit** manifest `metadata` bag (assert DTO allowlist excludes `PluginRecord.metadata`).
-- [ ] Return `503 feature_disabled` when `PLUGINS_ENABLED=false`.
+- [x] `GET /api/plugins` — list all records including `plugin_id=null` manifest failures (metadata + `load_duration_ms` + safe `failure` object).
+- [x] `GET /api/plugins/{plugin_id}` — detail or `404` when `plugin_id` is null/unknown; include informational `dependencies`; **omit** manifest `metadata` bag (assert DTO allowlist excludes `PluginRecord.metadata`).
+- [x] Return `503 feature_disabled` when `PLUGINS_ENABLED=false`.
 
 ## Health Extension
 
-- [ ] Add `plugins_enabled`, `plugins_loaded_count`, `plugins_failed_count` to health payload.
+- [x] Add `plugins_enabled`, `plugins_loaded_count`, `plugins_failed_count` to health payload.
 
 ## Mount Router
 
-- [ ] Include router in `app/main.py`.
+- [x] Include router in `app/main.py`.
 
 ## Testing
 
-- [ ] Router tests with flag on/off.
-- [ ] Assert responses exclude paths, credentials, template bodies, stack traces, and manifest `metadata` keys/values; assert `manifest_not_found` / `invalid_manifest` records expose no directory or file paths.
-- [ ] Assert api_version failure exposes safe `failure.expected_api_versions` + `failure.manifest_api_version`.
-- [ ] Assert `load_duration_ms` present on loaded and failed records.
+- [x] Router tests with flag on/off.
+- [x] Assert responses exclude paths, credentials, template bodies, stack traces, and manifest `metadata` keys/values; assert `manifest_not_found` / `invalid_manifest` records expose no directory or file paths.
+- [x] Assert api_version failure exposes safe `failure.expected_api_versions` + `failure.manifest_api_version`.
+- [x] Assert `load_duration_ms` present on loaded and failed records.
 
 **Verify**
 
@@ -1401,12 +1402,23 @@ Expose read-only plugin inventory via authenticated REST endpoints and health ch
 
 **Exit criteria**
 
-- Router tests pass.
-- User confirmation to proceed to Phase 7.
+- [x] Router tests pass.
+- [ ] User confirmation to proceed to Phase 7.
 
 **Rollback**
 
 - Remove router mount; disable flag.
+
+**Completion Record**
+
+| Metric              | Result                                              |
+| ------------------- | --------------------------------------------------- |
+| Lint                | ✅ PASS                                             |
+| Typecheck           | ✅ PASS                                             |
+| Plugin router tests | ✅ 11 passed (`tests/test_plugins_router.py`)       |
+| Health tests        | ✅ PASS (`tests/test_health.py` — plugin fields)    |
+| Phase 6 status      | ✅ Completed                                        |
+| Phase 7 authorized  | ⬜ Pending user confirmation                        |
 
 ---
 
@@ -1760,3 +1772,4 @@ Execution of plugin tools and workflow nodes continues to emit existing `tool_sp
 | 1.2     | 2026-08-10 | Phase 0 complete: baseline audit published; phase table + Phase 0 completion record updated. PR review clarifications (GraphValidator path, SemVer, coverage, workflow test scope, manifest fields, atomic registration, malformed manifests, REST metadata omission, WorkflowPluginRegistry ownership, load metrics label contract). Part II only. |
 | 1.3     | 2026-08-11 | Phases 1–4 complete: plugin SDK foundation, tool plugins, prompt plugins, workflow node plugins. Phase status table, step checklists, exit criteria, and completion records updated. Epic status → `in_progress`. |
 | 1.4     | 2026-08-11 | Phase 5 complete: MCP server plugins, env-wins merge in `register_mcp_tools`, startup load logging, versioning hardening. Phase status table, step checklists, exit criteria, and completion record updated. |
+| 1.5     | 2026-08-11 | Phase 6 complete: authenticated plugin inventory REST API (`GET /api/plugins`, `GET /api/plugins/{plugin_id}`), `PluginsStore`, health plugin counts. Phase status table, step checklists, exit criteria, and completion record updated. |

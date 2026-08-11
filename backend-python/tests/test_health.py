@@ -1,6 +1,7 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.ai.deps import get_plugin_registry
 from app.core.config import APP_VERSION, get_settings
 from app.main import app
 from app.providers.capabilities import capabilities_by_provider
@@ -14,22 +15,29 @@ async def test_health_returns_expected_shape() -> None:
         response = await client.get("/api/health")
 
     assert response.status_code == 200
+    settings = get_settings()
+    plugin_registry = get_plugin_registry()
+    plugins_enabled = settings.plugins_enabled
     assert response.json() == {
         "status": "ok",
-        "provider": get_settings().llm_provider,
+        "provider": settings.llm_provider,
         "version": APP_VERSION,
-        "chat_streaming_enabled": get_settings().chat_streaming_enabled,
-        "tools_enabled": get_settings().tools_enabled,
-        "rag_enabled": get_settings().rag_enabled,
-        "voice_enabled": get_settings().voice_enabled,
-        "memory_enabled": get_settings().memory_enabled,
-        "workflow_engine_enabled": get_settings().workflow_engine_enabled,
-        "observability_enabled": get_settings().observability_enabled,
-        "plugins_enabled": get_settings().plugins_enabled,
-        "plugins_loaded_count": 0,
-        "plugins_failed_count": 0,
+        "chat_streaming_enabled": settings.chat_streaming_enabled,
+        "tools_enabled": settings.tools_enabled,
+        "rag_enabled": settings.rag_enabled,
+        "voice_enabled": settings.voice_enabled,
+        "memory_enabled": settings.memory_enabled,
+        "workflow_engine_enabled": settings.workflow_engine_enabled,
+        "observability_enabled": settings.observability_enabled,
+        "plugins_enabled": plugins_enabled,
+        "plugins_loaded_count": (
+            plugin_registry.loaded_count if plugins_enabled else 0
+        ),
+        "plugins_failed_count": (
+            plugin_registry.failed_count if plugins_enabled else 0
+        ),
         "capabilities": {
-            "by_provider": capabilities_by_provider(get_settings()),
+            "by_provider": capabilities_by_provider(settings),
         },
     }
 
