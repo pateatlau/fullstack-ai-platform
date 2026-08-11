@@ -665,7 +665,7 @@ class WorkflowNodeExecutionRecord(Base):
     __table_args__ = (
         CheckConstraint(
             "node_type IN ('task', 'llm', 'agent', 'router', 'fork', 'join', "
-            "'approval', 'terminal')",
+            "'approval', 'terminal', 'plugin')",
             name="workflow_node_execution_type_valid",
         ),
         CheckConstraint(
