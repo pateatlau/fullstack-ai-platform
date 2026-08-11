@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.ai.workflow.exceptions import WorkflowValidationError
 from app.ai.workflow.models import (
@@ -138,6 +138,8 @@ class ApprovalDecisionRequest(BaseModel):
 
 class ApprovalRejectRequest(BaseModel):
     """Optional body for workflow reject endpoint (Epic 09)."""
+
+    model_config = ConfigDict(extra="forbid")
 
     reason: str | None = None
 
