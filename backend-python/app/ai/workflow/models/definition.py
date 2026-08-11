@@ -21,6 +21,7 @@ class NodeType(StrEnum):
     FORK = "fork"
     JOIN = "join"
     APPROVAL = "approval"
+    PLUGIN = "plugin"
     TERMINAL = "terminal"
 
 

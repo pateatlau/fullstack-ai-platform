@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
 from app.ai.workflow.conditions.schema import validate_condition_shape
 from app.ai.workflow.exceptions import WorkflowValidationError
@@ -12,6 +13,10 @@ from app.ai.workflow.nodes.approval_node import (
     APPROVED_EDGE_ID_KEY,
     REJECTED_EDGE_ID_KEY,
 )
+
+if TYPE_CHECKING:
+    from app.ai.plugins.registry import PluginRegistry
+    from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
 
 _DEFAULT_MAX_NODES = 50
 _DEFAULT_MAX_PARALLEL_BRANCHES = 8
@@ -25,9 +30,15 @@ class GraphValidator:
         *,
         max_nodes_per_definition: int = _DEFAULT_MAX_NODES,
         max_parallel_branches: int = _DEFAULT_MAX_PARALLEL_BRANCHES,
+        plugins_enabled: bool = False,
+        plugin_registry: PluginRegistry | None = None,
+        workflow_plugin_registry: WorkflowPluginRegistry | None = None,
     ) -> None:
         self._max_nodes = max_nodes_per_definition
         self._max_parallel_branches = max_parallel_branches
+        self._plugins_enabled = plugins_enabled
+        self._plugin_registry = plugin_registry
+        self._workflow_plugin_registry = workflow_plugin_registry
 
     def validate(self, definition: WorkflowDefinition) -> None:
         """Validate a definition graph; raises ``WorkflowValidationError`` on failure."""
@@ -35,7 +46,11 @@ class GraphValidator:
         self._validate_node_count(definition)
         self._validate_entry_node(definition, node_ids)
         self._validate_node_types(definition)
+        if not self._plugins_enabled:
+            self._reject_plugin_nodes_when_disabled(definition)
         self._validate_node_configs(definition)
+        if self._plugins_enabled:
+            self._validate_plugin_nodes(definition)
         self._validate_dangling_edges(definition, node_ids)
         self._validate_edge_conditions(definition)
         self._validate_cycles(definition, node_ids)
@@ -66,7 +81,57 @@ class GraphValidator:
                 )
 
     def _validate_node_configs(self, definition: WorkflowDefinition) -> None:
-        validate_node_configs(definition.nodes)
+        validate_node_configs(
+            definition.nodes,
+            workflow_plugin_registry=(
+                self._workflow_plugin_registry if self._plugins_enabled else None
+            ),
+        )
+
+    def _reject_plugin_nodes_when_disabled(
+        self, definition: WorkflowDefinition
+    ) -> None:
+        for node in definition.nodes:
+            if node.type is NodeType.PLUGIN:
+                raise WorkflowValidationError(
+                    f"Node {node.id!r} has type 'plugin' but PLUGINS_ENABLED is false."
+                )
+
+    def _validate_plugin_nodes(self, definition: WorkflowDefinition) -> None:
+        from app.ai.plugins.models import PluginStatus
+
+        for node in definition.nodes:
+            if node.type is not NodeType.PLUGIN:
+                continue
+
+            plugin_id = node.config.get("plugin_id")
+            plugin_node_type = node.config.get("plugin_node_type")
+            if not isinstance(plugin_id, str) or not plugin_id.strip():
+                raise WorkflowValidationError(
+                    f"Plugin node {node.id!r} requires config.plugin_id."
+                )
+            if not isinstance(plugin_node_type, str) or not plugin_node_type.strip():
+                raise WorkflowValidationError(
+                    f"Plugin node {node.id!r} requires config.plugin_node_type."
+                )
+
+            record = (
+                self._plugin_registry.get(plugin_id)
+                if self._plugin_registry is not None
+                else None
+            )
+            if record is None or record.status is not PluginStatus.LOADED:
+                raise WorkflowValidationError(
+                    f"Plugin node {node.id!r} references unknown or unloaded plugin "
+                    f"{plugin_id!r}."
+                )
+
+            registry = self._workflow_plugin_registry
+            if registry is None or not registry.has(plugin_id, plugin_node_type):
+                raise WorkflowValidationError(
+                    f"Plugin node {node.id!r} references unknown node type "
+                    f"{plugin_node_type!r} for plugin {plugin_id!r}."
+                )
 
     def _validate_dangling_edges(
         self, definition: WorkflowDefinition, node_ids: set[str]

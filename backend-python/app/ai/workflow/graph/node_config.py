@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from app.ai.tools.schemas import ToolDefinition
+from app.ai.tools.validator import ToolValidator
 from app.ai.workflow.exceptions import WorkflowValidationError
 from app.ai.workflow.models import NodeType, WorkflowNode
 from app.ai.workflow.nodes.approval_node import (
@@ -9,10 +13,18 @@ from app.ai.workflow.nodes.approval_node import (
     REJECTED_EDGE_ID_KEY,
 )
 
+if TYPE_CHECKING:
+    from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
+
 _FILE_TEMPLATE_PREFIX = "@"
+_CONFIG_VALIDATOR = ToolValidator()
 
 
-def validate_node_configs(nodes: list[WorkflowNode]) -> None:
+def validate_node_configs(
+    nodes: list[WorkflowNode],
+    *,
+    workflow_plugin_registry: WorkflowPluginRegistry | None = None,
+) -> None:
     """Validate per-node config shapes for supported node types."""
     for node in nodes:
         if node.type is NodeType.LLM:
@@ -21,6 +33,12 @@ def validate_node_configs(nodes: list[WorkflowNode]) -> None:
             _validate_agent_node_config(node.id, node.config)
         elif node.type is NodeType.APPROVAL:
             _validate_approval_node_config(node.id, node.config)
+        elif node.type is NodeType.PLUGIN:
+            _validate_plugin_node_config(
+                node.id,
+                node.config,
+                workflow_plugin_registry=workflow_plugin_registry,
+            )
 
 
 def _validate_llm_node_config(node_id: str, config: dict[str, object]) -> None:
@@ -102,6 +120,46 @@ def _validate_approval_node_config(node_id: str, config: dict[str, object]) -> N
             raise WorkflowValidationError(
                 f"Approval node {node_id!r} config.{key} must be a non-empty string."
             )
+
+
+def _validate_plugin_node_config(
+    node_id: str,
+    config: dict[str, object],
+    *,
+    workflow_plugin_registry: WorkflowPluginRegistry | None = None,
+) -> None:
+    plugin_id = config.get("plugin_id")
+    if not isinstance(plugin_id, str) or not plugin_id.strip():
+        raise WorkflowValidationError(
+            f"Plugin node {node_id!r} requires config.plugin_id (non-empty string)."
+        )
+
+    plugin_node_type = config.get("plugin_node_type")
+    if not isinstance(plugin_node_type, str) or not plugin_node_type.strip():
+        raise WorkflowValidationError(
+            f"Plugin node {node_id!r} requires config.plugin_node_type "
+            "(non-empty string)."
+        )
+
+    if workflow_plugin_registry is None:
+        return
+
+    schema = workflow_plugin_registry.get_config_schema(plugin_id, plugin_node_type)
+    if not schema:
+        return
+
+    error = _CONFIG_VALIDATOR.validate(
+        ToolDefinition(
+            name="_plugin_node",
+            description="Plugin node config validation",
+            parameters=schema,
+        ),
+        config,
+    )
+    if error is not None:
+        raise WorkflowValidationError(
+            f"Plugin node {node_id!r} config: {error.message}"
+        )
 
 
 def _reject_file_template_ref(value: str, *, node_id: str, field_name: str) -> None:

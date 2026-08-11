@@ -606,9 +606,11 @@ def _create_workflow_manager(
     agent_runtime: DefaultAgent,
     background_store_factory: Callable[[AsyncSession], "PostgresWorkflowStore"],
 ) -> "WorkflowManager":
+    from app.ai.plugins.workflow.plugin_node import PluginNodeExecutor
     from app.ai.workflow.conditions.evaluator import ConditionEvaluator
     from app.ai.workflow.manager import WorkflowManager
     from app.ai.workflow.models import NodeType
+    from app.ai.workflow.nodes.base import NodeExecutor
     from app.ai.workflow.nodes.approval_node import ApprovalNodeExecutor
     from app.ai.workflow.nodes.agent_node import AgentNodeExecutor
     from app.ai.workflow.nodes.llm_node import LLMNodeExecutor
@@ -616,25 +618,35 @@ def _create_workflow_manager(
     from app.ai.workflow.nodes.router_node import RouterNodeExecutor
     from app.ai.workflow.nodes.task_node import TaskNodeExecutor
 
+    workflow_plugin_registry = get_workflow_plugin_registry()
+    node_executors: dict[NodeType, NodeExecutor] = {
+        NodeType.TASK: TaskNodeExecutor(tool_executor),
+        NodeType.LLM: LLMNodeExecutor(
+            prompt_manager=prompt_manager,
+            settings=settings,
+        ),
+        NodeType.AGENT: AgentNodeExecutor(agent_runtime, settings=settings),
+        NodeType.ROUTER: RouterNodeExecutor(ConditionEvaluator()),
+        NodeType.FORK: ForkNodeExecutor(
+            max_parallel_branches=settings.workflow_max_parallel_branches
+        ),
+        NodeType.JOIN: JoinNodeExecutor(),
+        NodeType.APPROVAL: ApprovalNodeExecutor(),
+    }
+    if settings.plugins_enabled:
+        node_executors[NodeType.PLUGIN] = PluginNodeExecutor(
+            workflow_plugin_registry=workflow_plugin_registry,
+            settings=settings,
+        )
+
     return WorkflowManager(
         store=store,
         settings=settings,
-        node_executors={
-            NodeType.TASK: TaskNodeExecutor(tool_executor),
-            NodeType.LLM: LLMNodeExecutor(
-                prompt_manager=prompt_manager,
-                settings=settings,
-            ),
-            NodeType.AGENT: AgentNodeExecutor(agent_runtime, settings=settings),
-            NodeType.ROUTER: RouterNodeExecutor(ConditionEvaluator()),
-            NodeType.FORK: ForkNodeExecutor(
-                max_parallel_branches=settings.workflow_max_parallel_branches
-            ),
-            NodeType.JOIN: JoinNodeExecutor(),
-            NodeType.APPROVAL: ApprovalNodeExecutor(),
-        },
+        node_executors=node_executors,
         background_store_factory=background_store_factory,
         tool_registry=get_tool_registry(),
+        plugin_registry=get_plugin_registry(),
+        workflow_plugin_registry=workflow_plugin_registry,
     )
 
 
