@@ -54,6 +54,7 @@ from app.ai.rag.retriever import Retriever
 from app.ai.rag.rewrite import LLMQueryRewriter
 from app.ai.rag.service import RAGService
 from app.ai.plugins.registry import PluginRegistry
+from app.ai.plugins.store import PluginsStore
 from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.implementations.web_search import (
@@ -102,6 +103,12 @@ def get_tool_registry() -> ToolRegistry:
 def get_plugin_registry() -> PluginRegistry:
     """Return the process-wide ``PluginRegistry`` singleton."""
     return PluginRegistry()
+
+
+@lru_cache
+def get_plugins_store() -> PluginsStore:
+    """Return the process-wide ``PluginsStore`` singleton."""
+    return PluginsStore(get_plugin_registry())
 
 
 @lru_cache
