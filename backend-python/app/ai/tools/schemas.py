@@ -11,11 +11,18 @@ from app.core.caller import CallerContext
 
 
 class ToolDefinition(BaseModel):
-    """Registered tool metadata exposed to callers and LLM function-calling APIs."""
+    """Registered tool metadata for callers and the tool platform.
+
+    ``name``, ``description``, and ``parameters`` are exposed to LLM
+    function-calling APIs via ``ToolRegistry.get_schemas_for_llm()``.
+    ``requires_approval`` is platform-only HITL metadata and is intentionally
+    omitted from LLM schemas.
+    """
 
     name: str
     description: str
     parameters: dict[str, Any]
+    requires_approval: bool = False
 
 
 class ToolCall(BaseModel):

@@ -1,8 +1,8 @@
 ---
 epic: v2-09
 title: Human-in-the-Loop
-status: not_started
-version: 1.2
+status: in_progress
+version: 1.3
 depends_on: [v2-06, v2-07, v2-08]
 provides:
   [
@@ -969,7 +969,7 @@ _Re-verified in Epic 09 Phase 0 (2026-08-11); source of truth: [post-mvp-v2-epic
 | Phase | Name                                       | Effort | Status      |
 | ----- | ------------------------------------------ | ------ | ----------- |
 | 0     | Baseline Audit                             | XS     | Completed   |
-| 1     | HITL Foundations                           | M      | Not Started |
+| 1     | HITL Foundations                           | M      | Completed   |
 | 2     | Agent Tool-Call Approval Gate              | L      | Not Started |
 | 3     | Agent Approval Decision & Resume           | L      | Not Started |
 | 4     | Workflow Approval Enhancements             | M      | Not Started |
@@ -1044,7 +1044,7 @@ Establish a verified implementation baseline before introducing Human-in-the-Loo
 **Exit criteria**
 
 - [x] Baseline audit published.
-- [ ] User confirmation to proceed to Phase 1.
+- [x] User confirmation to proceed to Phase 1.
 
 **Rollback**
 
@@ -1062,14 +1062,14 @@ Establish a verified implementation baseline before introducing Human-in-the-Loo
 | Frontend tests     | ✅ 291 passed (48 files); lint + build pass |
 | Baseline audit     | ✅ [post-mvp-v2-epic9-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic9-phase-0-baseline-audit.md) |
 | Phase 0 status     | ✅ Completed                                |
-| Phase 1 authorized | ⬜ Pending user confirmation                |
+| Phase 1 authorized | ✅ User confirmed                           |
 
 ---
 
 # Phase 1 — HITL Foundations
 
 **Effort:** M
-**Status:** Not Started
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1090,38 +1090,38 @@ Introduce the core HITL package, domain models, database migration, and feature 
 
 ## Package Structure
 
-- [ ] Create `app/ai/hitl/` per Part I package layout.
-- [ ] Export public API from `__init__.py`.
-- [ ] Verify import cycle freedom.
+- [x] Create `app/ai/hitl/` per Part I package layout.
+- [x] Export public API from `__init__.py`.
+- [x] Verify import cycle freedom.
 
 ## Models
 
-- [ ] Implement `ApprovalKind`, `ApprovalStatus` enums (`pending`, `approved`, `rejected`, `expired`, `cancelled` — the last two reserved, no transition path yet).
-- [ ] Implement `ProposedToolCall`, `AgentToolApproval`, `ApprovalRevision`, `ApprovalResult`, `ApprovalAuditEntry` Pydantic models matching Part I schema.
-- [ ] Implement `ApprovalPolicy.requires_approval(tool)` per Locked Decisions (union of `ToolDefinition.requires_approval` and `hitl_required_tool_names`).
+- [x] Implement `ApprovalKind`, `ApprovalStatus` enums (`pending`, `approved`, `rejected`, `expired`, `cancelled` — the last two reserved, no transition path yet).
+- [x] Implement `ProposedToolCall`, `AgentToolApproval`, `ApprovalRevision`, `ApprovalResult`, `ApprovalAuditEntry` Pydantic models matching Part I schema.
+- [x] Implement `ApprovalPolicy.requires_approval(tool)` per Locked Decisions (union of `ToolDefinition.requires_approval` and `hitl_required_tool_names`).
 
 ## Migration
 
-- [ ] Create `agent_tool_approvals` table (all columns per Part I § Agent Tool-Call Approval — Domain Model, incl. `approval_correlation_id`).
-- [ ] Create `approval_revisions` table (all columns per Part I § Approval Revision History).
-- [ ] Extend `chat_messages.status` CHECK constraint with `waiting_approval`, `rejected`; add nullable `pending_approval_id` FK.
-- [ ] Add `workflow_node_executions.edited_arguments` (jsonb, nullable) and `.reason` (text, nullable) columns.
-- [ ] Verify migration upgrade/downgrade round-trip.
+- [x] Create `agent_tool_approvals` table (all columns per Part I § Agent Tool-Call Approval — Domain Model, incl. `approval_correlation_id`).
+- [x] Create `approval_revisions` table (all columns per Part I § Approval Revision History).
+- [x] Extend `chat_messages.status` CHECK constraint with `waiting_approval`, `rejected`; add nullable `pending_approval_id` FK.
+- [x] Add `workflow_node_executions.edited_arguments` (jsonb, nullable) and `.reason` (text, nullable) columns.
+- [x] Verify migration upgrade/downgrade round-trip.
 
 ## Tool Schema
 
-- [ ] Add `ToolDefinition.requires_approval: bool = False` (additive; confirm `get_schemas_for_llm` does not leak the flag to provider function-calling schemas).
+- [x] Add `ToolDefinition.requires_approval: bool = False` (additive; confirm `get_schemas_for_llm` does not leak the flag to provider function-calling schemas).
 
 ## Configuration
 
-- [ ] Add `HITL_ENABLED` (default `false`) and related settings to `app/core/config.py`.
-- [ ] Document settings in `backend-python/.env.example`.
+- [x] Add `HITL_ENABLED` (default `false`) and related settings to `app/core/config.py`.
+- [x] Document settings in `backend-python/.env.example`.
 
 ## Testing
 
-- [ ] `ApprovalPolicy` tests: tool-flagged, config-flagged, both, neither.
-- [ ] Model serialization round-trip tests (`ProposedToolCall`, `AgentToolApproval`, `ApprovalRevision`, `ApprovalResult`, `ApprovalAuditEntry`).
-- [ ] Migration upgrade/downgrade test (both new tables).
+- [x] `ApprovalPolicy` tests: tool-flagged, config-flagged, both, neither.
+- [x] Model serialization round-trip tests (`ProposedToolCall`, `AgentToolApproval`, `ApprovalRevision`, `ApprovalResult`, `ApprovalAuditEntry`).
+- [x] Migration upgrade/downgrade test (both new tables).
 
 **Verify**
 
@@ -1136,8 +1136,8 @@ Introduce the core HITL package, domain models, database migration, and feature 
 
 **Exit criteria**
 
-- [ ] Foundation tests pass.
-- [ ] Public model/policy APIs frozen.
+- [x] Foundation tests pass.
+- [x] Public model/policy APIs frozen.
 - [ ] User confirmation to proceed to Phase 2.
 
 **Rollback**
@@ -1147,14 +1147,14 @@ Introduce the core HITL package, domain models, database migration, and feature 
 
 **Completion Record**
 
-| Metric                | Result          |
-| --------------------- | --------------- |
-| Lint                  | Pending Phase 1 |
-| Typecheck             | Pending Phase 1 |
-| HITL foundation tests | Pending Phase 1 |
-| Migration round-trip  | Pending Phase 1 |
-| Phase 1 status        | Not Started     |
-| Phase 2 authorized    | Pending         |
+| Metric                | Result                                      |
+| --------------------- | ------------------------------------------- |
+| Lint                  | ✅ PASS                                     |
+| Typecheck             | ✅ PASS — 0 errors                          |
+| HITL foundation tests | ✅ 25 passed (`tests/ai/hitl/`)             |
+| Migration round-trip  | ✅ PASS — `0010_hitl_tables` upgrade/downgrade |
+| Phase 1 status        | ✅ Completed                                |
+| Phase 2 authorized    | ⬜ Pending user confirmation                |
 
 ---
 
@@ -1983,3 +1983,4 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 | 1       | 2026-08-11 | Initial epic draft — Part I design + Part II 11-phase execution plan (Phases 0–10). Not started. |
 | 1.1     | 2026-08-11 | Incorporated architecture review: added `approval_revisions` history + `POST …/revise` endpoint, canonical `ApprovalResult` DTO, `approval_correlation_id` cross-system correlation, explicit Decision Execution Stages (aligned with future Epic 10 background jobs), execution-failure-vs-decision-status semantics, reserved `cancelled` status and approval lifecycle FSM diagram, `O(V+E)` graph-guard complexity note, `approval_decisions_total`/`hitl_resume_latency_ms`/`hitl_tool_execution_latency_ms` metrics and first-class approval tracing attributes, expanded adversarial/edge-case eval scenarios (Phase 8), Migration Impact Summary, Glossary, and Implementation Risks section. No architectural redesign — additive only. Not started. |
 | 1.2     | 2026-08-11 | Phase 0 baseline audit complete — [post-mvp-v2-epic9-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic9-phase-0-baseline-audit.md). Part II only. |
+| 1.3     | 2026-08-11 | Phase 1 HITL foundations complete — `app/ai/hitl/` package, migration `0010_hitl_tables`, `ToolDefinition.requires_approval`, `HITL_ENABLED` config, foundation tests. Part II only. |
