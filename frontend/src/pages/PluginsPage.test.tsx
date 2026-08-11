@@ -136,6 +136,27 @@ describe('PluginsPage', () => {
     expect(screen.queryByRole('heading', { name: 'Loaded plugins' })).toBeNull()
   })
 
+  it('shows unavailable notice when plugins API returns feature_disabled', async () => {
+    storeSession(makeJwt(3600), user)
+    vi.stubGlobal(
+      'fetch',
+      createPluginsFetchMock({
+        pluginsEnabled: true,
+        inventoryError: {
+          status: 503,
+          code: 'feature_disabled',
+          message: 'Plugins are not enabled on this server.',
+        },
+      }),
+    )
+
+    renderPluginsRoute()
+
+    expect(await screen.findByRole('heading', { name: 'Plugins are not available' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'No plugins loaded' })).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('renders plugin inventory table', async () => {
     storeSession(makeJwt(3600), user)
     vi.stubGlobal('fetch', createPluginsFetchMock({ pluginsEnabled: true }))

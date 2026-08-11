@@ -37,7 +37,7 @@ export function displayPluginName(item: PluginInventoryItem): string {
   return item.name ?? displayPluginId(item.plugin_id)
 }
 
-export function formatContributionKind(kind: PluginContributionKind): string {
+export function formatContributionKind(kind: string): string {
   switch (kind) {
     case 'tool':
       return 'Tool'
@@ -47,6 +47,8 @@ export function formatContributionKind(kind: PluginContributionKind): string {
       return 'Workflow node'
     case 'mcp_server':
       return 'MCP server'
+    default:
+      return kind.replace(/_/g, ' ')
   }
 }
 

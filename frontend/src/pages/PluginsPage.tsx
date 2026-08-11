@@ -125,6 +125,7 @@ function PluginsContent() {
   const [plugins, setPlugins] = useState<PluginInventoryItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [featureDisabled, setFeatureDisabled] = useState(false)
 
   const handleApiError = useCallback(
     (apiError: unknown): boolean => {
@@ -134,7 +135,7 @@ function PluginsContent() {
       }
       if (apiError instanceof PluginsApiError) {
         if (apiError.code === 'feature_disabled') {
-          setError('Plugins are not enabled on this server.')
+          setFeatureDisabled(true)
           return true
         }
         setError(apiError.message)
@@ -152,6 +153,7 @@ function PluginsContent() {
     void (async () => {
       setIsLoading(true)
       setError(null)
+      setFeatureDisabled(false)
       try {
         const response = await fetchPluginInventory()
         if (!cancelled) {
@@ -173,6 +175,10 @@ function PluginsContent() {
       cancelled = true
     }
   }, [handleApiError])
+
+  if (featureDisabled) {
+    return <PluginsUnavailableNotice />
+  }
 
   const loadedCount = plugins.filter((plugin) => plugin.status === 'loaded').length
   const failedCount = plugins.filter((plugin) => plugin.status === 'failed').length
