@@ -27,6 +27,7 @@ from opentelemetry.trace.span import TraceState
 
 from app.ai.observability.metrics.instruments import (
     record_agent_iteration_metric,
+    record_plugin_load_metrics,
     record_tool_call_metrics,
     record_workflow_node_execution_metric,
     record_workflow_parallel_branch_metric,
@@ -273,6 +274,54 @@ def workflow_span(action: WorkflowSpanAction) -> Generator[Span | None, None, No
     span_name = f"workflow.{action}"
     with _observability_span(span_name) as span:
         yield span
+
+
+@contextmanager
+def plugin_span(
+    plugin_id: str | None = None,
+    *,
+    kind: str | None = None,
+) -> Generator[Span | None, None, None]:
+    """Per-plugin load span — wraps entrypoint registration when observability is on."""
+    attributes: dict[str, Any] = {}
+    if plugin_id is not None:
+        attributes["plugin_id"] = plugin_id
+    if kind is not None:
+        attributes["contribution_kind"] = kind
+    with _observability_span("plugin.load", attributes=attributes) as span:
+        yield span
+
+
+def record_plugin_load_outcome(
+    span: Span | None,
+    *,
+    plugin_id: str | None,
+    status: str,
+    load_duration_ms: float,
+    contribution_kinds: list[str] | None = None,
+    failure_code: str | None = None,
+) -> None:
+    """Attach terminal plugin load attributes and record load counters."""
+    succeeded = status == "loaded"
+    record_plugin_load_metrics(
+        succeeded=succeeded,
+        failure_code=failure_code,
+    )
+    if span is None:
+        return
+    attributes: dict[str, Any] = {
+        "status": status,
+        "load_duration_ms": load_duration_ms,
+    }
+    if plugin_id is not None:
+        attributes["plugin_id"] = plugin_id
+    if contribution_kinds:
+        attributes["contribution_kind"] = ",".join(contribution_kinds)
+    if failure_code is not None:
+        attributes["failure_code"] = failure_code
+    _set_span_attributes(span, attributes)
+    if not succeeded:
+        mark_span_error_status(span, span_name="plugin.load")
 
 
 def record_tool_span_outcome(

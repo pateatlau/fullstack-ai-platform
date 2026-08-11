@@ -30,6 +30,8 @@ _INSTRUMENT_LABEL_KEYS: dict[str, frozenset[str]] = {
     "workflow_checkpoint_latency_ms": frozenset({"workflow_type"}),
     "workflow_approval_pending_count": frozenset({"workflow_type"}),
     "workflow_parallel_branch_count": frozenset({"workflow_type"}),
+    "plugins_loaded_total": frozenset({"failure_code"}),
+    "plugin_load_failures_total": frozenset({"failure_code"}),
 }
 
 
@@ -92,6 +94,12 @@ class MetricInstruments:
         self.workflow_parallel_branch_count: Histogram = meter.create_histogram(
             "workflow_parallel_branch_count",
             unit="branch",
+        )
+        self.plugins_loaded_total: Counter = meter.create_counter(
+            "plugins_loaded_total"
+        )
+        self.plugin_load_failures_total: Counter = meter.create_counter(
+            "plugin_load_failures_total"
         )
 
     @classmethod
@@ -307,6 +315,25 @@ def record_workflow_approval_pending_delta(
         instruments.workflow_approval_pending_count.add(delta, labels)
 
     _record("workflow_approval_pending_count", _emit)
+
+
+def record_plugin_load_metrics(*, succeeded: bool, failure_code: str | None) -> None:
+    """Record plugin load success/failure counters (``failure_code`` label only)."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    raw_code = "none" if succeeded else (failure_code or "other")
+    labels = build_metric_attributes(failure_code=raw_code)
+
+    def _emit() -> None:
+        if succeeded:
+            instruments.plugins_loaded_total.add(1, labels)
+        else:
+            instruments.plugin_load_failures_total.add(1, labels)
+
+    counter_name = "plugins_loaded_total" if succeeded else "plugin_load_failures_total"
+    _record(counter_name, _emit)
 
 
 def record_workflow_parallel_branch_metric(
