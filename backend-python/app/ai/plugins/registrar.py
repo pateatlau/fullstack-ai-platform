@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from app.ai.interfaces.tool_handler import ToolHandler
+from app.ai.mcp.config import McpConnectionConfig
 from app.ai.plugins.exceptions import PluginRegistrationError
 from app.ai.plugins.models import PluginContributionKind
+from app.ai.plugins.registry import PluginRegistry
 from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
 from app.ai.prompts.repository import PromptRepository
 from app.ai.tools.registry import ToolRegistry
@@ -62,12 +64,14 @@ class PluginRegistrar:
         tool_registry: ToolRegistry | None = None,
         prompt_repository: PromptRepository | None = None,
         workflow_plugin_registry: WorkflowPluginRegistry | None = None,
+        plugin_registry: PluginRegistry | None = None,
     ) -> None:
         self._plugin_id = plugin_id
         self._plugin_dir = plugin_dir
         self._tool_registry = tool_registry
         self._prompt_repository = prompt_repository
         self._workflow_plugin_registry = workflow_plugin_registry
+        self._plugin_registry = plugin_registry
         self._lock = threading.Lock()
         self._closed = False
         self._committed = False
@@ -148,7 +152,8 @@ class PluginRegistrar:
     def register_mcp_server(self, config: dict[str, Any]) -> None:
         with self._lock:
             self._ensure_open_unlocked()
-            self._staging.mcp_servers.append(StagedMcpServer(config=dict(config)))
+            validated = _validate_mcp_server_config(config)
+            self._staging.mcp_servers.append(StagedMcpServer(config=validated))
 
     def commit(self) -> None:
         with self._lock:
@@ -186,6 +191,13 @@ class PluginRegistrar:
                         registered_workflow_nodes.append(
                             (self._plugin_id, staged.node_type)
                         )
+
+                if self._plugin_registry is not None and self._staging.mcp_servers:
+                    mcp_configs = [
+                        McpConnectionConfig(**staged.config)
+                        for staged in self._staging.mcp_servers
+                    ]
+                    self._plugin_registry.add_mcp_servers(mcp_configs)
             except Exception as exc:
                 self._rollback_registrations(
                     registered_tool_names,
@@ -273,3 +285,26 @@ class PluginRegistrar:
             raise PluginRegistrationError(
                 "Plugin registration already committed; cannot stage more contributions."
             )
+
+
+def _validate_mcp_server_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Validate MCP server config and return a JSON-serializable dict."""
+    from pydantic import ValidationError
+
+    server_name = config.get("name", "<unknown>")
+    try:
+        validated = McpConnectionConfig(**config)
+    except ValidationError as exc:
+        error_fields = [
+            err["loc"][0] if err.get("loc") else "unknown" for err in exc.errors()
+        ]
+        error_summary = ", ".join(sorted({str(field) for field in error_fields}))
+        raise PluginRegistrationError(
+            f"Invalid MCP server config for '{server_name}': "
+            f"validation failed for fields: {error_summary}"
+        ) from exc
+    except Exception as exc:
+        raise PluginRegistrationError(
+            f"Invalid MCP server config for '{server_name}': {type(exc).__name__}"
+        ) from exc
+    return validated.to_dict()

@@ -56,6 +56,19 @@ class McpConnectionConfig(BaseModel):
             object.__setattr__(self, "env", MappingProxyType(self.env))
         return self
 
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable registration dict."""
+        payload: dict[str, Any] = {
+            "name": self.name,
+            "command": self.command,
+            "args": list(self.args),
+            "env": dict(self.env),
+            "transport": self.transport,
+        }
+        if self.credentials is not None:
+            payload["credentials"] = self.credentials.model_dump(mode="json")
+        return payload
+
 
 class McpToolCall(BaseModel):
     """Internal: MCP tool invocation payload (not part of public API).

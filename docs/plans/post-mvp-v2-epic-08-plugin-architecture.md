@@ -2,7 +2,7 @@
 epic: v2-08
 title: Plugin Architecture
 status: in_progress
-version: 1.3
+version: 1.4
 depends_on: [v2-07]
 provides:
   [
@@ -857,7 +857,7 @@ _Copy from Epic 07 Phase 10 completion record._
 | Integration tests        | Workflow **241** (207 package + 23 router + 11 workflow tool); observability router 15; streaming 26 |
 | Eval CLI                 | 15/15 `--level all`; regression check clean                             |
 | Observability            | Completed (Epic 07); `OBSERVABILITY_ENABLED` behind flag                |
-| Plugin Architecture      | Phases 0–4 complete — SDK, tool, prompt, and workflow node plugins implemented |
+| Plugin Architecture      | Phases 0–5 complete — SDK, tool, prompt, workflow node, and MCP server plugins implemented |
 
 ---
 
@@ -870,7 +870,7 @@ _Copy from Epic 07 Phase 10 completion record._
 | 2     | Tool Plugins                    | M      | Completed   |
 | 3     | Prompt Plugins                  | M      | Completed   |
 | 4     | Workflow Node Plugins           | L      | Completed   |
-| 5     | MCP Server Plugins & Versioning | M      | Not Started |
+| 5     | MCP Server Plugins & Versioning | M      | Completed   |
 | 6     | Plugin REST API & Health        | S      | Not Started |
 | 7     | Plugin Observability            | S      | Not Started |
 | 8     | Reference Plugins & Eval Cases  | M      | Not Started |
@@ -1259,7 +1259,7 @@ Add `NodeType.PLUGIN`, implement `PluginNodeExecutor`, extend `GraphValidator`, 
 **Exit criteria**
 
 - [x] Workflow plugin tests pass.
-- [ ] User confirmation to proceed to Phase 5.
+- [x] User confirmation to proceed to Phase 5.
 
 **Rollback**
 
@@ -1276,13 +1276,14 @@ Add `NodeType.PLUGIN`, implement `PluginNodeExecutor`, extend `GraphValidator`, 
 | Workflow suite         | ✅ 215 passed (`tests/ai/workflow/`)                                   |
 | Plugin test suite      | ✅ 46 passed (`tests/ai/plugins/`)                                     |
 | Phase 4 status         | ✅ Completed                                                           |
-| Phase 5 authorized     | ⬜ Pending user confirmation                                           |
+| Phase 5 authorized     | ✅ Authorized                                                          |
 
 ---
 
 # Phase 5 — MCP Server Plugins & Versioning
 
 **Effort:** M
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1299,25 +1300,25 @@ Merge plugin-declared MCP servers into startup registration; finalize versioning
 
 ## MCP Merge
 
-- [ ] Aggregate MCP configs from loaded plugins + manifest YAML.
-- [ ] Dedupe by server `name`; env `settings.mcp_servers` overrides plugin entry with warning log.
-- [ ] Skip all plugin MCP when `MCP_ENABLED=false` (debug log).
+- [x] Aggregate MCP configs from loaded plugins + manifest YAML.
+- [x] Dedupe by server `name`; env `settings.mcp_servers` overrides plugin entry with warning log.
+- [x] Skip all plugin MCP when `MCP_ENABLED=false` (debug log).
 
 ## Versioning Hardening
 
-- [ ] Reject manifest missing `api_version` or unsupported version with `PluginLoadFailureReason`.
-- [ ] Include `version`, `api_version`, `contributions`, `load_duration_ms`, author metadata, `dependencies`, `metadata` on `PluginRecord`.
+- [x] Reject manifest missing `api_version` or unsupported version with `PluginLoadFailureReason`.
+- [x] Include `version`, `api_version`, `contributions`, `load_duration_ms`, author metadata, `dependencies`, `metadata` on `PluginRecord`.
 
 ## Startup Logging
 
-- [ ] Emit structured log: plugins_loaded, plugins_failed, tool/prompt/workflow/mcp contribution counts, per-plugin `load_duration_ms`, failure `code` when failed.
+- [x] Emit structured log: plugins_loaded, plugins_failed, tool/prompt/workflow/mcp contribution counts, per-plugin `load_duration_ms`, failure `code` when failed.
 
 ## Testing
 
-- [ ] Test env vs plugin name conflict (env wins).
-- [ ] Test MCP plugin skipped when MCP disabled.
-- [ ] Test invalid MCP config fails plugin only.
-- [ ] Test api_version mismatch produces `unsupported_api_version` reason with expected vs manifest values.
+- [x] Test env vs plugin name conflict (env wins).
+- [x] Test MCP plugin skipped when MCP disabled.
+- [x] Test invalid MCP config fails plugin only.
+- [x] Test api_version mismatch produces `unsupported_api_version` reason with expected vs manifest values.
 
 **Verify**
 
@@ -1330,12 +1331,24 @@ Merge plugin-declared MCP servers into startup registration; finalize versioning
 
 **Exit criteria**
 
-- MCP plugin tests pass.
-- User confirmation to proceed to Phase 6.
+- [x] MCP plugin tests pass.
+- [ ] User confirmation to proceed to Phase 6.
 
 **Rollback**
 
 - Remove `extra_servers` parameter; disable flags.
+
+**Completion Record**
+
+| Metric              | Result                                                          |
+| ------------------- | --------------------------------------------------------------- |
+| Lint                | ✅ PASS                                                         |
+| Typecheck           | ✅ PASS                                                         |
+| MCP plugin tests    | ✅ 7 passed (`tests/ai/plugins/test_mcp_plugins.py`)            |
+| MCP suite           | ✅ 197 passed (`tests/ai/plugins/test_mcp_plugins.py` + `tests/ai/mcp/`) |
+| Plugin test suite   | ✅ 57 passed (`tests/ai/plugins/`)                              |
+| Phase 5 status      | ✅ Completed                                                    |
+| Phase 6 authorized  | ⬜ Pending user confirmation                                    |
 
 ---
 
@@ -1746,3 +1759,4 @@ Execution of plugin tools and workflow nodes continues to emit existing `tool_sp
 | 1.1     | 2026-08-10 | Reserved manifest fields (`dependencies`, author metadata, `metadata`); `PluginRecord.load_duration_ms`; structured `PluginLoadFailureReason` for API version diagnostics; § Future Enhancements (isolated loading, richer lifecycle states). Part I + Phases 1, 5–7, 9 sync. |
 | 1.2     | 2026-08-10 | Phase 0 complete: baseline audit published; phase table + Phase 0 completion record updated. PR review clarifications (GraphValidator path, SemVer, coverage, workflow test scope, manifest fields, atomic registration, malformed manifests, REST metadata omission, WorkflowPluginRegistry ownership, load metrics label contract). Part II only. |
 | 1.3     | 2026-08-11 | Phases 1–4 complete: plugin SDK foundation, tool plugins, prompt plugins, workflow node plugins. Phase status table, step checklists, exit criteria, and completion records updated. Epic status → `in_progress`. |
+| 1.4     | 2026-08-11 | Phase 5 complete: MCP server plugins, env-wins merge in `register_mcp_tools`, startup load logging, versioning hardening. Phase status table, step checklists, exit criteria, and completion record updated. |

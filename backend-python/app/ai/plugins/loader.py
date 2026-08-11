@@ -255,7 +255,23 @@ class PluginLoader:
             tool_registry=self._tool_registry,
             prompt_repository=self._prompt_repository,
             workflow_plugin_registry=self._workflow_plugin_registry,
+            plugin_registry=self._registry,
         )
+
+        for mcp_server in manifest.mcp_servers:
+            try:
+                registrar.register_mcp_server(mcp_server.to_dict())
+            except PluginRegistrationError as exc:
+                self._registry.mark_failed(
+                    manifest=manifest,
+                    failure=PluginLoadFailureReason(
+                        code="registration_error",
+                        message=str(exc),
+                    ),
+                    load_duration_ms=_elapsed_ms(load_start),
+                )
+                return
+
         wait_timeout_seconds = self._settings.plugin_registration_wait_timeout_seconds
         registration_error: BaseException | None = None
         registration_complete = threading.Event()

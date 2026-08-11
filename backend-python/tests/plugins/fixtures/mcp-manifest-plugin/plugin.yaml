@@ -1,0 +1,12 @@
+plugin_id: com.test.mcp-manifest
+name: MCP Manifest Plugin
+version: 1.0.0
+api_version: "1"
+entrypoint: mcp_manifest_plugin.register:register
+contributions:
+  - mcp_server
+mcp_servers:
+  - name: manifest-mcp-server
+    command: uvx
+    args: ["mcp-server-echo"]
+    transport: stdio

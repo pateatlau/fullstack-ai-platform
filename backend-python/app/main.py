@@ -58,18 +58,12 @@ async def lifespan(_: FastAPI):
     settings.log_development_warnings(logger)
 
     if settings.plugins_enabled:
-        report = load_plugins(
+        load_plugins(
             settings,
             tool_registry=get_tool_registry(),
             prompt_repository=get_prompt_repository(),
             workflow_plugin_registry=get_workflow_plugin_registry(),
             plugin_registry=get_plugin_registry(),
-        )
-        logger.info(
-            "Plugin load complete",
-            plugins_loaded=report.loaded_count,
-            plugins_failed=report.failed_count,
-            total_load_duration_ms=report.total_load_duration_ms,
         )
 
     # Register V1 production tools
@@ -84,6 +78,7 @@ async def lifespan(_: FastAPI):
                 registry=get_tool_registry(),
                 mcp_registry=get_mcp_server_registry(),
                 settings=settings,
+                extra_servers=get_plugin_registry().list_mcp_servers(),
             )
         except Exception as exc:
             logger.error(
