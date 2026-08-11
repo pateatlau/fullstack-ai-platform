@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import datetime
+import time
 import uuid
 from typing import TYPE_CHECKING, Literal, Protocol
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+
     from app.ai.agent.executor.agent_executor import AgentExecutor
 
 from app.ai.agent.executor.result_aggregator import (
@@ -36,6 +39,17 @@ from app.ai.hitl.models import (
     ApprovalStatus,
     ProposedToolCall,
 )
+from app.ai.observability.metrics.instruments import (
+    record_agent_tool_approval_pending_delta,
+    record_hitl_decision_metrics,
+    record_hitl_resume_latency_ms,
+)
+from app.ai.observability.tracing.spans import (
+    approval_span,
+    elapsed_ms_since,
+    hitl_decision_latency_ms,
+    record_approval_span_outcome,
+)
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext
@@ -48,6 +62,40 @@ def normalize_hitl_reason(reason: str | None, *, max_length: int) -> str | None:
     if reason is None:
         return None
     return reason if len(reason) <= max_length else reason[:max_length]
+
+
+def _emit_agent_decision_metrics(
+    span: Span | None,
+    *,
+    decided: AgentToolApproval,
+    decision: Literal["approved", "rejected"],
+    edited: bool,
+) -> int | None:
+    """Record terminal decision metrics immediately after a successful CAS write."""
+    record_agent_tool_approval_pending_delta(-1)
+    assert decided.decided_at is not None
+    decision_latency_ms = hitl_decision_latency_ms(
+        decided.requested_at,
+        decided.decided_at,
+    )
+    if decision_latency_ms is not None:
+        record_hitl_decision_metrics(
+            kind=ApprovalKind.AGENT_TOOL.value,
+            decision=decision,
+            decision_latency_ms=decision_latency_ms,
+        )
+    record_approval_span_outcome(
+        span,
+        approval_status=(
+            ApprovalStatus.APPROVED.value
+            if decision == "approved"
+            else ApprovalStatus.REJECTED.value
+        ),
+        approval_decision=decision,
+        decision_latency_ms=decision_latency_ms,
+        edited=edited,
+    )
+    return decision_latency_ms
 
 
 class AgentApprovalStore(Protocol):
@@ -188,45 +236,57 @@ class AgentApprovalService:
             state,
             AgentExecutionStatus.WAITING_APPROVAL,
         )
-        approval = await self._approval_store.create(
-            session_id=session_id,
-            owner_id=owner_id,
-            execution_id=execution_id,
-            approval_correlation_id=approval_correlation_id,
-            proposed_calls=proposed_calls,
-            paused_scratchpad=scratchpad.to_snapshot(),
-            paused_state=paused_state.model_dump(mode="json"),
-        )
-
-        assistant_seq = await self._chat_store.allocate_seq(session_id)
-        placeholder = await self._chat_store.add_message(
-            session_id=session_id,
-            seq=assistant_seq,
-            role="assistant",
-            content="",
-            provider=provider,
-            model=model,
-            status="waiting_approval",
-            pending_approval_id=approval.id,
-        )
-        await self._chat_store.mark_last_message_at(session_id)
-
-        linked = await self._approval_store.link_pending_message(
-            approval.id,
-            pending_message_id=placeholder.id,
-        )
-        approval = linked or approval
-
-        await stream_publisher.publish(
-            AgentStreamEvent.approval_required(
-                execution_id,
-                approval_id=approval.id,
-                approval_correlation_id=approval.approval_correlation_id,
-                proposed_calls=[
-                    call.model_dump(mode="json") for call in proposed_calls
-                ],
+        with approval_span(
+            approval_id=str(approval_correlation_id),
+            approval_kind=ApprovalKind.AGENT_TOOL.value,
+            approval_correlation_id=str(approval_correlation_id),
+        ) as span:
+            approval = await self._approval_store.create(
+                session_id=session_id,
+                owner_id=owner_id,
+                execution_id=execution_id,
+                approval_correlation_id=approval_correlation_id,
+                proposed_calls=proposed_calls,
+                paused_scratchpad=scratchpad.to_snapshot(),
+                paused_state=paused_state.model_dump(mode="json"),
             )
-        )
+
+            assistant_seq = await self._chat_store.allocate_seq(session_id)
+            placeholder = await self._chat_store.add_message(
+                session_id=session_id,
+                seq=assistant_seq,
+                role="assistant",
+                content="",
+                provider=provider,
+                model=model,
+                status="waiting_approval",
+                pending_approval_id=approval.id,
+            )
+            await self._chat_store.mark_last_message_at(session_id)
+
+            linked = await self._approval_store.link_pending_message(
+                approval.id,
+                pending_message_id=placeholder.id,
+            )
+            approval = linked or approval
+
+            await stream_publisher.publish(
+                AgentStreamEvent.approval_required(
+                    execution_id,
+                    approval_id=approval.id,
+                    approval_correlation_id=approval.approval_correlation_id,
+                    proposed_calls=[
+                        call.model_dump(mode="json") for call in proposed_calls
+                    ],
+                )
+            )
+            record_agent_tool_approval_pending_delta(1)
+            record_approval_span_outcome(
+                span,
+                approval_id=str(approval.id),
+                approval_status=ApprovalStatus.PENDING.value,
+                edited=False,
+            )
         return approval
 
     async def revise(
@@ -249,18 +309,28 @@ class AgentApprovalService:
             self._tool_validator,
         )
 
-        updated = await self._approval_store.cas_revise(
-            approval_id,
-            owner_id=owner_id,
-            edited_calls=edited_calls,
-        )
-        revision = await self._approval_store.append_revision(
-            approval_id=approval_id,
-            approval_kind=ApprovalKind.AGENT_TOOL,
-            edited_by=owner_id,
-            edited_payload=edited_calls,
-            note=note,
-        )
+        with approval_span(
+            approval_id=str(approval_id),
+            approval_kind=ApprovalKind.AGENT_TOOL.value,
+            approval_correlation_id=str(approval.approval_correlation_id),
+        ) as span:
+            updated = await self._approval_store.cas_revise(
+                approval_id,
+                owner_id=owner_id,
+                edited_calls=edited_calls,
+            )
+            revision = await self._approval_store.append_revision(
+                approval_id=approval_id,
+                approval_kind=ApprovalKind.AGENT_TOOL,
+                edited_by=owner_id,
+                edited_payload=edited_calls,
+                note=note,
+            )
+            record_approval_span_outcome(
+                span,
+                approval_status=ApprovalStatus.PENDING.value,
+                edited=True,
+            )
         return updated, revision
 
     async def decide(
@@ -286,20 +356,31 @@ class AgentApprovalService:
             )
 
         if decision == "rejected":
-            decided = await self._approval_store.cas_decide(
-                approval_id,
-                owner_id=owner_id,
-                status=ApprovalStatus.REJECTED,
-                decided_by=owner_id,
-                reason=reason,
-            )
-            await self._update_placeholder_message(
-                decided,
-                content="",
-                status="rejected",
-                finish_reason="rejected",
-                clear_pending=True,
-            )
+            with approval_span(
+                approval_id=str(approval_id),
+                approval_kind=ApprovalKind.AGENT_TOOL.value,
+                approval_correlation_id=str(approval.approval_correlation_id),
+            ) as span:
+                decided = await self._approval_store.cas_decide(
+                    approval_id,
+                    owner_id=owner_id,
+                    status=ApprovalStatus.REJECTED,
+                    decided_by=owner_id,
+                    reason=reason,
+                )
+                _emit_agent_decision_metrics(
+                    span,
+                    decided=decided,
+                    decision="rejected",
+                    edited=_has_edits(decided),
+                )
+                await self._update_placeholder_message(
+                    decided,
+                    content="",
+                    status="rejected",
+                    finish_reason="rejected",
+                    clear_pending=True,
+                )
             return _build_approval_result(
                 decided,
                 final_payload=_resolve_final_payload(decided),
@@ -307,21 +388,32 @@ class AgentApprovalService:
             )
 
         # Approved: validate first, CAS, then append inline revision on success.
-        decided = await self._approval_store.cas_decide(
-            approval_id,
-            owner_id=owner_id,
-            status=ApprovalStatus.APPROVED,
-            decided_by=owner_id,
-            reason=reason,
-            edited_calls=edited_calls,
-        )
-        if edited_calls is not None:
-            await self._approval_store.append_revision(
-                approval_id=approval_id,
-                approval_kind=ApprovalKind.AGENT_TOOL,
-                edited_by=owner_id,
-                edited_payload=edited_calls,
-                note=reason,
+        with approval_span(
+            approval_id=str(approval_id),
+            approval_kind=ApprovalKind.AGENT_TOOL.value,
+            approval_correlation_id=str(approval.approval_correlation_id),
+        ) as span:
+            decided = await self._approval_store.cas_decide(
+                approval_id,
+                owner_id=owner_id,
+                status=ApprovalStatus.APPROVED,
+                decided_by=owner_id,
+                reason=reason,
+                edited_calls=edited_calls,
+            )
+            if edited_calls is not None:
+                await self._approval_store.append_revision(
+                    approval_id=approval_id,
+                    approval_kind=ApprovalKind.AGENT_TOOL,
+                    edited_by=owner_id,
+                    edited_payload=edited_calls,
+                    note=reason,
+                )
+            _emit_agent_decision_metrics(
+                span,
+                decided=decided,
+                decision="approved",
+                edited=_has_edits(decided),
             )
         return _build_approval_result(
             decided,
@@ -355,114 +447,138 @@ class AgentApprovalService:
                 self._tool_validator,
             )
 
-        decided = await self._approval_store.cas_decide(
-            approval_id,
-            owner_id=owner_id,
-            status=ApprovalStatus.APPROVED,
-            decided_by=owner_id,
-            reason=reason,
-            edited_calls=edited_calls,
-        )
-        if edited_calls is not None:
-            await self._approval_store.append_revision(
-                approval_id=approval_id,
-                approval_kind=ApprovalKind.AGENT_TOOL,
-                edited_by=owner_id,
-                edited_payload=edited_calls,
-                note=reason,
+        resume_start = time.perf_counter()
+        with approval_span(
+            approval_id=str(approval_id),
+            approval_kind=ApprovalKind.AGENT_TOOL.value,
+            approval_correlation_id=str(approval.approval_correlation_id),
+        ) as span:
+            decided = await self._approval_store.cas_decide(
+                approval_id,
+                owner_id=owner_id,
+                status=ApprovalStatus.APPROVED,
+                decided_by=owner_id,
+                reason=reason,
+                edited_calls=edited_calls,
             )
-        result = _build_approval_result(
-            decided,
-            final_payload=_resolve_final_payload(decided),
-            edited=_has_edits(decided),
-        )
-        calls = _calls_from_payload(result.final_payload, decided.proposed_calls)
-
-        existing = self._scratchpad_store.get(decided.execution_id)
-        if existing is not None:
-            self._scratchpad_store.remove(decided.execution_id)
-        stored = Scratchpad.from_snapshot(
-            decided.execution_id,
-            decided.paused_scratchpad,
-        )
-        self._scratchpad_store.create(decided.execution_id)
-        scratchpad = self._scratchpad_store.require(decided.execution_id)
-        for entry in stored.entries:
-            scratchpad.append(entry)
-
-        state = AgentExecutionState.model_validate(decided.paused_state)
-        exec_context = tool_context.model_copy(
-            update={
-                "session_id": decided.session_id,
-                "approval_correlation_id": decided.approval_correlation_id,
-            }
-        )
-        try:
-            tool_results = await self._execute_approved_calls(
-                calls,
-                execution_id=decided.execution_id,
-                tool_context=exec_context,
-                scratchpad=scratchpad,
-                stream_publisher=stream_publisher,
+            if edited_calls is not None:
+                await self._approval_store.append_revision(
+                    approval_id=approval_id,
+                    approval_kind=ApprovalKind.AGENT_TOOL,
+                    edited_by=owner_id,
+                    edited_payload=edited_calls,
+                    note=reason,
+                )
+            _emit_agent_decision_metrics(
+                span,
+                decided=decided,
+                decision="approved",
+                edited=_has_edits(decided),
             )
-        except Exception:
-            await self._update_placeholder_message(
+            result = _build_approval_result(
                 decided,
-                content="",
-                status="error",
-                finish_reason="error",
-                clear_pending=True,
+                final_payload=_resolve_final_payload(decided),
+                edited=_has_edits(decided),
             )
-            raise
-        for tool_name in tool_results.tools_used:
-            state = AgentStateManager.record_tool_used(state, tool_name)
+            calls = _calls_from_payload(result.final_payload, decided.proposed_calls)
 
-        last_planner_content = _extract_last_planner_content(scratchpad)
-        try:
-            response = await executor.resume_from_approval(
-                request,
-                context,
-                scratchpad=scratchpad,
-                state=state,
-                tool_context=exec_context,
-                tool_results=tool_results,
-                last_planner_content=last_planner_content,
+            existing = self._scratchpad_store.get(decided.execution_id)
+            if existing is not None:
+                self._scratchpad_store.remove(decided.execution_id)
+            stored = Scratchpad.from_snapshot(
+                decided.execution_id,
+                decided.paused_scratchpad,
             )
-        except AgentApprovalPauseError:
-            raise
-        except Exception:
-            await self._update_placeholder_message(
-                decided,
-                content="",
-                status="error",
-                finish_reason="error",
-                clear_pending=True,
-            )
-            raise
+            self._scratchpad_store.create(decided.execution_id)
+            scratchpad = self._scratchpad_store.require(decided.execution_id)
+            for entry in stored.entries:
+                scratchpad.append(entry)
 
-        if response.finish_reason == "waiting_approval":
-            await self._update_placeholder_message(
-                decided,
-                content=response.content,
-                status="complete",
-                finish_reason="stop",
-                clear_pending=True,
+            state = AgentExecutionState.model_validate(decided.paused_state)
+            approved_context = tool_context.model_copy(
+                update={
+                    "session_id": decided.session_id,
+                    "approval_correlation_id": decided.approval_correlation_id,
+                }
             )
-            await self._chat_store.mark_last_message_at(decided.session_id)
-            return result, response
+            try:
+                tool_results = await self._execute_approved_calls(
+                    calls,
+                    execution_id=decided.execution_id,
+                    tool_context=approved_context,
+                    scratchpad=scratchpad,
+                    stream_publisher=stream_publisher,
+                )
+            except Exception:
+                await self._update_placeholder_message(
+                    decided,
+                    content="",
+                    status="error",
+                    finish_reason="error",
+                    clear_pending=True,
+                )
+                raise
+            for tool_name in tool_results.tools_used:
+                state = AgentStateManager.record_tool_used(state, tool_name)
 
-        tool_failed = any(not record.result.success for record in tool_results.records)
-        message_status = (
-            "error" if tool_failed or response.finish_reason == "error" else "complete"
-        )
-        await self._update_placeholder_message(
-            decided,
-            content=response.content,
-            status=message_status,
-            finish_reason=response.finish_reason,
-            clear_pending=True,
-        )
-        await self._chat_store.mark_last_message_at(decided.session_id)
+            last_planner_content = _extract_last_planner_content(scratchpad)
+            # Correlation applies only to the approved gated execution (Stage 3).
+            resume_context = approved_context.model_copy(
+                update={"approval_correlation_id": None}
+            )
+            try:
+                response = await executor.resume_from_approval(
+                    request,
+                    context,
+                    scratchpad=scratchpad,
+                    state=state,
+                    tool_context=resume_context,
+                    tool_results=tool_results,
+                    last_planner_content=last_planner_content,
+                )
+            except AgentApprovalPauseError:
+                raise
+            except Exception:
+                await self._update_placeholder_message(
+                    decided,
+                    content="",
+                    status="error",
+                    finish_reason="error",
+                    clear_pending=True,
+                )
+                raise
+
+            if response.finish_reason == "waiting_approval":
+                await self._update_placeholder_message(
+                    decided,
+                    content=response.content,
+                    status="complete",
+                    finish_reason="stop",
+                    clear_pending=True,
+                )
+                await self._chat_store.mark_last_message_at(decided.session_id)
+            else:
+                tool_failed = any(
+                    not record.result.success for record in tool_results.records
+                )
+                message_status = (
+                    "error"
+                    if tool_failed or response.finish_reason == "error"
+                    else "complete"
+                )
+                await self._update_placeholder_message(
+                    decided,
+                    content=response.content,
+                    status=message_status,
+                    finish_reason=response.finish_reason,
+                    clear_pending=True,
+                )
+                await self._chat_store.mark_last_message_at(decided.session_id)
+
+            record_hitl_resume_latency_ms(
+                kind=ApprovalKind.AGENT_TOOL.value,
+                latency_ms=elapsed_ms_since(resume_start),
+            )
         return result, response
 
     async def list_revisions(

@@ -32,6 +32,11 @@ _INSTRUMENT_LABEL_KEYS: dict[str, frozenset[str]] = {
     "workflow_parallel_branch_count": frozenset({"workflow_type"}),
     "plugins_loaded_total": frozenset({"failure_code"}),
     "plugin_load_failures_total": frozenset({"failure_code"}),
+    "agent_tool_approval_pending_count": frozenset(),
+    "approval_decisions_total": frozenset({"kind", "decision"}),
+    "hitl_approval_decision_latency_ms": frozenset({"kind"}),
+    "hitl_resume_latency_ms": frozenset({"kind"}),
+    "hitl_tool_execution_latency_ms": frozenset({"kind"}),
 }
 
 
@@ -100,6 +105,24 @@ class MetricInstruments:
         )
         self.plugin_load_failures_total: Counter = meter.create_counter(
             "plugin_load_failures_total"
+        )
+        self.agent_tool_approval_pending_count: UpDownCounter = (
+            meter.create_up_down_counter("agent_tool_approval_pending_count")
+        )
+        self.approval_decisions_total: Counter = meter.create_counter(
+            "approval_decisions_total"
+        )
+        self.hitl_approval_decision_latency_ms: Histogram = meter.create_histogram(
+            "hitl_approval_decision_latency_ms",
+            unit="ms",
+        )
+        self.hitl_resume_latency_ms: Histogram = meter.create_histogram(
+            "hitl_resume_latency_ms",
+            unit="ms",
+        )
+        self.hitl_tool_execution_latency_ms: Histogram = meter.create_histogram(
+            "hitl_tool_execution_latency_ms",
+            unit="ms",
         )
 
     @classmethod
@@ -351,6 +374,66 @@ def record_workflow_parallel_branch_metric(
         instruments.workflow_parallel_branch_count.record(branch_count, labels)
 
     _record("workflow_parallel_branch_count", _emit)
+
+
+def record_agent_tool_approval_pending_delta(delta: int) -> None:
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    def _emit() -> None:
+        instruments.agent_tool_approval_pending_count.add(delta)
+
+    _record("agent_tool_approval_pending_count", _emit)
+
+
+def record_hitl_decision_metrics(
+    *,
+    kind: str,
+    decision: str,
+    decision_latency_ms: int,
+) -> None:
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    kind_labels = build_metric_attributes(kind=kind)
+    decision_labels = build_metric_attributes(kind=kind, decision=decision)
+
+    def _emit() -> None:
+        instruments.approval_decisions_total.add(1, decision_labels)
+        instruments.hitl_approval_decision_latency_ms.record(
+            decision_latency_ms,
+            kind_labels,
+        )
+
+    _record("approval_decisions_total", _emit)
+
+
+def record_hitl_resume_latency_ms(*, kind: str, latency_ms: int) -> None:
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(kind=kind)
+
+    def _emit() -> None:
+        instruments.hitl_resume_latency_ms.record(latency_ms, labels)
+
+    _record("hitl_resume_latency_ms", _emit)
+
+
+def record_hitl_tool_execution_latency_ms(*, kind: str, latency_ms: int) -> None:
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(kind=kind)
+
+    def _emit() -> None:
+        instruments.hitl_tool_execution_latency_ms.record(latency_ms, labels)
+
+    _record("hitl_tool_execution_latency_ms", _emit)
 
 
 def assert_label_keys_allowlisted() -> None:
