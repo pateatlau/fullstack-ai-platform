@@ -323,7 +323,7 @@ def record_plugin_load_metrics(*, succeeded: bool, failure_code: str | None) -> 
     if instruments is None:
         return
 
-    raw_code = "none" if succeeded else (failure_code or "unknown")
+    raw_code = "none" if succeeded else (failure_code or "other")
     labels = build_metric_attributes(failure_code=raw_code)
 
     def _emit() -> None:

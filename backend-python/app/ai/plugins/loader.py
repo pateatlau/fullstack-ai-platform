@@ -182,138 +182,239 @@ class PluginLoader:
                     failure_code=failure_code,
                 )
 
-            if not manifest_path.is_file():
-                self._registry.mark_failed(
-                    failure=PluginLoadFailureReason(
-                        code="manifest_not_found",
-                        message="Plugin manifest not found.",
-                    ),
-                    load_duration_ms=_elapsed_ms(load_start),
-                )
-                _observe(status="failed", failure_code="manifest_not_found")
-                return
-
-            manifest, parse_failure = try_load_manifest_from_yaml(manifest_path)
-            if manifest is None:
-                partial = extract_partial_identity(manifest_path)
-                plugin_id = partial.get("plugin_id")
-                self._registry.mark_failed(
-                    failure=parse_failure
-                    or PluginLoadFailureReason(
-                        code="invalid_manifest",
-                        message="Invalid plugin manifest.",
-                    ),
-                    load_duration_ms=_elapsed_ms(load_start),
-                    plugin_id=partial.get("plugin_id"),
-                    name=partial.get("name"),
-                    version=partial.get("version"),
-                    api_version=partial.get("api_version"),
-                    author=partial.get("author"),
-                    homepage=partial.get("homepage"),
-                    repository=partial.get("repository"),
-                    documentation=partial.get("documentation"),
-                    license=partial.get("license"),
-                    dependencies=partial.get("dependencies"),
-                    metadata=partial.get("metadata"),
-                )
-                failure_code = (
-                    parse_failure.code
-                    if parse_failure is not None
-                    else "invalid_manifest"
-                )
-                _observe(status="failed", failure_code=failure_code)
-                return
-
-            plugin_id = manifest.plugin_id
-
-            api_failure = validate_api_version(manifest)
-            if api_failure is not None:
-                self._registry.mark_failed(
-                    manifest=manifest,
-                    failure=api_failure,
-                    load_duration_ms=_elapsed_ms(load_start),
-                )
-                _observe(
-                    status="failed",
-                    resolved_plugin_id=manifest.plugin_id,
-                    failure_code=api_failure.code,
-                )
-                return
-
-            allowlist = self._settings.plugin_allowlist
-            if allowlist and manifest.plugin_id not in allowlist:
-                self._registry.mark_failed(
-                    manifest=manifest,
-                    failure=PluginLoadFailureReason(
-                        code="allowlist_excluded",
-                        message="Plugin is not included in plugin_allowlist.",
-                    ),
-                    load_duration_ms=_elapsed_ms(load_start),
-                )
-                _observe(
-                    status="failed",
-                    resolved_plugin_id=manifest.plugin_id,
-                    failure_code="allowlist_excluded",
-                )
-                return
-
-            if manifest.plugin_id in seen_plugin_ids:
-                self._registry.mark_failed(
-                    manifest=manifest,
-                    failure=PluginLoadFailureReason(
-                        code="invalid_manifest",
-                        message=f"Duplicate plugin_id '{manifest.plugin_id}'.",
-                    ),
-                    load_duration_ms=_elapsed_ms(load_start),
-                )
-                _observe(
-                    status="failed",
-                    resolved_plugin_id=manifest.plugin_id,
-                    failure_code="invalid_manifest",
-                )
-                return
-
-            seen_plugin_ids.add(manifest.plugin_id)
-
+            manifest: PluginManifest | None = None
             try:
-                register_fn = _load_entrypoint_callable(
-                    plugin_dir=plugin_dir,
-                    plugin_id=manifest.plugin_id,
-                    entrypoint=manifest.entrypoint,
-                )
-            except Exception:
-                logger.warning(
-                    "Plugin entrypoint import failed.",
-                    extra={"plugin_id": manifest.plugin_id},
-                )
-                self._registry.mark_failed(
-                    manifest=manifest,
-                    failure=PluginLoadFailureReason(
-                        code="entrypoint_import_error",
-                        message="Unable to import plugin entrypoint.",
-                    ),
-                    load_duration_ms=_elapsed_ms(load_start),
-                )
-                _observe(
-                    status="failed",
-                    resolved_plugin_id=manifest.plugin_id,
-                    failure_code="entrypoint_import_error",
-                )
-                return
+                if not manifest_path.is_file():
+                    self._registry.mark_failed(
+                        failure=PluginLoadFailureReason(
+                            code="manifest_not_found",
+                            message="Plugin manifest not found.",
+                        ),
+                        load_duration_ms=_elapsed_ms(load_start),
+                    )
+                    _observe(status="failed", failure_code="manifest_not_found")
+                    return
 
-            registrar = PluginRegistrar(
-                plugin_id=manifest.plugin_id,
-                plugin_dir=plugin_dir,
-                tool_registry=self._tool_registry,
-                prompt_repository=self._prompt_repository,
-                workflow_plugin_registry=self._workflow_plugin_registry,
-                plugin_registry=self._registry,
-            )
+                manifest, parse_failure = try_load_manifest_from_yaml(manifest_path)
+                if manifest is None:
+                    partial = extract_partial_identity(manifest_path)
+                    plugin_id = partial.get("plugin_id")
+                    self._registry.mark_failed(
+                        failure=parse_failure
+                        or PluginLoadFailureReason(
+                            code="invalid_manifest",
+                            message="Invalid plugin manifest.",
+                        ),
+                        load_duration_ms=_elapsed_ms(load_start),
+                        plugin_id=partial.get("plugin_id"),
+                        name=partial.get("name"),
+                        version=partial.get("version"),
+                        api_version=partial.get("api_version"),
+                        author=partial.get("author"),
+                        homepage=partial.get("homepage"),
+                        repository=partial.get("repository"),
+                        documentation=partial.get("documentation"),
+                        license=partial.get("license"),
+                        dependencies=partial.get("dependencies"),
+                        metadata=partial.get("metadata"),
+                    )
+                    failure_code = (
+                        parse_failure.code
+                        if parse_failure is not None
+                        else "invalid_manifest"
+                    )
+                    _observe(status="failed", failure_code=failure_code)
+                    return
 
-            for mcp_server in manifest.mcp_servers:
+                plugin_id = manifest.plugin_id
+
+                api_failure = validate_api_version(manifest)
+                if api_failure is not None:
+                    self._registry.mark_failed(
+                        manifest=manifest,
+                        failure=api_failure,
+                        load_duration_ms=_elapsed_ms(load_start),
+                    )
+                    _observe(
+                        status="failed",
+                        resolved_plugin_id=manifest.plugin_id,
+                        failure_code=api_failure.code,
+                    )
+                    return
+
+                allowlist = self._settings.plugin_allowlist
+                if allowlist and manifest.plugin_id not in allowlist:
+                    self._registry.mark_failed(
+                        manifest=manifest,
+                        failure=PluginLoadFailureReason(
+                            code="allowlist_excluded",
+                            message="Plugin is not included in plugin_allowlist.",
+                        ),
+                        load_duration_ms=_elapsed_ms(load_start),
+                    )
+                    _observe(
+                        status="failed",
+                        resolved_plugin_id=manifest.plugin_id,
+                        failure_code="allowlist_excluded",
+                    )
+                    return
+
+                if manifest.plugin_id in seen_plugin_ids:
+                    self._registry.mark_failed(
+                        manifest=manifest,
+                        failure=PluginLoadFailureReason(
+                            code="invalid_manifest",
+                            message=f"Duplicate plugin_id '{manifest.plugin_id}'.",
+                        ),
+                        load_duration_ms=_elapsed_ms(load_start),
+                    )
+                    _observe(
+                        status="failed",
+                        resolved_plugin_id=manifest.plugin_id,
+                        failure_code="invalid_manifest",
+                    )
+                    return
+
+                seen_plugin_ids.add(manifest.plugin_id)
+
                 try:
-                    registrar.register_mcp_server(mcp_server.to_dict())
+                    register_fn = _load_entrypoint_callable(
+                        plugin_dir=plugin_dir,
+                        plugin_id=manifest.plugin_id,
+                        entrypoint=manifest.entrypoint,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Plugin entrypoint import failed.",
+                        extra={"plugin_id": manifest.plugin_id},
+                    )
+                    self._registry.mark_failed(
+                        manifest=manifest,
+                        failure=PluginLoadFailureReason(
+                            code="entrypoint_import_error",
+                            message="Unable to import plugin entrypoint.",
+                        ),
+                        load_duration_ms=_elapsed_ms(load_start),
+                    )
+                    _observe(
+                        status="failed",
+                        resolved_plugin_id=manifest.plugin_id,
+                        failure_code="entrypoint_import_error",
+                    )
+                    return
+
+                registrar = PluginRegistrar(
+                    plugin_id=manifest.plugin_id,
+                    plugin_dir=plugin_dir,
+                    tool_registry=self._tool_registry,
+                    prompt_repository=self._prompt_repository,
+                    workflow_plugin_registry=self._workflow_plugin_registry,
+                    plugin_registry=self._registry,
+                )
+
+                for mcp_server in manifest.mcp_servers:
+                    try:
+                        registrar.register_mcp_server(mcp_server.to_dict())
+                    except PluginRegistrationError as exc:
+                        self._registry.mark_failed(
+                            manifest=manifest,
+                            failure=PluginLoadFailureReason(
+                                code="registration_error",
+                                message=str(exc),
+                            ),
+                            load_duration_ms=_elapsed_ms(load_start),
+                        )
+                        _observe(
+                            status="failed",
+                            resolved_plugin_id=manifest.plugin_id,
+                            failure_code="registration_error",
+                        )
+                        return
+
+                wait_timeout_seconds = (
+                    self._settings.plugin_registration_wait_timeout_seconds
+                )
+                registration_error: BaseException | None = None
+                registration_complete = threading.Event()
+
+                def _run_registration() -> None:
+                    nonlocal registration_error
+                    try:
+                        register_fn(registrar)
+                    except BaseException as exc:
+                        registration_error = exc
+                    finally:
+                        registration_complete.set()
+
+                # Cooperative wait: loader stops waiting after N seconds; register() may
+                # continue in the daemon thread until it returns (in-process V2 boundary).
+                thread = threading.Thread(
+                    target=_run_registration,
+                    name=f"plugin-register-{manifest.plugin_id}",
+                    daemon=True,
+                )
+                thread.start()
+
+                if not registration_complete.wait(timeout=wait_timeout_seconds):
+                    registrar.close()
+                    self._registry.mark_failed(
+                        manifest=manifest,
+                        failure=PluginLoadFailureReason(
+                            code="timeout",
+                            message=(
+                                "Plugin registration did not complete within "
+                                f"{wait_timeout_seconds}s wait limit"
+                            ),
+                        ),
+                        load_duration_ms=_elapsed_ms(load_start),
+                    )
+                    _observe(
+                        status="failed",
+                        resolved_plugin_id=manifest.plugin_id,
+                        failure_code="timeout",
+                    )
+                    return
+
+                if registration_error is not None:
+                    registrar.rollback()
+                    if isinstance(registration_error, PluginRegistrationError):
+                        self._registry.mark_failed(
+                            manifest=manifest,
+                            failure=PluginLoadFailureReason(
+                                code="registration_error",
+                                message=str(registration_error),
+                            ),
+                            load_duration_ms=_elapsed_ms(load_start),
+                        )
+                        _observe(
+                            status="failed",
+                            resolved_plugin_id=manifest.plugin_id,
+                            failure_code="registration_error",
+                        )
+                        return
+                    logger.warning(
+                        "Plugin registration failed.",
+                        extra={"plugin_id": manifest.plugin_id},
+                    )
+                    self._registry.mark_failed(
+                        manifest=manifest,
+                        failure=PluginLoadFailureReason(
+                            code="registration_error",
+                            message="Plugin registration failed.",
+                        ),
+                        load_duration_ms=_elapsed_ms(load_start),
+                    )
+                    _observe(
+                        status="failed",
+                        resolved_plugin_id=manifest.plugin_id,
+                        failure_code="registration_error",
+                    )
+                    return
+
+                try:
+                    registrar.commit()
                 except PluginRegistrationError as exc:
+                    registrar.rollback()
                     self._registry.mark_failed(
                         manifest=manifest,
                         failure=PluginLoadFailureReason(
@@ -329,116 +430,45 @@ class PluginLoader:
                     )
                     return
 
-            wait_timeout_seconds = (
-                self._settings.plugin_registration_wait_timeout_seconds
-            )
-            registration_error: BaseException | None = None
-            registration_complete = threading.Event()
-
-            def _run_registration() -> None:
-                nonlocal registration_error
-                try:
-                    register_fn(registrar)
-                except BaseException as exc:
-                    registration_error = exc
-                finally:
-                    registration_complete.set()
-
-            # Cooperative wait: loader stops waiting after N seconds; register() may
-            # continue in the daemon thread until it returns (in-process V2 boundary).
-            thread = threading.Thread(
-                target=_run_registration,
-                name=f"plugin-register-{manifest.plugin_id}",
-                daemon=True,
-            )
-            thread.start()
-
-            if not registration_complete.wait(timeout=wait_timeout_seconds):
-                registrar.close()
-                self._registry.mark_failed(
-                    manifest=manifest,
-                    failure=PluginLoadFailureReason(
-                        code="timeout",
-                        message=(
-                            "Plugin registration did not complete within "
-                            f"{wait_timeout_seconds}s wait limit"
-                        ),
-                    ),
+                contributions = registrar.contribution_kinds()
+                self._registry.mark_loaded(
+                    manifest,
+                    contributions=contributions,
                     load_duration_ms=_elapsed_ms(load_start),
                 )
                 _observe(
-                    status="failed",
+                    status="loaded",
                     resolved_plugin_id=manifest.plugin_id,
-                    failure_code="timeout",
+                    contribution_kinds=[kind.value for kind in contributions],
                 )
-                return
-
-            if registration_error is not None:
-                registrar.rollback()
-                if isinstance(registration_error, PluginRegistrationError):
+            except Exception:
+                logger.exception(
+                    "Unexpected plugin load failure.",
+                    extra={"plugin_id": plugin_id},
+                )
+                failure = PluginLoadFailureReason(
+                    code="registration_error",
+                    message="Unexpected plugin load failure.",
+                )
+                if manifest is not None:
                     self._registry.mark_failed(
                         manifest=manifest,
-                        failure=PluginLoadFailureReason(
-                            code="registration_error",
-                            message=str(registration_error),
-                        ),
+                        failure=failure,
                         load_duration_ms=_elapsed_ms(load_start),
                     )
-                    _observe(
-                        status="failed",
-                        resolved_plugin_id=manifest.plugin_id,
-                        failure_code="registration_error",
+                    resolved_id = manifest.plugin_id
+                else:
+                    self._registry.mark_failed(
+                        failure=failure,
+                        load_duration_ms=_elapsed_ms(load_start),
+                        plugin_id=plugin_id,
                     )
-                    return
-                logger.warning(
-                    "Plugin registration failed.",
-                    extra={"plugin_id": manifest.plugin_id},
-                )
-                self._registry.mark_failed(
-                    manifest=manifest,
-                    failure=PluginLoadFailureReason(
-                        code="registration_error",
-                        message="Plugin registration failed.",
-                    ),
-                    load_duration_ms=_elapsed_ms(load_start),
-                )
+                    resolved_id = plugin_id
                 _observe(
                     status="failed",
-                    resolved_plugin_id=manifest.plugin_id,
-                    failure_code="registration_error",
+                    resolved_plugin_id=resolved_id,
+                    failure_code="other",
                 )
-                return
-
-            try:
-                registrar.commit()
-            except PluginRegistrationError as exc:
-                registrar.rollback()
-                self._registry.mark_failed(
-                    manifest=manifest,
-                    failure=PluginLoadFailureReason(
-                        code="registration_error",
-                        message=str(exc),
-                    ),
-                    load_duration_ms=_elapsed_ms(load_start),
-                )
-                _observe(
-                    status="failed",
-                    resolved_plugin_id=manifest.plugin_id,
-                    failure_code="registration_error",
-                )
-                return
-
-            contributions = registrar.contribution_kinds()
-            self._registry.mark_loaded(
-                manifest,
-                contributions=contributions,
-                load_duration_ms=_elapsed_ms(load_start),
-            )
-            _observe(
-                status="loaded",
-                resolved_plugin_id=manifest.plugin_id,
-                contribution_kinds=[kind.value for kind in contributions],
-            )
 
     def _resolve_plugin_directories(self) -> list[Path]:
         resolved: list[Path] = []

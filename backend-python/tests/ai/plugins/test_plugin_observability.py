@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+from unittest.mock import patch
+
 import pytest
 from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
@@ -17,6 +19,7 @@ from app.ai.observability.metrics.labels import FAILURE_CODE_REGISTRY
 from app.ai.observability.metrics.meter import MeterRegistry
 from app.ai.observability.tracing.provider import TracerRegistry
 from app.ai.plugins import PluginStatus
+from app.ai.plugins.registry import PluginRegistry
 from app.core.config import Settings
 from tests.ai.plugins.conftest import FIXTURES_ROOT, load_plugins, plugin_settings
 
@@ -179,6 +182,43 @@ class TestPluginLoadSpans:
         assert [
             span for span in exporter.get_finished_spans() if span.name == "plugin.load"
         ] == []
+
+    def test_unexpected_exception_records_terminal_span_and_other_metric(
+        self,
+        memory_exporter: InMemorySpanExporter,
+        metric_reader: InMemoryMetricReader,
+    ) -> None:
+        settings = _plugin_dir_settings(
+            str(FIXTURES_ROOT), allowlist=["com.test.minimal"]
+        )
+        TracerRegistry.initialize(
+            settings,
+            extra_span_processors=[SimpleSpanProcessor(memory_exporter)],
+        )
+        with patch.object(
+            PluginRegistry,
+            "mark_loaded",
+            side_effect=RuntimeError("unexpected"),
+        ):
+            load_plugins(settings)
+
+        span = _find_load_span(
+            memory_exporter.get_finished_spans(),
+            plugin_id="com.test.minimal",
+        )
+        assert span is not None
+        attributes = _span_attributes(span)
+        assert attributes["status"] == "failed"
+        assert attributes["failure_code"] == "other"
+        assert attributes["load_duration_ms"] >= 0
+
+        points = _metric_data_points(metric_reader, "plugin_load_failures_total")
+        other_points = [
+            point
+            for point in points
+            if (point.attributes or {}).get("failure_code") == "other"
+        ]
+        assert len(other_points) == 1
 
 
 class TestPluginLoadMetrics:
