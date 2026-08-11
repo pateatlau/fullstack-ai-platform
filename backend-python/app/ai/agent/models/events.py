@@ -20,6 +20,7 @@ class AgentStreamEventType(StrEnum):
     REFLECTION = "reflection"
     COMPLETE = "complete"
     ERROR = "error"
+    APPROVAL_REQUIRED = "approval_required"
 
 
 class StartEventPayload(BaseModel):
@@ -85,6 +86,14 @@ class ErrorEventPayload(BaseModel):
     message: str = Field(min_length=1)
 
 
+class ApprovalRequiredEventPayload(BaseModel):
+    """Payload for :attr:`AgentStreamEventType.APPROVAL_REQUIRED`."""
+
+    approval_id: uuid.UUID
+    approval_correlation_id: uuid.UUID
+    proposed_calls: list[dict[str, object]] = Field(default_factory=list)
+
+
 AgentStreamEventPayload = (
     StartEventPayload
     | PlanningEventPayload
@@ -94,6 +103,7 @@ AgentStreamEventPayload = (
     | ReflectionEventPayload
     | CompleteEventPayload
     | ErrorEventPayload
+    | ApprovalRequiredEventPayload
 )
 
 
@@ -109,6 +119,7 @@ _PAYLOAD_MODEL_BY_TYPE: dict[
     AgentStreamEventType.REFLECTION: ReflectionEventPayload,
     AgentStreamEventType.COMPLETE: CompleteEventPayload,
     AgentStreamEventType.ERROR: ErrorEventPayload,
+    AgentStreamEventType.APPROVAL_REQUIRED: ApprovalRequiredEventPayload,
 }
 
 
@@ -240,4 +251,24 @@ class AgentStreamEvent(BaseModel):
             type=AgentStreamEventType.ERROR,
             execution_id=execution_id,
             payload=payload.model_dump(),
+        )
+
+    @classmethod
+    def approval_required(
+        cls,
+        execution_id: str,
+        *,
+        approval_id: uuid.UUID,
+        approval_correlation_id: uuid.UUID,
+        proposed_calls: list[dict[str, object]],
+    ) -> AgentStreamEvent:
+        payload = ApprovalRequiredEventPayload(
+            approval_id=approval_id,
+            approval_correlation_id=approval_correlation_id,
+            proposed_calls=proposed_calls,
+        )
+        return cls(
+            type=AgentStreamEventType.APPROVAL_REQUIRED,
+            execution_id=execution_id,
+            payload=payload.model_dump(mode="json"),
         )

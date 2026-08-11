@@ -970,7 +970,7 @@ _Re-verified in Epic 09 Phase 0 (2026-08-11); source of truth: [post-mvp-v2-epic
 | ----- | ------------------------------------------ | ------ | ----------- |
 | 0     | Baseline Audit                             | XS     | Completed   |
 | 1     | HITL Foundations                           | M      | Completed   |
-| 2     | Agent Tool-Call Approval Gate              | L      | Not Started |
+| 2     | Agent Tool-Call Approval Gate              | L      | Completed   |
 | 3     | Agent Approval Decision & Resume           | L      | Not Started |
 | 4     | Workflow Approval Enhancements             | M      | Not Started |
 | 5     | Workflow Graph Guard & MCP/Plugin Coverage | M      | Not Started |
@@ -1138,7 +1138,7 @@ Introduce the core HITL package, domain models, database migration, and feature 
 
 - [x] Foundation tests pass.
 - [x] Public model/policy APIs frozen.
-- [ ] User confirmation to proceed to Phase 2.
+- [x] User confirmation to proceed to Phase 2.
 
 **Rollback**
 
@@ -1154,14 +1154,14 @@ Introduce the core HITL package, domain models, database migration, and feature 
 | HITL foundation tests | ✅ 25 passed (`tests/ai/hitl/`)             |
 | Migration round-trip  | ✅ PASS — `0010_hitl_tables` upgrade/downgrade |
 | Phase 1 status        | ✅ Completed                                |
-| Phase 2 authorized    | ⬜ Pending user confirmation                |
+| Phase 2 authorized    | ✅ User confirmed                           |
 
 ---
 
 # Phase 2 — Agent Tool-Call Approval Gate
 
 **Effort:** L
-**Status:** Not Started
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1181,30 +1181,30 @@ Wire `ApprovalPolicy` into `ToolRunner` so an approval-required tool call pauses
 
 ## Scratchpad Snapshotting
 
-- [ ] Implement `Scratchpad.to_snapshot() -> list[dict]` (serializes `ScratchpadEntry[]`); document as the sole exception to "never persisted".
-- [ ] Implement `AgentExecutionState` snapshot serialization (already a Pydantic model — use `model_dump(mode="json")`).
+- [x] Implement `Scratchpad.to_snapshot() -> list[dict]` (serializes `ScratchpadEntry[]`); document as the sole exception to "never persisted".
+- [x] Implement `AgentExecutionState` snapshot serialization (already a Pydantic model — use `model_dump(mode="json")`).
 
 ## Gate Wiring
 
-- [ ] In `ToolRunner`, before dispatching a planned tool-call step, resolve each call's `ToolDefinition` and check `ApprovalPolicy.requires_approval()`.
-- [ ] If any call in the step requires approval, pause the **entire step** (Locked Decision — step-level granularity).
-- [ ] Delegate to `AgentApprovalService.pause(step, scratchpad, state, session_id, owner_id)`.
+- [x] In `ToolRunner`, before dispatching a planned tool-call step, resolve each call's `ToolDefinition` and check `ApprovalPolicy.requires_approval()`.
+- [x] If any call in the step requires approval, pause the **entire step** (Locked Decision — step-level granularity).
+- [x] Delegate to `AgentApprovalService.pause(step, scratchpad, state, session_id, owner_id)`.
 
 ## Pause Persistence
 
-- [ ] `AgentApprovalService.pause()` generates a new `approval_correlation_id` (UUID) and inserts `agent_tool_approvals` (status=pending, proposed_calls, paused_scratchpad, paused_state, approval_correlation_id).
-- [ ] Insert placeholder `ChatMessage` (status=waiting_approval, content="", pending_approval_id=…) via `ChatStore`.
-- [ ] Publish `AgentStreamEvent.approval_required(execution_id, approval_id, approval_correlation_id, proposed_calls)`.
-- [ ] Ensure the agent run terminates cleanly after the pause (no `complete`/`error` event emitted for this turn) and scratchpad store cleanup does not lose the snapshot already persisted.
+- [x] `AgentApprovalService.pause()` generates a new `approval_correlation_id` (UUID) and inserts `agent_tool_approvals` (status=pending, proposed_calls, paused_scratchpad, paused_state, approval_correlation_id).
+- [x] Insert placeholder `ChatMessage` (status=waiting_approval, content="", pending_approval_id=…) via `ChatStore`.
+- [x] Publish `AgentStreamEvent.approval_required(execution_id, approval_id, approval_correlation_id, proposed_calls)`.
+- [x] Ensure the agent run terminates cleanly after the pause (no `complete`/`error` event emitted for this turn) and scratchpad store cleanup does not lose the snapshot already persisted.
 
 ## Testing
 
-- [ ] Fixture tool flagged `requires_approval=True`; assert `ToolRunner` does not dispatch it.
-- [ ] Assert `agent_tool_approvals` row created with correct `proposed_calls`.
-- [ ] Assert placeholder `ChatMessage` persisted with `status=waiting_approval`.
-- [ ] Assert SSE stream emits `approval_required` and then closes (no `end` frame).
-- [ ] Test: flag off — tool dispatches normally, no new rows.
-- [ ] Test: step with a mix of flagged and unflagged calls pauses the whole step.
+- [x] Fixture tool flagged `requires_approval=True`; assert `ToolRunner` does not dispatch it.
+- [x] Assert `agent_tool_approvals` row created with correct `proposed_calls`.
+- [x] Assert placeholder `ChatMessage` persisted with `status=waiting_approval`.
+- [x] Assert SSE stream emits `approval_required` and then closes (no `end` frame).
+- [x] Test: flag off — tool dispatches normally, no new rows.
+- [x] Test: step with a mix of flagged and unflagged calls pauses the whole step.
 
 **Verify**
 
@@ -1217,7 +1217,7 @@ Wire `ApprovalPolicy` into `ToolRunner` so an approval-required tool call pauses
 
 **Exit criteria**
 
-- [ ] Pause path tests pass.
+- [x] Pause path tests pass.
 - [ ] User confirmation to proceed to Phase 3.
 
 **Rollback**
@@ -1227,13 +1227,13 @@ Wire `ApprovalPolicy` into `ToolRunner` so an approval-required tool call pauses
 
 **Completion Record**
 
-| Metric             | Result          |
-| ------------------ | --------------- |
-| Lint               | Pending Phase 2 |
-| Typecheck          | Pending Phase 2 |
-| Pause path tests   | Pending Phase 2 |
-| Phase 2 status     | Not Started     |
-| Phase 3 authorized | Pending         |
+| Metric             | Result                                      |
+| ------------------ | ------------------------------------------- |
+| Lint               | ✅ PASS                                     |
+| Typecheck          | ✅ PASS — 0 errors                          |
+| Pause path tests   | ✅ 9 passed (`test_pause.py`, `test_tool_approval.py`) |
+| Phase 2 status     | ✅ Completed                                |
+| Phase 3 authorized | ⬜ Pending user confirmation                |
 
 ---
 
@@ -1984,3 +1984,4 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 | 1.1     | 2026-08-11 | Incorporated architecture review: added `approval_revisions` history + `POST …/revise` endpoint, canonical `ApprovalResult` DTO, `approval_correlation_id` cross-system correlation, explicit Decision Execution Stages (aligned with future Epic 10 background jobs), execution-failure-vs-decision-status semantics, reserved `cancelled` status and approval lifecycle FSM diagram, `O(V+E)` graph-guard complexity note, `approval_decisions_total`/`hitl_resume_latency_ms`/`hitl_tool_execution_latency_ms` metrics and first-class approval tracing attributes, expanded adversarial/edge-case eval scenarios (Phase 8), Migration Impact Summary, Glossary, and Implementation Risks section. No architectural redesign — additive only. Not started. |
 | 1.2     | 2026-08-11 | Phase 0 baseline audit complete — [post-mvp-v2-epic9-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic9-phase-0-baseline-audit.md). Part II only. |
 | 1.3     | 2026-08-11 | Phase 1 HITL foundations complete — `app/ai/hitl/` package, migration `0010_hitl_tables`, `ToolDefinition.requires_approval`, `HITL_ENABLED` config, foundation tests. Part II only. |
+| 1.4     | 2026-08-11 | Phase 2 agent tool-call approval gate complete — `ToolRunner` pause gate, `AgentApprovalService.pause()`, `AgentToolApprovalStore`, `approval_required` SSE, pause path tests. Part II only. |

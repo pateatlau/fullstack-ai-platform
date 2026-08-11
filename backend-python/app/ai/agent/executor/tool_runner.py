@@ -17,10 +17,15 @@ from app.ai.agent.interfaces.streaming import StreamPublisher
 from app.ai.agent.interfaces.retry import RetryPolicy
 from app.ai.agent.models.events import AgentStreamEvent
 from app.ai.agent.models.plan import PlannedStep
+from app.ai.agent.models.state import AgentExecutionState
 from app.ai.agent.retry.classifier import is_retryable_tool_result
 from app.ai.agent.retry.executor import retry_operation
 from app.ai.agent.retry.policies import ToolRetryPolicy
+from app.ai.agent.scratchpad.scratchpad import Scratchpad
 from app.ai.agent.streaming.publisher import NoOpStreamPublisher
+from app.ai.hitl.exceptions import HitlError
+from app.ai.hitl.policy import ApprovalPolicy
+from app.ai.hitl.service import AgentApprovalService, raise_pause
 from app.ai.observability.tracing.spans import (
     agent_span,
     elapsed_ms_since,
@@ -29,6 +34,7 @@ from app.ai.observability.tracing.spans import (
     set_tool_retry_count,
 )
 from app.ai.tools.executor import ToolExecutor
+from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext, ToolResult
 
 
@@ -67,14 +73,22 @@ class ToolRunner:
         self,
         *,
         tool_executor: ToolExecutor,
+        tool_registry: ToolRegistry | None = None,
         stream_publisher: StreamPublisher | None = None,
         retry_policy: ToolRetryPolicy | None = None,
         parallel_tools_enabled: bool = False,
+        hitl_enabled: bool = False,
+        approval_policy: ApprovalPolicy | None = None,
+        approval_service: AgentApprovalService | None = None,
     ) -> None:
         self._executor = tool_executor
+        self._registry = tool_registry
         self._publisher = stream_publisher or NoOpStreamPublisher()
         self._retry_policy = retry_policy or ToolRetryPolicy()
         self._parallel_tools_enabled = parallel_tools_enabled
+        self._hitl_enabled = hitl_enabled
+        self._approval_policy = approval_policy
+        self._approval_service = approval_service
 
     async def run_tool_steps(
         self,
@@ -82,9 +96,25 @@ class ToolRunner:
         *,
         execution_id: str,
         tool_context: ToolExecutionContext,
+        scratchpad: Scratchpad | None = None,
+        state: AgentExecutionState | None = None,
+        session_id: uuid.UUID | None = None,
+        owner_id: uuid.UUID | None = None,
+        provider: str | None = None,
+        model: str | None = None,
     ) -> AggregatedToolResults:
         """Execute tool-call steps respecting dependencies and parallel settings."""
         batches = resolve_step_batches(steps)
+        await self._preflight_approval_for_steps(
+            steps,
+            execution_id=execution_id,
+            scratchpad=scratchpad,
+            state=state,
+            session_id=session_id,
+            owner_id=owner_id,
+            provider=provider,
+            model=model,
+        )
         records: list[ToolRunRecord] = []
 
         for batch in batches:
@@ -92,6 +122,12 @@ class ToolRunner:
                 batch,
                 execution_id=execution_id,
                 tool_context=tool_context,
+                scratchpad=scratchpad,
+                state=state,
+                session_id=session_id,
+                owner_id=owner_id,
+                provider=provider,
+                model=model,
             )
             records.extend(batch_records)
 
@@ -103,6 +139,12 @@ class ToolRunner:
         *,
         execution_id: str,
         tool_context: ToolExecutionContext,
+        scratchpad: Scratchpad | None,
+        state: AgentExecutionState | None,
+        session_id: uuid.UUID | None,
+        owner_id: uuid.UUID | None,
+        provider: str | None,
+        model: str | None,
     ) -> list[ToolRunRecord]:
         if len(batch) > 1 and self._parallel_tools_enabled:
             nested = await asyncio.gather(
@@ -111,6 +153,12 @@ class ToolRunner:
                         step,
                         execution_id=execution_id,
                         tool_context=tool_context,
+                        scratchpad=scratchpad,
+                        state=state,
+                        session_id=session_id,
+                        owner_id=owner_id,
+                        provider=provider,
+                        model=model,
                     )
                     for step in batch
                 ]
@@ -124,6 +172,12 @@ class ToolRunner:
                     step,
                     execution_id=execution_id,
                     tool_context=tool_context,
+                    scratchpad=scratchpad,
+                    state=state,
+                    session_id=session_id,
+                    owner_id=owner_id,
+                    provider=provider,
+                    model=model,
                 )
             )
         return records
@@ -134,6 +188,12 @@ class ToolRunner:
         *,
         execution_id: str,
         tool_context: ToolExecutionContext,
+        scratchpad: Scratchpad | None,
+        state: AgentExecutionState | None,
+        session_id: uuid.UUID | None,
+        owner_id: uuid.UUID | None,
+        provider: str | None,
+        model: str | None,
     ) -> list[ToolRunRecord]:
         if not step.tool_calls:
             return []
@@ -163,6 +223,79 @@ class ToolRunner:
                 )
             )
         return records
+
+    async def _maybe_pause_for_approval(
+        self,
+        step: PlannedStep,
+        *,
+        execution_id: str,
+        scratchpad: Scratchpad | None,
+        state: AgentExecutionState | None,
+        session_id: uuid.UUID | None,
+        owner_id: uuid.UUID | None,
+        provider: str | None,
+        model: str | None,
+    ) -> None:
+        if not self._hitl_enabled:
+            return
+        if self._registry is None or self._approval_policy is None:
+            raise HitlError(
+                "HITL is enabled but ToolRunner is missing ToolRegistry or ApprovalPolicy."
+            )
+        if not _step_requires_approval(step, self._registry, self._approval_policy):
+            return
+        if self._approval_service is None:
+            raise HitlError(
+                "HITL is enabled but ToolRunner is missing AgentApprovalService."
+            )
+        if scratchpad is None or state is None:
+            raise HitlError(
+                "Approval-required tool call cannot pause without scratchpad and state."
+            )
+        if session_id is None or owner_id is None:
+            raise HitlError(
+                "Approval-required tool call cannot pause without session_id and owner_id."
+            )
+
+        approval = await self._approval_service.pause(
+            step,
+            scratchpad=scratchpad,
+            state=state,
+            session_id=session_id,
+            owner_id=owner_id,
+            execution_id=execution_id,
+            stream_publisher=self._publisher,
+            provider=provider,
+            model=model,
+        )
+        raise_pause(approval)
+
+    async def _preflight_approval_for_steps(
+        self,
+        steps: list[PlannedStep],
+        *,
+        execution_id: str,
+        scratchpad: Scratchpad | None,
+        state: AgentExecutionState | None,
+        session_id: uuid.UUID | None,
+        owner_id: uuid.UUID | None,
+        provider: str | None,
+        model: str | None,
+    ) -> None:
+        """Pause before any tool dispatch when a planned step requires approval."""
+        for step in steps:
+            if not step.tool_calls:
+                continue
+            await self._maybe_pause_for_approval(
+                step,
+                execution_id=execution_id,
+                scratchpad=scratchpad,
+                state=state,
+                session_id=session_id,
+                owner_id=owner_id,
+                provider=provider,
+                model=model,
+            )
 
     async def _run_single_tool(
         self,
@@ -249,6 +382,18 @@ class ToolRunner:
             return await retry_operation(operation, policy)
         except ToolExecutionRetryableError as exc:
             return exc.result
+
+
+def _step_requires_approval(
+    step: PlannedStep,
+    registry: ToolRegistry,
+    policy: ApprovalPolicy,
+) -> bool:
+    for call in step.tool_calls:
+        tool = registry.get(call.name)
+        if tool is not None and policy.requires_approval(tool):
+            return True
+    return False
 
 
 def _resolve_call_id(call: ToolCall, *, step_id: str) -> str:

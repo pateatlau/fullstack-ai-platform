@@ -55,7 +55,11 @@ class ScratchpadEntry(BaseModel):
 
 
 class Scratchpad:
-    """In-memory scratchpad for one agent execution — never persisted."""
+    """In-memory scratchpad for one agent execution — never persisted.
+
+    HITL pause is the sole exception: :meth:`to_snapshot` serializes entries
+    into ``agent_tool_approvals.paused_scratchpad`` for resume (Epic 09).
+    """
 
     def __init__(self, execution_id: str) -> None:
         self.execution_id = execution_id
@@ -145,3 +149,19 @@ class Scratchpad:
     def to_message_context(self) -> list[ScratchpadMessage]:
         """Build provider-compatible messages from scratchpad entries."""
         return [entry.to_message() for entry in self._entries]
+
+    def to_snapshot(self) -> list[dict[str, object]]:
+        """Serialize entries for HITL pause persistence (Epic 09 Phase 2)."""
+        return [entry.model_dump(mode="json") for entry in self._entries]
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        execution_id: str,
+        entries: list[dict[str, object]],
+    ) -> Scratchpad:
+        """Rehydrate a scratchpad from a HITL pause snapshot (Phase 3 resume)."""
+        scratchpad = cls(execution_id)
+        for raw in entries:
+            scratchpad.append(ScratchpadEntry.model_validate(raw))
+        return scratchpad

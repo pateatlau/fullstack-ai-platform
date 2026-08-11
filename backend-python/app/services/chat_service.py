@@ -29,6 +29,7 @@ from app.db.models import ChatMessage, ChatSession, SessionSummary, UsageEvent
 from app.providers.base import LLMProvider, ProviderChunk, ProviderCompletion
 from app.providers.factory import ProviderFactory
 from app.schemas.chat import (
+    ApprovalRequiredFrame,
     ChatMessageOut,
     ChatMessageSchema,
     ChatRequestSchema,
@@ -97,6 +98,7 @@ class ChatStore(Protocol):
         status: str = "complete",
         finish_reason: str | None = None,
         client_message_id: str | None = None,
+        pending_approval_id: uuid.UUID | None = None,
     ) -> ChatMessage: ...
 
     async def list_messages(self, session_id: uuid.UUID) -> list[ChatMessage]: ...
@@ -326,6 +328,7 @@ SseFrame = (
     | ToolStartFrame
     | ToolEndFrame
     | RetrievalCompleteFrame
+    | ApprovalRequiredFrame
 )
 
 

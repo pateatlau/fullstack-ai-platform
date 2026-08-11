@@ -68,6 +68,7 @@ async def stream_agent_chat(
     agent_context = build_agent_context(
         caller=caller,
         allowed_tool_names=allowed_tool_names,
+        session_id=session_id,
     )
 
     collected: list[str] = []
@@ -125,6 +126,17 @@ async def stream_agent_chat(
                     event_name, frame = mapped
                     yield format_sse(event_name, frame)
                 continue
+
+            if event.type == AgentStreamEventType.APPROVAL_REQUIRED:
+                if not start_emitted:
+                    yield _emit_start()
+                mapped = sse_frame_from_agent_event(event, response_id=response_id)
+                if prep is not None:
+                    await chat_service._commit()
+                if mapped is not None:
+                    event_name, frame = mapped
+                    yield format_sse(event_name, frame)
+                return
 
             if event.type == AgentStreamEventType.TOKEN:
                 payload = event.typed_payload()

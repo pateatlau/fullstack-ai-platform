@@ -6,6 +6,7 @@ from app.ai.hitl.exceptions import (
     ApprovalDecisionConflictError,
     ApprovalNotFoundError,
     ApprovalValidationError,
+    AgentApprovalPauseError,
     HitlError,
 )
 from app.ai.hitl.models import (
@@ -18,9 +19,14 @@ from app.ai.hitl.models import (
     ProposedToolCall,
 )
 from app.ai.hitl.policy import ApprovalPolicy
+from app.ai.hitl.service import AgentApprovalService
+from app.ai.hitl.store import AgentToolApprovalStore
 
 __all__ = [
+    "AgentApprovalPauseError",
+    "AgentApprovalService",
     "AgentToolApproval",
+    "AgentToolApprovalStore",
     "ApprovalAuditEntry",
     "ApprovalDecisionConflictError",
     "ApprovalKind",
