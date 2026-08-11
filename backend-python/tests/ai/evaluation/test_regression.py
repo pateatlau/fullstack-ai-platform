@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.ai.evaluation.cli import run_eval
+from app.ai.evaluation.cli import _levels_to_run, run_eval
 from app.ai.evaluation.datasets import load_dataset
 from app.ai.evaluation.regression import RegressionChecker, RegressionResult
 from app.ai.evaluation.report import (
@@ -34,12 +34,14 @@ def _environment(
     *,
     agent_runtime_enabled: bool = True,
     workflow_engine_enabled: bool = True,
+    plugins_enabled: bool = False,
     postgres_available: bool = True,
     pgvector_available: bool = True,
 ) -> EvalRunEnvironment:
     return EvalRunEnvironment(
         agent_runtime_enabled=agent_runtime_enabled,
         workflow_engine_enabled=workflow_engine_enabled,
+        plugins_enabled=plugins_enabled,
         postgres_available=postgres_available,
         pgvector_available=pgvector_available,
     )
@@ -488,7 +490,12 @@ async def test_cli_update_baseline_writes_file_when_eligible(
     payload = json.loads(baseline_path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 2
     assert payload["run_environment"]["agent_runtime_enabled"] is True
-    assert len(payload["results"]) == len(load_dataset(DATASET).cases)
+    all_level_cases = [
+        case
+        for case in load_dataset(DATASET).cases
+        if case.level in _levels_to_run("all")
+    ]
+    assert len(payload["results"]) == len(all_level_cases)
     assert not any(
         item["skipped"]
         for item in payload["results"]
@@ -518,5 +525,8 @@ def test_dataset_loads_all_new_cases() -> None:
         "workflow_sequential_tasks",
         "workflow_conditional_router",
         "workflow_approval_pause",
+        "plugin_echo_tool_ping",
+        "plugin_echo_prompt_greeting",
+        "plugin_echo_workflow_node",
     }
     assert case_ids == expected

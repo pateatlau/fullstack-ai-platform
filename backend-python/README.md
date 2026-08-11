@@ -522,6 +522,38 @@ uv run python -m app.ai.evaluation.cli --level e2e --use-judge
 
 **Tuning workflow:** re-run eval after changing env vars (`LLM_PROVIDER`, `RAG_TOP_K`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `EMBEDDING_MODEL`, prompt templates) and compare JSON reports to pick better settings before Phase 11 API exposure.
 
+### Reference plugins (V2 Epic 8)
+
+Git-tracked reference plugins under `plugins/` demonstrate tool, prompt, and workflow node contributions:
+
+| Plugin | ID | Contributions |
+| ------ | -- | ------------- |
+| `echo-tool/` | `com.example.echo` | Tool `com.example.echo.ping`, prompt templates under `plugin/com.example.echo` |
+| `echo-workflow-node/` | `com.example.echo.workflow` | Workflow node type `echo` |
+
+**Enable reference plugins (operator steps):**
+
+1. Set `PLUGINS_ENABLED=true` in `.env`.
+2. Ensure `PLUGIN_DIRECTORIES` includes `plugins` (default relative to `backend-python/`).
+3. Restart the API process so plugins load at startup.
+4. Optional: set `PLUGIN_ALLOWLIST` to restrict which plugin IDs load.
+
+When `PLUGINS_ENABLED=false` (default), plugin directories are ignored and the Plugin REST API returns `503 feature_disabled`.
+
+**Plugin eval level** (requires `PLUGINS_ENABLED=true`; workflow cases also need `WORKFLOW_ENGINE_ENABLED=true`, Postgres, and pgvector):
+
+```bash
+uv run python -m app.ai.evaluation.cli --level plugin
+```
+
+Plugin cases in `tests/data/evaluation/sample.yaml` are **skipped** (not failed) when `PLUGINS_ENABLED=false`, matching agent/workflow skip behaviour. `--level all` does not include plugin cases — run `--level plugin` explicitly.
+
+**Verify reference plugins:**
+
+```bash
+pytest tests/ai/plugins/test_reference_plugins.py
+```
+
 ### Module boundaries
 
 | Layer | Location | Responsibility |

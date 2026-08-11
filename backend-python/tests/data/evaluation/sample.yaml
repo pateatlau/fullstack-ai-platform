@@ -235,3 +235,47 @@ cases:
         - id: e3
           from_node_id: after
           to_node_id: end
+
+  - id: plugin_echo_tool_ping
+    level: plugin
+    plugin_kind: tool
+    plugin_tool_name: com.example.echo.ping
+    plugin_tool_arguments:
+      message: hello-plugin
+    expected_tool_data:
+      message: hello-plugin
+
+  - id: plugin_echo_prompt_greeting
+    level: plugin
+    plugin_kind: prompt
+    prompt_category: plugin/com.example.echo
+    prompt_name: greeting
+    prompt_version: '1'
+    prompt_variables:
+      user_name: Eval
+    expected_render_contains:
+      - Hello Eval
+
+  - id: plugin_echo_workflow_node
+    level: plugin
+    plugin_kind: workflow
+    expected_terminal_status: completed
+    trigger_input:
+      input_text: plugin-echo-value
+    workflow_definition:
+      name: Plugin Echo Workflow
+      entry_node_id: echo_step
+      nodes:
+        - id: echo_step
+          type: plugin
+          config:
+            plugin_id: com.example.echo.workflow
+            plugin_node_type: echo
+            message_key: input_text
+        - id: end
+          type: terminal
+          config: {}
+      edges:
+        - id: e1
+          from_node_id: echo_step
+          to_node_id: end
