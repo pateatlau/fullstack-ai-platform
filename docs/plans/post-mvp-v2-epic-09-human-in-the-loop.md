@@ -2,7 +2,7 @@
 epic: v2-09
 title: Human-in-the-Loop
 status: in_progress
-version: 1.6
+version: 1.7
 depends_on: [v2-06, v2-07, v2-08]
 provides:
   [
@@ -25,6 +25,8 @@ test_paths:
     tests/ai/hitl,
     tests/ai/agent/test_tool_approval.py,
     tests/ai/workflow/test_approval_node.py,
+    tests/ai/workflow/test_graph_validator.py,
+    tests/ai/hitl/test_coverage_mcp_plugin.py,
     tests/test_approvals_router.py,
     tests/test_workflows_router.py,
     frontend/src/pages/ApprovalsPage.test.tsx,
@@ -972,8 +974,8 @@ _Re-verified in Epic 09 Phase 0 (2026-08-11); source of truth: [post-mvp-v2-epic
 | 1     | HITL Foundations                           | M      | Completed   |
 | 2     | Agent Tool-Call Approval Gate              | L      | Completed   |
 | 3     | Agent Approval Decision & Resume           | L      | Completed   |
-| 4     | Workflow Approval Enhancements             | M      | Not Started |
-| 5     | Workflow Graph Guard & MCP/Plugin Coverage | M      | Not Started |
+| 4     | Workflow Approval Enhancements             | M      | Completed   |
+| 5     | Workflow Graph Guard & MCP/Plugin Coverage | M      | Completed   |
 | 6     | Unified Approval REST API & Audit          | S      | Not Started |
 | 7     | HITL Observability                         | S      | Not Started |
 | 8     | Reference Scenarios & Eval Cases           | M      | Not Started |
@@ -1389,7 +1391,7 @@ Extend Epic 06's workflow approval nodes with editable arguments and a decision 
 **Exit criteria**
 
 - [x] Workflow approval enhancement tests pass.
-- [ ] User confirmation to proceed to Phase 5.
+- [x] User confirmation to proceed to Phase 5.
 
 **Rollback**
 
@@ -1404,14 +1406,14 @@ Extend Epic 06's workflow approval nodes with editable arguments and a decision 
 | Typecheck               | ✅ PASS — 0 errors (changed modules)        |
 | Workflow approval tests | ✅ 39 passed (`test_approval_node` + router) |
 | Phase 4 status          | ✅ Completed                                |
-| Phase 5 authorized      | ⬜ Pending user confirmation                |
+| Phase 5 authorized      | ✅ Authorized                               |
 
 ---
 
 # Phase 5 — Workflow Graph Guard & MCP/Plugin Coverage
 
 **Effort:** M
-**Status:** Not Started
+**Status:** Completed
 
 **Objective**
 
@@ -1426,28 +1428,28 @@ Add the `GraphValidator` reachability guard so approval-required tools cannot be
 
 ## Graph Validation
 
-- [ ] Implement backward-reachability check: for every `task`/`agent` node referencing an approval-required tool, verify every path from the trigger passes through an `approval` node — a single `O(V + E)` reverse traversal per flagged node (see Part I § Workflow Graph Guard for the complexity note).
-- [ ] Raise `WorkflowValidationError` naming the offending node and tool on violation.
-- [ ] Gate the check on `HITL_ENABLED`; skip entirely when disabled (Epic 06 parity).
-- [ ] Test against Epic 06's existing parallel/fork-join fixtures to confirm no false positives on complex branching (nested/parallel approval-required paths).
+- [x] Implement backward-reachability check: for every `task`/`agent` node referencing an approval-required tool, verify every path from the trigger passes through an `approval` node — a single `O(V + E)` reverse traversal per flagged node (see Part I § Workflow Graph Guard for the complexity note).
+- [x] Raise `WorkflowValidationError` naming the offending node and tool on violation.
+- [x] Gate the check on `HITL_ENABLED`; skip entirely when disabled (Epic 06 parity).
+- [x] Test against Epic 06's existing parallel/fork-join fixtures to confirm no false positives on complex branching (nested/parallel approval-required paths).
 
 ## MCP Coverage
 
-- [ ] Fixture MCP tool with `requires_approval=True` on its adapter's `ToolDefinition`.
-- [ ] Test: chat/agent path pauses on the MCP tool identically to a native tool.
-- [ ] Test: workflow graph guard rejects a definition referencing the MCP tool without a preceding approval node.
+- [x] Fixture MCP tool with `requires_approval=True` on its adapter's `ToolDefinition`.
+- [x] Test: chat/agent path pauses on the MCP tool identically to a native tool.
+- [x] Test: workflow graph guard rejects a definition referencing the MCP tool without a preceding approval node.
 
 ## Plugin Coverage
 
-- [ ] Extend or add a plugin fixture (reusing Epic 08's `echo-tool` pattern) registering a tool with `requires_approval=True` via `PluginRegistrar.register_tool()`.
-- [ ] Test: chat/agent path pauses on the plugin tool identically to a native tool.
-- [ ] Test: workflow graph guard rejects a definition referencing the plugin tool without a preceding approval node.
+- [x] Extend or add a plugin fixture (reusing Epic 08's `echo-tool` pattern) registering a tool with `requires_approval=True` via `PluginRegistrar.register_tool()`.
+- [x] Test: chat/agent path pauses on the plugin tool identically to a native tool.
+- [x] Test: workflow graph guard rejects a definition referencing the plugin tool without a preceding approval node.
 
 ## Testing
 
-- [ ] Test: unflagged tools unaffected by the reachability check.
-- [ ] Test: a `task` node correctly _preceded_ by an `approval` node passes validation.
-- [ ] Test: flag off — reachability check skipped; Epic 06 workflows using previously-invalid graphs (if any) are unaffected.
+- [x] Test: unflagged tools unaffected by the reachability check.
+- [x] Test: a `task` node correctly _preceded_ by an `approval` node passes validation.
+- [x] Test: flag off — reachability check skipped; Epic 06 workflows using previously-invalid graphs (if any) are unaffected.
 
 **Verify**
 
@@ -1460,7 +1462,7 @@ Add the `GraphValidator` reachability guard so approval-required tools cannot be
 
 **Exit criteria**
 
-- [ ] Graph guard and coverage tests pass.
+- [x] Graph guard and coverage tests pass.
 - [ ] User confirmation to proceed to Phase 6.
 
 **Rollback**
@@ -1469,14 +1471,14 @@ Add the `GraphValidator` reachability guard so approval-required tools cannot be
 
 **Completion Record**
 
-| Metric                    | Result          |
-| ------------------------- | --------------- |
-| Lint                      | Pending Phase 5 |
-| Typecheck                 | Pending Phase 5 |
-| Graph guard tests         | Pending Phase 5 |
-| MCP/plugin coverage tests | Pending Phase 5 |
-| Phase 5 status            | Not Started     |
-| Phase 6 authorized        | Pending         |
+| Metric                    | Result                                                         |
+| ------------------------- | -------------------------------------------------------------- |
+| Lint                      | ✅ PASS                                                        |
+| Typecheck                 | ✅ PASS — 0 errors (changed modules)                           |
+| Graph guard tests         | ✅ 37 passed (`test_graph_validator` + `test_coverage_mcp_plugin`) |
+| MCP/plugin coverage tests | ✅ included in verify suite above                              |
+| Phase 5 status            | ✅ Completed                                                   |
+| Phase 6 authorized        | ⬜ Pending user confirmation                                   |
 
 ---
 
@@ -1988,3 +1990,4 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 | 1.4     | 2026-08-11 | Phase 2 agent tool-call approval gate complete — `ToolRunner` pause gate, `AgentApprovalService.pause()`, `AgentToolApprovalStore`, `approval_required` SSE, pause path tests. Part II only. |
 | 1.5     | 2026-08-11 | Phase 3 agent approval decision & resume complete — `AgentApprovalService.revise()`/`decide()`/`approve_and_resume()`, `AgentExecutor.resume_from_approval()`, REST endpoints (`POST …/revise`, `POST …/decide`, `GET …/revisions`), `ChatStore.update_message`, 29-test verify suite; PR hardening (SSE stream cleanup, revision row lock, `AgentApprovalStore` protocol). Part II only. |
 | 1.6     | 2026-08-11 | Phase 4 workflow approval enhancements complete — `edited_arguments`/`reason` on workflow decisions, `ApprovalDecisionRequest`, `ApprovalRevision` append on edit, `ApprovalResult` from `apply_decision`, optional approve/reject body; 39-test verify suite. Part II only. |
+| 1.7     | 2026-08-11 | Phase 5 workflow graph guard & MCP/plugin coverage complete — `GraphValidator` HITL reachability guard (flag-gated), `WorkflowManager` wiring, MCP/plugin `requires_approval` integration tests; 37-test verify suite. Part II only. |

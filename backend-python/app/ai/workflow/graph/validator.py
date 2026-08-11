@@ -8,15 +8,22 @@ from typing import TYPE_CHECKING
 from app.ai.workflow.conditions.schema import validate_condition_shape
 from app.ai.workflow.exceptions import WorkflowValidationError
 from app.ai.workflow.graph.node_config import validate_node_configs
-from app.ai.workflow.models import NodeType, WorkflowDefinition, WorkflowEdge
+from app.ai.workflow.models import (
+    NodeType,
+    WorkflowDefinition,
+    WorkflowEdge,
+    WorkflowNode,
+)
 from app.ai.workflow.nodes.approval_node import (
     APPROVED_EDGE_ID_KEY,
     REJECTED_EDGE_ID_KEY,
 )
 
 if TYPE_CHECKING:
+    from app.ai.hitl.policy import ApprovalPolicy
     from app.ai.plugins.registry import PluginRegistry
     from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
+    from app.ai.tools.registry import ToolRegistry
 
 _DEFAULT_MAX_NODES = 50
 _DEFAULT_MAX_PARALLEL_BRANCHES = 8
@@ -33,12 +40,18 @@ class GraphValidator:
         plugins_enabled: bool = False,
         plugin_registry: PluginRegistry | None = None,
         workflow_plugin_registry: WorkflowPluginRegistry | None = None,
+        hitl_enabled: bool = False,
+        tool_registry: ToolRegistry | None = None,
+        approval_policy: ApprovalPolicy | None = None,
     ) -> None:
         self._max_nodes = max_nodes_per_definition
         self._max_parallel_branches = max_parallel_branches
         self._plugins_enabled = plugins_enabled
         self._plugin_registry = plugin_registry
         self._workflow_plugin_registry = workflow_plugin_registry
+        self._hitl_enabled = hitl_enabled
+        self._tool_registry = tool_registry
+        self._approval_policy = approval_policy
 
     def validate(self, definition: WorkflowDefinition) -> None:
         """Validate a definition graph; raises ``WorkflowValidationError`` on failure."""
@@ -57,6 +70,7 @@ class GraphValidator:
         self._validate_reachability(definition, node_ids)
         self._validate_fork_join_pairing(definition, node_ids)
         self._validate_approval_nodes(definition)
+        self._validate_approval_required_tool_reachability(definition, node_ids)
 
     def _validate_node_count(self, definition: WorkflowDefinition) -> None:
         if len(definition.nodes) > self._max_nodes:
@@ -335,6 +349,122 @@ class GraphValidator:
                     "no unconditional outgoing edge is present."
                 )
 
+    def _validate_approval_required_tool_reachability(
+        self, definition: WorkflowDefinition, node_ids: set[str]
+    ) -> None:
+        """Fail when a flagged tool is reachable without a preceding approval node."""
+        if not self._hitl_enabled:
+            return
+        if self._tool_registry is None or self._approval_policy is None:
+            raise WorkflowValidationError(
+                "HITL reachability guard is misconfigured: tool_registry and "
+                "approval_policy are required when HITL_ENABLED=true."
+            )
+
+        nodes_by_id = {node.id: node for node in definition.nodes}
+        forward_adjacency = self._build_adjacency(definition.edges, node_ids)
+        reverse_adjacency = self._build_reverse_adjacency(definition.edges, node_ids)
+        protected = self._compute_approval_protected_nodes(
+            definition.entry_node_id,
+            nodes_by_id,
+            forward_adjacency,
+            reverse_adjacency,
+            node_ids,
+        )
+
+        for node in definition.nodes:
+            if node.type not in (NodeType.TASK, NodeType.AGENT):
+                continue
+            for tool_name in self._referenced_tool_names(node):
+                tool = self._tool_registry.get(tool_name)
+                if tool is None or not self._approval_policy.requires_approval(tool):
+                    continue
+                if protected.get(node.id, False):
+                    continue
+                raise WorkflowValidationError(
+                    f"Node {node.id!r} references approval-required tool "
+                    f"{tool_name!r} without a preceding approval node on all paths "
+                    f"from entry node {definition.entry_node_id!r}."
+                )
+
+    @staticmethod
+    def _referenced_tool_names(node: WorkflowNode) -> list[str]:
+        if node.type is NodeType.TASK:
+            tool_name = node.config.get("tool_name")
+            if isinstance(tool_name, str) and tool_name.strip():
+                return [tool_name]
+            return []
+        tool_names = node.config.get("tool_names")
+        if not isinstance(tool_names, list):
+            return []
+        return [name for name in tool_names if isinstance(name, str) and name.strip()]
+
+    @staticmethod
+    def _compute_approval_protected_nodes(
+        entry_node_id: str,
+        nodes_by_id: dict[str, WorkflowNode],
+        forward_adjacency: dict[str, list[str]],
+        reverse_adjacency: dict[str, list[str]],
+        node_ids: set[str],
+    ) -> dict[str, bool]:
+        """Return nodes where every entry-to-node path crosses an approval node."""
+        order = GraphValidator._topological_order(
+            entry_node_id, forward_adjacency, node_ids
+        )
+        protected: dict[str, bool] = {}
+
+        for node_id in order:
+            node = nodes_by_id[node_id]
+            predecessors = reverse_adjacency[node_id]
+
+            if node_id == entry_node_id:
+                protected[node_id] = node.type is NodeType.APPROVAL
+                continue
+
+            if not predecessors:
+                protected[node_id] = False
+                continue
+
+            incoming_protected = []
+            for predecessor_id in predecessors:
+                predecessor = nodes_by_id[predecessor_id]
+                if predecessor.type is NodeType.APPROVAL:
+                    incoming_protected.append(True)
+                else:
+                    incoming_protected.append(protected.get(predecessor_id, False))
+            protected[node_id] = all(incoming_protected)
+
+        return protected
+
+    @staticmethod
+    def _topological_order(
+        entry_node_id: str,
+        forward_adjacency: dict[str, list[str]],
+        node_ids: set[str],
+    ) -> list[str]:
+        in_degree = {node_id: 0 for node_id in node_ids}
+        for node_id in node_ids:
+            for successor in forward_adjacency[node_id]:
+                in_degree[successor] += 1
+
+        ready = sorted(node_id for node_id, degree in in_degree.items() if degree == 0)
+        if entry_node_id in ready:
+            ready.remove(entry_node_id)
+            ready.insert(0, entry_node_id)
+
+        order: list[str] = []
+        remaining = dict(in_degree)
+        while ready:
+            node_id = ready.pop(0)
+            order.append(node_id)
+            for successor in forward_adjacency[node_id]:
+                remaining[successor] -= 1
+                if remaining[successor] == 0:
+                    ready.append(successor)
+                    ready.sort()
+
+        return order
+
     @staticmethod
     def _build_adjacency(
         edges: list[WorkflowEdge], node_ids: set[str]
@@ -345,3 +475,14 @@ class GraphValidator:
         for edge in edges:
             adjacency[edge.from_node_id].append(edge.to_node_id)
         return adjacency
+
+    @staticmethod
+    def _build_reverse_adjacency(
+        edges: list[WorkflowEdge], node_ids: set[str]
+    ) -> dict[str, list[str]]:
+        reverse: dict[str, list[str]] = defaultdict(list)
+        for node_id in node_ids:
+            reverse[node_id]
+        for edge in edges:
+            reverse[edge.to_node_id].append(edge.from_node_id)
+        return reverse
