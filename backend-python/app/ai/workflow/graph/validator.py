@@ -356,7 +356,10 @@ class GraphValidator:
         if not self._hitl_enabled:
             return
         if self._tool_registry is None or self._approval_policy is None:
-            return
+            raise WorkflowValidationError(
+                "HITL reachability guard is misconfigured: tool_registry and "
+                "approval_policy are required when HITL_ENABLED=true."
+            )
 
         nodes_by_id = {node.id: node for node in definition.nodes}
         forward_adjacency = self._build_adjacency(definition.edges, node_ids)

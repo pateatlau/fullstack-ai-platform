@@ -549,6 +549,12 @@ class _NoOpHandler:
 
 
 class TestGraphValidatorApprovalRequiredToolReachability:
+    def test_hitl_enabled_without_dependencies_fails_fast(self) -> None:
+        validator = GraphValidator(hitl_enabled=True)
+
+        with pytest.raises(WorkflowValidationError, match="misconfigured"):
+            validator.validate(_definition())
+
     def test_sensitive_task_without_approval_is_rejected(self) -> None:
         registry = _sensitive_tool_registry()
         validator = _hitl_validator(registry)
