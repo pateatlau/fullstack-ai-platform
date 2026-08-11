@@ -64,7 +64,7 @@ Additional settings (see `backend-python/.env.example`): `PLUGIN_DIRECTORIES`, `
 ## Migration / Upgrade Notes
 
 1. Pull release; no Alembic migration required for plugins.
-2. Ensure `backend-python/.env.example` includes `PLUGINS_*` settings (`PLUGINS_ENABLED=false` by default).
+2. Ensure `backend-python/.env.example` includes plugin settings: `PLUGINS_ENABLED` (default `false`), `PLUGIN_DIRECTORIES`, `PLUGIN_ALLOWLIST`, and `PLUGIN_REGISTRATION_WAIT_TIMEOUT_SECONDS`.
 3. To exercise locally: set `PLUGINS_ENABLED=true`, ensure `PLUGIN_DIRECTORIES` includes `plugins`, restart API, sign in, open `/plugins`.
 4. Reference plugins: `backend-python/plugins/echo-tool/`, `backend-python/plugins/echo-workflow-node/`.
 5. Run plugin eval: `uv run python -m app.ai.evaluation.cli --level plugin` (requires flags + Postgres/pgvector for workflow case).

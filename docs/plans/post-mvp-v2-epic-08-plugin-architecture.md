@@ -1704,7 +1704,8 @@ Full-platform validation, flag-off regression, release summary, and epic complet
 | Eval Suite                | ✅ 15/15 `--level all`; 3/3 `--level plugin`; regression clean |
 | Feature Flag Regression   | ✅ 1778 passed with `PLUGINS_ENABLED=false` |
 | Release Summary Published | ✅ [post-mvp-v2-epic8-release-summary.md](../releases/post-mvp-v2-epic8-release-summary.md) |
-| Epic Status               | ✅ Completed (pending user authorization for Epic 09) |
+| Epic Status               | ✅ Completed |
+| Epic 09 authorization     | ⬜ Pending user confirmation |
 
 ---
 
