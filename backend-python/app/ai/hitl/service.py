@@ -231,11 +231,16 @@ class AgentApprovalService:
         note: str | None = None,
     ) -> tuple[AgentToolApproval, ApprovalRevision]:
         """Pre-decision edit: validate, append revision, update ``edited_calls``."""
-        await self._approval_store.require_for_owner(
+        approval = await self._approval_store.require_for_owner(
             approval_id,
             owner_id=owner_id,
         )
-        _validate_edited_calls(edited_calls, self._tool_registry, self._tool_validator)
+        _validate_edited_calls(
+            edited_calls,
+            approval.proposed_calls,
+            self._tool_registry,
+            self._tool_validator,
+        )
 
         updated = await self._approval_store.cas_revise(
             approval_id,
@@ -261,13 +266,16 @@ class AgentApprovalService:
         reason: str | None = None,
     ) -> ApprovalResult:
         """Record a terminal decision. Approve path requires follow-up resume call."""
-        await self._approval_store.require_for_owner(
+        approval = await self._approval_store.require_for_owner(
             approval_id,
             owner_id=owner_id,
         )
         if edited_calls is not None:
             _validate_edited_calls(
-                edited_calls, self._tool_registry, self._tool_validator
+                edited_calls,
+                approval.proposed_calls,
+                self._tool_registry,
+                self._tool_validator,
             )
 
         if decision == "rejected":
@@ -291,16 +299,7 @@ class AgentApprovalService:
                 edited=_has_edits(decided),
             )
 
-        # Approved: validate first, optionally append inline revision, then CAS.
-        if edited_calls is not None:
-            await self._approval_store.append_revision(
-                approval_id=approval_id,
-                approval_kind=ApprovalKind.AGENT_TOOL,
-                edited_by=owner_id,
-                edited_payload=edited_calls,
-                note=reason,
-            )
-
+        # Approved: validate first, CAS, then append inline revision on success.
         decided = await self._approval_store.cas_decide(
             approval_id,
             owner_id=owner_id,
@@ -309,6 +308,14 @@ class AgentApprovalService:
             reason=reason,
             edited_calls=edited_calls,
         )
+        if edited_calls is not None:
+            await self._approval_store.append_revision(
+                approval_id=approval_id,
+                approval_kind=ApprovalKind.AGENT_TOOL,
+                edited_by=owner_id,
+                edited_payload=edited_calls,
+                note=reason,
+            )
         return _build_approval_result(
             decided,
             final_payload=_resolve_final_payload(decided),
@@ -329,20 +336,16 @@ class AgentApprovalService:
         reason: str | None = None,
     ) -> tuple[ApprovalResult, AgentResponse]:
         """Record approval, execute gated tools, and resume the ReAct loop."""
-        await self._approval_store.require_for_owner(
+        approval = await self._approval_store.require_for_owner(
             approval_id,
             owner_id=owner_id,
         )
         if edited_calls is not None:
             _validate_edited_calls(
-                edited_calls, self._tool_registry, self._tool_validator
-            )
-            await self._approval_store.append_revision(
-                approval_id=approval_id,
-                approval_kind=ApprovalKind.AGENT_TOOL,
-                edited_by=owner_id,
-                edited_payload=edited_calls,
-                note=reason,
+                edited_calls,
+                approval.proposed_calls,
+                self._tool_registry,
+                self._tool_validator,
             )
 
         decided = await self._approval_store.cas_decide(
@@ -353,6 +356,14 @@ class AgentApprovalService:
             reason=reason,
             edited_calls=edited_calls,
         )
+        if edited_calls is not None:
+            await self._approval_store.append_revision(
+                approval_id=approval_id,
+                approval_kind=ApprovalKind.AGENT_TOOL,
+                edited_by=owner_id,
+                edited_payload=edited_calls,
+                note=reason,
+            )
         result = _build_approval_result(
             decided,
             final_payload=_resolve_final_payload(decided),
@@ -379,13 +390,23 @@ class AgentApprovalService:
                 "approval_correlation_id": decided.approval_correlation_id,
             }
         )
-        tool_results = await self._execute_approved_calls(
-            calls,
-            execution_id=decided.execution_id,
-            tool_context=exec_context,
-            scratchpad=scratchpad,
-            stream_publisher=stream_publisher,
-        )
+        try:
+            tool_results = await self._execute_approved_calls(
+                calls,
+                execution_id=decided.execution_id,
+                tool_context=exec_context,
+                scratchpad=scratchpad,
+                stream_publisher=stream_publisher,
+            )
+        except Exception:
+            await self._update_placeholder_message(
+                decided,
+                content="",
+                status="error",
+                finish_reason="error",
+                clear_pending=True,
+            )
+            raise
         for tool_name in tool_results.tools_used:
             state = AgentStateManager.record_tool_used(state, tool_name)
 
@@ -413,6 +434,14 @@ class AgentApprovalService:
             raise
 
         if response.finish_reason == "waiting_approval":
+            await self._update_placeholder_message(
+                decided,
+                content=response.content,
+                status="complete",
+                finish_reason="stop",
+                clear_pending=True,
+            )
+            await self._chat_store.mark_last_message_at(decided.session_id)
             return result, response
 
         tool_failed = any(not record.result.success for record in tool_results.records)
@@ -542,12 +571,33 @@ def _proposed_calls_from_step(step: PlannedStep) -> list[ProposedToolCall]:
 
 def _validate_edited_calls(
     edited_calls: list[ProposedToolCall],
+    proposed_calls: list[ProposedToolCall],
     registry: ToolRegistry | None,
     validator: ToolValidator,
 ) -> None:
     if registry is None:
         raise RuntimeError("ToolRegistry is required to validate edited calls.")
+    if len(edited_calls) != len(proposed_calls):
+        raise ApprovalValidationError(
+            f"edited_calls must include exactly {len(proposed_calls)} call(s)."
+        )
+
+    proposed_by_id = {call.call_id: call for call in proposed_calls}
+    seen_call_ids: set[str] = set()
     for call in edited_calls:
+        if call.call_id in seen_call_ids:
+            raise ApprovalValidationError(f"Duplicate edited call_id: {call.call_id}.")
+        seen_call_ids.add(call.call_id)
+
+        proposed = proposed_by_id.get(call.call_id)
+        if proposed is None:
+            raise ApprovalValidationError(f"Unknown edited call_id: {call.call_id}.")
+        if call.name != proposed.name:
+            raise ApprovalValidationError(
+                f"Tool name mismatch for call_id {call.call_id}: "
+                f"expected {proposed.name}, got {call.name}."
+            )
+
         tool = registry.get(call.name)
         if tool is None:
             raise ApprovalValidationError(f"Unknown tool: {call.name}")

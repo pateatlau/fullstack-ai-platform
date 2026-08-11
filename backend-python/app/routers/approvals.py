@@ -27,13 +27,14 @@ from app.ai.hitl.exceptions import (
     ApprovalValidationError,
     HitlError,
 )
-from app.ai.hitl.models import ApprovalKind
+from app.ai.hitl.models import AgentToolApproval, ApprovalKind, ApprovalStatus
 from app.ai.hitl.service import AgentApprovalService
 from app.ai.tools.schemas import ToolExecutionContext
 from app.core.caller import CallerContext, require_authenticated_caller
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
 from app.core.logging import bind_context
+from app.db.models import ChatMessage
 from app.middleware.correlation_id import get_request_id
 from app.schemas.approvals import (
     ApprovalDecideRequest,
@@ -41,6 +42,7 @@ from app.schemas.approvals import (
     ApprovalRevisionResponse,
     ApprovalReviseRequest,
 )
+from app.schemas.chat import ErrorFrame
 from app.services.chat_service import format_sse
 
 router = APIRouter()
@@ -79,6 +81,21 @@ def _raise_hitl_error(exc: HitlError) -> NoReturn:
         message=str(exc),
         status_code=500,
     ) from exc
+
+
+def _sse_error_from_hitl(exc: HitlError, *, response_id: str) -> str:
+    if isinstance(exc, ApprovalDecisionConflictError):
+        code = "approval_decision_conflict"
+    elif isinstance(exc, ApprovalNotFoundError):
+        code = "approval_not_found"
+    elif isinstance(exc, ApprovalValidationError):
+        code = "validation_error"
+    else:
+        code = "hitl_error"
+    return format_sse(
+        "error",
+        ErrorFrame(id=response_id, code=code, message=str(exc)),
+    )
 
 
 def _build_resume_request(
@@ -178,6 +195,26 @@ async def decide_agent_approval(
             _raise_hitl_error(exc)
         return ApprovalResultResponse.from_domain(result)
 
+    try:
+        approval = await approval_service.get_owned_approval(
+            approval_id,
+            owner_id=caller.user_id,
+        )
+    except HitlError as exc:
+        _raise_hitl_error(exc)
+
+    if approval.status != ApprovalStatus.PENDING:
+        raise AppError(
+            code="approval_decision_conflict",
+            message=(
+                f"Approval {approval_id} is no longer pending "
+                f"(status={approval.status.value})."
+            ),
+            status_code=409,
+        )
+
+    placeholder = await approval_service.get_placeholder_message(approval)
+
     return StreamingResponse(
         _stream_approved_decision(
             approval_id=approval_id,
@@ -186,6 +223,8 @@ async def decide_agent_approval(
             settings=settings,
             approval_service=approval_service,
             agent=agent,
+            approval=approval,
+            placeholder=placeholder,
         ),
         media_type="text/event-stream",
     )
@@ -199,18 +238,11 @@ async def _stream_approved_decision(
     settings: Settings,
     approval_service: AgentApprovalService,
     agent: DefaultAgent,
+    approval: AgentToolApproval,
+    placeholder: ChatMessage | None,
 ) -> AsyncIterator[str]:
     assert caller.user_id is not None
     owner_id = caller.user_id
-    try:
-        approval = await approval_service.get_owned_approval(
-            approval_id,
-            owner_id=owner_id,
-        )
-    except HitlError as exc:
-        _raise_hitl_error(exc)
-
-    placeholder = await approval_service.get_placeholder_message(approval)
 
     request = _build_resume_request(
         model=placeholder.model if placeholder is not None else None,
@@ -266,9 +298,10 @@ async def _stream_approved_decision(
             if mapped is not None:
                 event_name, frame = mapped
                 yield format_sse(event_name, frame)
-        await task
-    except HitlError as exc:
-        _raise_hitl_error(exc)
+        try:
+            await task
+        except HitlError as exc:
+            yield _sse_error_from_hitl(exc, response_id=response_id)
     finally:
         await publisher.close()
         if not task.done():

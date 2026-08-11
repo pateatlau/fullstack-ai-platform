@@ -336,7 +336,7 @@ class AgentExecutor:
                 with agent_span("iteration") as iteration_span:
                     state = AgentStateManager.begin_iteration(state)
                     iteration_index = state.current_iteration - 1
-                    tool_calls_count = _count_tool_calls(tool_results)
+                    tool_calls_count = 0
                     await self._publisher.publish(
                         AgentStreamEvent.planning(
                             context.execution_id,

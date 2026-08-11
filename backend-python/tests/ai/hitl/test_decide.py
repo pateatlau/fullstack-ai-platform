@@ -503,3 +503,9 @@ async def test_resumed_turn_second_pause_new_correlation_id() -> None:
     assert (
         store.rows[0].approval_correlation_id != store.rows[1].approval_correlation_id
     )
+    messages = await chat_store.list_messages(session_id)
+    assistants = [m for m in messages if m.role == "assistant"]
+    assert len(assistants) == 2
+    assert assistants[0].status == "complete"
+    assert assistants[0].pending_approval_id is None
+    assert assistants[1].status == "waiting_approval"

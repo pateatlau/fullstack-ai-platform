@@ -163,6 +163,10 @@ class InMemoryApprovalStore:
         edited_payload: list[ProposedToolCall] | dict[str, object],
         note: str | None = None,
     ) -> ApprovalRevision:
+        if await self.get(approval_id) is None:
+            raise ApprovalNotFoundError(
+                f"Approval {approval_id} not found for kind {approval_kind.value}."
+            )
         matching = [
             item
             for item in self.revisions

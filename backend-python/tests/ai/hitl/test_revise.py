@@ -8,6 +8,7 @@ import pytest
 
 from app.ai.hitl.exceptions import (
     ApprovalDecisionConflictError,
+    ApprovalNotFoundError,
     ApprovalValidationError,
 )
 from app.ai.hitl.models import ApprovalKind, ApprovalStatus, ProposedToolCall
@@ -123,6 +124,69 @@ async def test_revise_invalid_payload_raises_422() -> None:
         )
 
     assert not store.revisions
+
+
+@pytest.mark.anyio
+async def test_revise_rejects_unknown_or_mismatched_calls() -> None:
+    owner_id = uuid.uuid4()
+    store = InMemoryApprovalStore()
+    service = AgentApprovalService(
+        approval_store=store,
+        chat_store=FakeChatStore(),
+        tool_registry=_registry(),
+    )
+    approval_id = await _pending_approval(store, owner_id=owner_id)
+
+    with pytest.raises(ApprovalValidationError, match="Unknown edited call_id"):
+        await service.revise(
+            approval_id,
+            edited_calls=[
+                ProposedToolCall(
+                    name="delete_file", arguments={"path": "/tmp/x"}, call_id="c9"
+                )
+            ],
+            owner_id=owner_id,
+        )
+
+    with pytest.raises(ApprovalValidationError, match="Tool name mismatch"):
+        await service.revise(
+            approval_id,
+            edited_calls=[
+                ProposedToolCall(
+                    name="other_tool", arguments={"path": "/tmp/x"}, call_id="c1"
+                )
+            ],
+            owner_id=owner_id,
+        )
+
+    with pytest.raises(ApprovalValidationError, match="exactly 1 call"):
+        await service.revise(
+            approval_id,
+            edited_calls=[
+                ProposedToolCall(
+                    name="delete_file", arguments={"path": "/a"}, call_id="c1"
+                ),
+                ProposedToolCall(
+                    name="delete_file", arguments={"path": "/b"}, call_id="c2"
+                ),
+            ],
+            owner_id=owner_id,
+        )
+
+    assert not store.revisions
+
+
+@pytest.mark.anyio
+async def test_append_revision_unknown_approval_raises() -> None:
+    store = InMemoryApprovalStore()
+
+    with pytest.raises(ApprovalNotFoundError):
+        await store.append_revision(
+            approval_id=uuid.uuid4(),
+            approval_kind=ApprovalKind.AGENT_TOOL,
+            edited_by=uuid.uuid4(),
+            edited_payload=[],
+        )
 
 
 @pytest.mark.anyio

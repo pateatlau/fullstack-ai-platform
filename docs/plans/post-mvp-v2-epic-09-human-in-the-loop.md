@@ -1327,7 +1327,7 @@ Implement `AgentApprovalService.decide()`: record the decision via Compare-And-S
 | --------------------- | ------------------------------------------- |
 | Lint                  | ✅ PASS                                     |
 | Typecheck             | ✅ PASS — 0 errors (`app/ai/hitl/`)         |
-| Decision/resume tests | ✅ 26 passed (Phase 3 verify suite)         |
+| Decision/resume tests | ✅ 29 passed (Phase 3 verify suite)         |
 | Revision history tests | ✅ covered in `test_revise.py` + decide tests |
 | PR review hardening   | ✅ SSE publisher cleanup on early failure; revision row lock (`FOR UPDATE`); `AgentApprovalStore` protocol |
 | Phase 3 status        | ✅ Completed                                |
@@ -1986,4 +1986,4 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 | 1.2     | 2026-08-11 | Phase 0 baseline audit complete — [post-mvp-v2-epic9-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic9-phase-0-baseline-audit.md). Part II only. |
 | 1.3     | 2026-08-11 | Phase 1 HITL foundations complete — `app/ai/hitl/` package, migration `0010_hitl_tables`, `ToolDefinition.requires_approval`, `HITL_ENABLED` config, foundation tests. Part II only. |
 | 1.4     | 2026-08-11 | Phase 2 agent tool-call approval gate complete — `ToolRunner` pause gate, `AgentApprovalService.pause()`, `AgentToolApprovalStore`, `approval_required` SSE, pause path tests. Part II only. |
-| 1.5     | 2026-08-11 | Phase 3 agent approval decision & resume complete — `AgentApprovalService.revise()`/`decide()`/`approve_and_resume()`, `AgentExecutor.resume_from_approval()`, REST endpoints (`POST …/revise`, `POST …/decide`, `GET …/revisions`), `ChatStore.update_message`, 26-test verify suite; PR hardening (SSE stream cleanup, revision row lock, `AgentApprovalStore` protocol). Part II only. |
+| 1.5     | 2026-08-11 | Phase 3 agent approval decision & resume complete — `AgentApprovalService.revise()`/`decide()`/`approve_and_resume()`, `AgentExecutor.resume_from_approval()`, REST endpoints (`POST …/revise`, `POST …/decide`, `GET …/revisions`), `ChatStore.update_message`, 29-test verify suite; PR hardening (SSE stream cleanup, revision row lock, `AgentApprovalStore` protocol). Part II only. |
