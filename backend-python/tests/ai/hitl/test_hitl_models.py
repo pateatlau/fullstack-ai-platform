@@ -119,6 +119,23 @@ class TestApprovalResult:
         restored = ApprovalResult.model_validate_json(payload.model_dump_json())
         assert restored == payload
 
+    def test_system_terminal_status_allows_null_approver(self) -> None:
+        now = datetime.datetime(2026, 8, 11, 12, 0, tzinfo=datetime.UTC)
+        payload = ApprovalResult(
+            approval_id=uuid.uuid4(),
+            approval_kind=ApprovalKind.AGENT_TOOL,
+            status=ApprovalStatus.EXPIRED,
+            edited=False,
+            final_payload=None,
+            reason=None,
+            approver=None,
+            decided_at=now,
+            approval_correlation_id=uuid.uuid4(),
+        )
+        restored = ApprovalResult.model_validate_json(payload.model_dump_json())
+        assert restored == payload
+        assert restored.approver is None
+
 
 class TestApprovalAuditEntry:
     def test_round_trip(self) -> None:

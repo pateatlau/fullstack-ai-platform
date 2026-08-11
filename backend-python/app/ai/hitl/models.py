@@ -78,7 +78,7 @@ class ApprovalResult(BaseModel):
     edited: bool
     final_payload: dict[str, object] | list[ProposedToolCall] | None
     reason: str | None
-    approver: uuid.UUID
+    approver: uuid.UUID | None = None
     decided_at: datetime.datetime
     approval_correlation_id: uuid.UUID
 
