@@ -16,6 +16,21 @@ from app.ai.hitl.models import (
 from app.db.models import ChatMessage, ChatSession
 
 
+def _serialize_tool_calls(calls: list[ProposedToolCall]) -> list[ProposedToolCall]:
+    """Round-trip tool calls through JSON like ``AgentToolApprovalStore``."""
+    return [
+        ProposedToolCall.model_validate(call.model_dump(mode="json")) for call in calls
+    ]
+
+
+def _serialize_edited_payload(
+    edited_payload: list[ProposedToolCall] | dict[str, object],
+) -> dict[str, object] | list[ProposedToolCall]:
+    if isinstance(edited_payload, list):
+        return _serialize_tool_calls(edited_payload)
+    return edited_payload
+
+
 class EvalHitlApprovalStore:
     """Minimal approval store for HITL eval agent cases."""
 
@@ -42,7 +57,7 @@ class EvalHitlApprovalStore:
             execution_id=execution_id,
             approval_correlation_id=approval_correlation_id,
             status=ApprovalStatus.PENDING,
-            proposed_calls=proposed_calls,
+            proposed_calls=_serialize_tool_calls(proposed_calls),
             edited_calls=None,
             reason=None,
             paused_scratchpad=paused_scratchpad,
@@ -93,7 +108,10 @@ class EvalHitlApprovalStore:
         row = await self.get(approval_id)
         if row is None:
             return None
-        updated = row.model_copy(update={"pending_message_id": pending_message_id})
+        now = datetime.datetime.now(datetime.UTC)
+        updated = row.model_copy(
+            update={"pending_message_id": pending_message_id, "updated_at": now}
+        )
         self._replace(updated)
         return updated
 
@@ -125,7 +143,7 @@ class EvalHitlApprovalStore:
             "updated_at": now,
         }
         if edited_calls is not None:
-            updates["edited_calls"] = edited_calls
+            updates["edited_calls"] = _serialize_tool_calls(edited_calls)
         updated = row.model_copy(update=updates)
         self._replace(updated)
         return updated
@@ -148,7 +166,7 @@ class EvalHitlApprovalStore:
             )
         updated = row.model_copy(
             update={
-                "edited_calls": edited_calls,
+                "edited_calls": _serialize_tool_calls(edited_calls),
                 "updated_at": datetime.datetime.now(datetime.UTC),
             }
         )
@@ -164,6 +182,10 @@ class EvalHitlApprovalStore:
         edited_payload: list[ProposedToolCall] | dict[str, object],
         note: str | None = None,
     ) -> ApprovalRevision:
+        if approval_kind != ApprovalKind.AGENT_TOOL:
+            raise ApprovalNotFoundError(
+                f"Approval {approval_id} not found for kind {approval_kind.value}."
+            )
         if await self.get(approval_id) is None:
             raise ApprovalNotFoundError(
                 f"Approval {approval_id} not found for kind {approval_kind.value}."
@@ -181,7 +203,7 @@ class EvalHitlApprovalStore:
             revision_number=revision_number,
             edited_by=edited_by,
             edited_at=datetime.datetime.now(datetime.UTC),
-            edited_payload=edited_payload,
+            edited_payload=_serialize_edited_payload(edited_payload),
             note=note,
         )
         self.revisions.append(revision)

@@ -529,5 +529,10 @@ def test_dataset_loads_all_new_cases() -> None:
         "plugin_echo_tool_ping",
         "plugin_echo_prompt_greeting",
         "plugin_echo_workflow_node",
+        "hitl_agent_approve",
+        "hitl_agent_approve_edits",
+        "hitl_agent_reject",
+        "hitl_workflow_approve_edits",
+        "hitl_workflow_reject",
     }
     assert case_ids == expected

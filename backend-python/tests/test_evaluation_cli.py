@@ -145,6 +145,46 @@ async def test_cli_level_hitl_agent_runs_when_flag_on(
 
 
 @pytest.mark.anyio
+async def test_cli_level_hitl_skips_postgres_probe_when_workflow_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "hitl-agent-no-db-report.json"
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    get_settings.cache_clear()
+    monkeypatch.setenv("HITL_ENABLED", "true")
+    monkeypatch.setenv("AGENT_RUNTIME_ENABLED", "true")
+    monkeypatch.setenv("WORKFLOW_ENGINE_ENABLED", "false")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://invalid:invalid@127.0.0.1:59999/nodb",
+    )
+
+    exit_code = await run_eval(_args(level="hitl", output=output))
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["run_environment"]["postgres_available"] is False
+    agent_results = [
+        result
+        for result in payload["results"]
+        if result["case_id"].startswith("hitl_agent")
+    ]
+    workflow_results = [
+        result
+        for result in payload["results"]
+        if result["case_id"].startswith("hitl_workflow")
+    ]
+    assert len(agent_results) == 3
+    assert not any(result.get("skipped") for result in agent_results)
+    assert workflow_results
+    assert all(result.get("skipped") for result in workflow_results)
+    assert all(
+        result.get("skip_reason") == "WORKFLOW_ENGINE_ENABLED=false"
+        for result in workflow_results
+    )
+    assert exit_code in {0, 1}
+
+
+@pytest.mark.anyio
 async def test_cli_level_all_smoke(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

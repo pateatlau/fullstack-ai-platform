@@ -82,6 +82,7 @@ from app.ai.rag.service import RAGService
 from app.ai.vectorstores.pgvector import PgVectorStore
 from app.core.caller import CallerContext
 from app.core.config import Settings
+from app.core.logging import get_logger
 from app.db.documents import SqlDocumentStore
 from app.db.identity import SqlUserStore
 from app.db.models import User
@@ -102,6 +103,7 @@ DOCUMENT_FIXTURES_ROOT = (
     Path(__file__).resolve().parents[3] / "tests" / "data" / "documents"
 )
 REFERENCE_PLUGINS_ROOT = Path(__file__).resolve().parents[3] / "plugins"
+_logger = get_logger(__name__)
 EMBEDDING_DIMENSIONS = 1536
 _AGENT_EVAL_SUPPORTED_TOOLS: frozenset[str] = frozenset({"echo"})
 
@@ -1059,10 +1061,18 @@ class HitlEvalRunner:
                     f"Expected waiting_approval, got {paused.finish_reason!r}."
                 )
             pending = next(
-                row
-                for row in approval_store.rows
-                if row.status is ApprovalStatus.PENDING
+                (
+                    row
+                    for row in approval_store.rows
+                    if row.status is ApprovalStatus.PENDING
+                ),
+                None,
             )
+            if pending is None:
+                raise RuntimeError(
+                    "No pending agent tool approval found after agent paused "
+                    "with waiting_approval."
+                )
             executor = _hitl_resume_executor(
                 registry=registry,
                 approval_service=approval_service,
@@ -1222,10 +1232,17 @@ class HitlEvalRunner:
                 )
                 assert with_executions is not None
                 approval_execution = next(
-                    execution
-                    for execution in with_executions[1]
-                    if execution.node_type is NodeType.APPROVAL
+                    (
+                        execution
+                        for execution in with_executions[1]
+                        if execution.node_type is NodeType.APPROVAL
+                    ),
+                    None,
                 )
+                if approval_execution is None:
+                    raise RuntimeError(
+                        f"No approval node execution found for workflow run {run.id}."
+                    )
                 failed, _ = await manager.apply_decision(
                     run.id,
                     approval_execution.id,
@@ -1245,10 +1262,17 @@ class HitlEvalRunner:
                 )
                 assert with_executions is not None
                 approval_execution = next(
-                    execution
-                    for execution in with_executions[1]
-                    if execution.node_type is NodeType.APPROVAL
+                    (
+                        execution
+                        for execution in with_executions[1]
+                        if execution.node_type is NodeType.APPROVAL
+                    ),
+                    None,
                 )
+                if approval_execution is None:
+                    raise RuntimeError(
+                        f"No approval node execution found for workflow run {run.id}."
+                    )
                 edited_arguments = (
                     dict(case.hitl_edited_arguments)
                     if case.hitl_decision == "approve_with_edits"
@@ -1290,7 +1314,14 @@ class HitlEvalRunner:
             )
         finally:
             if owner_id is not None:
-                await _cleanup_eval_workflow_owner(self.session, owner_id)
+                try:
+                    await _cleanup_eval_workflow_owner(self.session, owner_id)
+                except Exception:
+                    _logger.warning(
+                        "Eval HITL workflow owner cleanup failed",
+                        owner_id=str(owner_id),
+                        exc_info=True,
+                    )
 
     async def _create_user(self) -> uuid.UUID:
         if self.session is None:

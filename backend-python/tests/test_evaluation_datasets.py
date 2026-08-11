@@ -269,3 +269,84 @@ edges:
 
     assert spec["entry_node_id"] == "start"
     assert spec["name"] == "Echo Workflow"
+
+
+def test_hitl_case_rejects_edits_on_non_edit_decision(tmp_path: Path) -> None:
+    path = tmp_path / "hitl_bad_decision.yaml"
+    path.write_text(
+        """
+cases:
+  - id: bad_hitl
+    level: hitl
+    hitl_surface: agent
+    hitl_decision: approve
+    goal: Send a notification
+    expected_outcome: done
+    hitl_edited_calls:
+      - name: send_notification
+        call_id: c1
+        arguments:
+          message: edited
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvalDatasetError, match="hitl_edited_calls are only allowed when"
+    ):
+        load_dataset(path)
+
+
+def test_hitl_case_rejects_wrong_surface_edit_field(tmp_path: Path) -> None:
+    path = tmp_path / "hitl_wrong_surface.yaml"
+    path.write_text(
+        """
+cases:
+  - id: bad_hitl
+    level: hitl
+    hitl_surface: workflow
+    hitl_decision: approve_with_edits
+    expected_terminal_status: completed
+    trigger_input: {}
+    hitl_edited_calls:
+      - name: echo
+        arguments:
+          message: edited
+    workflow_definition:
+      name: Bad
+      entry_node_id: start
+      nodes:
+        - id: start
+          type: terminal
+          config: {}
+      edges: []
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvalDatasetError, match="hitl_edited_calls are not valid for workflow"
+    ):
+        load_dataset(path)
+
+
+def test_hitl_case_validates_edited_call_entry_schema(tmp_path: Path) -> None:
+    path = tmp_path / "hitl_bad_call.yaml"
+    path.write_text(
+        """
+cases:
+  - id: bad_hitl
+    level: hitl
+    hitl_surface: agent
+    hitl_decision: approve_with_edits
+    goal: Send a notification
+    expected_outcome: done
+    hitl_edited_calls:
+      - name: send_notification
+        arguments: not-a-mapping
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvalDatasetError, match="requires an 'arguments' mapping"):
+        load_dataset(path)

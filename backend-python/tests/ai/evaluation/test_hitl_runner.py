@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -54,7 +55,7 @@ async def test_hitl_eval_runner_skips_when_flag_off() -> None:
 @pytest.mark.anyio
 async def test_hitl_eval_runner_agent_approve_passes() -> None:
     runner = HitlEvalRunner(
-        settings=_settings(),
+        settings=_settings(hitl_required_tool_names=["send_notification"]),
         prompt_manager=create_prompt_manager(),
     )
     result = await runner.run_case(_agent_case())
@@ -126,3 +127,46 @@ async def test_hitl_eval_runner_workflow_case(db_session) -> None:
     assert result.skipped is False
     assert result.passed is True
     assert result.terminal_status == "completed"
+
+
+@pytest.mark.anyio
+async def test_hitl_eval_runner_workflow_returns_failed_result_when_cleanup_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = AsyncMock()
+    manager = MagicMock()
+    manager.create_definition = AsyncMock(side_effect=RuntimeError("create failed"))
+    cleanup = AsyncMock(side_effect=RuntimeError("cleanup failed"))
+    monkeypatch.setattr(
+        "app.ai.evaluation.runners._cleanup_eval_workflow_owner",
+        cleanup,
+    )
+
+    async def fake_create_user(self: HitlEvalRunner) -> uuid.UUID:
+        return uuid.uuid4()
+
+    monkeypatch.setattr(HitlEvalRunner, "_create_user", fake_create_user)
+    monkeypatch.setattr(
+        "app.ai.evaluation.runners._build_hitl_eval_workflow_manager",
+        lambda **_kwargs: manager,
+    )
+    monkeypatch.setattr(
+        "app.ai.evaluation.runners.pgvector_available",
+        AsyncMock(return_value=True),
+    )
+
+    dataset = load_dataset(DATASET)
+    workflow_case = next(
+        case for case in dataset.cases if case.id == "hitl_workflow_reject"
+    )
+    runner = HitlEvalRunner(
+        settings=_settings(),
+        prompt_manager=create_prompt_manager(),
+        session=session,
+    )
+    result = await runner.run_case(workflow_case)
+
+    assert result.passed is False
+    assert result.error == "create failed"
+    session.rollback.assert_awaited_once()
+    cleanup.assert_awaited_once()

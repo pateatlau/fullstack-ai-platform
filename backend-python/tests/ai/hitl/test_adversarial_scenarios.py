@@ -23,7 +23,7 @@ from app.ai.hitl.models import ApprovalStatus, ProposedToolCall
 from app.ai.tools.schemas import ToolExecutionContext
 from app.ai.tools.stubs.send_notification import SendNotificationHandler
 from app.ai.workflow.exceptions import WorkflowDecisionConflictError
-from app.ai.workflow.models import ApprovalDecision, RunStatus
+from app.ai.workflow.models import ApprovalDecision, NodeStatus, RunStatus
 from app.core.caller import CallerContext
 from app.providers.factory import ProviderFactory
 from tests.fakes import FakeProvider
@@ -40,7 +40,6 @@ from tests.ai.hitl.scenario_helpers import (
     mcp_tool_registry,
     nested_parallel_approval_definition,
     notification_provider,
-    parallel_fork_join_approval_definition,
     pause_tool_runner_step,
     plugin_tool_registry,
     reference_tool_registry,
@@ -422,7 +421,7 @@ async def test_nested_parallel_workflow_runs_end_to_end() -> None:
     owner_id = uuid.uuid4()
     manager, _ = build_in_memory_workflow_manager()
     definition = await manager._store.create_definition(  # type: ignore[attr-defined]
-        parallel_fork_join_approval_definition(owner_id)
+        nested_parallel_approval_definition(owner_id)
     )
     run = await manager.start_run(
         definition.id,
@@ -438,17 +437,23 @@ async def test_nested_parallel_workflow_runs_end_to_end() -> None:
 
     with_executions = await manager.get_run_with_executions(run.id, owner_id=owner_id)
     assert with_executions is not None
-    approval_execution = next(
-        execution for execution in with_executions[1] if execution.node_id == "approve"
-    )
-    _, _ = await manager.apply_decision(
-        run.id,
-        approval_execution.id,
-        owner_id=owner_id,
-        decision=ApprovalDecision.APPROVED,
-    )
-    if manager._last_scheduled_run_task is not None:
-        await manager._last_scheduled_run_task
+    pending_approvals = {
+        execution.node_id: execution
+        for execution in with_executions[1]
+        if execution.node_id in {"approve_left", "approve_right"}
+        and execution.status is NodeStatus.WAITING_APPROVAL
+    }
+    assert pending_approvals.keys() == {"approve_left", "approve_right"}
+
+    for node_id in ("approve_left", "approve_right"):
+        _, _ = await manager.apply_decision(
+            run.id,
+            pending_approvals[node_id].id,
+            owner_id=owner_id,
+            decision=ApprovalDecision.APPROVED,
+        )
+        if manager._last_scheduled_run_task is not None:
+            await manager._last_scheduled_run_task
 
     completed = await manager.get_run(run.id, owner_id=owner_id)
     assert completed is not None

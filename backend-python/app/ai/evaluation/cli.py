@@ -222,7 +222,8 @@ async def _run_with_session(
     engine: AsyncEngine | None = None
 
     db_levels = levels & {"retrieval", "e2e", "workflow"}
-    if db_levels or "plugin" in levels or "hitl" in levels:
+    hitl_needs_postgres = "hitl" in levels and settings.workflow_engine_enabled
+    if db_levels or "plugin" in levels or hitl_needs_postgres:
         postgres_ok, pgvector_ok, session, engine = await _probe_postgres(settings)
 
     report.run_environment = EvalRunEnvironment(
