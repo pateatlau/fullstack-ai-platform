@@ -1502,7 +1502,7 @@ Expose the read-only, cross-surface approval inbox/audit API and extend health w
 
 ## API Implementation
 
-- [x] `GET /api/approvals` — merge `agent_tool_approvals` (owner-scoped) and workflow approval node executions (owner-scoped via `WorkflowStore`) into `ApprovalAuditEntry[]`; support `status`/`kind` filters and pagination. `status`/`kind` filter values are additive-extensible for future richer filtering (edited-state, plugin/MCP origin) — `TODO(future):` per Part I § Future Enhancements, not implemented in this phase.
+- [x] `GET /api/approvals` — merge `agent_tool_approvals` (owner-scoped) and workflow approval node executions (owner-scoped by querying `WorkflowNodeExecutionRecord` joined to `WorkflowRunRecord` on `run_id`, filtered to `node_type=approval`, with `WorkflowRunRecord.owner_id = caller`) into `ApprovalAuditEntry[]`; support `status`/`kind` filters and pagination. `status`/`kind` filter values are additive-extensible for future richer filtering (edited-state, plugin/MCP origin) — `TODO(future):` per Part I § Future Enhancements, not implemented in this phase.
 - [x] `GET /api/approvals/{id}` — detail; `404` when not found or not owned; include `approval_correlation_id` and `revision_count`.
 - [x] `GET /api/approvals/{id}/revisions` — full `ApprovalRevision[]` for either kind, ordered by `revision_number`; `404` when not found or not owned.
 - [x] Return `503 feature_disabled` when `HITL_ENABLED=false`.

@@ -13,6 +13,20 @@ from app.providers.capabilities import capabilities_by_provider
 router = APIRouter()
 
 
+async def _hitl_pending_approvals_count(
+    *,
+    hitl_enabled: bool,
+    approvals_store: ApprovalsStore,
+) -> int:
+    """Best-effort pending count for liveness; never fail ``/api/health`` on DB errors."""
+    if not hitl_enabled:
+        return 0
+    try:
+        return await approvals_store.count_pending()
+    except Exception:
+        return 0
+
+
 @router.get("/api/health")
 async def health(
     settings: Settings = Depends(get_settings),
@@ -21,8 +35,9 @@ async def health(
 ) -> dict[str, object]:
     plugins_enabled = settings.plugins_enabled
     hitl_enabled = settings.hitl_enabled
-    hitl_pending_approvals_count = (
-        await approvals_store.count_pending() if hitl_enabled else 0
+    hitl_pending_approvals_count = await _hitl_pending_approvals_count(
+        hitl_enabled=hitl_enabled,
+        approvals_store=approvals_store,
     )
     return {
         "status": "ok",
