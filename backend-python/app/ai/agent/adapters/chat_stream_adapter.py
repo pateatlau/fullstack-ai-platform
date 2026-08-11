@@ -134,7 +134,7 @@ async def stream_agent_chat(
                 if mapped is not None:
                     event_name, frame = mapped
                     yield format_sse(event_name, frame)
-                if prep is not None and caller is not None:
+                if prep is not None:
                     await chat_service._commit()
                 return
 

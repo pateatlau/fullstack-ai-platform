@@ -18,7 +18,7 @@ from app.ai.agent.models.request import AgentRequest
 from app.ai.agent.planner import ReActPlanner
 from app.ai.agent.scratchpad import ScratchpadStore
 from app.ai.agent.streaming import InMemoryStreamPublisher
-from app.ai.hitl.exceptions import AgentApprovalPauseError
+from app.ai.hitl.exceptions import AgentApprovalPauseError, HitlError
 from app.ai.hitl.policy import ApprovalPolicy
 from app.ai.hitl.service import AgentApprovalService
 from app.ai.tools.executor import ToolExecutor
@@ -222,6 +222,68 @@ async def test_mixed_step_pauses_entire_step(
         )
 
     assert TrackingHandler.calls == []
+
+
+@pytest.mark.anyio
+async def test_hitl_fails_closed_when_pause_context_missing(
+    sensitive_registry: ToolRegistry,
+    tool_context: ToolExecutionContext,
+) -> None:
+    executor = ToolExecutor(registry=sensitive_registry, settings=Settings())
+    chat_store = FakeChatStore()
+    runner = ToolRunner(
+        tool_executor=executor,
+        tool_registry=sensitive_registry,
+        hitl_enabled=True,
+        approval_policy=ApprovalPolicy(required_tool_names=frozenset()),
+        approval_service=_approval_service(chat_store),
+    )
+    scratchpad_store = ScratchpadStore()
+    scratchpad = scratchpad_store.create("exec-fail-closed")
+    state = AgentExecutionState(execution_id="exec-fail-closed")
+    step = PlannedStep(
+        step_id="s1",
+        action=StepAction.TOOL_CALL,
+        tool_calls=[ToolCall(name="delete_file", arguments={"path": "/tmp/x"})],
+    )
+
+    with pytest.raises(HitlError, match="session_id and owner_id"):
+        await runner.run_tool_steps(
+            [step],
+            execution_id="exec-fail-closed",
+            tool_context=tool_context,
+            scratchpad=scratchpad,
+            state=state,
+        )
+
+    assert not chat_store.messages
+
+
+@pytest.mark.anyio
+async def test_hitl_fails_closed_when_approval_service_missing(
+    sensitive_registry: ToolRegistry,
+    tool_context: ToolExecutionContext,
+) -> None:
+    executor = ToolExecutor(registry=sensitive_registry, settings=Settings())
+    runner = ToolRunner(
+        tool_executor=executor,
+        tool_registry=sensitive_registry,
+        hitl_enabled=True,
+        approval_policy=ApprovalPolicy(required_tool_names=frozenset()),
+        approval_service=None,
+    )
+    step = PlannedStep(
+        step_id="s1",
+        action=StepAction.TOOL_CALL,
+        tool_calls=[ToolCall(name="delete_file", arguments={"path": "/tmp/x"})],
+    )
+
+    with pytest.raises(HitlError, match="AgentApprovalService"):
+        await runner.run_tool_steps(
+            [step],
+            execution_id="exec-no-service",
+            tool_context=tool_context,
+        )
 
 
 @pytest.mark.anyio

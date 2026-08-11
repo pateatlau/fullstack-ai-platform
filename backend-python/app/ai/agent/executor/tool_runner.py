@@ -23,6 +23,7 @@ from app.ai.agent.retry.executor import retry_operation
 from app.ai.agent.retry.policies import ToolRetryPolicy
 from app.ai.agent.scratchpad.scratchpad import Scratchpad
 from app.ai.agent.streaming.publisher import NoOpStreamPublisher
+from app.ai.hitl.exceptions import HitlError
 from app.ai.hitl.policy import ApprovalPolicy
 from app.ai.hitl.service import AgentApprovalService, raise_pause
 from app.ai.observability.tracing.spans import (
@@ -238,18 +239,24 @@ class ToolRunner:
     ) -> None:
         if not self._hitl_enabled:
             return
-        if (
-            self._approval_policy is None
-            or self._approval_service is None
-            or self._registry is None
-            or scratchpad is None
-            or state is None
-            or session_id is None
-            or owner_id is None
-        ):
-            return
+        if self._registry is None or self._approval_policy is None:
+            raise HitlError(
+                "HITL is enabled but ToolRunner is missing ToolRegistry or ApprovalPolicy."
+            )
         if not _step_requires_approval(step, self._registry, self._approval_policy):
             return
+        if self._approval_service is None:
+            raise HitlError(
+                "HITL is enabled but ToolRunner is missing AgentApprovalService."
+            )
+        if scratchpad is None or state is None:
+            raise HitlError(
+                "Approval-required tool call cannot pause without scratchpad and state."
+            )
+        if session_id is None or owner_id is None:
+            raise HitlError(
+                "Approval-required tool call cannot pause without session_id and owner_id."
+            )
 
         approval = await self._approval_service.pause(
             step,

@@ -99,6 +99,7 @@ def test_agent_stream_event_types_cover_part_i_strategy() -> None:
         "reflection",
         "complete",
         "error",
+        "approval_required",
     }
     assert {member.value for member in AgentStreamEventType} == expected
 
