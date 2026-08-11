@@ -26,6 +26,7 @@ from app.core.errors import AppError
 from app.core.logging import bind_context
 from app.schemas.workflow import (
     ApprovalDecisionRequest,
+    ApprovalRejectRequest,
     DEFAULT_WORKFLOW_LIST_LIMIT,
     MAX_WORKFLOW_LIST_LIMIT,
     StartWorkflowRunRequest,
@@ -460,7 +461,7 @@ async def approve_workflow_node(
 async def reject_workflow_node(
     run_id: uuid.UUID,
     node_execution_id: uuid.UUID,
-    body: ApprovalDecisionRequest | None = None,
+    body: ApprovalRejectRequest | None = None,
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     workflow_manager: WorkflowManager = Depends(get_workflow_manager),
@@ -469,7 +470,7 @@ async def reject_workflow_node(
     bind_context(user_id=str(caller.user_id))
     _require_workflow_enabled(settings)
 
-    request = body or ApprovalDecisionRequest()
+    request = body or ApprovalRejectRequest()
     run, _ = await _run_workflow_operation(
         workflow_manager.apply_decision(
             run_id,

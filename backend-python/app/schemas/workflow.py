@@ -32,6 +32,7 @@ MAX_WORKFLOW_LIST_LIMIT = 100
 
 __all__ = [
     "ApprovalDecisionRequest",
+    "ApprovalRejectRequest",
     "DEFAULT_WORKFLOW_LIST_LIMIT",
     "MAX_WORKFLOW_LIST_LIMIT",
     "StartWorkflowRunRequest",
@@ -129,9 +130,15 @@ class StartWorkflowRunRequest(BaseModel):
 
 
 class ApprovalDecisionRequest(BaseModel):
-    """Optional body for workflow approve/reject endpoints (Epic 09)."""
+    """Optional body for workflow approve endpoint (Epic 09)."""
 
     edited_arguments: dict[str, object] | None = None
+    reason: str | None = None
+
+
+class ApprovalRejectRequest(BaseModel):
+    """Optional body for workflow reject endpoint (Epic 09)."""
+
     reason: str | None = None
 
 
