@@ -2,7 +2,7 @@
 epic: v2-09
 title: Human-in-the-Loop
 status: in_progress
-version: 1.8
+version: 1.9
 depends_on: [v2-06, v2-07, v2-08]
 provides:
   [
@@ -977,7 +977,7 @@ _Re-verified in Epic 09 Phase 0 (2026-08-11); source of truth: [post-mvp-v2-epic
 | 4     | Workflow Approval Enhancements             | M      | Completed   |
 | 5     | Workflow Graph Guard & MCP/Plugin Coverage | M      | Completed   |
 | 6     | Unified Approval REST API & Audit          | S      | Completed   |
-| 7     | HITL Observability                         | S      | Not Started |
+| 7     | HITL Observability                         | S      | Completed |
 | 8     | Reference Scenarios & Eval Cases           | M      | Not Started |
 | 9     | Frontend Approval Inbox & Audit UI         | S      | Not Started |
 | 10    | Validation & Release                       | M      | Not Started |
@@ -1553,14 +1553,14 @@ Expose the read-only, cross-surface approval inbox/audit API and extend health w
 | Revisions endpoint tests | ✅ included in router verify suite above                       |
 | Health tests             | ✅ updated (`test_health`, `test_health_includes_hitl_fields`) |
 | Phase 6 status           | ✅ Completed                                                   |
-| Phase 7 authorized       | ⬜ Pending user confirmation                                   |
+| Phase 7 authorized       | ✅ Completed (user authorized Phase 7)                         |
 
 ---
 
 # Phase 7 — HITL Observability
 
 **Effort:** S
-**Status:** Not Started
+**Status:** Completed
 
 **Objective**
 
@@ -1581,24 +1581,24 @@ Add approval span/metric instrumentation closing Epic 07's deferred "approval la
 
 ## Span Helper
 
-- [ ] Implement `approval_span` with fixed name `approval.decide` and attributes `approval_id`, `approval_kind`, `approval_status`, `approval_decision`, `decision_latency_ms`, `edited: bool` (ids are span attributes only — never metric labels, per the unbounded-cardinality invariant).
-- [ ] Wrap pause, revise, and decide operations when `OBSERVABILITY_ENABLED=true`.
-- [ ] Set `approval_correlation_id` on the approval span and propagate it into `ToolExecutionContext` so the resulting `tool_span` (Epic 07, existing) carries the same value as an attribute — the durable cross-span link.
+- [x] Implement `approval_span` with fixed name `approval.decide` and attributes `approval_id`, `approval_kind`, `approval_status`, `approval_decision`, `decision_latency_ms`, `edited: bool` (ids are span attributes only — never metric labels, per the unbounded-cardinality invariant).
+- [x] Wrap pause, revise, and decide operations when `OBSERVABILITY_ENABLED=true`.
+- [x] Set `approval_correlation_id` on the approval span and propagate it into `ToolExecutionContext` so the resulting `tool_span` (Epic 07, existing) carries the same value as an attribute — the durable cross-span link.
 
 ## Metrics
 
-- [ ] Add `agent_tool_approval_pending_count` (`UpDownCounter`, no unbounded labels) incremented/decremented on pause/decide, mirroring `record_workflow_approval_pending_delta`.
-- [ ] Add `approval_decisions_total` (`Counter`, labels `kind` ∈ `{agent_tool, workflow_node}`, `decision` ∈ `{approved, rejected}`) incremented once per terminal decision — the basis for future success-rate/rejection-rate/edit-rate dashboards without adding new instruments per the review's "derived metrics" recommendation.
-- [ ] Add `hitl_approval_decision_latency_ms` (`Histogram`, label `kind`) recorded from `requested_at` to `decided_at` on both surfaces.
-- [ ] Add `hitl_resume_latency_ms` (`Histogram`, label `kind`) recorded from Stage 2 start to Stage 4 completion (see Part I § Decision Execution Stages).
-- [ ] Add `hitl_tool_execution_latency_ms` (`Histogram`, label `kind`) recorded around the Stage 3 `ToolExecutor.execute()` call for approved calls only.
-- [ ] Extend `ALLOWED_LABEL_KEYS` in `app/ai/observability/metrics/labels.py` as needed; no `tool_name`/`session_id`/`run_id`/`approval_id` labels (unbounded cardinality) — `kind` and `decision` are the only labels, both small closed sets.
+- [x] Add `agent_tool_approval_pending_count` (`UpDownCounter`, no unbounded labels) incremented/decremented on pause/decide, mirroring `record_workflow_approval_pending_delta`.
+- [x] Add `approval_decisions_total` (`Counter`, labels `kind` ∈ `{agent_tool, workflow_node}`, `decision` ∈ `{approved, rejected}`) incremented once per terminal decision — the basis for future success-rate/rejection-rate/edit-rate dashboards without adding new instruments per the review's "derived metrics" recommendation.
+- [x] Add `hitl_approval_decision_latency_ms` (`Histogram`, label `kind`) recorded from `requested_at` to `decided_at` on both surfaces.
+- [x] Add `hitl_resume_latency_ms` (`Histogram`, label `kind`) recorded from Stage 2 start to Stage 4 completion (see Part I § Decision Execution Stages).
+- [x] Add `hitl_tool_execution_latency_ms` (`Histogram`, label `kind`) recorded around the Stage 3 `ToolExecutor.execute()` call for approved calls only.
+- [x] Extend `ALLOWED_LABEL_KEYS` in `app/ai/observability/metrics/labels.py` as needed; no `tool_name`/`session_id`/`run_id`/`approval_id` labels (unbounded cardinality) — `kind` and `decision` are the only labels, both small closed sets.
 
 ## Testing
 
-- [ ] In-memory span exporter tests for pause/revise/decide, asserting `approval_id`/`approval_kind`/`approval_status`/`approval_decision` attributes are present and `approval_correlation_id` matches on the paired `tool_span`.
-- [ ] Metric tests for pending count increment/decrement, `approval_decisions_total` increments, and all three latency histograms recording (both kinds).
-- [ ] Verify flag off → no HITL spans/metrics.
+- [x] In-memory span exporter tests for pause/revise/decide, asserting `approval_id`/`approval_kind`/`approval_status`/`approval_decision` attributes are present and `approval_correlation_id` matches on the paired `tool_span`.
+- [x] Metric tests for pending count increment/decrement, `approval_decisions_total` increments, and all three latency histograms recording (both kinds).
+- [x] Verify flag off → no HITL spans/metrics.
 
 **Verify**
 
@@ -1612,7 +1612,7 @@ Add approval span/metric instrumentation closing Epic 07's deferred "approval la
 
 **Exit criteria**
 
-- [ ] Observability tests pass.
+- [x] Observability tests pass.
 - [ ] User confirmation to proceed to Phase 8.
 
 **Rollback**
@@ -1623,10 +1623,10 @@ Add approval span/metric instrumentation closing Epic 07's deferred "approval la
 
 | Metric              | Result          |
 | ------------------- | --------------- |
-| Lint                | Pending Phase 7 |
-| Observability tests | Pending Phase 7 |
-| Phase 7 status      | Not Started     |
-| Phase 8 authorized  | Pending         |
+| Lint                | ✅ Passes                                      |
+| Observability tests | ✅ 86 passed (`test_observability` + Epic 07) |
+| Phase 7 status      | ✅ Completed                                   |
+| Phase 8 authorized  | ⬜ Pending user confirmation                   |
 
 ---
 
@@ -1993,3 +1993,4 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 | 1.6     | 2026-08-11 | Phase 4 workflow approval enhancements complete — `edited_arguments`/`reason` on workflow decisions, `ApprovalDecisionRequest`, `ApprovalRevision` append on edit, `ApprovalResult` from `apply_decision`, optional approve/reject body; 39-test verify suite. Part II only. |
 | 1.7     | 2026-08-11 | Phase 5 workflow graph guard & MCP/plugin coverage complete — `GraphValidator` HITL reachability guard (flag-gated), `WorkflowManager` wiring, MCP/plugin `requires_approval` integration tests; 37-test verify suite. Part II only. |
 | 1.8     | 2026-08-11 | Phase 6 unified approval REST API & audit complete — `ApprovalsStore` aggregation, `GET /api/approvals` list/detail, cross-kind revisions endpoint, health HITL fields, 8-test router verify suite + store integration test. Part II only. |
+| 1.9     | 2026-08-11 | Phase 7 HITL observability complete — `approval_span`, HITL metrics (`agent_tool_approval_pending_count`, `approval_decisions_total`, three latency histograms), `approval_correlation_id` on `tool_span`, instrumentation wired into agent pause/revise/decide/resume and workflow pause/decide; `tests/ai/hitl/test_observability.py`. Part II only. |

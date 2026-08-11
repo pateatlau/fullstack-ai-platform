@@ -6,6 +6,7 @@ Bodies are generic scaffolds until Phases 2–4 wire real pipeline call sites.
 from __future__ import annotations
 
 import contextvars
+import datetime
 import time
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
@@ -27,6 +28,9 @@ from opentelemetry.trace.span import TraceState
 
 from app.ai.observability.metrics.instruments import (
     record_agent_iteration_metric,
+    record_hitl_decision_metrics,
+    record_hitl_resume_latency_ms,
+    record_hitl_tool_execution_latency_ms,
     record_plugin_load_metrics,
     record_tool_call_metrics,
     record_workflow_node_execution_metric,
@@ -292,6 +296,95 @@ def plugin_span(
         yield span
 
 
+@contextmanager
+def approval_span(
+    *,
+    approval_id: str,
+    approval_kind: str,
+    approval_correlation_id: str | None = None,
+) -> Generator[Span | None, None, None]:
+    """HITL approval span — content-free ids/kind only (Epic 09)."""
+    attributes: dict[str, Any] = {
+        "approval_id": approval_id,
+        "approval_kind": approval_kind,
+    }
+    if approval_correlation_id is not None:
+        attributes["approval_correlation_id"] = approval_correlation_id
+    with _observability_span("approval.decide", attributes=attributes) as span:
+        yield span
+
+
+def hitl_decision_latency_ms(
+    requested_at: datetime.datetime,
+    decided_at: datetime.datetime | None,
+) -> int | None:
+    """Whole milliseconds from approval request to terminal decision."""
+    if decided_at is None:
+        return None
+    delta_ms = int((decided_at - requested_at).total_seconds() * 1000)
+    return max(delta_ms, 0)
+
+
+def record_approval_span_outcome(
+    span: Span | None,
+    *,
+    approval_id: str | None = None,
+    approval_status: str,
+    approval_decision: str | None = None,
+    decision_latency_ms: int | None = None,
+    edited: bool | None = None,
+) -> None:
+    """Attach terminal HITL approval attributes to an ``approval.decide`` span."""
+    if span is None:
+        return
+    attributes: dict[str, Any] = {"approval_status": approval_status}
+    if approval_id is not None:
+        attributes["approval_id"] = approval_id
+    if approval_decision is not None:
+        attributes["approval_decision"] = approval_decision
+    if decision_latency_ms is not None:
+        attributes["decision_latency_ms"] = decision_latency_ms
+    if edited is not None:
+        attributes["edited"] = edited
+    _set_span_attributes(span, attributes)
+
+
+def record_hitl_terminal_decision(
+    span: Span | None,
+    *,
+    kind: str,
+    decision: str,
+    approval_status: str,
+    requested_at: datetime.datetime,
+    decided_at: datetime.datetime,
+    edited: bool,
+    resume_latency_ms: int | None = None,
+    tool_execution_latency_ms: int | None = None,
+) -> None:
+    """Record terminal HITL decision metrics and span attributes."""
+    decision_latency_ms = hitl_decision_latency_ms(requested_at, decided_at)
+    if decision_latency_ms is not None:
+        record_hitl_decision_metrics(
+            kind=kind,
+            decision=decision,
+            decision_latency_ms=decision_latency_ms,
+        )
+    if resume_latency_ms is not None:
+        record_hitl_resume_latency_ms(kind=kind, latency_ms=resume_latency_ms)
+    if tool_execution_latency_ms is not None:
+        record_hitl_tool_execution_latency_ms(
+            kind=kind,
+            latency_ms=tool_execution_latency_ms,
+        )
+    record_approval_span_outcome(
+        span,
+        approval_status=approval_status,
+        approval_decision=decision,
+        decision_latency_ms=decision_latency_ms,
+        edited=edited,
+    )
+
+
 def record_plugin_load_outcome(
     span: Span | None,
     *,
@@ -332,6 +425,7 @@ def record_tool_span_outcome(
     latency_ms: int,
     authorization_result: str | None = None,
     retry_count: int | None = None,
+    approval_correlation_id: str | None = None,
 ) -> None:
     """Attach terminal tool execution attributes and mark failed outcomes on the span."""
     record_tool_call_metrics(
@@ -351,6 +445,8 @@ def record_tool_span_outcome(
     }
     if authorization_result is not None:
         attributes["authorization_result"] = authorization_result
+    if approval_correlation_id is not None:
+        attributes["approval_correlation_id"] = approval_correlation_id
     _set_span_attributes(span, attributes)
     if not success:
         try:

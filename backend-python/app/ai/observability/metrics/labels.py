@@ -11,6 +11,8 @@ ALLOWED_LABEL_KEYS = frozenset(
         "node_type",
         "status",
         "failure_code",
+        "kind",
+        "decision",
     }
 )
 
@@ -58,6 +60,8 @@ FAILURE_CODE_REGISTRY = frozenset(
         "other",
     }
 )
+APPROVAL_KIND_REGISTRY = frozenset({"agent_tool", "workflow_node", "other"})
+DECISION_REGISTRY = frozenset({"approved", "rejected", "other"})
 
 _OTHER = "other"
 
@@ -99,6 +103,10 @@ def normalize_metric_label(dimension: str, raw_value: str | None) -> str:
         return _normalize_status(value)
     if dimension == "failure_code":
         return value if value in FAILURE_CODE_REGISTRY else _OTHER
+    if dimension == "kind":
+        return value if value in APPROVAL_KIND_REGISTRY else _OTHER
+    if dimension == "decision":
+        return value if value in DECISION_REGISTRY else _OTHER
     return _OTHER
 
 

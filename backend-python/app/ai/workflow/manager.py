@@ -28,9 +28,11 @@ from app.ai.observability.metrics.instruments import (
     record_workflow_run_started,
 )
 from app.ai.observability.tracing.spans import (
+    approval_span,
     capture_current_span_context,
     elapsed_ms_since,
     mark_span_error_status,
+    record_hitl_terminal_decision,
     record_workflow_run_outcome,
     SpanContextSnapshot,
     workflow_run_root_span,
@@ -604,29 +606,68 @@ class WorkflowManager:
         approval_result = _build_workflow_approval_result(
             decided_execution, decision=decision
         )
-        record_workflow_approval_pending_delta(-1)
-
-        if reject_ends_run:
-            return updated_run, approval_result
-
-        executor = WorkflowExecutor(
-            self._store,
-            self._node_executors,
-            settings=self._settings,
-            tool_registry=self._tool_registry,
+        decision_label = (
+            "approved" if decision is ApprovalDecision.APPROVED else "rejected"
         )
-        continued = await executor.continue_from_approval(
-            updated_run,
-            definition=definition,
-            approval_node_id=approval_node_id,
-            selected_edge_ids=selected_edge_ids,
+        status_label = (
+            ApprovalStatus.APPROVED.value
+            if decision is ApprovalDecision.APPROVED
+            else ApprovalStatus.REJECTED.value
         )
-        if run_status_after_decision is RunStatus.RUNNING:
-            self._schedule_run(
-                continued.id,
-                owner_id=owner_id,
-                origin_context=capture_current_span_context(),
-                resume_reason="approval_continue",
+        requested_at = (
+            decided_execution.started_at
+            or decided_execution.decided_at
+            or datetime.datetime.now(datetime.UTC)
+        )
+        resume_start = time.perf_counter()
+        with approval_span(
+            approval_id=str(decided_execution.id),
+            approval_kind=ApprovalKind.WORKFLOW_NODE.value,
+            approval_correlation_id=str(decided_execution.id),
+        ) as span:
+            record_workflow_approval_pending_delta(-1)
+            if reject_ends_run:
+                assert decided_execution.decided_at is not None
+                record_hitl_terminal_decision(
+                    span,
+                    kind=ApprovalKind.WORKFLOW_NODE.value,
+                    decision=decision_label,
+                    approval_status=status_label,
+                    requested_at=requested_at,
+                    decided_at=decided_execution.decided_at,
+                    edited=decided_execution.edited_arguments is not None,
+                )
+                return updated_run, approval_result
+
+            executor = WorkflowExecutor(
+                self._store,
+                self._node_executors,
+                settings=self._settings,
+                tool_registry=self._tool_registry,
+            )
+            continued = await executor.continue_from_approval(
+                updated_run,
+                definition=definition,
+                approval_node_id=approval_node_id,
+                selected_edge_ids=selected_edge_ids,
+            )
+            if run_status_after_decision is RunStatus.RUNNING:
+                self._schedule_run(
+                    continued.id,
+                    owner_id=owner_id,
+                    origin_context=capture_current_span_context(),
+                    resume_reason="approval_continue",
+                )
+            assert decided_execution.decided_at is not None
+            record_hitl_terminal_decision(
+                span,
+                kind=ApprovalKind.WORKFLOW_NODE.value,
+                decision=decision_label,
+                approval_status=status_label,
+                requested_at=requested_at,
+                decided_at=decided_execution.decided_at,
+                edited=decided_execution.edited_arguments is not None,
+                resume_latency_ms=elapsed_ms_since(resume_start),
             )
         return continued, approval_result
 

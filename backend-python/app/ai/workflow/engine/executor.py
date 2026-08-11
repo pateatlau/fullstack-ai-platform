@@ -14,13 +14,16 @@ import uuid
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+from app.ai.hitl.models import ApprovalKind, ApprovalStatus
 from app.ai.observability.metrics.instruments import (
     record_workflow_approval_pending_delta,
     record_workflow_checkpoint_metric,
     record_workflow_retry,
 )
 from app.ai.observability.tracing.spans import (
+    approval_span,
     elapsed_ms_since,
+    record_approval_span_outcome,
     record_workflow_node_outcome,
     workflow_span,
 )
@@ -681,7 +684,17 @@ class WorkflowExecutor:
                 }
             )
         )
-        record_workflow_approval_pending_delta(1)
+        with approval_span(
+            approval_id=str(execution.id),
+            approval_kind=ApprovalKind.WORKFLOW_NODE.value,
+            approval_correlation_id=str(execution.id),
+        ) as span:
+            record_workflow_approval_pending_delta(1)
+            record_approval_span_outcome(
+                span,
+                approval_status=ApprovalStatus.PENDING.value,
+                edited=False,
+            )
         return await self._checkpoint_with_retry(
             run,
             status=RunStatus.WAITING_APPROVAL,

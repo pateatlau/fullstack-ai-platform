@@ -10,6 +10,7 @@ from opentelemetry.trace import Span
 
 from app.ai.observability.tracing.spans import (
     elapsed_ms_since,
+    record_hitl_tool_execution_latency_ms,
     record_tool_span_outcome,
     tool_span,
 )
@@ -213,7 +214,18 @@ class ToolExecutor:
             success=normalized.success,
             latency_ms=latency_ms,
             authorization_result=authorization_result,
+            approval_correlation_id=(
+                str(context.approval_correlation_id)
+                if context.approval_correlation_id is not None
+                else None
+            ),
         )
+        hitl_kind = _hitl_kind_from_context(context)
+        if hitl_kind is not None:
+            record_hitl_tool_execution_latency_ms(
+                kind=hitl_kind,
+                latency_ms=latency_ms,
+            )
 
         if normalized.success:
             _logger.info(
@@ -265,6 +277,15 @@ class ToolExecutor:
         # Apply MCP permission policy
         assert self._mcp_permission_policy is not None
         return self._mcp_permission_policy.authorize_tool(server_name, tool_name)
+
+
+def _hitl_kind_from_context(context: ToolExecutionContext) -> str | None:
+    """Infer HITL approval kind when a gated tool executes post-decision."""
+    if context.approval_correlation_id is None:
+        return None
+    if context.session_id is not None:
+        return "agent_tool"
+    return "workflow_node"
 
 
 def _normalize_handler_arguments(
