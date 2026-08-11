@@ -16,6 +16,12 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.hitl.models import (
+    ApprovalKind,
+    ApprovalResult,
+    ApprovalStatus,
+)
+from app.ai.hitl.service import normalize_hitl_reason
 from app.ai.observability.metrics.instruments import (
     record_workflow_approval_pending_delta,
     record_workflow_run_started,
@@ -72,6 +78,32 @@ BackgroundStoreFactory = Callable[[AsyncSession], WorkflowStore]
 
 _logger = get_logger(__name__)
 _MAX_APPROVAL_DECISION_RETRIES = 25
+_DEFAULT_HITL_MAX_REASON_LENGTH = 2000
+
+
+def _build_workflow_approval_result(
+    execution: WorkflowNodeExecution,
+    *,
+    decision: ApprovalDecision,
+) -> ApprovalResult:
+    status = (
+        ApprovalStatus.APPROVED
+        if decision is ApprovalDecision.APPROVED
+        else ApprovalStatus.REJECTED
+    )
+    decided_at = execution.decided_at or datetime.datetime.now(datetime.UTC)
+    edited_arguments = execution.edited_arguments
+    return ApprovalResult(
+        approval_id=execution.id,
+        approval_kind=ApprovalKind.WORKFLOW_NODE,
+        status=status,
+        edited=edited_arguments is not None,
+        final_payload=edited_arguments,
+        reason=execution.reason,
+        approver=execution.decided_by,
+        decided_at=decided_at,
+        approval_correlation_id=execution.id,
+    )
 
 
 def _run_status_after_approval_decision(
@@ -373,9 +405,26 @@ class WorkflowManager:
         *,
         owner_id: uuid.UUID,
         decision: ApprovalDecision,
-    ) -> WorkflowRun:
+        edited_arguments: dict[str, object] | None = None,
+        reason: str | None = None,
+    ) -> tuple[WorkflowRun, ApprovalResult]:
         """Record an owner-scoped approval decision and resume when applicable."""
+        hitl_enabled = (
+            self._settings.hitl_enabled if self._settings is not None else False
+        )
+        if hitl_enabled:
+            max_reason_length = (
+                self._settings.hitl_max_reason_length
+                if self._settings is not None
+                else _DEFAULT_HITL_MAX_REASON_LENGTH
+            )
+            reason = normalize_hitl_reason(reason, max_length=max_reason_length)
+        else:
+            edited_arguments = None
+            reason = None
+
         updated_run: WorkflowRun | None = None
+        decided_execution: WorkflowNodeExecution | None = None
         run_status_after_decision: RunStatus | None = None
         reject_ends_run = False
         approval_node_id = ""
@@ -407,7 +456,9 @@ class WorkflowManager:
 
             if run.status is not RunStatus.WAITING_APPROVAL:
                 if execution.decision is decision:
-                    return run
+                    return run, _build_workflow_approval_result(
+                        execution, decision=decision
+                    )
                 if execution.decision is not None:
                     raise WorkflowDecisionConflictError(
                         "Approval decision conflicts with an existing decision."
@@ -417,7 +468,9 @@ class WorkflowManager:
                 )
             if execution.status is not NodeStatus.WAITING_APPROVAL:
                 if execution.decision is decision:
-                    return run
+                    return run, _build_workflow_approval_result(
+                        execution, decision=decision
+                    )
                 if execution.decision is not None:
                     raise WorkflowDecisionConflictError(
                         "Approval decision conflicts with an existing decision."
@@ -462,6 +515,7 @@ class WorkflowManager:
                 node_id=approval_node.id,
                 decision=decision,
                 selected_edge_ids=selected_edge_ids,
+                edited_arguments=edited_arguments,
             )
             updated_context = run.context.model_copy(
                 update={
@@ -499,13 +553,15 @@ class WorkflowManager:
             approval_node_id = approval_node.id
 
             try:
-                await self._store.record_approval_decision(
+                decided_execution = await self._store.record_approval_decision(
                     node_execution_id,
                     owner_id=owner_id,
                     decision=decision,
                     decided_by=owner_id,
                     node_status=node_status,
                     run=updated_run,
+                    edited_arguments=edited_arguments,
+                    reason=reason,
                 )
                 break
             except WorkflowApprovalCasMissError as exc:
@@ -516,7 +572,9 @@ class WorkflowManager:
                         raise WorkflowNotFoundError(
                             f"Workflow run {run_id} not found."
                         ) from exc
-                    return latest
+                    return latest, _build_workflow_approval_result(
+                        existing, decision=decision
+                    )
                 raise WorkflowDecisionConflictError(
                     "Approval decision conflicts with an existing decision."
                 ) from exc
@@ -531,11 +589,15 @@ class WorkflowManager:
 
         assert updated_run is not None
         assert definition is not None
+        assert decided_execution is not None
 
+        approval_result = _build_workflow_approval_result(
+            decided_execution, decision=decision
+        )
         record_workflow_approval_pending_delta(-1)
 
         if reject_ends_run:
-            return updated_run
+            return updated_run, approval_result
 
         executor = WorkflowExecutor(
             self._store,
@@ -556,7 +618,7 @@ class WorkflowManager:
                 origin_context=capture_current_span_context(),
                 resume_reason="approval_continue",
             )
-        return continued
+        return continued, approval_result
 
     async def cancel_run(
         self, run_id: uuid.UUID, *, owner_id: uuid.UUID

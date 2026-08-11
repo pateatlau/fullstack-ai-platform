@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.ai.workflow.exceptions import WorkflowValidationError
 from app.ai.workflow.models import (
@@ -31,6 +31,8 @@ DEFAULT_WORKFLOW_LIST_LIMIT = 50
 MAX_WORKFLOW_LIST_LIMIT = 100
 
 __all__ = [
+    "ApprovalDecisionRequest",
+    "ApprovalRejectRequest",
     "DEFAULT_WORKFLOW_LIST_LIMIT",
     "MAX_WORKFLOW_LIST_LIMIT",
     "StartWorkflowRunRequest",
@@ -127,6 +129,21 @@ class StartWorkflowRunRequest(BaseModel):
     trigger_input: dict[str, object] = Field(default_factory=dict)
 
 
+class ApprovalDecisionRequest(BaseModel):
+    """Optional body for workflow approve endpoint (Epic 09)."""
+
+    edited_arguments: dict[str, object] | None = None
+    reason: str | None = None
+
+
+class ApprovalRejectRequest(BaseModel):
+    """Optional body for workflow reject endpoint (Epic 09)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = None
+
+
 class WorkflowRunResponse(BaseModel):
     """Public workflow run snapshot."""
 
@@ -158,6 +175,8 @@ class WorkflowNodeExecutionResponse(BaseModel):
     decided_by: uuid.UUID | None
     decided_at: datetime.datetime | None
     decision: ApprovalDecision | None
+    edited_arguments: dict[str, object] | None = None
+    reason: str | None = None
     started_at: datetime.datetime | None
     completed_at: datetime.datetime | None
 
@@ -254,6 +273,8 @@ def to_node_execution_response(
         decided_by=execution.decided_by,
         decided_at=execution.decided_at,
         decision=execution.decision,
+        edited_arguments=execution.edited_arguments,
+        reason=execution.reason,
         started_at=execution.started_at,
         completed_at=execution.completed_at,
     )

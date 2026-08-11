@@ -2,7 +2,7 @@
 epic: v2-09
 title: Human-in-the-Loop
 status: in_progress
-version: 1.3
+version: 1.6
 depends_on: [v2-06, v2-07, v2-08]
 provides:
   [
@@ -1331,14 +1331,14 @@ Implement `AgentApprovalService.decide()`: record the decision via Compare-And-S
 | Revision history tests | ✅ covered in `test_revise.py` + decide tests |
 | PR review hardening   | ✅ SSE publisher cleanup on early failure; revision row lock (`FOR UPDATE`); `AgentApprovalStore` protocol |
 | Phase 3 status        | ✅ Completed                                |
-| Phase 4 authorized    | ⬜ Pending user confirmation                |
+| Phase 4 authorized    | ✅ User requested Phase 4 implementation      |
 
 ---
 
 # Phase 4 — Workflow Approval Enhancements
 
 **Effort:** M
-**Status:** Not Started
+**Status:** Completed
 
 **Objective**
 
@@ -1347,7 +1347,7 @@ Extend Epic 06's workflow approval nodes with editable arguments and a decision 
 **Deliverables**
 
 - `ApprovalDecisionRequest` schema (`edited_arguments?`, `reason?`)
-- `WorkflowManager.apply_decision(..., edited_arguments=None, reason=None) -> ApprovalResult`
+- `WorkflowManager.apply_decision(..., edited_arguments=None, reason=None) -> tuple[WorkflowRun, ApprovalResult]`
 - `build_approval_decision_output()` extended to include `edited_arguments`
 - `WorkflowNodeExecution.edited_arguments`, `.reason` populated
 - One `ApprovalRevision` (`kind=workflow_node`) appended whenever `edited_arguments` is supplied
@@ -1357,24 +1357,24 @@ Extend Epic 06's workflow approval nodes with editable arguments and a decision 
 
 ## Manager & Store
 
-- [ ] Extend `WorkflowManager.apply_decision()` signature with optional `edited_arguments: dict[str, object] | None` and `reason: str | None`; build and return an `ApprovalResult`.
-- [ ] Extend `WorkflowStore.record_approval_decision()` to persist `edited_arguments`/`reason` on the `WorkflowNodeExecution` row (same transaction as the existing Compare-And-Swap (CAS) write) and append one `ApprovalRevision` row when `edited_arguments` is non-null.
-- [ ] Extend `build_approval_decision_output()` to include `edited_arguments` in the `run.context.variables[node_id]` output when present.
-- [ ] Ensure a subsequent execution failure on the downstream `task`/`agent` node (per Part I § Execution Failure Semantics) never touches this node's own `decision`/`status` fields — confirm via the existing Epic 06 failure-propagation path, no new code required.
+- [x] Extend `WorkflowManager.apply_decision()` signature with optional `edited_arguments: dict[str, object] | None` and `reason: str | None`; build and return an `ApprovalResult`.
+- [x] Extend `WorkflowStore.record_approval_decision()` to persist `edited_arguments`/`reason` on the `WorkflowNodeExecution` row (same transaction as the existing Compare-And-Swap (CAS) write) and append one `ApprovalRevision` row when `edited_arguments` is non-null.
+- [x] Extend `build_approval_decision_output()` to include `edited_arguments` in the `run.context.variables[node_id]` output when present.
+- [x] Ensure a subsequent execution failure on the downstream `task`/`agent` node (per Part I § Execution Failure Semantics) never touches this node's own `decision`/`status` fields — confirm via the existing Epic 06 failure-propagation path, no new code required.
 
 ## Router & Schema
 
-- [ ] Add `ApprovalDecisionRequest` (optional body) to `app/schemas/workflow.py`.
-- [ ] Update `POST …/approve` and `POST …/reject` to accept the optional body; omitted body preserves Epic 06 behaviour exactly.
-- [ ] Extend `WorkflowNodeExecutionResponse` with `edited_arguments`, `reason`.
+- [x] Add `ApprovalDecisionRequest` (optional body) to `app/schemas/workflow.py`.
+- [x] Update `POST …/approve` and `POST …/reject` to accept the optional body; omitted body preserves Epic 06 behaviour exactly.
+- [x] Extend `WorkflowNodeExecutionResponse` with `edited_arguments`, `reason`.
 
 ## Testing
 
-- [ ] Test: approve with `edited_arguments` → downstream task node's `{{variables.<node_id>.edited_arguments.<field>}}` template resolves correctly; one `ApprovalRevision` recorded.
-- [ ] Test: approve without body → Epic 06 byte-for-byte behaviour (regression); zero `ApprovalRevision` rows.
-- [ ] Test: reject with `reason` → persisted and returned in detail response.
-- [ ] Test: `hitl_max_reason_length` truncation/validation.
-- [ ] Test: downstream node execution fails after approval with `edited_arguments` → approval node's `decision` remains `approved`; run fails per existing Epic 06 semantics.
+- [x] Test: approve with `edited_arguments` → downstream task node's `{{variables.<node_id>.edited_arguments.<field>}}` template resolves correctly; one `ApprovalRevision` recorded.
+- [x] Test: approve without body → Epic 06 byte-for-byte behaviour (regression); zero `ApprovalRevision` rows.
+- [x] Test: reject with `reason` → persisted and returned in detail response.
+- [x] Test: `hitl_max_reason_length` truncation/validation.
+- [x] Test: downstream node execution fails after approval with `edited_arguments` → approval node's `decision` remains `approved`; run fails per existing Epic 06 semantics.
 
 **Verify**
 
@@ -1388,7 +1388,7 @@ Extend Epic 06's workflow approval nodes with editable arguments and a decision 
 
 **Exit criteria**
 
-- [ ] Workflow approval enhancement tests pass.
+- [x] Workflow approval enhancement tests pass.
 - [ ] User confirmation to proceed to Phase 5.
 
 **Rollback**
@@ -1398,13 +1398,13 @@ Extend Epic 06's workflow approval nodes with editable arguments and a decision 
 
 **Completion Record**
 
-| Metric                  | Result          |
-| ----------------------- | --------------- |
-| Lint                    | Pending Phase 4 |
-| Typecheck               | Pending Phase 4 |
-| Workflow approval tests | Pending Phase 4 |
-| Phase 4 status          | Not Started     |
-| Phase 5 authorized      | Pending         |
+| Metric                  | Result                                      |
+| ----------------------- | ------------------------------------------- |
+| Lint                    | ✅ PASS                                     |
+| Typecheck               | ✅ PASS — 0 errors (changed modules)        |
+| Workflow approval tests | ✅ 39 passed (`test_approval_node` + router) |
+| Phase 4 status          | ✅ Completed                                |
+| Phase 5 authorized      | ⬜ Pending user confirmation                |
 
 ---
 
@@ -1987,3 +1987,4 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 | 1.3     | 2026-08-11 | Phase 1 HITL foundations complete — `app/ai/hitl/` package, migration `0010_hitl_tables`, `ToolDefinition.requires_approval`, `HITL_ENABLED` config, foundation tests. Part II only. |
 | 1.4     | 2026-08-11 | Phase 2 agent tool-call approval gate complete — `ToolRunner` pause gate, `AgentApprovalService.pause()`, `AgentToolApprovalStore`, `approval_required` SSE, pause path tests. Part II only. |
 | 1.5     | 2026-08-11 | Phase 3 agent approval decision & resume complete — `AgentApprovalService.revise()`/`decide()`/`approve_and_resume()`, `AgentExecutor.resume_from_approval()`, REST endpoints (`POST …/revise`, `POST …/decide`, `GET …/revisions`), `ChatStore.update_message`, 29-test verify suite; PR hardening (SSE stream cleanup, revision row lock, `AgentApprovalStore` protocol). Part II only. |
+| 1.6     | 2026-08-11 | Phase 4 workflow approval enhancements complete — `edited_arguments`/`reason` on workflow decisions, `ApprovalDecisionRequest`, `ApprovalRevision` append on edit, `ApprovalResult` from `apply_decision`, optional approve/reject body; 39-test verify suite. Part II only. |

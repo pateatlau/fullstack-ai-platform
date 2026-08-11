@@ -89,5 +89,7 @@ class WorkflowNodeExecution(BaseModel):
     decided_by: uuid.UUID | None = None
     decided_at: datetime.datetime | None = None
     decision: ApprovalDecision | None = None
+    edited_arguments: dict[str, object] | None = None
+    reason: str | None = None
     started_at: datetime.datetime | None = None
     completed_at: datetime.datetime | None = None

@@ -629,6 +629,29 @@ async def test_approve_and_reject_pending_approval_node(
 
 
 @pytest.mark.anyio
+async def test_reject_with_unknown_fields_returns_422(
+    workflow_api_app: FastAPI,
+) -> None:
+    owner_id = uuid.uuid4()
+    workflow_api_app.dependency_overrides[get_workflow_manager] = lambda: (
+        WorkflowManager(FakeWorkflowStore())
+    )
+    headers = _auth_headers(owner_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=workflow_api_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/workflow-runs/{uuid.uuid4()}/nodes/{uuid.uuid4()}/reject",
+            headers=headers,
+            json={"edited_arguments": {"message": "nope"}, "reason": "no"},
+        )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.anyio
 async def test_list_endpoints_honor_limit_and_offset(workflow_api_app: FastAPI) -> None:
     store = FakeWorkflowStore()
     owner_id = uuid.uuid4()

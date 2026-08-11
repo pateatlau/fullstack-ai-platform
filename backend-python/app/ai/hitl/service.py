@@ -43,6 +43,13 @@ from app.ai.tools.validator import ToolValidator
 from app.db.models import ChatMessage
 
 
+def normalize_hitl_reason(reason: str | None, *, max_length: int) -> str | None:
+    """Truncate free-text decision reasons to the configured maximum length."""
+    if reason is None:
+        return None
+    return reason if len(reason) <= max_length else reason[:max_length]
+
+
 class AgentApprovalStore(Protocol):
     async def create(
         self,

@@ -25,6 +25,8 @@ from app.core.config import Settings, get_settings
 from app.core.errors import AppError
 from app.core.logging import bind_context
 from app.schemas.workflow import (
+    ApprovalDecisionRequest,
+    ApprovalRejectRequest,
     DEFAULT_WORKFLOW_LIST_LIMIT,
     MAX_WORKFLOW_LIST_LIMIT,
     StartWorkflowRunRequest,
@@ -429,6 +431,7 @@ async def resume_workflow_run(
 async def approve_workflow_node(
     run_id: uuid.UUID,
     node_execution_id: uuid.UUID,
+    body: ApprovalDecisionRequest | None = None,
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     workflow_manager: WorkflowManager = Depends(get_workflow_manager),
@@ -437,12 +440,15 @@ async def approve_workflow_node(
     bind_context(user_id=str(caller.user_id))
     _require_workflow_enabled(settings)
 
-    run = await _run_workflow_operation(
+    request = body or ApprovalDecisionRequest()
+    run, _ = await _run_workflow_operation(
         workflow_manager.apply_decision(
             run_id,
             node_execution_id,
             owner_id=caller.user_id,
             decision=ApprovalDecision.APPROVED,
+            edited_arguments=request.edited_arguments,
+            reason=request.reason,
         )
     )
     return to_run_response(run)
@@ -455,6 +461,7 @@ async def approve_workflow_node(
 async def reject_workflow_node(
     run_id: uuid.UUID,
     node_execution_id: uuid.UUID,
+    body: ApprovalRejectRequest | None = None,
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     workflow_manager: WorkflowManager = Depends(get_workflow_manager),
@@ -463,12 +470,14 @@ async def reject_workflow_node(
     bind_context(user_id=str(caller.user_id))
     _require_workflow_enabled(settings)
 
-    run = await _run_workflow_operation(
+    request = body or ApprovalRejectRequest()
+    run, _ = await _run_workflow_operation(
         workflow_manager.apply_decision(
             run_id,
             node_execution_id,
             owner_id=caller.user_id,
             decision=ApprovalDecision.REJECTED,
+            reason=request.reason,
         )
     )
     return to_run_response(run)
