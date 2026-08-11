@@ -1,4 +1,4 @@
-import type { Citation, ChatSessionListItem, Message } from '../types/chat'
+import type { Citation, ChatSessionListItem, Message, ProposedToolCallFrame } from '../types/chat'
 import { EMPTY_ASSISTANT_RESPONSE_MESSAGE } from '../utils/chatMessages'
 
 export interface ChatState {
@@ -45,6 +45,15 @@ export type ChatAction =
   | { type: 'CLEAR_QUOTA_BLOCKED' }
   | { type: 'SET_SESSIONS'; sessions: ChatSessionListItem[] }
   | { type: 'SET_ACTIVE_SESSION'; sessionId: string | null }
+  | {
+      type: 'APPROVAL_REQUIRED'
+      id: string
+      approvalId: string
+      approvalCorrelationId: string
+      proposedCalls: ProposedToolCallFrame[]
+    }
+  | { type: 'APPROVAL_DECIDED'; id: string; status: 'complete' | 'rejected' }
+  | { type: 'RESUME_AFTER_APPROVAL'; id: string }
   | { type: 'LOAD_SESSION'; sessionId: string | null; messages: Message[] }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
@@ -103,6 +112,64 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         activeSessionId: action.sessionId,
+      }
+
+    case 'APPROVAL_REQUIRED':
+      return {
+        ...state,
+        messages: state.messages.map((message) =>
+          message.id === action.id
+            ? {
+                ...message,
+                status: 'waiting_approval',
+                content:
+                  message.content.trim().length > 0
+                    ? message.content
+                    : 'This turn is paused until you approve or reject the proposed tool call(s).',
+                pendingApproval: {
+                  approvalId: action.approvalId,
+                  approvalCorrelationId: action.approvalCorrelationId,
+                  proposedCalls: action.proposedCalls,
+                },
+                canRetry: false,
+              }
+            : message,
+        ),
+      }
+
+    case 'APPROVAL_DECIDED':
+      return {
+        ...state,
+        messages: state.messages.map((message) =>
+          message.id === action.id
+            ? {
+                ...message,
+                status: action.status,
+                pendingApproval: undefined,
+                canRetry: action.status === 'rejected',
+                errorMessage:
+                  action.status === 'rejected'
+                    ? 'Tool call rejected. Start a new message to try again.'
+                    : undefined,
+              }
+            : message,
+        ),
+      }
+
+    case 'RESUME_AFTER_APPROVAL':
+      return {
+        ...state,
+        messages: state.messages.map((message) =>
+          message.id === action.id
+            ? {
+                ...message,
+                status: 'streaming',
+                pendingApproval: undefined,
+                content: '',
+                canRetry: false,
+              }
+            : message,
+        ),
       }
 
     case 'LOAD_SESSION':

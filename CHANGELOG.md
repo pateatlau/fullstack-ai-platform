@@ -8,6 +8,29 @@ Platform releases use internal names (Post-MVP V1.1, V2 Epic 04). Git tags follo
 
 ## [Unreleased]
 
+## [V2 Epic 09 — Human-in-the-Loop] — 2026-08-12
+
+Platform-wide human approval for tool calls on agent and workflow surfaces, with editable arguments and audit history.
+
+### Added
+
+- HITL core under `app/ai/hitl/` (`ApprovalPolicy`, agent pause/resume, unified approvals REST API, revision history)
+- Agent tool-call approval gate in `ToolRunner` with scratchpad snapshot and `approval_required` SSE
+- Workflow approval enhancements: `edited_arguments`, decision `reason`, `ApprovalResult` DTO
+- `GraphValidator` reachability guard for approval-required tools without upstream approval nodes
+- HITL observability: `approval_span`, decision/resume/execution latency metrics, `approval_correlation_id`
+- Eval CLI `--level hitl` (5 reference cases); migration `0010_hitl_tables`
+- `HITL_ENABLED` feature flag (default off); `hitl_enabled` / `hitl_pending_approvals_count` on health
+- Frontend approval inbox at `/approvals` (pending + history tabs, revision expander)
+- Chat inline `ApprovalDecisionCard` for `approval_required` SSE; distinct `waiting_approval`/`rejected` message styling
+- `approvalsClient` for list/detail/revise/decide (SSE approve) with `feature_disabled` handling
+- WorkflowsPage approval panel with editable JSON arguments and optional reject reason
+
+### Changed
+
+- Workflow approve/reject endpoints accept optional `edited_arguments` and `reason` when HITL is enabled
+- Workflow approve/reject client calls send optional JSON body from the frontend panel
+
 ## [V2 Epic 04 — Voice Interfaces] — 2026-07-29
 
 Bidirectional voice chat for authenticated users, reusing the same RAG, agent, and MCP orchestration path as text SSE.

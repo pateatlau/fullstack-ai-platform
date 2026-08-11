@@ -3,7 +3,7 @@ import { useAuthContext } from '../context/AuthContext'
 import { useChatStreamingEnabled } from '../hooks/useChatStreamingEnabled'
 
 interface AppNavProps {
-  current: 'chat' | 'documents' | 'memory' | 'workflows' | 'observability' | 'plugins'
+  current: 'chat' | 'documents' | 'memory' | 'workflows' | 'observability' | 'plugins' | 'approvals'
 }
 
 const NAV_LINK_CLASS =
@@ -19,6 +19,7 @@ export function AppNav({ current }: AppNavProps) {
     workflowEngineEnabled,
     observabilityEnabled,
     pluginsEnabled,
+    hitlEnabled,
     healthLoading,
   } = useChatStreamingEnabled()
 
@@ -56,6 +57,11 @@ export function AppNav({ current }: AppNavProps) {
       {!healthLoading && pluginsEnabled && current !== 'plugins' ? (
         <Link to="/plugins" className={NAV_LINK_CLASS}>
           Plugins
+        </Link>
+      ) : null}
+      {!healthLoading && hitlEnabled && current !== 'approvals' ? (
+        <Link to="/approvals" className={NAV_LINK_CLASS}>
+          Approvals
         </Link>
       ) : null}
     </nav>

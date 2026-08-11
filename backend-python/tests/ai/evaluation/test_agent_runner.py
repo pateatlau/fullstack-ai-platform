@@ -171,6 +171,21 @@ async def test_agent_eval_runner_passes_with_multi_tool_calls(
 
 
 @pytest.mark.anyio
+async def test_agent_eval_runner_passes_when_hitl_enabled_without_approval_tools() -> (
+    None
+):
+    runner = AgentEvalRunner(
+        settings=_settings(hitl_enabled=True, hitl_required_tool_names=["web_search"]),
+        prompt_manager=create_prompt_manager(),
+    )
+
+    result = await runner.run_case(_agent_case())
+
+    assert result.passed is True
+    assert result.error is None
+
+
+@pytest.mark.anyio
 async def test_agent_eval_runner_records_error_without_fabricated_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

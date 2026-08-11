@@ -596,6 +596,7 @@ class AgentEvalRunner:
                 tool_registry=registry,
                 prompt_manager=self.prompt_manager,
                 tool_executor=tool_executor,
+                approval_policy=_approval_policy_for_settings(self.settings),
             )
             request = AgentRequest(
                 messages=[
@@ -1335,6 +1336,15 @@ class HitlEvalRunner:
         return user.id
 
 
+def _approval_policy_for_settings(settings: Settings) -> ApprovalPolicy | None:
+    """Wire HITL policy when the flag is on so eval agents match production."""
+    if not settings.hitl_enabled:
+        return None
+    return ApprovalPolicy(
+        required_tool_names=frozenset(settings.hitl_required_tool_names)
+    )
+
+
 def _hitl_error_result(*, case_id: str, start: float, message: str) -> EvalCaseResult:
     latency_ms = int((time.perf_counter() - start) * 1000)
     return EvalCaseResult(
@@ -1458,6 +1468,7 @@ def _build_hitl_eval_workflow_manager(
         tool_registry=registry,
         prompt_manager=prompt_manager,
         tool_executor=tool_executor,
+        approval_policy=_approval_policy_for_settings(settings),
     )
     store = PostgresWorkflowStore(session=session, settings=settings)
 
@@ -1540,6 +1551,7 @@ def _build_plugin_eval_workflow_manager(
         tool_registry=tool_registry,
         prompt_manager=prompt_manager,
         tool_executor=tool_executor,
+        approval_policy=_approval_policy_for_settings(settings),
     )
     store = PostgresWorkflowStore(session=session, settings=settings)
 
@@ -1800,6 +1812,7 @@ def _build_eval_workflow_manager(
         tool_registry=registry,
         prompt_manager=prompt_manager,
         tool_executor=tool_executor,
+        approval_policy=_approval_policy_for_settings(settings),
     )
     store = PostgresWorkflowStore(session=session, settings=settings)
 

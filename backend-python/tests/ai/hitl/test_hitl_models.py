@@ -20,7 +20,7 @@ from app.ai.hitl.exceptions import HitlError
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolDefinition
 from app.ai.tools.stubs.echo import ECHO_TOOL_DEFINITION, echo_handler
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 
 
 class TestProposedToolCall:
@@ -226,14 +226,11 @@ class TestToolDefinitionRequiresApproval:
 
 
 class TestHitlSettings:
-    def test_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("HITL_ENABLED", raising=False)
-        monkeypatch.delenv("HITL_REQUIRED_TOOL_NAMES", raising=False)
-        monkeypatch.delenv("HITL_APPROVAL_TIMEOUT_HOURS", raising=False)
-        monkeypatch.delenv("HITL_MAX_REASON_LENGTH", raising=False)
-        get_settings.cache_clear()
-        settings = Settings()
-        assert settings.hitl_enabled is False
-        assert settings.hitl_required_tool_names == []
-        assert settings.hitl_approval_timeout_hours == 0
-        assert settings.hitl_max_reason_length == 2000
+    def test_defaults(self) -> None:
+        """HITL settings default to the frozen Part I configuration defaults."""
+        fields = Settings.model_fields
+
+        assert fields["hitl_enabled"].default is False
+        assert fields["hitl_required_tool_names"].default_factory is list
+        assert fields["hitl_approval_timeout_hours"].default == 0
+        assert fields["hitl_max_reason_length"].default == 2000

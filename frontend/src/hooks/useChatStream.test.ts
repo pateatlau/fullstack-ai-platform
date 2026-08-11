@@ -111,4 +111,40 @@ describe('useChatStream', () => {
       expect(onStart).toHaveBeenCalled()
     })
   })
+
+  it('invokes onApprovalRequired and stops before end when approval_required arrives', async () => {
+    const onApprovalRequired = vi.fn()
+    const onEnd = vi.fn()
+
+    vi.spyOn(chatClient, 'streamChat').mockResolvedValue(
+      createSseResponse(
+        [
+          'event: start',
+          'data: {"type":"start","id":"resp_1","timestamp":"t0"}',
+          '',
+          '',
+          'event: approval_required',
+          'data: {"type":"approval_required","id":"resp_1","approval_id":"a1","approval_correlation_id":"c1","proposed_calls":[{"name":"echo","arguments":{},"call_id":"call-1"}],"timestamp":"t1"}',
+          '',
+          '',
+        ].join('\n'),
+      ),
+    )
+
+    const { result } = renderHook(() => useChatStream({ onApprovalRequired, onEnd }))
+
+    await result.current.start({
+      messages: [{ role: 'user', content: 'Notify me' }],
+    })
+
+    await waitFor(() => {
+      expect(onApprovalRequired).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'approval_required',
+          approval_id: 'a1',
+        }),
+      )
+    })
+    expect(onEnd).not.toHaveBeenCalled()
+  })
 })

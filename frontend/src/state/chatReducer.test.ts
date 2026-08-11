@@ -295,4 +295,29 @@ describe('chatReducer', () => {
     })
     expect(errored.error).toBeNull()
   })
+
+  it('APPROVAL_REQUIRED marks assistant message waiting with pending context', () => {
+    const started = chatReducer(initialChatState, {
+      type: 'START_MESSAGE',
+      id: 'assistant-1',
+      createdAt: 't1',
+    })
+
+    const paused = chatReducer(started, {
+      type: 'APPROVAL_REQUIRED',
+      id: 'assistant-1',
+      approvalId: 'approval-1',
+      approvalCorrelationId: 'corr-1',
+      proposedCalls: [{ name: 'echo', arguments: { message: 'hi' }, call_id: 'c1' }],
+    })
+
+    expect(paused.messages[0]).toMatchObject({
+      status: 'waiting_approval',
+      pendingApproval: {
+        approvalId: 'approval-1',
+        approvalCorrelationId: 'corr-1',
+        proposedCalls: [{ name: 'echo', arguments: { message: 'hi' }, call_id: 'c1' }],
+      },
+    })
+  })
 })

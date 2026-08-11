@@ -44,6 +44,24 @@ export function toLocalMessage(message: PersistedChatMessage): Message {
     }
   }
 
+  if (message.status === 'waiting_approval') {
+    return {
+      ...base,
+      content:
+        message.content.trim().length > 0
+          ? message.content
+          : 'This turn is paused until you approve or reject the proposed tool call(s).',
+    }
+  }
+
+  if (message.status === 'rejected') {
+    return {
+      ...base,
+      errorMessage: 'Tool call rejected. Start a new message to try again.',
+      canRetry: true,
+    }
+  }
+
   if (message.status === 'complete' && message.role === 'assistant' && !message.content.trim()) {
     return {
       ...base,

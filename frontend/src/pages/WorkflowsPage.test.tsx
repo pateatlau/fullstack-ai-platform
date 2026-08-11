@@ -243,7 +243,7 @@ describe('WorkflowsPage authenticated', () => {
     await userEvent.click(screen.getByRole('button', { name: /waiting approval/i }))
 
     const approvalRegion = await screen.findByRole('region', { name: /Pending approval/i })
-    expect(within(approvalRegion).getByText(/Please review this step/)).toBeTruthy()
+    expect(within(approvalRegion).getAllByText(/Please review this step/).length).toBeGreaterThan(0)
 
     await userEvent.click(screen.getByRole('button', { name: 'Approve' }))
 

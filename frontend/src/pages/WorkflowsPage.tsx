@@ -115,6 +115,109 @@ function findPendingApprovalExecution(
   return executions.find((execution) => execution.status === 'waiting_approval')
 }
 
+function WorkflowPendingApprovalPanel({
+  execution,
+  runId,
+  isActingOnRun,
+  onApprove,
+  onRejectClick,
+  onValidationError,
+}: {
+  execution: WorkflowNodeExecution
+  runId: string
+  isActingOnRun: boolean
+  onApprove: (
+    runId: string,
+    executionId: string,
+    body: { edited_arguments: Record<string, unknown>; reason: string | null },
+  ) => Promise<void>
+  onRejectClick: (reason: string | null) => void
+  onValidationError: (message: string) => void
+}) {
+  const [approvalReason, setApprovalReason] = useState('')
+  const [approvalEditedArgumentsJson, setApprovalEditedArgumentsJson] = useState(() =>
+    execution.input && typeof execution.input === 'object'
+      ? JSON.stringify(execution.input, null, 2)
+      : '{}',
+  )
+
+  const handleApproveClick = async () => {
+    try {
+      const parsed = JSON.parse(approvalEditedArgumentsJson) as unknown
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        onValidationError('Edited arguments must be a JSON object.')
+        return
+      }
+      await onApprove(runId, execution.id, {
+        edited_arguments: parsed as Record<string, unknown>,
+        reason: approvalReason.trim() || null,
+      })
+    } catch (error) {
+      onValidationError(error instanceof Error ? error.message : 'Invalid edited arguments JSON.')
+    }
+  }
+
+  return (
+    <div
+      className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4"
+      role="region"
+      aria-labelledby="pending-approval-heading"
+    >
+      <h3 id="pending-approval-heading" className="text-sm font-semibold text-amber-900">
+        Pending approval — {execution.node_id}
+      </h3>
+      <pre className="mt-2 overflow-x-auto rounded bg-white/80 p-2 text-xs text-shell-800">
+        {formatWorkflowJson(execution.input)}
+      </pre>
+      <label
+        className="mt-3 block text-xs font-medium text-amber-900"
+        htmlFor="workflow-approval-edited-args"
+      >
+        Edited arguments (JSON, optional)
+      </label>
+      <textarea
+        id="workflow-approval-edited-args"
+        className="mt-1 w-full min-h-24 rounded-lg border border-amber-200 bg-white px-2 py-1.5 font-mono text-xs text-shell-900"
+        value={approvalEditedArgumentsJson}
+        onChange={(event) => setApprovalEditedArgumentsJson(event.target.value)}
+        disabled={isActingOnRun}
+      />
+      <label
+        className="mt-3 block text-xs font-medium text-amber-900"
+        htmlFor="workflow-approval-reason"
+      >
+        Reason (optional)
+      </label>
+      <textarea
+        id="workflow-approval-reason"
+        className="mt-1 w-full min-h-16 rounded-lg border border-amber-200 bg-white px-2 py-1.5 text-xs text-shell-900"
+        value={approvalReason}
+        onChange={(event) => setApprovalReason(event.target.value)}
+        disabled={isActingOnRun}
+        maxLength={2000}
+      />
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="rounded-chat bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-60"
+          onClick={() => void handleApproveClick()}
+          disabled={isActingOnRun}
+        >
+          Approve
+        </button>
+        <button
+          type="button"
+          className="rounded-chat bg-danger-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-danger-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger-500 disabled:opacity-60"
+          onClick={() => onRejectClick(approvalReason.trim() || null)}
+          disabled={isActingOnRun}
+        >
+          Reject
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function WorkflowsContent() {
   const { handleInvalidAccessToken } = useAuthContext()
   const [definitions, setDefinitions] = useState<WorkflowDefinition[]>([])
@@ -131,6 +234,7 @@ function WorkflowsContent() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false)
+  const [pendingRejectReason, setPendingRejectReason] = useState<string | null>(null)
 
   const definitionNameById = useMemo(() => {
     const map = new Map<string, string>()
@@ -330,18 +434,38 @@ function WorkflowsContent() {
     }
   }
 
-  const handleApprove = async () => {
-    if (!selectedRunDetail || !pendingApprovalExecution) {
-      return
-    }
+  const handleApprove = async (
+    runId: string,
+    nodeExecutionId: string,
+    body: { edited_arguments: Record<string, unknown>; reason: string | null },
+  ) => {
     setIsActingOnRun(true)
     setError(null)
     setSuccess(null)
     try {
-      await approveWorkflowNode(selectedRunDetail.id, pendingApprovalExecution.id)
+      await approveWorkflowNode(runId, nodeExecutionId, {
+        edited_arguments: body.edited_arguments,
+        reason: body.reason,
+      })
       setSuccess('Approval submitted.')
       await loadDefinitionsAndRuns()
-      await refreshRunDetail(selectedRunDetail.id)
+      await refreshRunDetail(runId)
+    } catch (apiError) {
+      handleApiError(apiError)
+    } finally {
+      setIsActingOnRun(false)
+    }
+  }
+
+  const handleReject = async (runId: string, nodeExecutionId: string, reason: string | null) => {
+    setIsActingOnRun(true)
+    setError(null)
+    setSuccess(null)
+    try {
+      await rejectWorkflowNode(runId, nodeExecutionId, { reason })
+      setSuccess('Rejection submitted.')
+      await loadDefinitionsAndRuns()
+      await refreshRunDetail(runId)
     } catch (apiError) {
       handleApiError(apiError)
     } finally {
@@ -354,19 +478,8 @@ function WorkflowsContent() {
       return
     }
     setRejectConfirmOpen(false)
-    setIsActingOnRun(true)
-    setError(null)
-    setSuccess(null)
-    try {
-      await rejectWorkflowNode(selectedRunDetail.id, pendingApprovalExecution.id)
-      setSuccess('Rejection submitted.')
-      await loadDefinitionsAndRuns()
-      await refreshRunDetail(selectedRunDetail.id)
-    } catch (apiError) {
-      handleApiError(apiError)
-    } finally {
-      setIsActingOnRun(false)
-    }
+    await handleReject(selectedRunDetail.id, pendingApprovalExecution.id, pendingRejectReason)
+    setPendingRejectReason(null)
   }
 
   const canCancelRun =
@@ -597,37 +710,19 @@ function WorkflowsContent() {
             </button>
           </div>
 
-          {pendingApprovalExecution ? (
-            <div
-              className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4"
-              role="region"
-              aria-labelledby="pending-approval-heading"
-            >
-              <h3 id="pending-approval-heading" className="text-sm font-semibold text-amber-900">
-                Pending approval — {pendingApprovalExecution.node_id}
-              </h3>
-              <pre className="mt-2 overflow-x-auto rounded bg-white/80 p-2 text-xs text-shell-800">
-                {formatWorkflowJson(pendingApprovalExecution.input)}
-              </pre>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="rounded-chat bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-60"
-                  onClick={() => void handleApprove()}
-                  disabled={isActingOnRun}
-                >
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  className="rounded-chat bg-danger-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-danger-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger-500 disabled:opacity-60"
-                  onClick={() => setRejectConfirmOpen(true)}
-                  disabled={isActingOnRun}
-                >
-                  Reject
-                </button>
-              </div>
-            </div>
+          {pendingApprovalExecution && selectedRunDetail ? (
+            <WorkflowPendingApprovalPanel
+              key={pendingApprovalExecution.id}
+              execution={pendingApprovalExecution}
+              runId={selectedRunDetail.id}
+              isActingOnRun={isActingOnRun}
+              onApprove={handleApprove}
+              onRejectClick={(reason) => {
+                setPendingRejectReason(reason)
+                setRejectConfirmOpen(true)
+              }}
+              onValidationError={(message) => setError(message)}
+            />
           ) : null}
 
           <h3 className="mt-5 text-sm font-semibold text-shell-950">Node executions</h3>

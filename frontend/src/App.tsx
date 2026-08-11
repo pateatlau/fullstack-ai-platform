@@ -8,6 +8,7 @@ import { NotFoundPage } from './pages/NotFoundPage'
 import { WorkflowsPage } from './pages/WorkflowsPage'
 import { ObservabilityPage } from './pages/ObservabilityPage'
 import { PluginsPage } from './pages/PluginsPage'
+import { ApprovalsPage } from './pages/ApprovalsPage'
 
 function App() {
   return (
@@ -53,6 +54,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PluginsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/approvals"
+              element={
+                <ProtectedRoute>
+                  <ApprovalsPage />
                 </ProtectedRoute>
               }
             />

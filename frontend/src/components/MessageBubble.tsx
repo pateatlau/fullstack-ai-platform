@@ -1,15 +1,22 @@
 import type { Message } from '../types/chat'
+import { ApprovalDecisionCard } from './ApprovalDecisionCard'
 import { CitationList } from './CitationList'
 import { MessageContent } from './MessageContent'
 import { StreamingIndicator, type StreamingIndicatorVariant } from './StreamingIndicator'
 
-interface MessageBubbleProps {
+export interface MessageBubbleProps {
   message: Message
   onRetry?: (messageId: string) => void
   /** When false, in-flight assistant messages omit the "Streaming" status label. */
   showStreamingStatus?: boolean
   /** Label shown while waiting for the first token on an in-flight assistant message. */
   waitingVariant?: StreamingIndicatorVariant
+  onApprovalApproveStream?: {
+    onDelta: (messageId: string, content: string) => void
+    onComplete: (messageId: string) => void
+    onError: (messageId: string, errorMessage: string) => void
+  }
+  onApprovalRejected?: (messageId: string) => void
 }
 
 export function MessageBubble({
@@ -17,6 +24,8 @@ export function MessageBubble({
   onRetry,
   showStreamingStatus = true,
   waitingVariant = 'typing',
+  onApprovalApproveStream,
+  onApprovalRejected,
 }: MessageBubbleProps) {
   const isWaitingWithIndicator = message.status === 'streaming' && message.content === ''
   const waitingIndicatorVariant: StreamingIndicatorVariant =
@@ -35,11 +44,22 @@ export function MessageBubble({
       ? 'border-danger-600/40 bg-danger-100/60'
       : message.status === 'interrupted'
         ? 'border-amber-500/40 bg-amber-50'
-        : ''
+        : message.status === 'waiting_approval'
+          ? 'border-amber-400/50 bg-amber-50/80'
+          : message.status === 'rejected'
+            ? 'border-danger-500/30 bg-danger-50/80'
+            : ''
 
   const showStatusBadge =
     message.status !== 'complete' && !(message.status === 'streaming' && !showStreamingStatus)
-  const statusLabel = message.status === 'streaming' ? 'Streaming' : message.status
+  const statusLabel =
+    message.status === 'streaming'
+      ? 'Streaming'
+      : message.status === 'waiting_approval'
+        ? 'Waiting for approval'
+        : message.status === 'rejected'
+          ? 'Rejected'
+          : message.status
 
   return (
     <article className={`${alignment} ${baseBubble} ${roleBubble} ${statusTone}`}>
@@ -73,6 +93,23 @@ export function MessageBubble({
           {message.errorMessage ?? 'The stream was interrupted before completion.'}
         </p>
       )}
+      {message.status === 'rejected' && (
+        <p className="mt-3 rounded-xl bg-white/70 px-3 py-2 text-xs font-medium text-danger-600">
+          {message.errorMessage ?? 'Tool call rejected.'}
+        </p>
+      )}
+      {message.status === 'waiting_approval' && message.pendingApproval ? (
+        <ApprovalDecisionCard
+          messageId={message.id}
+          pendingApproval={message.pendingApproval}
+          onRejected={() => onApprovalRejected?.(message.id)}
+          onApproveStream={{
+            onDelta: (content) => onApprovalApproveStream?.onDelta(message.id, content),
+            onComplete: () => onApprovalApproveStream?.onComplete(message.id),
+            onError: (errorMessage) => onApprovalApproveStream?.onError(message.id, errorMessage),
+          }}
+        />
+      ) : null}
       {message.status === 'stopped' && (
         <p className="mt-3 rounded-xl bg-white/70 px-3 py-2 text-xs font-medium text-amber-700">
           Stopped.
