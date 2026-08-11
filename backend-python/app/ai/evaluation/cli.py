@@ -31,6 +31,7 @@ from app.ai.evaluation.regression import (
 from app.ai.evaluation.runners import (
     AgentEvalRunner,
     EndToEndEvalRunner,
+    HitlEvalRunner,
     PluginEvalRunner,
     PromptEvalRunner,
     RetrievalEvalRunner,
@@ -53,12 +54,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--level",
-        choices=["prompt", "retrieval", "e2e", "agent", "workflow", "plugin", "all"],
+        choices=[
+            "prompt",
+            "retrieval",
+            "e2e",
+            "agent",
+            "workflow",
+            "plugin",
+            "hitl",
+            "all",
+        ],
         default="all",
         help=(
             "Evaluation level to run (default: all). "
             "Use --level plugin for reference plugin smoke cases "
-            "(skipped when PLUGINS_ENABLED=false)."
+            "(skipped when PLUGINS_ENABLED=false). "
+            "Use --level hitl for HITL reference scenarios "
+            "(skipped when HITL_ENABLED=false)."
         ),
     )
     parser.add_argument(
@@ -120,6 +132,7 @@ def _settings_snapshot(settings: Settings) -> dict[str, object]:
         "agent_runtime_enabled": settings.agent_runtime_enabled,
         "workflow_engine_enabled": settings.workflow_engine_enabled,
         "plugins_enabled": settings.plugins_enabled,
+        "hitl_enabled": settings.hitl_enabled,
     }
 
 
@@ -209,13 +222,15 @@ async def _run_with_session(
     engine: AsyncEngine | None = None
 
     db_levels = levels & {"retrieval", "e2e", "workflow"}
-    if db_levels or "plugin" in levels:
+    hitl_needs_postgres = "hitl" in levels and settings.workflow_engine_enabled
+    if db_levels or "plugin" in levels or hitl_needs_postgres:
         postgres_ok, pgvector_ok, session, engine = await _probe_postgres(settings)
 
     report.run_environment = EvalRunEnvironment(
         agent_runtime_enabled=settings.agent_runtime_enabled,
         workflow_engine_enabled=settings.workflow_engine_enabled,
         plugins_enabled=settings.plugins_enabled,
+        hitl_enabled=settings.hitl_enabled,
         postgres_available=postgres_ok,
         pgvector_available=pgvector_ok,
     )
@@ -251,6 +266,15 @@ async def _run_with_session(
         )
         for case in filter_cases(dataset, "plugin"):
             report.results.append(await plugin_runner.run_case(case))
+
+    if "hitl" in levels:
+        hitl_runner = HitlEvalRunner(
+            settings=settings,
+            prompt_manager=prompt_manager,
+            session=session,
+        )
+        for case in filter_cases(dataset, "hitl"):
+            report.results.append(await hitl_runner.run_case(case))
 
     if not db_levels:
         await _dispose_db_resources(session, engine, rollback=True)

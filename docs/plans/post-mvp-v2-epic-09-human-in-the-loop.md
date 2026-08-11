@@ -2,7 +2,7 @@
 epic: v2-09
 title: Human-in-the-Loop
 status: in_progress
-version: 1.9
+version: 1.10
 depends_on: [v2-06, v2-07, v2-08]
 provides:
   [
@@ -27,6 +27,9 @@ test_paths:
     tests/ai/workflow/test_approval_node.py,
     tests/ai/workflow/test_graph_validator.py,
     tests/ai/hitl/test_coverage_mcp_plugin.py,
+    tests/ai/hitl/test_reference_scenarios.py,
+    tests/ai/hitl/test_adversarial_scenarios.py,
+    tests/ai/evaluation/test_hitl_runner.py,
     tests/test_approvals_router.py,
     tests/test_workflows_router.py,
     frontend/src/pages/ApprovalsPage.test.tsx,
@@ -978,7 +981,7 @@ _Re-verified in Epic 09 Phase 0 (2026-08-11); source of truth: [post-mvp-v2-epic
 | 5     | Workflow Graph Guard & MCP/Plugin Coverage | M      | Completed   |
 | 6     | Unified Approval REST API & Audit          | S      | Completed   |
 | 7     | HITL Observability                         | S      | Completed |
-| 8     | Reference Scenarios & Eval Cases           | M      | Not Started |
+| 8     | Reference Scenarios & Eval Cases           | M      | Completed |
 | 9     | Frontend Approval Inbox & Audit UI         | S      | Not Started |
 | 10    | Validation & Release                       | M      | Not Started |
 
@@ -1613,7 +1616,7 @@ Add approval span/metric instrumentation closing Epic 07's deferred "approval la
 **Exit criteria**
 
 - [x] Observability tests pass.
-- [ ] User confirmation to proceed to Phase 8.
+- [x] User confirmation to proceed to Phase 8.
 
 **Rollback**
 
@@ -1626,14 +1629,14 @@ Add approval span/metric instrumentation closing Epic 07's deferred "approval la
 | Lint                | ✅ Passes                                      |
 | Observability tests | ✅ 86 passed (`test_observability` + Epic 07) |
 | Phase 7 status      | ✅ Completed                                   |
-| Phase 8 authorized  | ⬜ Pending user confirmation                   |
+| Phase 8 authorized  | ✅ Authorized                                  |
 
 ---
 
 # Phase 8 — Reference Scenarios & Eval Cases
 
 **Effort:** M
-**Status:** Not Started
+**Status:** Completed
 
 **Objective**
 
@@ -1650,40 +1653,40 @@ Ship reference sensitive-tool scenarios and extend the evaluation harness with H
 
 ## Reference Scenario
 
-- [ ] Add a reference tool (or config-flag an existing safe example tool via `hitl_required_tool_names` in eval fixtures) suitable for approve/reject/edit demonstration without side effects.
-- [ ] Add a matching reference workflow definition with an `approval` node preceding a `task` node using edited arguments.
+- [x] Add a reference tool (or config-flag an existing safe example tool via `hitl_required_tool_names` in eval fixtures) suitable for approve/reject/edit demonstration without side effects.
+- [x] Add a matching reference workflow definition with an `approval` node preceding a `task` node using edited arguments.
 
 ## Eval Extension
 
-- [ ] Add `--level hitl` eval cases (or extend `--level agent`/`--level workflow`) gated on `HITL_ENABLED`, following existing harness patterns (Epic 08's `--level plugin` precedent).
-- [ ] Document skip policy when HITL disabled.
+- [x] Add `--level hitl` eval cases (or extend `--level agent`/`--level workflow`) gated on `HITL_ENABLED`, following existing harness patterns (Epic 08's `--level plugin` precedent).
+- [x] Document skip policy when HITL disabled.
 
 ## Adversarial & Concurrency Scenarios
 
 Implemented as integration tests (and, where the harness supports it, `--level hitl` eval cases) in this phase:
 
-- [ ] **Duplicate approval submissions** — decide the same approval twice; assert the second call returns `409` and the first decision stands unchanged.
-- [ ] **Concurrent approval decisions** — two decide calls racing on the same `pending` row (simulated via two sessions issuing the Compare-And-Swap (CAS) update); assert exactly one succeeds and the other observes `409` (exercises the same Compare-And-Swap (CAS) guard as Phase 3, at an integration level).
-- [ ] **Invalid edited arguments** — revise and decide calls with schema-invalid `edited_calls`/`edited_arguments`; assert `422` and no state mutation (no revision appended, no execution).
-- [ ] **Stale approval ids** — decide/revise against a nonexistent id or an id already in a terminal state; assert `404`/`409` respectively, never a silent no-op.
-- [ ] **Plugin tool approvals** — reuse the Phase 5 plugin fixture; assert the full pause → decide → resume loop behaves identically to a native tool.
-- [ ] **MCP tool approvals** — reuse the Phase 5 MCP fixture; assert the full pause → decide → resume loop behaves identically to a native tool.
-- [ ] **Multiple approvals within a single conversation** — a chat turn whose plan contains two sequential approval-required tool calls in separate steps; assert each produces its own `agent_tool_approvals` row with its own `approval_correlation_id`, decided independently, and the turn finalizes only after both are resolved.
-- [ ] **Nested workflow approvals** — a workflow graph with an `approval` node inside a parallel/fork-join branch (reusing Epic 06's branching fixtures); assert `GraphValidator` accepts it when every branch is properly guarded and the run executes correctly end to end.
-- [ ] **Streaming interruption during approval** — simulate the client disconnecting after the `approval_required` SSE frame is sent (before calling decide); assert the `agent_tool_approvals` row remains `pending` and is independently resumable via a later decide call from a fresh connection.
-- [ ] **Expired approvals** — documented, not eval-tested in V2: `hitl_approval_timeout_hours` has no enforcement (`TODO(epic-10):`), so there is no behavior to assert beyond "an old pending approval remains decidable indefinitely" (implicitly covered by the streaming-interruption case above).
-- [ ] **Server restart/resume** — documented as a known V2 gap, not eval-tested: a process restart between Stage 1 and Stage 4 (see § Decision Execution Stages) leaves a resumable-but-stuck row (see Part I § Snapshot Cleanup Strategy); no test asserts recovery since none is implemented until Epic 10.
+- [x] **Duplicate approval submissions** — decide the same approval twice; assert the second call returns `409` and the first decision stands unchanged.
+- [x] **Concurrent approval decisions** — two decide calls racing on the same `pending` row (simulated via two sessions issuing the Compare-And-Swap (CAS) update); assert exactly one succeeds and the other observes `409` (exercises the same Compare-And-Swap (CAS) guard as Phase 3, at an integration level).
+- [x] **Invalid edited arguments** — revise and decide calls with schema-invalid `edited_calls`/`edited_arguments`; assert `422` and no state mutation (no revision appended, no execution).
+- [x] **Stale approval ids** — decide/revise against a nonexistent id or an id already in a terminal state; assert `404`/`409` respectively, never a silent no-op.
+- [x] **Plugin tool approvals** — reuse the Phase 5 plugin fixture; assert the full pause → decide → resume loop behaves identically to a native tool.
+- [x] **MCP tool approvals** — reuse the Phase 5 MCP fixture; assert the full pause → decide → resume loop behaves identically to a native tool.
+- [x] **Multiple approvals within a single conversation** — a chat turn whose plan contains two sequential approval-required tool calls in separate steps; assert each produces its own `agent_tool_approvals` row with its own `approval_correlation_id`, decided independently, and the turn finalizes only after both are resolved.
+- [x] **Nested workflow approvals** — a workflow graph with an `approval` node inside a parallel/fork-join branch (reusing Epic 06's branching fixtures); assert `GraphValidator` accepts it when every branch is properly guarded and the run executes correctly end to end.
+- [x] **Streaming interruption during approval** — simulate the client disconnecting after the `approval_required` SSE frame is sent (before calling decide); assert the `agent_tool_approvals` row remains `pending` and is independently resumable via a later decide call from a fresh connection.
+- [x] **Expired approvals** — documented, not eval-tested in V2: `hitl_approval_timeout_hours` has no enforcement (`TODO(epic-10):`), so there is no behavior to assert beyond "an old pending approval remains decidable indefinitely" (implicitly covered by the streaming-interruption case above).
+- [x] **Server restart/resume** — documented as a known V2 gap, not eval-tested: a process restart between Stage 1 and Stage 4 (see § Decision Execution Stages) leaves a resumable-but-stuck row (see Part I § Snapshot Cleanup Strategy); no test asserts recovery since none is implemented until Epic 10.
 
 ## Documentation
 
-- [ ] Document operator steps: enable flag, flag a tool, decide via REST, inspect audit trail.
-- [ ] Document which adversarial scenarios above are eval-tested vs. documented-only gaps, cross-referencing Part I § Implementation Risks.
+- [x] Document operator steps: enable flag, flag a tool, decide via REST, inspect audit trail.
+- [x] Document which adversarial scenarios above are eval-tested vs. documented-only gaps, cross-referencing Part I § Implementation Risks.
 
 ## Testing
 
-- [ ] Integration test exercising the full pause → decide → resume loop end-to-end (agent surface).
-- [ ] Integration test exercising the full pause → decide (edited) → continue loop end-to-end (workflow surface).
-- [ ] Eval cases pass in CI when flags enabled.
+- [x] Integration test exercising the full pause → decide → resume loop end-to-end (agent surface).
+- [x] Integration test exercising the full pause → decide (edited) → continue loop end-to-end (workflow surface).
+- [x] Eval cases pass in CI when flags enabled.
 
 **Verify**
 
@@ -1698,8 +1701,8 @@ Implemented as integration tests (and, where the harness supports it, `--level h
 
 **Exit criteria**
 
-- [ ] Reference scenario tests pass.
-- [ ] Adversarial scenario tests pass.
+- [x] Reference scenario tests pass.
+- [x] Adversarial scenario tests pass.
 - [ ] User confirmation to proceed to Phase 9.
 
 **Rollback**
@@ -1708,14 +1711,15 @@ Implemented as integration tests (and, where the harness supports it, `--level h
 
 **Completion Record**
 
-| Metric                    | Result          |
-| ------------------------- | --------------- |
-| Reference scenario tests  | Pending Phase 8 |
-| Adversarial scenario tests | Pending Phase 8 |
-| Eval `--level hitl`       | Pending Phase 8 |
-| README                    | Pending Phase 8 |
-| Phase 8 status            | Not Started     |
-| Phase 9 authorized        | Pending         |
+| Metric                     | Result                                                                                  |
+| -------------------------- | --------------------------------------------------------------------------------------- |
+| Reference scenario tests   | ✅ 4 passed (`tests/ai/hitl/test_reference_scenarios.py`)                              |
+| Adversarial scenario tests | ✅ 13 passed (`tests/ai/hitl/test_adversarial_scenarios.py`)                           |
+| Eval `--level hitl`        | ✅ 5/5 passed (`HitlEvalRunner`, 5 cases in `sample.yaml`; skips when flag off)        |
+| Eval harness tests         | ✅ 6 passed (`tests/ai/evaluation/test_hitl_runner.py`)                                |
+| README                     | ✅ HITL operator steps + adversarial coverage table (`backend-python/README.md`)       |
+| Phase 8 status             | ✅ Completed                                                                            |
+| Phase 9 authorized         | ⬜ Pending user confirmation                                                            |
 
 ---
 
@@ -1994,3 +1998,4 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 | 1.7     | 2026-08-11 | Phase 5 workflow graph guard & MCP/plugin coverage complete — `GraphValidator` HITL reachability guard (flag-gated), `WorkflowManager` wiring, MCP/plugin `requires_approval` integration tests; 37-test verify suite. Part II only. |
 | 1.8     | 2026-08-11 | Phase 6 unified approval REST API & audit complete — `ApprovalsStore` aggregation, `GET /api/approvals` list/detail, cross-kind revisions endpoint, health HITL fields, 8-test router verify suite + store integration test. Part II only. |
 | 1.9     | 2026-08-11 | Phase 7 HITL observability complete — `approval_span`, HITL metrics (`agent_tool_approval_pending_count`, `approval_decisions_total`, three latency histograms), `approval_correlation_id` on `tool_span`, instrumentation wired into agent pause/revise/decide/resume and workflow pause/decide; `tests/ai/hitl/test_observability.py`. Part II only. |
+| 1.10    | 2026-08-11 | Phase 8 reference scenarios & eval cases complete — `send_notification` reference stub, `--level hitl` eval harness (`HitlEvalRunner`, 5 cases), reference/adversarial integration tests, README operator steps + deferred-gap table. Part II only. |

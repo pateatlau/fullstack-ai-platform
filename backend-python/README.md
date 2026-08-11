@@ -548,6 +548,46 @@ uv run python -m app.ai.evaluation.cli --level plugin
 
 Plugin cases in `tests/data/evaluation/sample.yaml` are **skipped** (not failed) when `PLUGINS_ENABLED=false`, matching agent/workflow skip behaviour. `--level all` does not include plugin cases — run `--level plugin` explicitly.
 
+### Human-in-the-Loop reference scenarios (V2 Epic 9)
+
+Reference sensitive-tool coverage uses the in-memory `send_notification` stub (`app/ai/tools/stubs/send_notification.py`, `requires_approval=true`) — no external side effects.
+
+**Enable HITL (operator steps):**
+
+1. Set `HITL_ENABLED=true` in `.env`.
+2. Flag sensitive tools via `ToolDefinition.requires_approval=true` and/or `HITL_REQUIRED_TOOL_NAMES=send_notification,delete_file` (comma-separated operator override).
+3. Restart the API process.
+4. When an agent turn or workflow reaches a flagged tool, a pending approval is created. Decide via REST:
+   - `GET /api/approvals` — list pending/history (caller-scoped)
+   - `GET /api/approvals/{id}` — detail
+   - `POST /api/approvals/{id}/revise` — pre-decision argument edits (agent-tool only)
+   - `POST /api/approvals/{id}/decide` — approve (SSE continuation) or reject (JSON)
+5. Inspect the unified audit trail via `GET /api/approvals` (history tab in Phase 9 UI).
+
+When `HITL_ENABLED=false` (default), chat/agent/workflow behaviour is unchanged.
+
+**HITL eval level** (requires `HITL_ENABLED=true`; workflow cases also need `WORKFLOW_ENGINE_ENABLED=true`, Postgres, and pgvector):
+
+```bash
+uv run python -m app.ai.evaluation.cli --level hitl
+```
+
+HITL cases in `tests/data/evaluation/sample.yaml` are **skipped** (not failed) when `HITL_ENABLED=false`. Agent-side cases run offline; workflow cases need Postgres. `--level all` does not include HITL cases — run `--level hitl` explicitly.
+
+**Adversarial coverage (Phase 8):**
+
+| Scenario | Covered by |
+| -------- | ---------- |
+| Duplicate / concurrent decisions (`409`) | `tests/ai/hitl/test_adversarial_scenarios.py` |
+| Invalid edited arguments (`422`, no mutation) | same |
+| Stale / terminal approval ids (`404`/`409`) | same |
+| Plugin / MCP pause → decide → resume | same |
+| Multiple approvals per conversation | same |
+| Nested parallel workflow approvals | same |
+| Streaming disconnect before decide | same |
+| Expired approvals (timeout enforcement) | **Deferred** — `hitl_approval_timeout_hours` has no enforcement until Epic 10 |
+| Server restart mid-resume | **Deferred** — resumable-but-stuck rows until Epic 10 background jobs |
+
 **Verify reference plugins:**
 
 ```bash

@@ -1,0 +1,32 @@
+name: HITL Approve With Edits Workflow
+entry_node_id: start
+nodes:
+  - id: start
+    type: task
+    config:
+      tool_name: echo
+      arguments_template:
+        message: start
+  - id: approve
+    type: approval
+    config:
+      approved_edge_id: approved
+  - id: after
+    type: task
+    config:
+      tool_name: echo
+      arguments_template:
+        message: '{{variables.approve.edited_arguments.message}}'
+  - id: end
+    type: terminal
+    config: {}
+edges:
+  - id: e1
+    from_node_id: start
+    to_node_id: approve
+  - id: approved
+    from_node_id: approve
+    to_node_id: after
+  - id: e3
+    from_node_id: after
+    to_node_id: end

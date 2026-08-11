@@ -15,12 +15,22 @@ from unittest.mock import patch
 from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.agent.models.config import AgentConfig
 from app.ai.agent.models.context import AgentContext
+from app.ai.agent.executor.agent_executor import AgentExecutor
+from app.ai.agent.executor.tool_runner import ToolRunner
+from app.ai.agent.planner.react_planner import ReActPlanner
+from app.ai.agent.scratchpad.store import ScratchpadStore
+from app.ai.agent.streaming.publisher import NoOpStreamPublisher
+from app.ai.evaluation.hitl_support import EvalHitlApprovalStore, EvalHitlChatStore
 from app.ai.agent.models.messages import AgentMessage
 from app.ai.agent.models.request import AgentRequest
 from app.ai.agent.runtime.factory import create_default_agent
 from app.ai.documents.pipeline import IngestionPipeline
 from app.ai.evaluation.datasets import EvalCase, load_workflow_fixture
+from app.ai.hitl.models import ApprovalStatus, ProposedToolCall
+from app.ai.hitl.policy import ApprovalPolicy
+from app.ai.hitl.service import AgentApprovalService
 from app.ai.plugins.bootstrap import load_plugins as orchestrate_load_plugins
 from app.ai.plugins.registry import PluginRegistry
 from app.ai.plugins.workflow.plugin_node import PluginNodeExecutor
@@ -45,9 +55,16 @@ from app.ai.tools.schemas import ToolCall, ToolExecutionContext
 from app.ai.tools.stubs.echo import ECHO_TOOL_DEFINITION, EchoToolHandler
 from app.ai.workflow.conditions.evaluator import ConditionEvaluator
 from app.ai.workflow.manager import WorkflowManager
+from app.ai.tools.stubs.send_notification import (
+    SEND_NOTIFICATION_TOOL_DEFINITION,
+    SEND_NOTIFICATION_TOOL_NAME,
+    SendNotificationHandler,
+)
 from app.ai.workflow.models import (
+    ApprovalDecision,
     DefinitionStatus,
     NodeType,
+    RunStatus,
     WorkflowDefinition,
     WorkflowEdge,
     WorkflowNode,
@@ -65,6 +82,7 @@ from app.ai.rag.service import RAGService
 from app.ai.vectorstores.pgvector import PgVectorStore
 from app.core.caller import CallerContext
 from app.core.config import Settings
+from app.core.logging import get_logger
 from app.db.documents import SqlDocumentStore
 from app.db.identity import SqlUserStore
 from app.db.models import User
@@ -85,6 +103,7 @@ DOCUMENT_FIXTURES_ROOT = (
     Path(__file__).resolve().parents[3] / "tests" / "data" / "documents"
 )
 REFERENCE_PLUGINS_ROOT = Path(__file__).resolve().parents[3] / "plugins"
+_logger = get_logger(__name__)
 EMBEDDING_DIMENSIONS = 1536
 _AGENT_EVAL_SUPPORTED_TOOLS: frozenset[str] = frozenset({"echo"})
 
@@ -946,6 +965,527 @@ class PluginEvalRunner:
             picture=None,
         )
         return user.id
+
+
+@dataclass(frozen=True)
+class HitlEvalRunner:
+    """Run HITL reference scenarios for agent and workflow surfaces."""
+
+    settings: Settings
+    prompt_manager: PromptManager
+    session: AsyncSession | None = None
+
+    async def run_case(self, case: EvalCase) -> EvalCaseResult:
+        start = time.perf_counter()
+        if not self.settings.hitl_enabled:
+            return EvalCaseResult(
+                case_id=case.id,
+                level="hitl",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="HITL_ENABLED=false",
+            )
+
+        surface = case.hitl_surface
+        if surface == "agent":
+            return await self._run_agent_case(case, start=start)
+        if surface == "workflow":
+            return await self._run_workflow_case(case, start=start)
+        return _hitl_error_result(
+            case_id=case.id,
+            start=start,
+            message="hitl_surface is required for hitl cases.",
+        )
+
+    async def _run_agent_case(self, case: EvalCase, *, start: float) -> EvalCaseResult:
+        if not self.settings.agent_runtime_enabled:
+            return EvalCaseResult(
+                case_id=case.id,
+                level="hitl",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="AGENT_RUNTIME_ENABLED=false",
+            )
+
+        SendNotificationHandler.reset()
+        owner_id = uuid.uuid4()
+        approval_store = EvalHitlApprovalStore()
+        chat_store = EvalHitlChatStore()
+        registry = _hitl_eval_tool_registry()
+        eval_settings = self.settings.model_copy(update={"hitl_enabled": True})
+        tool_executor = ToolExecutor(registry=registry, settings=eval_settings)
+        approval_service = AgentApprovalService(
+            approval_store=approval_store,
+            chat_store=chat_store,
+            tool_registry=registry,
+            tool_executor=tool_executor,
+            scratchpad_store=ScratchpadStore(),
+        )
+        provider = _hitl_agent_provider(case)
+        agent = create_default_agent(
+            settings=eval_settings,
+            tool_registry=registry,
+            prompt_manager=self.prompt_manager,
+            tool_executor=tool_executor,
+            scratchpad_store=ScratchpadStore(),
+            approval_policy=ApprovalPolicy(
+                required_tool_names=frozenset(eval_settings.hitl_required_tool_names)
+            ),
+            approval_service=approval_service,
+        )
+        session = await chat_store.create_session(user_id=owner_id)
+        caller = CallerContext.for_user(owner_id)
+        context = AgentContext(
+            execution_id=f"eval-hitl-{case.id}",
+            caller=caller,
+            session_id=session.id,
+        )
+        request = AgentRequest(
+            messages=[AgentMessage(role="user", content=case.goal or "")],
+            model=case.model or self.settings.openai_model,
+            config=AgentConfig(max_iterations=3),
+        )
+
+        try:
+            with patch.object(
+                ProviderFactory,
+                "get_provider",
+                staticmethod(lambda _name, _settings: provider),
+            ):
+                paused = await agent.run(request, context)
+
+            if paused.finish_reason != "waiting_approval":
+                raise RuntimeError(
+                    f"Expected waiting_approval, got {paused.finish_reason!r}."
+                )
+            pending = next(
+                (
+                    row
+                    for row in approval_store.rows
+                    if row.status is ApprovalStatus.PENDING
+                ),
+                None,
+            )
+            if pending is None:
+                raise RuntimeError(
+                    "No pending agent tool approval found after agent paused "
+                    "with waiting_approval."
+                )
+            executor = _hitl_resume_executor(
+                registry=registry,
+                approval_service=approval_service,
+                provider=provider,
+                eval_settings=eval_settings,
+            )
+            passed = await self._apply_agent_decision(
+                case=case,
+                approval_service=approval_service,
+                approval_id=pending.id,
+                owner_id=owner_id,
+                executor=executor,
+                request=request,
+                context=context,
+                caller=caller,
+            )
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="hitl",
+                passed=passed,
+                latency_ms=latency_ms,
+                model=request.model,
+            )
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="hitl",
+                passed=False,
+                latency_ms=latency_ms,
+                error=str(exc),
+            )
+
+    async def _apply_agent_decision(
+        self,
+        *,
+        case: EvalCase,
+        approval_service: AgentApprovalService,
+        approval_id: uuid.UUID,
+        owner_id: uuid.UUID,
+        executor: AgentExecutor,
+        request: AgentRequest,
+        context: AgentContext,
+        caller: CallerContext,
+    ) -> bool:
+        decision = case.hitl_decision or "approve"
+        if decision == "reject":
+            result = await approval_service.decide(
+                approval_id,
+                owner_id=owner_id,
+                decision="rejected",
+                reason="eval reject",
+            )
+            return result.status is ApprovalStatus.REJECTED
+
+        edited_calls = _edited_calls_from_case(case)
+        _, response = await approval_service.approve_and_resume(
+            approval_id,
+            owner_id=owner_id,
+            executor=executor,
+            request=request,
+            context=context,
+            tool_context=ToolExecutionContext(caller=caller),
+            stream_publisher=NoOpStreamPublisher(),
+            edited_calls=edited_calls,
+        )
+        if decision == "approve_with_edits":
+            expected_message = None
+            if edited_calls:
+                message_value = edited_calls[0].arguments.get("message")
+                if isinstance(message_value, str):
+                    expected_message = message_value
+            if expected_message is None:
+                expected_message = "edited"
+            if not SendNotificationHandler.sent_messages:
+                return False
+            last_sent = SendNotificationHandler.sent_messages[-1]
+            if last_sent.get("message") != expected_message:
+                return False
+        elif not SendNotificationHandler.sent_messages:
+            return False
+
+        if case.expected_outcome is None:
+            return response.finish_reason == "stop"
+        return answer_matches(
+            response.content,
+            case.expected_outcome,
+            case.expected_outcome_match,
+        )
+
+    async def _run_workflow_case(
+        self, case: EvalCase, *, start: float
+    ) -> EvalCaseResult:
+        if not self.settings.workflow_engine_enabled:
+            return EvalCaseResult(
+                case_id=case.id,
+                level="hitl",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="WORKFLOW_ENGINE_ENABLED=false",
+            )
+        if self.session is None:
+            return EvalCaseResult(
+                case_id=case.id,
+                level="hitl",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="Postgres not available (run from backend-python with DB up)",
+            )
+        if not await pgvector_available(self.session):
+            return EvalCaseResult(
+                case_id=case.id,
+                level="hitl",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="pgvector extension not available",
+            )
+
+        owner_id: uuid.UUID | None = None
+        try:
+            owner_id = await self._create_user()
+            manager = _build_hitl_eval_workflow_manager(
+                session=self.session,
+                settings=self.settings.model_copy(update={"hitl_enabled": True}),
+            )
+            definition = _workflow_definition_from_case(case, owner_id=owner_id)
+            created = await manager.create_definition(definition)
+            await self.session.commit()
+
+            run = await manager.start_run(
+                created.id,
+                owner_id=owner_id,
+                idempotency_key=f"eval-hitl-{case.id}-{uuid.uuid4()}",
+                trigger_input=case.trigger_input,
+                defer_schedule=True,
+            )
+            await self.session.commit()
+            manager.flush_deferred_run_schedules()
+            await _await_scheduled_run(manager)
+
+            paused = await manager.get_run(run.id, owner_id=owner_id)
+            if paused is None:
+                raise RuntimeError(f"Workflow run {run.id} not found after scheduling.")
+
+            if case.hitl_decision == "reject":
+                if paused.status is not RunStatus.WAITING_APPROVAL:
+                    raise RuntimeError(
+                        f"Expected waiting_approval before reject, got {paused.status}."
+                    )
+                with_executions = await manager.get_run_with_executions(
+                    run.id,
+                    owner_id=owner_id,
+                )
+                assert with_executions is not None
+                approval_execution = next(
+                    (
+                        execution
+                        for execution in with_executions[1]
+                        if execution.node_type is NodeType.APPROVAL
+                    ),
+                    None,
+                )
+                if approval_execution is None:
+                    raise RuntimeError(
+                        f"No approval node execution found for workflow run {run.id}."
+                    )
+                failed, _ = await manager.apply_decision(
+                    run.id,
+                    approval_execution.id,
+                    owner_id=owner_id,
+                    decision=ApprovalDecision.REJECTED,
+                    reason="eval reject",
+                )
+                terminal_status = failed.status.value
+            else:
+                if paused.status is not RunStatus.WAITING_APPROVAL:
+                    raise RuntimeError(
+                        f"Expected waiting_approval before decision, got {paused.status}."
+                    )
+                with_executions = await manager.get_run_with_executions(
+                    run.id,
+                    owner_id=owner_id,
+                )
+                assert with_executions is not None
+                approval_execution = next(
+                    (
+                        execution
+                        for execution in with_executions[1]
+                        if execution.node_type is NodeType.APPROVAL
+                    ),
+                    None,
+                )
+                if approval_execution is None:
+                    raise RuntimeError(
+                        f"No approval node execution found for workflow run {run.id}."
+                    )
+                edited_arguments = (
+                    dict(case.hitl_edited_arguments)
+                    if case.hitl_decision == "approve_with_edits"
+                    else None
+                )
+                _, _ = await manager.apply_decision(
+                    run.id,
+                    approval_execution.id,
+                    owner_id=owner_id,
+                    decision=ApprovalDecision.APPROVED,
+                    edited_arguments=edited_arguments,
+                )
+                manager.flush_deferred_run_schedules()
+                await _await_scheduled_run(manager)
+                final_run = await manager.get_run(run.id, owner_id=owner_id)
+                if final_run is None:
+                    raise RuntimeError(f"Workflow run {run.id} missing after decision.")
+                terminal_status = final_run.status.value
+
+            expected_status = case.expected_terminal_status or ""
+            passed = terminal_status == expected_status
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="hitl",
+                passed=passed,
+                latency_ms=latency_ms,
+                terminal_status=terminal_status,
+            )
+        except Exception as exc:
+            await self.session.rollback()
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="hitl",
+                passed=False,
+                latency_ms=latency_ms,
+                error=str(exc),
+            )
+        finally:
+            if owner_id is not None:
+                try:
+                    await _cleanup_eval_workflow_owner(self.session, owner_id)
+                except Exception:
+                    _logger.warning(
+                        "Eval HITL workflow owner cleanup failed",
+                        owner_id=str(owner_id),
+                        exc_info=True,
+                    )
+
+    async def _create_user(self) -> uuid.UUID:
+        if self.session is None:
+            raise RuntimeError("Postgres session is required for HITL workflow cases.")
+        user = await SqlUserStore(self.session).create(
+            sub=f"eval-hitl-{uuid.uuid4()}",
+            email=None,
+            name=None,
+            picture=None,
+        )
+        return user.id
+
+
+def _hitl_error_result(*, case_id: str, start: float, message: str) -> EvalCaseResult:
+    latency_ms = int((time.perf_counter() - start) * 1000)
+    return EvalCaseResult(
+        case_id=case_id,
+        level="hitl",
+        passed=False,
+        latency_ms=latency_ms,
+        error=message,
+    )
+
+
+def _hitl_eval_tool_registry() -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register(SEND_NOTIFICATION_TOOL_DEFINITION, SendNotificationHandler())
+    registry.register(ECHO_TOOL_DEFINITION, EchoToolHandler())
+    return registry
+
+
+def _hitl_agent_provider(case: EvalCase) -> _AgentEvalProvider:
+    tool_completions = [
+        ProviderToolCompletion(
+            content="Sending notification.",
+            tool_calls=[
+                ProviderToolCall(
+                    id="call-hitl-1",
+                    name=SEND_NOTIFICATION_TOOL_NAME,
+                    arguments={"message": "hello", "channel": "email"},
+                )
+            ],
+        ),
+        ProviderToolCompletion(
+            content=case.expected_outcome or "Notification sent.",
+            tool_calls=[],
+            finish_reason="stop",
+            usage=ProviderUsage(
+                prompt_tokens=1,
+                completion_tokens=1,
+                total_tokens=2,
+            ),
+        ),
+    ]
+    return _AgentEvalProvider(
+        tool_completions=tool_completions,
+        model=case.model or "gpt-4o-mini",
+        temperature=case.temperature or 0.7,
+    )
+
+
+def _edited_calls_from_case(case: EvalCase) -> list[ProposedToolCall] | None:
+    if case.hitl_decision != "approve_with_edits":
+        return None
+    if not case.hitl_edited_calls:
+        return [
+            ProposedToolCall(
+                name=SEND_NOTIFICATION_TOOL_NAME,
+                arguments={"message": "edited", "channel": "email"},
+                call_id="call-hitl-1",
+            )
+        ]
+    parsed: list[ProposedToolCall] = []
+    for index, raw in enumerate(case.hitl_edited_calls):
+        name = raw.get("name")
+        arguments = raw.get("arguments")
+        call_id = raw.get("call_id")
+        if not isinstance(name, str) or not isinstance(arguments, dict):
+            raise ValueError(f"Invalid hitl_edited_calls entry at index {index}.")
+        parsed.append(
+            ProposedToolCall(
+                name=name,
+                arguments=arguments,
+                call_id=str(call_id or f"call-hitl-{index + 1}"),
+            )
+        )
+    return parsed
+
+
+def _hitl_resume_executor(
+    *,
+    registry: ToolRegistry,
+    approval_service: AgentApprovalService,
+    provider: _AgentEvalProvider,
+    eval_settings: Settings,
+) -> AgentExecutor:
+    tool_executor = ToolExecutor(registry=registry, settings=eval_settings)
+    scratchpad_store = ScratchpadStore()
+    runner = ToolRunner(
+        tool_executor=tool_executor,
+        tool_registry=registry,
+        stream_publisher=NoOpStreamPublisher(),
+        hitl_enabled=True,
+        approval_policy=ApprovalPolicy(
+            required_tool_names=frozenset(eval_settings.hitl_required_tool_names)
+        ),
+        approval_service=approval_service,
+    )
+    return AgentExecutor(
+        planner=ReActPlanner(
+            provider=provider,
+            tool_registry=registry,
+            prompt_manager=create_prompt_manager(),
+            scratchpad_store=scratchpad_store,
+        ),
+        provider=provider,
+        tool_runner=runner,
+        stream_publisher=NoOpStreamPublisher(),
+        scratchpad_store=scratchpad_store,
+        prompt_manager=create_prompt_manager(),
+    )
+
+
+def _build_hitl_eval_workflow_manager(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+) -> WorkflowManager:
+    registry = _hitl_eval_tool_registry()
+    prompt_manager = create_prompt_manager()
+    tool_executor = ToolExecutor(registry=registry, settings=settings)
+    agent_runtime = create_default_agent(
+        settings=settings,
+        tool_registry=registry,
+        prompt_manager=prompt_manager,
+        tool_executor=tool_executor,
+    )
+    store = PostgresWorkflowStore(session=session, settings=settings)
+
+    def background_store_factory(
+        bg_session: AsyncSession,
+    ) -> PostgresWorkflowStore:
+        return PostgresWorkflowStore(session=bg_session, settings=settings)
+
+    return WorkflowManager(
+        store=store,
+        settings=settings,
+        node_executors={
+            NodeType.TASK: TaskNodeExecutor(tool_executor),
+            NodeType.LLM: LLMNodeExecutor(
+                prompt_manager=prompt_manager,
+                settings=settings,
+            ),
+            NodeType.AGENT: AgentNodeExecutor(agent_runtime, settings=settings),
+            NodeType.ROUTER: RouterNodeExecutor(ConditionEvaluator()),
+            NodeType.FORK: ForkNodeExecutor(
+                max_parallel_branches=settings.workflow_max_parallel_branches
+            ),
+            NodeType.JOIN: JoinNodeExecutor(),
+            NodeType.APPROVAL: ApprovalNodeExecutor(),
+        },
+        background_store_factory=background_store_factory,
+        tool_registry=registry,
+    )
 
 
 def _plugin_error_result(*, case_id: str, start: float, message: str) -> EvalCaseResult:

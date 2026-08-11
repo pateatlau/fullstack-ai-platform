@@ -10,7 +10,9 @@ from typing import Any, Literal
 
 import yaml
 
-EvalLevel = Literal["prompt", "retrieval", "e2e", "agent", "workflow", "plugin"]
+EvalLevel = Literal["prompt", "retrieval", "e2e", "agent", "workflow", "plugin", "hitl"]
+HitlSurface = Literal["agent", "workflow"]
+HitlDecision = Literal["approve", "approve_with_edits", "reject"]
 AnswerMatchMode = Literal["exact", "contains", "fuzzy"]
 PluginKind = Literal["tool", "prompt", "workflow"]
 
@@ -55,6 +57,10 @@ class EvalCase:
     plugin_tool_name: str | None = None
     plugin_tool_arguments: dict[str, object] = field(default_factory=dict)
     expected_tool_data: dict[str, object] | None = None
+    hitl_surface: HitlSurface | None = None
+    hitl_decision: HitlDecision | None = None
+    hitl_edited_calls: tuple[dict[str, object], ...] = ()
+    hitl_edited_arguments: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -151,6 +157,8 @@ def _parse_case(raw: dict[str, Any], *, index: int) -> EvalCase:
         return _parse_agent_case(raw, case_id=case_id)
     if level == "plugin":
         return _parse_plugin_case(raw, case_id=case_id)
+    if level == "hitl":
+        return _parse_hitl_case(raw, case_id=case_id)
     return _parse_workflow_case(raw, case_id=case_id)
 
 
@@ -364,6 +372,206 @@ def _parse_plugin_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
     )
 
 
+def _parse_hitl_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
+    surface = raw.get("hitl_surface")
+    if surface not in {"agent", "workflow"}:
+        raise EvalDatasetError(
+            f"Case '{case_id}': hitl_surface must be agent or workflow."
+        )
+    decision = raw.get("hitl_decision")
+    if decision not in {"approve", "approve_with_edits", "reject"}:
+        raise EvalDatasetError(
+            f"Case '{case_id}': hitl_decision must be approve, approve_with_edits, "
+            "or reject."
+        )
+
+    edited_calls_raw = raw.get("hitl_edited_calls", [])
+    if edited_calls_raw is None:
+        edited_calls_raw = []
+    if not isinstance(edited_calls_raw, list):
+        raise EvalDatasetError(
+            f"Case '{case_id}': hitl_edited_calls must be a list of mappings."
+        )
+    edited_calls = _parse_hitl_edited_calls(edited_calls_raw, case_id=case_id)
+
+    edited_arguments_raw = raw.get("hitl_edited_arguments", {})
+    if edited_arguments_raw is None:
+        edited_arguments_raw = {}
+    if not isinstance(edited_arguments_raw, dict):
+        raise EvalDatasetError(
+            f"Case '{case_id}': hitl_edited_arguments must be a mapping when provided."
+        )
+    edited_arguments = _parse_hitl_edited_arguments(
+        edited_arguments_raw, case_id=case_id
+    )
+
+    _validate_hitl_edit_fields(
+        case_id=case_id,
+        surface=surface,
+        decision=decision,
+        edited_calls=edited_calls,
+        edited_arguments=edited_arguments,
+    )
+
+    if surface == "agent":
+        goal = _require_str(raw, "goal", case_id=case_id)
+        instructions = raw.get("instructions")
+        if instructions is not None and not isinstance(instructions, str):
+            raise EvalDatasetError(
+                f"Case '{case_id}': instructions must be a string when provided."
+            )
+        expected_outcome = raw.get("expected_outcome")
+        if expected_outcome is not None and not isinstance(expected_outcome, str):
+            raise EvalDatasetError(
+                f"Case '{case_id}': expected_outcome must be a string when provided."
+            )
+        if decision != "reject" and expected_outcome is None:
+            raise EvalDatasetError(
+                f"Case '{case_id}': agent hitl approve cases require expected_outcome."
+            )
+        match_mode = raw.get("expected_outcome_match", "contains")
+        if match_mode not in {"exact", "contains", "fuzzy"}:
+            raise EvalDatasetError(
+                f"Case '{case_id}': expected_outcome_match must be exact, contains, "
+                "or fuzzy."
+            )
+        return EvalCase(
+            id=case_id,
+            level="hitl",
+            hitl_surface="agent",
+            hitl_decision=decision,  # type: ignore[arg-type]
+            goal=goal,
+            instructions=instructions,
+            expected_outcome=expected_outcome,
+            expected_outcome_match=match_mode,  # type: ignore[arg-type]
+            hitl_edited_calls=edited_calls,
+        )
+
+    workflow_case = _parse_workflow_case(raw, case_id=case_id)
+    return EvalCase(
+        id=workflow_case.id,
+        level="hitl",
+        hitl_surface="workflow",
+        hitl_decision=decision,  # type: ignore[arg-type]
+        workflow_definition=workflow_case.workflow_definition,
+        workflow_fixture=workflow_case.workflow_fixture,
+        trigger_input=workflow_case.trigger_input,
+        expected_terminal_status=workflow_case.expected_terminal_status,
+        hitl_edited_arguments=edited_arguments,
+    )
+
+
+def _parse_hitl_edited_calls(
+    raw: list[object], *, case_id: str
+) -> tuple[dict[str, object], ...]:
+    parsed: list[dict[str, object]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise EvalDatasetError(
+                f"Case '{case_id}': hitl_edited_calls[{index}] must be a mapping."
+            )
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise EvalDatasetError(
+                f"Case '{case_id}': hitl_edited_calls[{index}] requires a non-empty "
+                "string 'name'."
+            )
+        arguments = item.get("arguments")
+        if not isinstance(arguments, dict):
+            raise EvalDatasetError(
+                f"Case '{case_id}': hitl_edited_calls[{index}] requires an "
+                "'arguments' mapping."
+            )
+        call_id = item.get("call_id")
+        if call_id is not None and not isinstance(call_id, str):
+            raise EvalDatasetError(
+                f"Case '{case_id}': hitl_edited_calls[{index}].call_id must be a "
+                "string when provided."
+            )
+        entry: dict[str, object] = {"name": name, "arguments": arguments}
+        if call_id is not None:
+            entry["call_id"] = call_id
+        parsed.append(entry)
+    return tuple(parsed)
+
+
+def _parse_hitl_edited_arguments(
+    raw: dict[object, object], *, case_id: str
+) -> dict[str, object]:
+    parsed: dict[str, object] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not key.strip():
+            raise EvalDatasetError(
+                f"Case '{case_id}': hitl_edited_arguments keys must be non-empty "
+                "strings."
+            )
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            parsed[key] = value
+            continue
+        if isinstance(value, dict):
+            parsed[key] = _parse_hitl_edited_arguments(value, case_id=case_id)
+            continue
+        if isinstance(value, list) and all(
+            isinstance(item, (str, int, float, bool)) or item is None for item in value
+        ):
+            parsed[key] = value
+            continue
+        raise EvalDatasetError(
+            f"Case '{case_id}': hitl_edited_arguments['{key}'] must be a scalar, "
+            "mapping, or list of scalars."
+        )
+    return parsed
+
+
+def _validate_hitl_edit_fields(
+    *,
+    case_id: str,
+    surface: str,
+    decision: str,
+    edited_calls: tuple[dict[str, object], ...],
+    edited_arguments: dict[str, object],
+) -> None:
+    has_calls = bool(edited_calls)
+    has_args = bool(edited_arguments)
+
+    if decision != "approve_with_edits":
+        if has_calls:
+            raise EvalDatasetError(
+                f"Case '{case_id}': hitl_edited_calls are only allowed when "
+                "hitl_decision is approve_with_edits."
+            )
+        if has_args:
+            raise EvalDatasetError(
+                f"Case '{case_id}': hitl_edited_arguments are only allowed when "
+                "hitl_decision is approve_with_edits."
+            )
+        return
+
+    if surface == "agent":
+        if has_args:
+            raise EvalDatasetError(
+                f"Case '{case_id}': hitl_edited_arguments are not valid for agent "
+                "hitl_surface; use hitl_edited_calls."
+            )
+        if not has_calls:
+            raise EvalDatasetError(
+                f"Case '{case_id}': agent approve_with_edits cases require "
+                "hitl_edited_calls."
+            )
+        return
+
+    if has_calls:
+        raise EvalDatasetError(
+            f"Case '{case_id}': hitl_edited_calls are not valid for workflow "
+            "hitl_surface; use hitl_edited_arguments."
+        )
+    if not has_args:
+        raise EvalDatasetError(
+            f"Case '{case_id}': workflow approve_with_edits cases require "
+            "hitl_edited_arguments."
+        )
+
+
 def _parse_workflow_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
     inline_definition = raw.get("workflow_definition")
     workflow_fixture = raw.get("workflow_fixture")
@@ -491,9 +699,10 @@ def _require_level(raw: dict[str, Any], *, index: int) -> EvalLevel:
         "agent",
         "workflow",
         "plugin",
+        "hitl",
     }:
         raise EvalDatasetError(
             f"Case at index {index}: level must be prompt, retrieval, e2e, agent, "
-            "workflow, or plugin."
+            "workflow, plugin, or hitl."
         )
     return value  # type: ignore[return-value]

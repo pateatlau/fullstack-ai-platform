@@ -279,3 +279,79 @@ cases:
         - id: e1
           from_node_id: echo_step
           to_node_id: end
+
+  - id: hitl_agent_approve
+    level: hitl
+    hitl_surface: agent
+    hitl_decision: approve
+    goal: Send a notification to the team
+    expected_outcome: Notification sent.
+
+  - id: hitl_agent_approve_edits
+    level: hitl
+    hitl_surface: agent
+    hitl_decision: approve_with_edits
+    goal: Send a notification
+    hitl_edited_calls:
+      - name: send_notification
+        call_id: call-hitl-1
+        arguments:
+          message: edited-eval
+          channel: email
+    expected_outcome: Notification sent.
+
+  - id: hitl_agent_reject
+    level: hitl
+    hitl_surface: agent
+    hitl_decision: reject
+    goal: Send a notification
+
+  - id: hitl_workflow_approve_edits
+    level: hitl
+    hitl_surface: workflow
+    hitl_decision: approve_with_edits
+    expected_terminal_status: completed
+    trigger_input: {}
+    hitl_edited_arguments:
+      message: edited-workflow
+    workflow_fixture: hitl_approve_edits.yaml
+
+  - id: hitl_workflow_reject
+    level: hitl
+    hitl_surface: workflow
+    hitl_decision: reject
+    expected_terminal_status: failed
+    trigger_input: {}
+    workflow_definition:
+      name: HITL Reject Workflow
+      entry_node_id: start
+      nodes:
+        - id: start
+          type: task
+          config:
+            tool_name: echo
+            arguments_template:
+              message: prep
+        - id: approve
+          type: approval
+          config:
+            approved_edge_id: approved
+        - id: after
+          type: task
+          config:
+            tool_name: echo
+            arguments_template:
+              message: after
+        - id: end
+          type: terminal
+          config: {}
+      edges:
+        - id: e1
+          from_node_id: start
+          to_node_id: approve
+        - id: approved
+          from_node_id: approve
+          to_node_id: after
+        - id: e3
+          from_node_id: after
+          to_node_id: end
