@@ -2,7 +2,7 @@
 epic: v2-08
 title: Plugin Architecture
 status: in_progress
-version: 1.7
+version: 1.8.1
 depends_on: [v2-07]
 provides:
   [
@@ -853,11 +853,11 @@ _Copy from Epic 07 Phase 10 completion record._
 | Area                     | State                                                                   |
 | ------------------------ | ----------------------------------------------------------------------- |
 | Backend tests / coverage | 1691 passed, 89.21% `app/`                                              |
-| Frontend tests           | 281 passed (46 files); lint + build pass                                |
+| Frontend tests           | 290 passed (48 files); lint + build pass                                |
 | Integration tests        | Workflow **241** (207 package + 23 router + 11 workflow tool); observability router 15; streaming 26 |
 | Eval CLI                 | 15/15 `--level all`; regression check clean                             |
 | Observability            | Completed (Epic 07); `OBSERVABILITY_ENABLED` behind flag                |
-| Plugin Architecture      | Phases 0–8 complete — SDK, tool, prompt, workflow node, MCP server plugins, REST inventory API, plugin load observability, reference plugins, and plugin eval level implemented |
+| Plugin Architecture      | Phases 0–9 **implementation** complete — SDK, tool, prompt, workflow node, MCP server plugins, REST inventory API, plugin load observability, reference plugins, plugin eval level, and frontend plugin inventory page shipped; **Phase 10 validation pending** (incl. `PLUGINS_ENABLED=false` flag-off regression) |
 
 ---
 
@@ -874,7 +874,7 @@ _Copy from Epic 07 Phase 10 completion record._
 | 6     | Plugin REST API & Health        | S      | Completed   |
 | 7     | Plugin Observability            | S      | Completed   |
 | 8     | Reference Plugins & Eval Cases  | M      | Completed   |
-| 9     | Frontend Plugin Inventory       | S      | Not Started |
+| 9     | Frontend Plugin Inventory       | S      | Completed (impl) |
 | 10    | Validation & Release            | M      | Not Started |
 
 ---
@@ -1551,7 +1551,7 @@ Ship git-tracked reference plugins demonstrating each contribution kind and exte
 **Exit criteria**
 
 - [x] Reference plugin tests pass.
-- [ ] User confirmation to proceed to Phase 9.
+- [x] User confirmation to proceed to Phase 9.
 
 **Rollback**
 
@@ -1568,13 +1568,14 @@ Ship git-tracked reference plugins demonstrating each contribution kind and exte
 | Eval `--level plugin`     | ✅ 3 cases in `sample.yaml`; skipped when `PLUGINS_ENABLED=false`      |
 | README                    | ✅ Reference plugins + operator steps documented                         |
 | Phase 8 status            | ✅ Completed                                                           |
-| Phase 9 authorized        | ⬜ Pending user confirmation                                           |
+| Phase 9 authorized        | ✅ Completed                                                           |
 
 ---
 
 # Phase 9 — Frontend Plugin Inventory
 
 **Effort:** S
+**Status:** Completed (2026-08-11 — implementation; Phase 10 validation pending)
 
 **Objective**
 
@@ -1592,18 +1593,18 @@ Add a read-only Plugins page listing loaded plugins from the REST API.
 
 ## API Client
 
-- [ ] Fetch `GET /api/plugins` with auth headers.
-- [ ] Handle `503 feature_disabled` with friendly empty state.
+- [x] Fetch `GET /api/plugins` with auth headers.
+- [x] Handle `503 feature_disabled` with friendly empty state.
 
 ## UI
 
-- [ ] Table/card list: name, plugin_id, version, api_version, contributions, status, load duration, optional author/homepage links.
-- [ ] Failed plugins: show `failure.code` and safe diagnostic fields (e.g. API version mismatch).
-- [ ] Link from settings or admin nav (match existing Observability/Workflows patterns).
+- [x] Table/card list: name, plugin_id, version, api_version, contributions, status, load duration, optional author/homepage links.
+- [x] Failed plugins: show `failure.code` and safe diagnostic fields (e.g. API version mismatch).
+- [x] Link from settings or admin nav (match existing Observability/Workflows patterns).
 
 ## Testing
 
-- [ ] MSW/mock tests for list and disabled states.
+- [x] MSW/mock tests for list and disabled states.
 
 **Verify**
 
@@ -1616,12 +1617,25 @@ Add a read-only Plugins page listing loaded plugins from the REST API.
 
 **Exit criteria**
 
-- Frontend tests pass.
-- User confirmation to proceed to Phase 10.
+- [x] Frontend tests pass.
+- [ ] User confirmation to proceed to Phase 10.
 
 **Rollback**
 
 - Remove route and page.
+
+**Completion Record**
+
+| Metric                    | Result                                                                 |
+| ------------------------- | ---------------------------------------------------------------------- |
+| Lint                      | ✅ PASS                                                                |
+| Frontend tests            | ✅ 290 passed (48 files); build pass                                   |
+| `pluginsClient` tests     | ✅ 2 passed (`frontend/src/api/pluginsClient.test.ts`)               |
+| `PluginsPage` tests       | ✅ 7 passed (`frontend/src/pages/PluginsPage.test.tsx`)              |
+| Route + nav               | ✅ `/plugins` route; AppNav link gated on `plugins_enabled`            |
+| Phase 9 status            | ✅ Implementation complete                                             |
+| `PLUGINS_ENABLED=false` regression | ⬜ Pending Phase 10                                             |
+| Phase 10 authorized       | ⬜ Pending user confirmation                                           |
 
 ---
 
@@ -1801,3 +1815,5 @@ Execution of plugin tools and workflow nodes continues to emit existing `tool_sp
 | 1.5     | 2026-08-11 | Phase 6 complete: authenticated plugin inventory REST API (`GET /api/plugins`, `GET /api/plugins/{plugin_id}`), `PluginsStore`, health plugin counts. Phase status table, step checklists, exit criteria, and completion record updated. |
 | 1.6     | 2026-08-11 | Phase 7 complete: `plugin_span`, `record_plugin_load_outcome`, load counters (`plugins_loaded_total`, `plugin_load_failures_total`) with bounded `failure_code` label, `PluginLoader` instrumentation. Phase status table, step checklists, exit criteria, and completion record updated. |
 | 1.7     | 2026-08-11 | Phase 8 complete: git-tracked reference plugins (`echo-tool`, `echo-workflow-node`), `--level plugin` eval harness with skip policy, integration tests, README operator docs. Phase status table, step checklists, exit criteria, and completion record updated. |
+| 1.8     | 2026-08-11 | Phase 9 implementation complete: frontend plugin inventory page (`PluginsPage`, `pluginsClient`, `/plugins` route, AppNav link gated on `plugins_enabled`). Phase status table, step checklists, exit criteria, and completion record updated. Phase 10 validation (incl. `PLUGINS_ENABLED=false` regression) pending. |
+| 1.8.1   | 2026-08-11 | Clarify Phase 9 / epic baseline status: implementation complete vs Phase 10 validation pending (flag-off regression unchecked). Baseline, phase table, completion record, and changelog aligned. |

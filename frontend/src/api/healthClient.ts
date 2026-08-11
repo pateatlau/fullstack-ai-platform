@@ -11,6 +11,7 @@ export interface HealthResponse {
   memory_enabled: boolean
   workflow_engine_enabled: boolean
   observability_enabled: boolean
+  plugins_enabled: boolean
   capabilities?: {
     by_provider: Record<
       string,
