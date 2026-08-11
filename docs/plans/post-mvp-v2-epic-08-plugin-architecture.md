@@ -1491,9 +1491,9 @@ No other metric labels on these counters (`kind`, `status`, `contribution_kind`,
 | Metric                    | Result                                                                 |
 | ------------------------- | ---------------------------------------------------------------------- |
 | Lint                      | ✅ PASS                                                                |
-| Plugin observability tests | ✅ 8 passed (`tests/ai/plugins/test_plugin_observability.py`)         |
-| Observability suite       | ✅ 87 passed (`test_plugin_observability.py` + `tests/ai/observability/`) |
-| Plugin test suite         | ✅ 65 passed (`tests/ai/plugins/`)                                     |
+| Plugin observability tests | ✅ 9 passed (`tests/ai/plugins/test_plugin_observability.py` — 5 span + 4 metrics) |
+| Observability suite       | ✅ 88 passed (`test_plugin_observability.py` + `tests/ai/observability/`) |
+| Plugin test suite         | ✅ 66 passed (`tests/ai/plugins/`)                                     |
 | Phase 7 status            | ✅ Completed                                                           |
 | Phase 8 authorized        | ⬜ Pending user confirmation                                           |
 

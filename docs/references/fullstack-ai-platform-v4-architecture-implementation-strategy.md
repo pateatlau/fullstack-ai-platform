@@ -141,6 +141,17 @@ Support live interaction with user screens and cameras.
 - Guided assistance
 - Visual automation
 
+### Privacy & Governance
+
+Inherits the V3 **Advanced Governance** contract (Epic 10: agent authorization, sandboxing, approval chains, policy enforcement, audit trails). **Screen sharing and live camera input must not be enabled** until the following privacy controls are defined and enforced:
+
+- **User consent** — explicit opt-in before capture starts; scope covers surface (screen region vs full display), camera, and session duration
+- **Access control** — RBAC/policy gates on who may initiate, view, or process captures
+- **Retention** — maximum storage duration and purpose limitation for frames, streams, and derived artifacts
+- **Deletion** — user-initiated and policy-driven purge of raw captures and derived indexes
+- **Redaction** — sensitive regions and content excluded from logs, spans, metrics, and API responses
+- **Audit** — immutable trail of consent grants, capture sessions, access, and deletion events
+
 ---
 
 # Epic 7 – Multimodal Memory
@@ -156,6 +167,17 @@ Persist and retrieve knowledge across all supported modalities.
 - Video memory
 - Document memory
 - Cross-modal retrieval
+
+### Privacy & Governance
+
+Inherits the V3 **Advanced Governance** contract (Epic 10). **Persistent multimodal memory must not be enabled** until the following privacy controls are defined and enforced:
+
+- **User consent** — explicit opt-in before storing modality-specific artifacts; clear disclosure of what is persisted and why
+- **Access control** — RBAC/policy gates on read, write, and cross-modal retrieval paths
+- **Retention** — per-modality and per-tenant TTLs; purpose limitation on indexed embeddings and source artifacts
+- **Deletion** — user-initiated and policy-driven purge across raw stores, embeddings, and retrieval indexes
+- **Redaction** — sensitive content stripped from memory payloads, logs, spans, and API responses
+- **Audit** — immutable trail of consent, writes, reads, exports, and deletion events
 
 ---
 
