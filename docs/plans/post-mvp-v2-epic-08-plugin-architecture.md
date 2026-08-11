@@ -1,8 +1,8 @@
 ---
 epic: v2-08
 title: Plugin Architecture
-status: in_progress
-version: 1.8.1
+status: completed
+version: 1.9
 depends_on: [v2-07]
 provides:
   [
@@ -852,12 +852,12 @@ _Copy from Epic 07 Phase 10 completion record._
 
 | Area                     | State                                                                   |
 | ------------------------ | ----------------------------------------------------------------------- |
-| Backend tests / coverage | 1691 passed, 89.21% `app/`                                              |
-| Frontend tests           | 290 passed (48 files); lint + build pass                                |
-| Integration tests        | Workflow **241** (207 package + 23 router + 11 workflow tool); observability router 15; streaming 26 |
-| Eval CLI                 | 15/15 `--level all`; regression check clean                             |
-| Observability            | Completed (Epic 07); `OBSERVABILITY_ENABLED` behind flag                |
-| Plugin Architecture      | Phases 0–9 **implementation** complete — SDK, tool, prompt, workflow node, MCP server plugins, REST inventory API, plugin load observability, reference plugins, plugin eval level, and frontend plugin inventory page shipped; **Phase 10 validation pending** (incl. `PLUGINS_ENABLED=false` flag-off regression) |
+| Backend tests / coverage | **1778 passed**, **89.17%** `app/` (Phase 10)                              |
+| Frontend tests           | **291 passed** (48 files); lint + build pass (Phase 10)                    |
+| Integration tests        | Workflow + MCP + plugins router **408 passed** (Phase 10 spot check)       |
+| Eval CLI                 | 15/15 `--level all`; 3/3 `--level plugin`; regression check clean (Phase 10) |
+| Observability            | Completed (Epic 07); `OBSERVABILITY_ENABLED` behind flag                   |
+| Plugin Architecture      | Phases 0–10 **Completed** — full validation + release summary published      |
 
 ---
 
@@ -874,8 +874,8 @@ _Copy from Epic 07 Phase 10 completion record._
 | 6     | Plugin REST API & Health        | S      | Completed   |
 | 7     | Plugin Observability            | S      | Completed   |
 | 8     | Reference Plugins & Eval Cases  | M      | Completed   |
-| 9     | Frontend Plugin Inventory       | S      | Completed (impl) |
-| 10    | Validation & Release            | M      | Not Started |
+| 9     | Frontend Plugin Inventory       | S      | Completed   |
+| 10    | Validation & Release            | M      | Completed   |
 
 ---
 
@@ -1575,7 +1575,7 @@ Ship git-tracked reference plugins demonstrating each contribution kind and exte
 # Phase 9 — Frontend Plugin Inventory
 
 **Effort:** S
-**Status:** Completed (2026-08-11 — implementation; Phase 10 validation pending)
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1618,7 +1618,7 @@ Add a read-only Plugins page listing loaded plugins from the REST API.
 **Exit criteria**
 
 - [x] Frontend tests pass.
-- [ ] User confirmation to proceed to Phase 10.
+- [x] User confirmation to proceed to Phase 10.
 
 **Rollback**
 
@@ -1629,19 +1629,20 @@ Add a read-only Plugins page listing loaded plugins from the REST API.
 | Metric                    | Result                                                                 |
 | ------------------------- | ---------------------------------------------------------------------- |
 | Lint                      | ✅ PASS                                                                |
-| Frontend tests            | ✅ 290 passed (48 files); build pass                                   |
+| Frontend tests            | ✅ 291 passed (48 files); build pass (Phase 10)                        |
 | `pluginsClient` tests     | ✅ 2 passed (`frontend/src/api/pluginsClient.test.ts`)               |
 | `PluginsPage` tests       | ✅ 7 passed (`frontend/src/pages/PluginsPage.test.tsx`)              |
 | Route + nav               | ✅ `/plugins` route; AppNav link gated on `plugins_enabled`            |
-| Phase 9 status            | ✅ Implementation complete                                             |
-| `PLUGINS_ENABLED=false` regression | ⬜ Pending Phase 10                                             |
-| Phase 10 authorized       | ⬜ Pending user confirmation                                           |
+| Phase 9 status            | ✅ Completed                                                           |
+| `PLUGINS_ENABLED=false` regression | ✅ 1778 passed (Phase 10)                                     |
+| Phase 10 authorized       | ✅ Completed                                                           |
 
 ---
 
 # Phase 10 — Validation & Release
 
 **Effort:** M
+**Status:** Completed (2026-08-11 — see [post-mvp-v2-epic8-release-summary.md](../releases/post-mvp-v2-epic8-release-summary.md))
 
 **Objective**
 
@@ -1657,16 +1658,16 @@ Full-platform validation, flag-off regression, release summary, and epic complet
 
 ## Validation
 
-- [ ] Full backend test suite + coverage ≥80% on `app/ai/plugins/`.
-- [ ] Frontend tests + build.
-- [ ] Integration tests (workflow, tool, MCP, plugins router).
-- [ ] Eval suite + regression check.
-- [ ] Flag-off regression: entire suite with `PLUGINS_ENABLED=false`.
+- [x] Full backend test suite + coverage ≥80% on `app/ai/plugins/`.
+- [x] Frontend tests + build.
+- [x] Integration tests (workflow, tool, MCP, plugins router).
+- [x] Eval suite + regression check.
+- [x] Flag-off regression: entire suite with `PLUGINS_ENABLED=false`.
 
 ## Documentation
 
-- [ ] Publish release summary.
-- [ ] Update `backend-python/.env.example` with plugin settings.
+- [x] Publish release summary.
+- [x] Update `backend-python/.env.example` with plugin settings.
 
 **Verify**
 
@@ -1696,13 +1697,15 @@ Full-platform validation, flag-off regression, release summary, and epic complet
 
 | Metric                    | Result |
 | ------------------------- | ------ |
-| Backend Tests             | _TBD_  |
-| Frontend Tests            | _TBD_  |
-| Integration Tests         | _TBD_  |
-| Eval Suite                | _TBD_  |
-| Feature Flag Regression   | _TBD_  |
-| Release Summary Published | _TBD_  |
-| Epic Status               | _TBD_  |
+| Backend Tests             | ✅ 1778 passed, 89.17% `app/` coverage |
+| Plugin package coverage   | ✅ 91% on `app/ai/plugins/` |
+| Frontend Tests            | ✅ 291 passed (48 files); build pass |
+| Integration Tests         | ✅ 408 passed (workflow + MCP + plugins router spot check) |
+| Eval Suite                | ✅ 15/15 `--level all`; 3/3 `--level plugin`; regression clean |
+| Feature Flag Regression   | ✅ 1778 passed with `PLUGINS_ENABLED=false` |
+| Release Summary Published | ✅ [post-mvp-v2-epic8-release-summary.md](../releases/post-mvp-v2-epic8-release-summary.md) |
+| Epic Status               | ✅ Completed |
+| Epic 09 authorization     | ⬜ Pending user confirmation |
 
 ---
 
@@ -1758,15 +1761,15 @@ Execution of plugin tools and workflow nodes continues to emit existing `tool_sp
 
 # Definition of Done
 
-- [ ] All Part I architectural invariants preserved.
-- [ ] Public APIs frozen after Phase 1.
-- [ ] Tool, prompt, workflow node, and MCP plugin kinds operational.
-- [ ] Version checking against `PLUGIN_API_VERSION` enforced.
-- [ ] Plugin REST API and frontend inventory page operational.
-- [ ] Reference plugins and eval coverage shipped.
-- [ ] `PLUGINS_ENABLED=false` preserves Epic 07 behaviour.
-- [ ] Backend coverage ≥80% on `app/ai/plugins/`.
-- [ ] Release summary published.
+- [x] All Part I architectural invariants preserved.
+- [x] Public APIs frozen after Phase 1.
+- [x] Tool, prompt, workflow node, and MCP plugin kinds operational.
+- [x] Version checking against `PLUGIN_API_VERSION` enforced.
+- [x] Plugin REST API and frontend inventory page operational.
+- [x] Reference plugins and eval coverage shipped.
+- [x] `PLUGINS_ENABLED=false` preserves Epic 07 behaviour.
+- [x] Backend coverage ≥80% on `app/ai/plugins/`.
+- [x] Release summary published.
 - [ ] User authorizes Epic 09.
 
 ---
@@ -1817,3 +1820,4 @@ Execution of plugin tools and workflow nodes continues to emit existing `tool_sp
 | 1.7     | 2026-08-11 | Phase 8 complete: git-tracked reference plugins (`echo-tool`, `echo-workflow-node`), `--level plugin` eval harness with skip policy, integration tests, README operator docs. Phase status table, step checklists, exit criteria, and completion record updated. |
 | 1.8     | 2026-08-11 | Phase 9 implementation complete: frontend plugin inventory page (`PluginsPage`, `pluginsClient`, `/plugins` route, AppNav link gated on `plugins_enabled`). Phase status table, step checklists, exit criteria, and completion record updated. Phase 10 validation (incl. `PLUGINS_ENABLED=false` regression) pending. |
 | 1.8.1   | 2026-08-11 | Clarify Phase 9 / epic baseline status: implementation complete vs Phase 10 validation pending (flag-off regression unchecked). Baseline, phase table, completion record, and changelog aligned. |
+| 1.9     | 2026-08-11 | Phase 10 complete: full validation gates (1778 backend, 291 frontend, eval 15/15 + plugin 3/3, flag-off parity); release summary published; `.env.example` plugin operator docs finalized. Epic status → `completed`. Part II only. |
