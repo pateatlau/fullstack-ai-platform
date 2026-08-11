@@ -441,6 +441,34 @@ class FakeChatStore:
         if chat_session is not None:
             chat_session.last_message_at = datetime.datetime.now(datetime.timezone.utc)
 
+    async def get_message(self, message_id: uuid.UUID) -> ChatMessage | None:
+        return next((m for m in self.messages if m.id == message_id), None)
+
+    async def update_message(
+        self,
+        message_id: uuid.UUID,
+        *,
+        content: str | None = None,
+        status: str | None = None,
+        finish_reason: str | None = None,
+        pending_approval_id: uuid.UUID | None = None,
+        clear_pending_approval: bool = False,
+    ) -> ChatMessage | None:
+        message = await self.get_message(message_id)
+        if message is None:
+            return None
+        if content is not None:
+            message.content = content
+        if status is not None:
+            message.status = status
+        if finish_reason is not None:
+            message.finish_reason = finish_reason
+        if clear_pending_approval:
+            message.pending_approval_id = None
+        elif pending_approval_id is not None:
+            message.pending_approval_id = pending_approval_id
+        return message
+
     async def update_title(self, session_id: uuid.UUID, title: str) -> None:
         chat_session = self.sessions.get(session_id)
         if chat_session is not None:

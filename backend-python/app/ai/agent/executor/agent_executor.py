@@ -249,6 +249,252 @@ class AgentExecutor:
             await self._publisher.close()
             self._scratchpad_store.remove(context.execution_id)
 
+    async def resume_from_approval(
+        self,
+        request: AgentRequest,
+        context: AgentContext,
+        *,
+        scratchpad: Scratchpad,
+        state: AgentExecutionState,
+        tool_context: ToolExecutionContext,
+        tool_results: AggregatedToolResults,
+        last_planner_content: str | None = None,
+    ) -> AgentResponse:
+        """Continue a paused turn after approved tool execution (Epic 09 Phase 3)."""
+        provider_name = _provider_name_from_request(request)
+
+        try:
+            state = AgentStateManager.transition(
+                state,
+                AgentExecutionStatus.PLANNING,
+            )
+            state = AgentStateManager.transition(
+                state,
+                AgentExecutionStatus.EXECUTING,
+            )
+
+            resume_plan = ExecutionPlan(
+                steps=[
+                    PlannedStep(
+                        step_id="resume-post-approval",
+                        action=StepAction.TOOL_CALL,
+                        tool_calls=[],
+                    )
+                ],
+                iteration=state.current_iteration,
+            )
+            state, should_finalize, retry_plan = await self._maybe_reflect(
+                request=request,
+                context=context,
+                state=state,
+                scratchpad=scratchpad,
+                tool_results=tool_results,
+                llm_content=last_planner_content,
+                last_tool_plan=resume_plan,
+            )
+            if retry_plan is not None:
+                state, retry_results = await self._execute_tool_plan(
+                    retry_plan,
+                    context=context,
+                    state=state,
+                    tool_context=tool_context,
+                    scratchpad=scratchpad,
+                    request=request,
+                    provider_name=provider_name,
+                )
+                if retry_results is not None:
+                    tool_results = retry_results
+            if should_finalize:
+                finalize_plan = ExecutionPlan(
+                    steps=[
+                        PlannedStep(
+                            step_id=f"finalize-reflect-{state.current_iteration}",
+                            action=StepAction.FINALIZE,
+                            reasoning=last_planner_content,
+                        )
+                    ],
+                    iteration=state.current_iteration,
+                    is_final=True,
+                )
+                return await self._finalize_and_complete(
+                    finalize_plan,
+                    request=request,
+                    context=context,
+                    state=state,
+                    scratchpad=scratchpad,
+                    last_planner_content=last_planner_content,
+                )
+
+            if state.status != AgentExecutionStatus.PLANNING:
+                state = AgentStateManager.transition(
+                    state,
+                    AgentExecutionStatus.PLANNING,
+                )
+
+            while state.has_remaining_iterations():
+                iteration_start = time.perf_counter()
+                with agent_span("iteration") as iteration_span:
+                    state = AgentStateManager.begin_iteration(state)
+                    iteration_index = state.current_iteration - 1
+                    tool_calls_count = 0
+                    await self._publisher.publish(
+                        AgentStreamEvent.planning(
+                            context.execution_id,
+                            iteration=iteration_index,
+                        )
+                    )
+
+                    plan = await self._planner.plan_next(
+                        request,
+                        context,
+                        iteration=iteration_index,
+                    )
+                    if plan.steps:
+                        last_planner_content = plan.steps[0].reasoning
+
+                    if plan.is_final:
+                        state = AgentStateManager.transition(
+                            state,
+                            AgentExecutionStatus.EXECUTING,
+                        )
+                        response = await self._finalize_and_complete(
+                            plan,
+                            request=request,
+                            context=context,
+                            state=state,
+                            scratchpad=scratchpad,
+                            last_planner_content=last_planner_content,
+                        )
+                        record_agent_iteration_attributes(
+                            iteration_span,
+                            iteration_index=iteration_index,
+                            tool_calls_count=tool_calls_count,
+                            latency_ms=elapsed_ms_since(iteration_start),
+                            finish_reason=response.finish_reason,
+                        )
+                        return response
+
+                    state = AgentStateManager.transition(
+                        state,
+                        AgentExecutionStatus.EXECUTING,
+                    )
+                    state, plan_results = await self._execute_tool_plan(
+                        plan,
+                        context=context,
+                        state=state,
+                        tool_context=tool_context,
+                        scratchpad=scratchpad,
+                        request=request,
+                        provider_name=provider_name,
+                    )
+                    if plan_results is not None:
+                        tool_results = plan_results
+                    tool_calls_count += _count_tool_calls(plan_results)
+                    state, should_finalize, retry_plan = await self._maybe_reflect(
+                        request=request,
+                        context=context,
+                        state=state,
+                        scratchpad=scratchpad,
+                        tool_results=tool_results,
+                        llm_content=last_planner_content,
+                        last_tool_plan=plan,
+                    )
+                    if retry_plan is not None:
+                        state, retry_results = await self._execute_tool_plan(
+                            retry_plan,
+                            context=context,
+                            state=state,
+                            tool_context=tool_context,
+                            scratchpad=scratchpad,
+                            request=request,
+                            provider_name=provider_name,
+                        )
+                        if retry_results is not None:
+                            tool_results = retry_results
+                        tool_calls_count += _count_tool_calls(retry_results)
+                    if should_finalize:
+                        finalize_plan = ExecutionPlan(
+                            steps=[
+                                PlannedStep(
+                                    step_id=f"finalize-reflect-{state.current_iteration}",
+                                    action=StepAction.FINALIZE,
+                                    reasoning=last_planner_content,
+                                )
+                            ],
+                            iteration=state.current_iteration,
+                            is_final=True,
+                        )
+                        response = await self._finalize_and_complete(
+                            finalize_plan,
+                            request=request,
+                            context=context,
+                            state=state,
+                            scratchpad=scratchpad,
+                            last_planner_content=last_planner_content,
+                        )
+                        record_agent_iteration_attributes(
+                            iteration_span,
+                            iteration_index=iteration_index,
+                            tool_calls_count=tool_calls_count,
+                            latency_ms=elapsed_ms_since(iteration_start),
+                            finish_reason=response.finish_reason,
+                        )
+                        return response
+                    if state.status != AgentExecutionStatus.PLANNING:
+                        state = AgentStateManager.transition(
+                            state,
+                            AgentExecutionStatus.PLANNING,
+                        )
+
+                    record_agent_iteration_attributes(
+                        iteration_span,
+                        iteration_index=iteration_index,
+                        tool_calls_count=tool_calls_count,
+                        latency_ms=elapsed_ms_since(iteration_start),
+                    )
+
+            limit_plan = build_iteration_limit_plan(iteration=state.current_iteration)
+            state = AgentStateManager.mark_iteration_limit_reached(state)
+            state = AgentStateManager.transition(
+                state,
+                AgentExecutionStatus.EXECUTING,
+            )
+            return await self._finalize_and_complete(
+                limit_plan,
+                request=request,
+                context=context,
+                state=state,
+                scratchpad=scratchpad,
+                last_planner_content=last_planner_content,
+            )
+        except AgentApprovalPauseError as exc:
+            return self._waiting_approval_response(exc, state)
+        except AgentError as exc:
+            await self._publisher.publish(
+                AgentStreamEvent.error(
+                    context.execution_id,
+                    code="agent_error",
+                    message=str(exc),
+                )
+            )
+            raise
+        except Exception:
+            _logger.exception(
+                "Agent execution failed during approval resume",
+                execution_id=context.execution_id,
+            )
+            await self._publisher.publish(
+                AgentStreamEvent.error(
+                    context.execution_id,
+                    code="agent_error",
+                    message="Agent execution failed.",
+                )
+            )
+            raise
+        finally:
+            await self._publisher.close()
+            self._scratchpad_store.remove(context.execution_id)
+
     async def execute_plan(
         self,
         plan: ExecutionPlan,

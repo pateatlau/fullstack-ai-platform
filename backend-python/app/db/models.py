@@ -751,3 +751,38 @@ class AgentToolApprovalRecord(Base):
         Index("ix_agent_tool_approvals_owner_status", "owner_id", "status"),
         Index("ix_agent_tool_approvals_session_id", "session_id"),
     )
+
+
+class ApprovalRevisionRecord(Base):
+    """Append-only edit history for a pending approval (Epic 09)."""
+
+    __tablename__ = "approval_revisions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    approval_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    approval_kind: Mapped[str] = mapped_column(nullable=False)
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    edited_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    edited_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
+    )
+    edited_payload: Mapped[object] = mapped_column(JSONB, nullable=False)
+    note: Mapped[str | None] = mapped_column(nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "approval_kind IN ('agent_tool', 'workflow_node')",
+            name="approval_revision_kind_valid",
+        ),
+        UniqueConstraint(
+            "approval_id",
+            "approval_kind",
+            "revision_number",
+            name="uq_approval_revisions_approval_kind_number",
+        ),
+        Index("ix_approval_revisions_approval_id_kind", "approval_id", "approval_kind"),
+    )

@@ -224,6 +224,35 @@ class SqlChatStore:
             .values(last_message_at=func.now())
         )
 
+    async def get_message(self, message_id: uuid.UUID) -> ChatMessage | None:
+        return await self._session.get(ChatMessage, message_id)
+
+    async def update_message(
+        self,
+        message_id: uuid.UUID,
+        *,
+        content: str | None = None,
+        status: str | None = None,
+        finish_reason: str | None = None,
+        pending_approval_id: uuid.UUID | None = None,
+        clear_pending_approval: bool = False,
+    ) -> ChatMessage | None:
+        message = await self._session.get(ChatMessage, message_id)
+        if message is None:
+            return None
+        if content is not None:
+            message.content = content
+        if status is not None:
+            message.status = status
+        if finish_reason is not None:
+            message.finish_reason = finish_reason
+        if clear_pending_approval:
+            message.pending_approval_id = None
+        elif pending_approval_id is not None:
+            message.pending_approval_id = pending_approval_id
+        await self._session.flush()
+        return message
+
     async def update_title(self, session_id: uuid.UUID, title: str) -> None:
         await self._session.execute(
             update(ChatSession).where(ChatSession.id == session_id).values(title=title)

@@ -113,6 +113,19 @@ class ChatStore(Protocol):
 
     async def mark_last_message_at(self, session_id: uuid.UUID) -> None: ...
 
+    async def update_message(
+        self,
+        message_id: uuid.UUID,
+        *,
+        content: str | None = None,
+        status: str | None = None,
+        finish_reason: str | None = None,
+        pending_approval_id: uuid.UUID | None = None,
+        clear_pending_approval: bool = False,
+    ) -> ChatMessage | None: ...
+
+    async def get_message(self, message_id: uuid.UUID) -> ChatMessage | None: ...
+
     async def update_title(self, session_id: uuid.UUID, title: str) -> None: ...
 
     async def list_messages_after_seq(

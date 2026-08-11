@@ -31,6 +31,7 @@ from app.middleware.correlation_id import correlation_id_middleware
 from app.middleware.rate_limit import rate_limit_middleware
 from app.routers import (
     auth,
+    approvals,
     chat,
     documents,
     health,
@@ -126,6 +127,7 @@ app = FastAPI(title="Chatbot Backend", version="0.1.0", lifespan=lifespan)
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(chat.router)
+app.include_router(approvals.router)
 app.include_router(documents.router)
 app.include_router(rag.router)
 app.include_router(memory.router)
