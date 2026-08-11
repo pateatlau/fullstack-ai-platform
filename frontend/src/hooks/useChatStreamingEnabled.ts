@@ -15,6 +15,7 @@ export interface ChatHealthFlags {
   memoryEnabled: boolean
   workflowEngineEnabled: boolean
   observabilityEnabled: boolean
+  pluginsEnabled: boolean
   healthLoading: boolean
   capabilitiesByProvider: Partial<Record<ProviderName, ProviderCapabilityFlags>>
 }
@@ -33,6 +34,7 @@ export function useChatStreamingEnabled(): ChatHealthFlags {
   const [memoryEnabled, setMemoryEnabled] = useState(false)
   const [workflowEngineEnabled, setWorkflowEngineEnabled] = useState(false)
   const [observabilityEnabled, setObservabilityEnabled] = useState(false)
+  const [pluginsEnabled, setPluginsEnabled] = useState(false)
   const [healthLoading, setHealthLoading] = useState(true)
   const [capabilitiesByProvider, setCapabilitiesByProvider] =
     useState<Partial<Record<ProviderName, ProviderCapabilityFlags>>>(DEFAULT_CAPABILITIES)
@@ -50,6 +52,7 @@ export function useChatStreamingEnabled(): ChatHealthFlags {
           setMemoryEnabled(health.memory_enabled)
           setWorkflowEngineEnabled(health.workflow_engine_enabled)
           setObservabilityEnabled(health.observability_enabled)
+          setPluginsEnabled(health.plugins_enabled ?? false)
           setCapabilitiesByProvider(
             (health.capabilities?.by_provider as
               Partial<Record<ProviderName, ProviderCapabilityFlags>> | undefined) ??
@@ -78,6 +81,7 @@ export function useChatStreamingEnabled(): ChatHealthFlags {
     memoryEnabled,
     workflowEngineEnabled,
     observabilityEnabled,
+    pluginsEnabled,
     healthLoading,
     capabilitiesByProvider,
   }

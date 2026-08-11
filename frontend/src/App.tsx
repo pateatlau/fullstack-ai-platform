@@ -7,6 +7,7 @@ import { MemorySettingsPage } from './pages/MemorySettingsPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { WorkflowsPage } from './pages/WorkflowsPage'
 import { ObservabilityPage } from './pages/ObservabilityPage'
+import { PluginsPage } from './pages/PluginsPage'
 
 function App() {
   return (
@@ -44,6 +45,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <ObservabilityPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/plugins"
+              element={
+                <ProtectedRoute>
+                  <PluginsPage />
                 </ProtectedRoute>
               }
             />

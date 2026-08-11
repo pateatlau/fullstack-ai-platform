@@ -9,6 +9,7 @@ export function jsonHealthResponse(
   memoryEnabled = false,
   workflowEngineEnabled = false,
   observabilityEnabled = false,
+  pluginsEnabled = false,
 ): Response {
   return new Response(
     JSON.stringify({
@@ -22,6 +23,7 @@ export function jsonHealthResponse(
       memory_enabled: memoryEnabled,
       workflow_engine_enabled: workflowEngineEnabled,
       observability_enabled: observabilityEnabled,
+      plugins_enabled: pluginsEnabled,
       capabilities: {
         by_provider: {
           openai: { supports_streaming: true, supports_tool_calling: true },
@@ -49,6 +51,7 @@ export function withChatPageFetchStubs(
     memoryEnabled?: boolean
     workflowEngineEnabled?: boolean
     observabilityEnabled?: boolean
+    pluginsEnabled?: boolean
   },
 ): ReturnType<typeof vi.fn> {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -64,6 +67,7 @@ export function withChatPageFetchStubs(
         options?.memoryEnabled ?? false,
         options?.workflowEngineEnabled ?? false,
         options?.observabilityEnabled ?? false,
+        options?.pluginsEnabled ?? false,
       )
     }
 
