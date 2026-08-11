@@ -52,6 +52,7 @@ async def register_mcp_tools(
     mcp_registry: "McpServerRegistry",
     settings: Settings,
     permission_policy: "McpPermissionPolicy | None" = None,
+    extra_servers: list[dict[str, Any]] | None = None,
 ) -> None:
     """Register MCP tools from configured servers (Phase 8).
 
@@ -79,10 +80,20 @@ async def register_mcp_tools(
 
     # Early return if MCP is disabled
     if not settings.mcp_enabled:
+        if extra_servers:
+            logger.debug(
+                "MCP integration disabled; skipping plugin-declared MCP servers",
+                extra={"plugin_server_count": len(extra_servers)},
+            )
         logger.debug("MCP integration disabled; skipping MCP tool registration")
         return
 
-    if not settings.mcp_servers:
+    server_configs = _merge_mcp_server_configs(
+        env_servers=list(settings.mcp_servers or []),
+        plugin_servers=extra_servers or [],
+    )
+
+    if not server_configs:
         logger.info("No MCP servers configured; skipping MCP tool registration")
         return
 
@@ -91,7 +102,7 @@ async def register_mcp_tools(
         extra={
             "mcp_enabled": settings.mcp_enabled,
             "mcp_spec_version": MCP_SPEC_VERSION,
-            "server_count": len(settings.mcp_servers),
+            "server_count": len(server_configs),
         },
     )
 
@@ -101,7 +112,7 @@ async def register_mcp_tools(
     failed_server_count = 0
     skipped_tool_count = 0
 
-    for server_config_dict in settings.mcp_servers:
+    for server_config_dict in server_configs:
         try:
             # Parse McpConnectionConfig from dict (immutable after startup)
             config = _parse_server_config(server_config_dict)
@@ -247,6 +258,40 @@ async def register_mcp_tools(
             "cached_server_count": len(discovery_cache),
         },
     )
+
+
+def _merge_mcp_server_configs(
+    *,
+    env_servers: list[dict[str, Any]],
+    plugin_servers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge env and plugin MCP configs; env wins on duplicate server names."""
+    merged = list(env_servers)
+    env_names = {
+        server.get("name")
+        for server in env_servers
+        if isinstance(server, dict) and isinstance(server.get("name"), str)
+    }
+    merged_names = set(env_names)
+
+    for plugin_server in plugin_servers:
+        server_name = plugin_server.get("name", "<unknown>")
+        if server_name in env_names:
+            logger.warning(
+                "Plugin MCP server skipped; env config wins on name conflict",
+                extra={"server_name": server_name},
+            )
+            continue
+        if server_name in merged_names:
+            logger.warning(
+                "Duplicate plugin MCP server name; skipping",
+                extra={"server_name": server_name},
+            )
+            continue
+        merged.append(plugin_server)
+        merged_names.add(server_name)
+
+    return merged
 
 
 def _parse_server_config(config_dict: dict[str, Any]) -> "McpConnectionConfig":

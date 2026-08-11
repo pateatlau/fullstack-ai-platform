@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+from typing import Any
+
+from app.ai.mcp.config import McpConnectionConfig
 from app.ai.plugins.manifest import PluginManifest, manifest_identity_fields
 from app.ai.plugins.models import (
     PluginContributionKind,
@@ -11,12 +15,15 @@ from app.ai.plugins.models import (
     PluginStatus,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class PluginRegistry:
     """Process-wide plugin load state (immutable after startup load)."""
 
     def __init__(self) -> None:
         self._records: list[PluginRecord] = []
+        self._mcp_servers: list[dict[str, Any]] = []
 
     def list_records(self) -> list[PluginRecord]:
         return list(self._records)
@@ -101,5 +108,23 @@ class PluginRegistry:
         self._records.append(record)
         return record
 
+    def add_mcp_servers(self, configs: list[McpConnectionConfig]) -> None:
+        """Append validated MCP server configs from a successfully loaded plugin."""
+        existing_names = {server["name"] for server in self._mcp_servers}
+        for config in configs:
+            if config.name in existing_names:
+                logger.warning(
+                    "Duplicate plugin MCP server name; skipping",
+                    extra={"server_name": config.name},
+                )
+                continue
+            self._mcp_servers.append(config.to_dict())
+            existing_names.add(config.name)
+
+    def list_mcp_servers(self) -> list[dict[str, Any]]:
+        """Return aggregated MCP server configs from loaded plugins."""
+        return list(self._mcp_servers)
+
     def reset_for_tests(self) -> None:
         self._records.clear()
+        self._mcp_servers.clear()
