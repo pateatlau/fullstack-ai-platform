@@ -11,14 +11,14 @@
 
 ## Executive Summary
 
-Baseline audit before implementing Epic 09 (Human-in-the-Loop). All quality gates pass; test count matches Epic 08 Phase 10 (**1778 passed**). Coverage is **89.19%** (+0.02 pp vs Epic 08 **89.17%**); still above the **80%** gate. Epic 08 is complete with release summary published. **No HITL implementation exists** — clean baseline. All extension points (`ToolRunner`, `ApprovalNodeExecutor`, `WorkflowManager.apply_decision`, `GraphValidator`, `ChatMessage`, `ToolDefinition`) are inventoried and verified present. **Phase 0 complete.** Phase 1 requires separate user confirmation.
+Baseline audit before implementing Epic 09 (Human-in-the-Loop). All quality gates pass; test count matches Epic 08 Phase 10 (**1778 passed**). Coverage is **89.19%** (+0.02 pp vs Epic 08 **89.17%**); still above the **80%** gate. Epic 08 is complete with release summary published. **No Epic 09 HITL code exists** — the agent/chat approval subsystem is absent (`app/ai/hitl/`, `HITL_ENABLED`, unified audit API), while Epic 06 workflow approval (`ApprovalNodeExecutor`, `WorkflowManager.apply_decision()`) remains operational — clean baseline for Epic 09 work. All extension points (`ToolRunner`, `ApprovalNodeExecutor`, `WorkflowManager.apply_decision`, `GraphValidator`, `ChatMessage`, `ToolDefinition`) are inventoried and verified present. **Phase 0 complete.** Phase 1 requires separate user confirmation.
 
 **Key findings:**
 
 - ✅ Backend gates pass: lint, format-check, typecheck, **1778 tests**, **89.19%** `app/` coverage (≥80% gate met), eval **15/15** (`--level all`) + **3/3** (`--level plugin`)
 - ✅ Frontend gates pass: lint, **291 tests** (48 files), build successful
 - ✅ Epic 08 complete: `app/ai/plugins/` operational; `PLUGINS_ENABLED` present (default `false`); release summary published
-- ✅ Extension points verified: `ToolRunner._execute_with_retry` dispatch site, `ApprovalNodeExecutor`, `WorkflowManager.apply_decision`, `build_approval_decision_output`, `GraphValidator` (10 validation passes), `ChatMessage.status` CHECK, `ToolDefinition` schema
+- ✅ Extension points verified: `ToolRunner._execute_with_retry` dispatch site, `ApprovalNodeExecutor`, `WorkflowManager.apply_decision`, `build_approval_decision_output`, `GraphValidator` (12 validation passes), `ChatMessage.status` CHECK, `ToolDefinition` schema
 - ✅ `Scratchpad`/`ScratchpadEntry` are Pydantic `BaseModel` types suitable for JSON snapshotting
 - ❌ `HITL_ENABLED` absent; `app/ai/hitl/` does not exist (expected Phase 1+)
 - ❌ `ToolDefinition.requires_approval` absent (expected Phase 1)
@@ -123,13 +123,13 @@ No approval UI modules exist (`approvalsClient`, `ApprovalsPage` absent — expe
 
 | Aspect | Current state | Epic 09 role |
 | ------ | ------------- | ------------ |
-| Entry point | `run_tool_steps()` → `_run_step_batch()` → `_run_single_step()` → `_run_single_tool()` | Phase 2: pre-dispatch `ApprovalPolicy` gate in `_run_single_tool` / `_run_single_step` |
-| Dispatch site | `_execute_with_retry()` line 241: `await self._executor.execute(call, tool_context)` | Gate consults policy **before** this call when `HITL_ENABLED=true` |
-| Streaming | Publishes `AgentStreamEvent.tool_start` / `tool_end` around dispatch | Phase 2: emit `waiting_approval` event before pause |
-| Parallel tools | `_parallel_tools_enabled` batches via `asyncio.gather` | Phase 2: entire step pauses when any call requires approval |
-| Retry | `_execute_with_retry` wraps `ToolExecutor.execute` with retry policy | Unchanged for approved/resumed calls |
+| Entry point | `run_tool_steps()` → `_run_step_batch()` → `_run_single_step()` → `_run_single_tool()` | Phase 2: `ApprovalPolicy` preflight in `_run_single_step()` before any dispatch |
+| Dispatch site | `_execute_with_retry()` line 189: `await self._executor.execute(call, tool_context)` | `_run_single_tool()` / `_execute_with_retry()` run only after step-level approval clears |
+| Streaming | `_run_single_tool()` publishes `AgentStreamEvent.tool_start` immediately before dispatch | Phase 2: emit `approval_required` on pause; `tool_start` only after all required approvals are granted |
+| Parallel tools | `_run_single_step()` may `asyncio.gather` multiple `_run_single_tool()` calls | Phase 2: preflight in `_run_single_step()` before `gather` — entire step pauses if any call requires approval |
+| Retry | `_execute_with_retry` wraps `ToolExecutor.execute` with retry policy | Unchanged; `_run_single_tool()` and `_execute_with_retry()` handle approved execution only |
 
-**HITL gate insertion point:** `_run_single_tool()` between event publish and `_execute_with_retry()` (or at `_run_single_step` for step-level pause per Locked Decisions).
+**HITL gate insertion point:** `_run_single_step()` — preflight every tool call in the step via `ApprovalPolicy` **before** `asyncio.gather` or sequential `_run_single_tool()` dispatch begins. If any call requires approval, pause the entire step (Locked Decision); emit `AgentStreamEvent.tool_start` only after all required approvals are granted. Keep `_run_single_tool()` and `_execute_with_retry()` focused on approved execution.
 
 ### 4.2 ApprovalNodeExecutor & apply_decision (`app/ai/workflow/`)
 
@@ -197,13 +197,13 @@ class ToolDefinition(BaseModel):
 
 Current values: `created`, `planning`, `executing`, `reflecting`, `completed`, `failed`
 
-**Epic 09 approach:** No new status enum value in v1 — pause is modeled via `AgentToolApproval` record + placeholder `ChatMessage.status='waiting_approval'`, not via `AgentExecutionStatus`.
+**Epic 09 approach (Phase 2):** Add `AgentExecutionStatus.WAITING_APPROVAL` (non-terminal) per plan file index (`app/ai/agent/models/state.py`); extend `VALID_TRANSITIONS` so pause can transition from `EXECUTING` and resume returns to `PLANNING`. Durable pause is also modeled via `AgentToolApproval` + placeholder `ChatMessage.status='waiting_approval'`.
 
 ### 5.2 AgentStreamEventType (`app/ai/agent/models/events.py`)
 
 Current values: `start`, `planning`, `tool_start`, `tool_end`, `token`, `reflection`, `complete`, `error`
 
-**Epic 09 Phase 2:** Add `waiting_approval` event type with payload (proposed calls, approval_id).
+**Epic 09 Phase 2:** Add `AgentStreamEventType.APPROVAL_REQUIRED` (SSE frame `approval_required`) with payload (proposed calls, approval_id, approval_correlation_id).
 
 ### 5.3 Scratchpad / ScratchpadEntry (`app/ai/agent/scratchpad/`)
 
@@ -211,12 +211,28 @@ Current values: `start`, `planning`, `tool_start`, `tool_end`, `token`, `reflect
 | ------ | ------ |
 | `ScratchpadEntry` | Pydantic `BaseModel` with `kind`, `content`, `tool_call_id`, `metadata`, `provider_message` |
 | JSON serializable | ✅ Yes — all fields are JSON-compatible types |
-| Persistence today | ❌ Never persisted (docstring: "never persisted") |
-| HITL exception | Phase 2–3: snapshot to `agent_tool_approvals.scratchpad_snapshot` on pause only |
+| Persistence today | ❌ Never persisted (`ScratchpadStore` in-memory only) |
+| `run()` cleanup | `AgentExecutor.run()` `finally` block calls `ScratchpadStore.remove(execution_id)` (line 240) — in-memory scratchpad is destroyed on every run exit, including HITL pause |
+| HITL exception | Phase 2: snapshot `ScratchpadEntry[]` to `agent_tool_approvals.paused_scratchpad` **before** `run()` returns and the `finally` block runs |
 
-### 5.4 AgentExecutor resume hook
+### 5.4 Durable resume state & `resume_from_approval()` (define before Phase 2–3)
 
-**Current:** No `resume_from_approval()` method — Phase 3 deliverable. Re-enters ReAct loop from `PLANNING` after decision.
+**Current:** No `resume_from_approval()` method; no pause snapshot path. `AgentExecutor.run()` holds all resume inputs in local/process memory only.
+
+**Requirement:** Before implementing the HITL pause/resume flow, define and persist a **durable resume bundle** at pause time — written to `agent_tool_approvals` (or equivalent store) **before** `run()`'s `finally` block removes the in-memory scratchpad.
+
+| Resume component | Source at pause | Must capture |
+| ---------------- | --------------- | ------------ |
+| Scratchpad | `Scratchpad.entries` | `paused_scratchpad` (`ScratchpadEntry[]`) |
+| Execution state | `AgentExecutionState` | `paused_state` — includes `current_iteration`, `max_iterations` (iteration budget), `status`, counters (`tools_used`, `reflection_count`, …) |
+| Pending calls | Paused `PlannedStep.tool_calls` | `proposed_calls` (`ProposedToolCall[]`) — entire step waits together |
+| Request | `AgentRequest` passed to `run()` | Messages, model, provider, temperature, `tool_names`, `config` — required to re-invoke planner/finalizer |
+| Context | `AgentContext` passed to `run()` | `execution_id`, `request_id`, `caller`, `allowed_tool_names` — correlates turn, auth, and tool allowlist |
+| Tool context | `ToolExecutionContext` passed to `run()` | `caller`, `session_id`, `request_id` — required to rebuild authorized tool dispatch on resume |
+
+**`resume_from_approval()` restoration (Phase 3):** `AgentApprovalService.decide()` rehydrates `paused_scratchpad` → in-memory `Scratchpad`, `paused_state` → `AgentExecutionState`, reloads request/context/tool_context from the durable bundle, executes approved (possibly edited) calls via `ToolExecutor`, appends results to the scratchpad, then calls `AgentExecutor.resume_from_approval(scratchpad, state, request, context, tool_context)` — re-enters the ReAct loop at the `PLANNING` transition (reflection on the just-approved step skipped in v1; proceeds to next planner iteration). Further approval-required calls may pause again with a fresh snapshot.
+
+**Timing invariant:** `AgentApprovalService.pause()` must complete the DB write (including `paused_scratchpad`, `paused_state`, `proposed_calls`, and request/context payloads) while `run()` is still paused and **before** control returns to `run()`'s `finally` — otherwise `ScratchpadStore.remove()` destroys the only in-memory copy.
 
 ---
 
@@ -241,10 +257,12 @@ Current values: `start`, `planning`, `tool_start`, `tool_end`, `token`, `reflect
 
 ## 7. HITL Subsystem Absence
 
-Confirmed no prior HITL implementation:
+Confirmed no Epic 09 HITL subsystem (agent/chat gate, `ApprovalPolicy`, unified audit); Epic 06 workflow approval infrastructure is present and operational:
 
 | Path / symbol | Status |
 | ------------- | ------ |
+| `ApprovalNodeExecutor` | ✅ Present (Epic 06 workflow approval) |
+| `WorkflowManager.apply_decision()` | ✅ Present (Epic 06 workflow approval) |
 | `app/ai/hitl/` | ❌ Does not exist |
 | `app/routers/approvals.py` | ❌ Does not exist |
 | `app/schemas/approvals.py` | ❌ Does not exist |
@@ -270,10 +288,10 @@ Confirmed no prior HITL implementation:
 | --------- | -------------- | ----- |
 | Platform-first `ApprovalPolicy` | **Planned** | No policy exists yet; `ToolDefinition` has no `requires_approval` |
 | Extend Epic 06 workflow approval additively | **Verified (prerequisite)** | `apply_decision`, CAS, `ApprovalNodeExecutor` operational and tested |
-| New symmetrical primitive for chat/agent | **Planned** | `ToolRunner` dispatch site identified; no pause mechanism yet |
+| New symmetrical primitive for chat/agent | **Planned** | `_run_single_step()` preflight site identified; no pause mechanism yet |
 | Fail-closed graph validation | **Planned** | `GraphValidator` has 12 passes; HITL reachability check absent |
 | Durable pause (Postgres) | **Planned (workflow)** / **Absent (agent)** | Workflow: `waiting_approval` on runs/node_executions exists; agent: no table yet |
-| `HITL_ENABLED=false` flag-off parity | **Verified (baseline)** | No HITL code exists; full parity unverified until Phase 1+ / Phase 10 |
+| `HITL_ENABLED=false` flag-off parity | **Baseline only (unverified)** | `HITL_ENABLED` absent; no HITL code exists — parity cannot be confirmed until the flag is implemented and both flag-on/flag-off paths are tested (Phase 1+ / Phase 10) |
 | Scratchpad snapshot exception | **Verified (design)** | `ScratchpadEntry` is JSON-serializable Pydantic model |
 | CAS concurrency on decisions | **Verified (workflow)** | Epic 06 pattern in `apply_decision`; agent CAS planned Phase 3 |
 
@@ -282,7 +300,7 @@ Confirmed no prior HITL implementation:
 | Phase | Integration point |
 | ----- | ----------------- |
 | 1 | `app/ai/hitl/` package, models, `ApprovalPolicy`, migration `0010`, `HITL_ENABLED`, unit tests |
-| 2 | `ToolRunner` pre-dispatch gate, pause snapshot, `waiting_approval` stream event |
+| 2 | `ToolRunner._run_single_step()` preflight gate, pause snapshot, `approval_required` stream event |
 | 3 | `AgentApprovalService.decide()`, `AgentExecutor.resume_from_approval()` |
 | 4 | `WorkflowManager.apply_decision()` + `edited_arguments`/`reason`; `build_approval_decision_output` |
 | 5 | `GraphValidator` approval-required tool reachability |
@@ -374,7 +392,7 @@ Epic 09 plan baseline **1778** backend tests matches this audit run exactly.
 | --------- | ------ |
 | Existing platform fully operational | ✅ All gates pass |
 | All extension points identified | ✅ §4 |
-| No HITL implementation present | ✅ §7 |
+| No Epic 09 HITL subsystem present (Epic 06 workflow approval operational) | ✅ §7 |
 | Baseline metrics recorded | ✅ §2–3, §10 |
 | Epic 08 complete / authorized for Epic 09 | ✅ §1 |
 | Part I architecture reviewed | ✅ §8 |

@@ -2,7 +2,7 @@
 epic: v2-09
 title: Human-in-the-Loop
 status: not_started
-version: 1.1
+version: 1.2
 depends_on: [v2-06, v2-07, v2-08]
 provides:
   [
@@ -950,16 +950,16 @@ When `HITL_ENABLED=false`, existing platform behaviour must remain unchanged.
 
 ## Baseline
 
-_Copy from Epic 08 Phase 10 completion record._
+_Re-verified in Epic 09 Phase 0 (2026-08-11); source of truth: [post-mvp-v2-epic9-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic9-phase-0-baseline-audit.md). Epic 08 Phase 10 completion record used as the starting template only._
 
 | Area                     | State                                                             |
 | ------------------------ | ----------------------------------------------------------------- |
-| Backend tests / coverage | **1778 passed**, **89.17%** `app/` (Epic 08 Phase 10)             |
-| Plugin package coverage  | **91%** on `app/ai/plugins/`                                      |
-| Frontend tests           | **291 passed** (48 files); lint + build pass                      |
-| Integration tests        | Workflow + MCP + plugins router **408 passed** (spot check)       |
-| Eval CLI                 | 15/15 `--level all`; 3/3 `--level plugin`; regression check clean |
-| Feature Flag Regression  | 1778 passed with `PLUGINS_ENABLED=false`                          |
+| Backend tests / coverage | **1778 passed**, **89.19%** `app/` (Phase 0)                      |
+| Plugin package coverage  | **91%** on `app/ai/plugins/` (Epic 08 Phase 10; not re-measured)  |
+| Frontend tests           | **291 passed** (48 files); lint + build pass (Phase 0)            |
+| Integration tests        | Workflow + MCP + plugins **512 passed** (Phase 0 spot check)      |
+| Eval CLI                 | 15/15 `--level all`; 3/3 `--level plugin`; regression check clean (Phase 0) |
+| Feature Flag Regression  | 1778 passed with `PLUGINS_ENABLED=false` (Phase 0 full suite)     |
 | Plugin Architecture      | Epic 08 Phases 0–10 **Completed** — release summary published     |
 
 ---
