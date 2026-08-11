@@ -21,6 +21,7 @@ from app.ai.hitl.models import (
     ApprovalResult,
     ApprovalStatus,
 )
+from app.ai.hitl.policy import ApprovalPolicy
 from app.ai.hitl.service import normalize_hitl_reason
 from app.ai.observability.metrics.instruments import (
     record_workflow_approval_pending_delta,
@@ -147,6 +148,12 @@ class WorkflowManager:
         self._last_scheduled_run_task: asyncio.Task[None] | None = None
         self._deferred_run_schedules: list[tuple[uuid.UUID, uuid.UUID]] = []
         plugins_enabled = settings.plugins_enabled if settings is not None else False
+        hitl_enabled = settings.hitl_enabled if settings is not None else False
+        approval_policy: ApprovalPolicy | None = None
+        if hitl_enabled and settings is not None:
+            approval_policy = ApprovalPolicy(
+                required_tool_names=frozenset(settings.hitl_required_tool_names)
+            )
         self._validator = GraphValidator(
             max_nodes_per_definition=(
                 settings.workflow_max_nodes_per_definition
@@ -161,6 +168,9 @@ class WorkflowManager:
             workflow_plugin_registry=(
                 workflow_plugin_registry if plugins_enabled else None
             ),
+            hitl_enabled=hitl_enabled,
+            tool_registry=tool_registry if hitl_enabled else None,
+            approval_policy=approval_policy,
         )
 
     async def get_definition(

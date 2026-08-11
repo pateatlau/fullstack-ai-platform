@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import TYPE_CHECKING
 
 import pytest
 
+from app.ai.tools.schemas import ToolDefinition, ToolExecutionContext, ToolResult
 from app.ai.workflow.exceptions import WorkflowValidationError
 from app.ai.workflow.graph.validator import GraphValidator
 from app.ai.workflow.models import (
@@ -16,6 +18,9 @@ from app.ai.workflow.models import (
     WorkflowEdge,
     WorkflowNode,
 )
+
+if TYPE_CHECKING:
+    from app.ai.tools.registry import ToolRegistry
 
 _NOW = datetime.datetime.now(datetime.UTC)
 _VALIDATOR = GraphValidator(max_nodes_per_definition=5, max_parallel_branches=2)
@@ -491,3 +496,263 @@ class TestGraphValidatorNodeConfigs:
             ],
         )
         _VALIDATOR.validate(definition)
+
+
+def _hitl_validator(
+    registry: "ToolRegistry",
+    *,
+    hitl_enabled: bool = True,
+    required_tool_names: frozenset[str] = frozenset(),
+) -> GraphValidator:
+    from app.ai.hitl.policy import ApprovalPolicy
+
+    policy = ApprovalPolicy(required_tool_names=required_tool_names)
+    return GraphValidator(
+        max_nodes_per_definition=20,
+        max_parallel_branches=8,
+        hitl_enabled=hitl_enabled,
+        tool_registry=registry,
+        approval_policy=policy if hitl_enabled else None,
+    )
+
+
+def _sensitive_tool_registry(*, tool_name: str = "delete_file") -> "ToolRegistry":
+    from app.ai.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            name=tool_name,
+            description="Sensitive tool",
+            parameters={"type": "object", "properties": {}},
+            requires_approval=True,
+        ),
+        _NoOpHandler(),
+    )
+    registry.register(
+        ToolDefinition(
+            name="echo",
+            description="Safe echo",
+            parameters={"type": "object", "properties": {}},
+        ),
+        _NoOpHandler(),
+    )
+    return registry
+
+
+class _NoOpHandler:
+    async def execute(
+        self, args: dict[str, object], context: ToolExecutionContext
+    ) -> ToolResult:
+        del args, context
+        return ToolResult(success=True, data={})
+
+
+class TestGraphValidatorApprovalRequiredToolReachability:
+    def test_sensitive_task_without_approval_is_rejected(self) -> None:
+        registry = _sensitive_tool_registry()
+        validator = _hitl_validator(registry)
+        definition = _definition(
+            nodes=[
+                _node("start", NodeType.TASK),
+                _node(
+                    "risky",
+                    NodeType.TASK,
+                    config={"tool_name": "delete_file", "arguments_template": {}},
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+            edges=[
+                _edge("e1", "start", "risky"),
+                _edge("e2", "risky", "end"),
+            ],
+        )
+
+        with pytest.raises(
+            WorkflowValidationError, match="approval-required tool 'delete_file'"
+        ):
+            validator.validate(definition)
+
+    def test_sensitive_task_preceded_by_approval_passes(self) -> None:
+        registry = _sensitive_tool_registry()
+        validator = _hitl_validator(registry)
+        definition = _definition(
+            nodes=[
+                _node("start", NodeType.TASK),
+                _node("approve", NodeType.APPROVAL, config={"approved_edge_id": "ok"}),
+                _node(
+                    "risky",
+                    NodeType.TASK,
+                    config={"tool_name": "delete_file", "arguments_template": {}},
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+            edges=[
+                _edge("e1", "start", "approve"),
+                _edge("ok", "approve", "risky"),
+                _edge("e3", "risky", "end"),
+            ],
+        )
+
+        validator.validate(definition)
+
+    def test_unflagged_tool_is_unaffected(self) -> None:
+        registry = _sensitive_tool_registry()
+        validator = _hitl_validator(registry)
+        definition = _definition(
+            nodes=[
+                _node("start", NodeType.TASK),
+                _node(
+                    "safe",
+                    NodeType.TASK,
+                    config={"tool_name": "echo", "arguments_template": {}},
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+            edges=[
+                _edge("e1", "start", "safe"),
+                _edge("e2", "safe", "end"),
+            ],
+        )
+
+        validator.validate(definition)
+
+    def test_sensitive_agent_node_without_approval_is_rejected(self) -> None:
+        registry = _sensitive_tool_registry()
+        validator = _hitl_validator(registry)
+        definition = _definition(
+            nodes=[
+                _node(
+                    "start",
+                    NodeType.AGENT,
+                    config={"goal": "Do work", "tool_names": ["delete_file"]},
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+            edges=[_edge("e1", "start", "end")],
+        )
+
+        with pytest.raises(WorkflowValidationError, match="approval-required tool"):
+            validator.validate(definition)
+
+    def test_config_flagged_tool_without_definition_flag_is_rejected(self) -> None:
+        from app.ai.tools.registry import ToolRegistry
+
+        registry = ToolRegistry()
+        registry.register(
+            ToolDefinition(
+                name="send_email",
+                description="Send email",
+                parameters={"type": "object", "properties": {}},
+            ),
+            _NoOpHandler(),
+        )
+        validator = _hitl_validator(
+            registry, required_tool_names=frozenset({"send_email"})
+        )
+        definition = _definition(
+            nodes=[
+                _node(
+                    "start",
+                    NodeType.TASK,
+                    config={"tool_name": "send_email", "arguments_template": {}},
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+            edges=[_edge("e1", "start", "end")],
+        )
+
+        with pytest.raises(
+            WorkflowValidationError, match="approval-required tool 'send_email'"
+        ):
+            validator.validate(definition)
+
+    def test_hitl_disabled_skips_reachability_check(self) -> None:
+        registry = _sensitive_tool_registry()
+        validator = _hitl_validator(registry, hitl_enabled=False)
+        definition = _definition(
+            nodes=[
+                _node(
+                    "start",
+                    NodeType.TASK,
+                    config={"tool_name": "delete_file", "arguments_template": {}},
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+            edges=[_edge("e1", "start", "end")],
+        )
+
+        validator.validate(definition)
+
+    def test_parallel_branch_missing_approval_is_rejected(self) -> None:
+        registry = _sensitive_tool_registry()
+        validator = _hitl_validator(registry)
+        definition = _definition(
+            nodes=[
+                _node("start", NodeType.TASK),
+                _node("fork", NodeType.FORK, config={"join_node_id": "join"}),
+                _node("left", NodeType.TASK),
+                _node(
+                    "right",
+                    NodeType.TASK,
+                    config={"tool_name": "delete_file", "arguments_template": {}},
+                ),
+                _node("approve", NodeType.APPROVAL, config={"approved_edge_id": "ok"}),
+                _node("join", NodeType.JOIN, config={"fork_node_id": "fork"}),
+                _node("end", NodeType.TERMINAL),
+            ],
+            edges=[
+                _edge("e1", "start", "fork"),
+                _edge("e2", "fork", "left"),
+                _edge("e3", "fork", "right"),
+                _edge("e4", "left", "approve"),
+                _edge("ok", "approve", "join"),
+                _edge("e6", "right", "join"),
+                _edge("e7", "join", "end"),
+            ],
+        )
+
+        with pytest.raises(WorkflowValidationError, match="approval-required tool"):
+            validator.validate(definition)
+
+    def test_parallel_branches_both_preceded_by_approval_passes(self) -> None:
+        registry = _sensitive_tool_registry()
+        validator = _hitl_validator(registry)
+        definition = _definition(
+            nodes=[
+                _node("start", NodeType.TASK),
+                _node("fork", NodeType.FORK, config={"join_node_id": "join"}),
+                _node("left", NodeType.TASK),
+                _node("right", NodeType.TASK),
+                _node(
+                    "approve_left",
+                    NodeType.APPROVAL,
+                    config={"approved_edge_id": "left_ok"},
+                ),
+                _node(
+                    "approve_right",
+                    NodeType.APPROVAL,
+                    config={"approved_edge_id": "right_ok"},
+                ),
+                _node("join", NodeType.JOIN, config={"fork_node_id": "fork"}),
+                _node(
+                    "risky",
+                    NodeType.TASK,
+                    config={"tool_name": "delete_file", "arguments_template": {}},
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+            edges=[
+                _edge("e1", "start", "fork"),
+                _edge("e2", "fork", "left"),
+                _edge("e3", "fork", "right"),
+                _edge("e4", "left", "approve_left"),
+                _edge("e5", "right", "approve_right"),
+                _edge("left_ok", "approve_left", "join"),
+                _edge("right_ok", "approve_right", "join"),
+                _edge("e8", "join", "risky"),
+                _edge("e9", "risky", "end"),
+            ],
+        )
+
+        validator.validate(definition)
