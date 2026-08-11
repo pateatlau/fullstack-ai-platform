@@ -8,6 +8,14 @@ import uuid
 
 import pytest
 
+from app.ai.hitl.models import ApprovalKind, ApprovalStatus
+from app.ai.tools.executor import ToolExecutor
+from app.ai.tools.registry import ToolRegistry
+from app.ai.tools.stubs.echo import (
+    ECHO_TOOL_DEFINITION,
+    ECHO_TOOL_NAME,
+    EchoToolHandler,
+)
 from app.ai.workflow.engine.executor import WorkflowExecutor
 from app.ai.workflow.exceptions import (
     WorkflowDecisionConflictError,
@@ -28,8 +36,10 @@ from app.ai.workflow.models import (
     WorkflowRun,
 )
 from app.ai.workflow.nodes.approval_node import ApprovalNodeExecutor
-from app.ai.workflow.nodes.base import NodeExecutionRequest
+from app.ai.workflow.nodes.base import NodeExecutionRequest, WorkflowNodeExecutionError
 from app.ai.workflow.nodes.parallel_node import ForkNodeExecutor, JoinNodeExecutor
+from app.ai.workflow.nodes.task_node import TaskNodeExecutor
+from app.core.config import Settings
 from tests.ai.workflow.test_interfaces import FakeWorkflowStore
 
 _NOW = datetime.datetime.now(datetime.UTC)
@@ -200,7 +210,7 @@ async def test_approve_and_resume_completes_run() -> None:
         execution for execution in with_executions[1] if execution.node_id == "approve"
     )
 
-    continued = await manager.apply_decision(
+    continued, _ = await manager.apply_decision(
         run.id,
         approval_execution.id,
         owner_id=owner_id,
@@ -241,7 +251,7 @@ async def test_reject_with_rejected_edge_follows_branch() -> None:
         execution for execution in with_executions[1] if execution.node_id == "approve"
     )
 
-    continued = await manager.apply_decision(
+    continued, _ = await manager.apply_decision(
         run.id,
         approval_execution.id,
         owner_id=owner_id,
@@ -282,7 +292,7 @@ async def test_reject_without_rejected_edge_fails_run() -> None:
         execution for execution in with_executions[1] if execution.node_id == "approve"
     )
 
-    failed = await manager.apply_decision(
+    failed, _ = await manager.apply_decision(
         run.id,
         approval_execution.id,
         owner_id=owner_id,
@@ -316,7 +326,7 @@ async def test_duplicate_matching_decision_is_idempotent() -> None:
         execution for execution in with_executions[1] if execution.node_id == "approve"
     )
 
-    first = await manager.apply_decision(
+    first, _ = await manager.apply_decision(
         run.id,
         approval_execution.id,
         owner_id=owner_id,
@@ -324,7 +334,7 @@ async def test_duplicate_matching_decision_is_idempotent() -> None:
     )
     assert first.status is RunStatus.RUNNING
     await _await_scheduled(manager)
-    second = await manager.apply_decision(
+    second, _ = await manager.apply_decision(
         run.id,
         approval_execution.id,
         owner_id=owner_id,
@@ -517,7 +527,7 @@ async def test_pause_and_resume_with_parallel_branches() -> None:
         execution for execution in with_executions[1] if execution.node_id == "approve"
     )
 
-    continued = await manager.apply_decision(
+    continued, _ = await manager.apply_decision(
         run.id,
         approval_execution.id,
         owner_id=owner_id,
@@ -607,7 +617,7 @@ async def test_partial_approval_decision_keeps_run_waiting() -> None:
         },
     )
 
-    partial = await manager.apply_decision(
+    partial, _ = await manager.apply_decision(
         run_id,
         execution_a_id,
         owner_id=owner_id,
@@ -618,7 +628,7 @@ async def test_partial_approval_decision_keeps_run_waiting() -> None:
     assert partial.current_node_ids == ["approve_b"]
     assert manager._last_scheduled_run_task is None
 
-    final = await manager.apply_decision(
+    final, _ = await manager.apply_decision(
         run_id,
         execution_b_id,
         owner_id=owner_id,
@@ -630,6 +640,308 @@ async def test_partial_approval_decision_keeps_run_waiting() -> None:
     assert final.status is RunStatus.RUNNING
     assert completed is not None
     assert completed.status is RunStatus.COMPLETED
+
+
+def _hitl_settings(*, hitl_max_reason_length: int = 2000) -> Settings:
+    return Settings(
+        openai_api_key="test-key",
+        hitl_enabled=True,
+        hitl_max_reason_length=hitl_max_reason_length,
+    )
+
+
+def _echo_task_executor() -> TaskNodeExecutor:
+    registry = ToolRegistry()
+    registry.register(ECHO_TOOL_DEFINITION, EchoToolHandler())
+    return TaskNodeExecutor(
+        ToolExecutor(registry=registry, settings=Settings(openai_api_key="test-key"))
+    )
+
+
+def _edited_args_approval_definition(owner_id: uuid.UUID) -> WorkflowDefinition:
+    return _definition(
+        owner_id=owner_id,
+        nodes=[
+            WorkflowNode(
+                id="start",
+                type=NodeType.TASK,
+                config={
+                    "tool_name": ECHO_TOOL_NAME,
+                    "arguments_template": {"message": "start"},
+                },
+            ),
+            WorkflowNode(
+                id="approve",
+                type=NodeType.APPROVAL,
+                config={"approved_edge_id": "approved"},
+            ),
+            WorkflowNode(
+                id="after",
+                type=NodeType.TASK,
+                config={
+                    "tool_name": ECHO_TOOL_NAME,
+                    "arguments_template": {
+                        "message": "{{variables.approve.edited_arguments.message}}"
+                    },
+                },
+            ),
+            WorkflowNode(id="end", type=NodeType.TERMINAL, config={}),
+        ],
+        edges=[
+            _edge("e1", "start", "approve"),
+            _edge("approved", "approve", "after"),
+            _edge("e3", "after", "end"),
+        ],
+    )
+
+
+@pytest.mark.anyio
+async def test_approve_with_edited_arguments_resolves_downstream_template() -> None:
+    owner_id = uuid.uuid4()
+    store = FakeWorkflowStore()
+    definition = await store.create_definition(
+        _edited_args_approval_definition(owner_id)
+    )
+    task_executor = _echo_task_executor()
+    manager = WorkflowManager(
+        store,
+        settings=_hitl_settings(),
+        node_executors={
+            NodeType.TASK: task_executor,
+            NodeType.APPROVAL: ApprovalNodeExecutor(),
+        },
+    )
+
+    run = await manager.start_run(
+        definition.id, owner_id=owner_id, idempotency_key="key-1"
+    )
+    await _await_scheduled(manager)
+
+    with_executions = await store.get_run_with_executions(run.id, owner_id=owner_id)
+    assert with_executions is not None
+    approval_execution = next(
+        execution for execution in with_executions[1] if execution.node_id == "approve"
+    )
+
+    _, result = await manager.apply_decision(
+        run.id,
+        approval_execution.id,
+        owner_id=owner_id,
+        decision=ApprovalDecision.APPROVED,
+        edited_arguments={"message": "edited-value"},
+    )
+    await _await_scheduled(manager)
+
+    final = await manager.get_run(run.id, owner_id=owner_id)
+    assert final is not None
+    assert final.status is RunStatus.COMPLETED
+    after_output = final.context.variables.get("after")
+    assert isinstance(after_output, dict)
+    assert after_output.get("data") == {"echo": "edited-value"}
+    assert result.edited is True
+    assert result.final_payload == {"message": "edited-value"}
+    assert len(store.approval_revisions) == 1
+    assert store.approval_revisions[0].approval_kind is ApprovalKind.WORKFLOW_NODE
+
+
+@pytest.mark.anyio
+async def test_approve_without_body_preserves_epic06_behavior() -> None:
+    owner_id = uuid.uuid4()
+    store = FakeWorkflowStore()
+    definition = await store.create_definition(_approval_linear_definition(owner_id))
+    task_executor = FakeTaskExecutor()
+    manager = WorkflowManager(
+        store,
+        settings=_hitl_settings(),
+        node_executors={
+            NodeType.TASK: task_executor,
+            NodeType.APPROVAL: ApprovalNodeExecutor(),
+        },
+    )
+
+    run = await manager.start_run(
+        definition.id, owner_id=owner_id, idempotency_key="key-1"
+    )
+    await _await_scheduled(manager)
+    with_executions = await store.get_run_with_executions(run.id, owner_id=owner_id)
+    assert with_executions is not None
+    approval_execution = next(
+        execution for execution in with_executions[1] if execution.node_id == "approve"
+    )
+
+    continued, result = await manager.apply_decision(
+        run.id,
+        approval_execution.id,
+        owner_id=owner_id,
+        decision=ApprovalDecision.APPROVED,
+    )
+    await _await_scheduled(manager)
+    final = await manager.get_run(run.id, owner_id=owner_id)
+
+    assert final is not None
+    assert final.status is RunStatus.COMPLETED
+    assert task_executor.calls == ["start", "after"]
+    approve_output = final.context.variables["approve"]
+    assert isinstance(approve_output, dict)
+    assert approve_output == {
+        "node_id": "approve",
+        "decision": "approved",
+        "selected_edge_ids": ["approved"],
+    }
+    assert continued.status is RunStatus.RUNNING
+    assert result.edited is False
+    assert result.final_payload is None
+    assert store.approval_revisions == []
+
+
+@pytest.mark.anyio
+async def test_reject_with_reason_persisted_on_execution() -> None:
+    owner_id = uuid.uuid4()
+    store = FakeWorkflowStore()
+    definition = await store.create_definition(_approval_branch_definition(owner_id))
+    manager = WorkflowManager(
+        store,
+        settings=_hitl_settings(),
+        node_executors={
+            NodeType.TASK: FakeTaskExecutor(),
+            NodeType.APPROVAL: ApprovalNodeExecutor(),
+        },
+    )
+
+    run = await manager.start_run(
+        definition.id, owner_id=owner_id, idempotency_key="key-1"
+    )
+    await _await_scheduled(manager)
+    with_executions = await store.get_run_with_executions(run.id, owner_id=owner_id)
+    assert with_executions is not None
+    approval_execution = next(
+        execution for execution in with_executions[1] if execution.node_id == "approve"
+    )
+
+    _, result = await manager.apply_decision(
+        run.id,
+        approval_execution.id,
+        owner_id=owner_id,
+        decision=ApprovalDecision.REJECTED,
+        reason="Not acceptable",
+    )
+    await _await_scheduled(manager)
+
+    updated_execution = store._executions[approval_execution.id]
+    assert updated_execution.reason == "Not acceptable"
+    assert result.reason == "Not acceptable"
+    assert result.status is ApprovalStatus.REJECTED
+
+
+@pytest.mark.anyio
+async def test_reason_truncated_to_hitl_max_reason_length() -> None:
+    owner_id = uuid.uuid4()
+    store = FakeWorkflowStore()
+    definition = await store.create_definition(_approval_linear_definition(owner_id))
+    manager = WorkflowManager(
+        store,
+        settings=_hitl_settings(hitl_max_reason_length=10),
+        node_executors={
+            NodeType.TASK: FakeTaskExecutor(),
+            NodeType.APPROVAL: ApprovalNodeExecutor(),
+        },
+    )
+
+    run = await manager.start_run(
+        definition.id, owner_id=owner_id, idempotency_key="key-1"
+    )
+    await _await_scheduled(manager)
+    with_executions = await store.get_run_with_executions(run.id, owner_id=owner_id)
+    assert with_executions is not None
+    approval_execution = next(
+        execution for execution in with_executions[1] if execution.node_id == "approve"
+    )
+
+    long_reason = "x" * 25
+    _, result = await manager.apply_decision(
+        run.id,
+        approval_execution.id,
+        owner_id=owner_id,
+        decision=ApprovalDecision.APPROVED,
+        reason=long_reason,
+    )
+
+    assert result.reason == "x" * 10
+    assert store._executions[approval_execution.id].reason == "x" * 10
+
+
+class _FailingAfterApprovalTaskExecutor:
+    async def execute(
+        self,
+        node: WorkflowNode,
+        context: WorkflowContext,
+        request: NodeExecutionRequest,
+    ) -> dict[str, object]:
+        del node, context, request
+        raise WorkflowNodeExecutionError("downstream failed")
+
+
+class _SwitchingTaskExecutor:
+    """Runs the start task normally, then fails on the post-approval task."""
+
+    def __init__(self) -> None:
+        self._start = FakeTaskExecutor()
+        self._fail = _FailingAfterApprovalTaskExecutor()
+        self.fail_after_approval = False
+
+    async def execute(
+        self,
+        node: WorkflowNode,
+        context: WorkflowContext,
+        request: NodeExecutionRequest,
+    ) -> dict[str, object]:
+        if self.fail_after_approval and node.id == "after":
+            return await self._fail.execute(node, context, request)
+        return await self._start.execute(node, context, request)
+
+
+@pytest.mark.anyio
+async def test_downstream_failure_preserves_approval_decision() -> None:
+    owner_id = uuid.uuid4()
+    store = FakeWorkflowStore()
+    definition = await store.create_definition(_approval_linear_definition(owner_id))
+    task_executor = _SwitchingTaskExecutor()
+    manager = WorkflowManager(
+        store,
+        settings=_hitl_settings(),
+        node_executors={
+            NodeType.TASK: task_executor,
+            NodeType.APPROVAL: ApprovalNodeExecutor(),
+        },
+    )
+
+    run = await manager.start_run(
+        definition.id, owner_id=owner_id, idempotency_key="key-1"
+    )
+    await _await_scheduled(manager)
+    with_executions = await store.get_run_with_executions(run.id, owner_id=owner_id)
+    assert with_executions is not None
+    approval_execution = next(
+        execution for execution in with_executions[1] if execution.node_id == "approve"
+    )
+
+    task_executor.fail_after_approval = True
+    _, result = await manager.apply_decision(
+        run.id,
+        approval_execution.id,
+        owner_id=owner_id,
+        decision=ApprovalDecision.APPROVED,
+        edited_arguments={"message": "will-fail"},
+    )
+    await _await_scheduled(manager)
+
+    failed_run = await manager.get_run(run.id, owner_id=owner_id)
+    approval_record = store._executions[approval_execution.id]
+    assert failed_run is not None
+    assert failed_run.status is RunStatus.FAILED
+    assert approval_record.decision is ApprovalDecision.APPROVED
+    assert approval_record.status is NodeStatus.SUCCEEDED
+    assert result.status is ApprovalStatus.APPROVED
 
 
 class TestApprovalNodeExecutor:

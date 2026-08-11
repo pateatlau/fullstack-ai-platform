@@ -70,10 +70,14 @@ def build_approval_decision_output(
     node_id: str,
     decision: ApprovalDecision,
     selected_edge_ids: list[str],
+    edited_arguments: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build node output persisted to ``WorkflowContext.variables`` after a decision."""
-    return {
+    output: dict[str, object] = {
         "node_id": node_id,
         "decision": decision.value,
         "selected_edge_ids": selected_edge_ids,
     }
+    if edited_arguments is not None:
+        output["edited_arguments"] = edited_arguments
+    return output

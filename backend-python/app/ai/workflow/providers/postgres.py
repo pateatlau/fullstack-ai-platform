@@ -23,6 +23,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.hitl.models import ApprovalKind
 from app.ai.workflow.exceptions import (
     WorkflowApprovalCasMissError,
     WorkflowConcurrentUpdateError,
@@ -44,6 +45,7 @@ from app.ai.workflow.models import (
 )
 from app.core.config import Settings
 from app.db.models import (
+    ApprovalRevisionRecord,
     WorkflowDefinitionRecord,
     WorkflowNodeExecutionRecord,
     WorkflowRunRecord,
@@ -402,6 +404,8 @@ class PostgresWorkflowStore:
         decided_by: uuid.UUID,
         node_status: NodeStatus,
         run: WorkflowRun,
+        edited_arguments: dict[str, object] | None = None,
+        reason: str | None = None,
     ) -> WorkflowNodeExecution:
         existing = await self._session.scalar(
             select(WorkflowNodeExecutionRecord)
@@ -427,19 +431,24 @@ class PostgresWorkflowStore:
             )
 
         now = datetime.datetime.now(datetime.UTC)
+        execution_values: dict[str, object] = {
+            "status": node_status.value,
+            "decision": decision.value,
+            "decided_by": decided_by,
+            "decided_at": now,
+            "completed_at": now,
+            "reason": reason,
+        }
+        if edited_arguments is not None:
+            execution_values["edited_arguments"] = edited_arguments
+
         execution_stmt = (
             update(WorkflowNodeExecutionRecord)
             .where(
                 WorkflowNodeExecutionRecord.id == execution_id,
                 WorkflowNodeExecutionRecord.status == NodeStatus.WAITING_APPROVAL.value,
             )
-            .values(
-                status=node_status.value,
-                decision=decision.value,
-                decided_by=decided_by,
-                decided_at=now,
-                completed_at=now,
-            )
+            .values(**execution_values)
             .returning(WorkflowNodeExecutionRecord)
         )
         execution_row = (
@@ -456,6 +465,14 @@ class PostgresWorkflowStore:
                     f"Workflow node execution {execution_id} not found."
                 )
             raise WorkflowApprovalCasMissError(_node_execution_to_domain(refreshed))
+
+        if edited_arguments is not None:
+            await self._append_workflow_approval_revision(
+                execution_id=execution_id,
+                edited_by=decided_by,
+                edited_arguments=edited_arguments,
+                note=reason,
+            )
 
         run_stmt = (
             update(WorkflowRunRecord)
@@ -484,6 +501,39 @@ class PostgresWorkflowStore:
         await self._session.commit()
         await self._session.refresh(execution_row)
         return _node_execution_to_domain(execution_row)
+
+    async def _append_workflow_approval_revision(
+        self,
+        *,
+        execution_id: uuid.UUID,
+        edited_by: uuid.UUID,
+        edited_arguments: dict[str, object],
+        note: str | None,
+    ) -> None:
+        await self._session.scalar(
+            select(WorkflowNodeExecutionRecord)
+            .where(WorkflowNodeExecutionRecord.id == execution_id)
+            .with_for_update()
+        )
+        max_number = await self._session.scalar(
+            select(func.max(ApprovalRevisionRecord.revision_number)).where(
+                ApprovalRevisionRecord.approval_id == execution_id,
+                ApprovalRevisionRecord.approval_kind
+                == ApprovalKind.WORKFLOW_NODE.value,
+            )
+        )
+        revision_number = (max_number or 0) + 1
+        self._session.add(
+            ApprovalRevisionRecord(
+                approval_id=execution_id,
+                approval_kind=ApprovalKind.WORKFLOW_NODE.value,
+                revision_number=revision_number,
+                edited_by=edited_by,
+                edited_payload=edited_arguments,
+                note=note,
+            )
+        )
+        await self._session.flush()
 
 
 def _graph_to_json(definition: WorkflowDefinition) -> dict[str, object]:
@@ -563,6 +613,8 @@ def _node_execution_to_orm(
         decided_by=execution.decided_by,
         decided_at=execution.decided_at,
         decision=execution.decision.value if execution.decision is not None else None,
+        edited_arguments=execution.edited_arguments,
+        reason=execution.reason,
         started_at=execution.started_at,
         completed_at=execution.completed_at,
     )
@@ -578,6 +630,8 @@ def _apply_node_execution_updates(
     row.decided_by = execution.decided_by
     row.decided_at = execution.decided_at
     row.decision = execution.decision.value if execution.decision is not None else None
+    row.edited_arguments = execution.edited_arguments
+    row.reason = execution.reason
     row.started_at = execution.started_at
     row.completed_at = execution.completed_at
 
@@ -598,6 +652,12 @@ def _node_execution_to_domain(
         decided_by=row.decided_by,
         decided_at=row.decided_at,
         decision=ApprovalDecision(row.decision) if row.decision is not None else None,
+        edited_arguments=(
+            dict(row.edited_arguments)
+            if isinstance(row.edited_arguments, dict)
+            else None
+        ),
+        reason=row.reason,
         started_at=row.started_at,
         completed_at=row.completed_at,
     )

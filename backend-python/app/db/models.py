@@ -661,6 +661,10 @@ class WorkflowNodeExecutionRecord(Base):
         TIMESTAMP(timezone=True), nullable=True
     )
     decision: Mapped[str | None] = mapped_column(nullable=True)
+    edited_arguments: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    reason: Mapped[str | None] = mapped_column(nullable=True)
     started_at: Mapped[datetime.datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )

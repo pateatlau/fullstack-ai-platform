@@ -8,6 +8,7 @@ import uuid
 
 import pytest
 
+from app.ai.hitl.models import ApprovalKind, ApprovalRevision
 from app.ai.workflow.exceptions import (
     WorkflowApprovalCasMissError,
     WorkflowConcurrentUpdateError,
@@ -64,6 +65,7 @@ class FakeWorkflowStore:
         self._definitions: dict[uuid.UUID, WorkflowDefinition] = {}
         self._runs: dict[uuid.UUID, WorkflowRun] = {}
         self._executions: dict[uuid.UUID, WorkflowNodeExecution] = {}
+        self.approval_revisions: list[ApprovalRevision] = []
         self._run_create_lock = asyncio.Lock()
         self._approval_decision_lock = asyncio.Lock()
 
@@ -271,6 +273,8 @@ class FakeWorkflowStore:
         decided_by: uuid.UUID,
         node_status: NodeStatus,
         run: WorkflowRun,
+        edited_arguments: dict[str, object] | None = None,
+        reason: str | None = None,
     ) -> WorkflowNodeExecution:
         async with self._approval_decision_lock:
             execution = self._executions.get(execution_id)
@@ -301,10 +305,34 @@ class FakeWorkflowStore:
                     "decided_at": _NOW,
                     "status": node_status,
                     "completed_at": _NOW,
+                    "edited_arguments": edited_arguments,
+                    "reason": reason,
                 }
             )
             self._executions[execution_id] = updated
             self._runs[run.id] = run
+            if edited_arguments is not None:
+                revision_number = (
+                    sum(
+                        1
+                        for revision in self.approval_revisions
+                        if revision.approval_id == execution_id
+                        and revision.approval_kind is ApprovalKind.WORKFLOW_NODE
+                    )
+                    + 1
+                )
+                self.approval_revisions.append(
+                    ApprovalRevision(
+                        id=uuid.uuid4(),
+                        approval_id=execution_id,
+                        approval_kind=ApprovalKind.WORKFLOW_NODE,
+                        revision_number=revision_number,
+                        edited_by=decided_by,
+                        edited_at=_NOW,
+                        edited_payload=edited_arguments,
+                        note=reason,
+                    )
+                )
             return updated
 
 

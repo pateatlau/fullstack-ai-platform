@@ -113,4 +113,6 @@ class WorkflowStore(Protocol):
         decided_by: uuid.UUID,
         node_status: NodeStatus,
         run: WorkflowRun,
+        edited_arguments: dict[str, object] | None = None,
+        reason: str | None = None,
     ) -> WorkflowNodeExecution: ...
