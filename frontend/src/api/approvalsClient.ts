@@ -192,7 +192,7 @@ export async function streamApproveApproval(
   const parser = new SseParser()
 
   try {
-    while (true) {
+    readLoop: while (true) {
       const { done, value } = await reader.read()
       if (done) {
         break
@@ -215,13 +215,19 @@ export async function streamApproveApproval(
           handlers.onApprovalRequired?.(chunk)
         } else if (chunk.type === 'error') {
           handlers.onError?.(chunk)
-          return
+          break readLoop
         }
       }
     }
   } catch (error) {
     if ((error as Error).name !== 'AbortError') {
       handlers.onError?.(error as Error)
+    }
+  } finally {
+    try {
+      await reader.cancel()
+    } catch {
+      // Stream may already be closed after natural end or cancel.
     }
   }
 }

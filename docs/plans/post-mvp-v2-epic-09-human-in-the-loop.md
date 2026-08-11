@@ -1787,7 +1787,7 @@ Add a frontend approval inbox (pending, cross-surface) with inline argument edit
 | Metric                  | Result                                                          |
 | ----------------------- | --------------------------------------------------------------- |
 | Lint                    | ✅ Clean                                                         |
-| Frontend tests          | ✅ **300** passed (50 files; +9 vs Phase 10 pre-Phase-9 baseline) |
+| Frontend tests          | ✅ **300** passed (50 files; +9 vs Phase 0 baseline of 291)      |
 | `approvalsClient` tests | ✅ 4 passed                                                      |
 | `ApprovalsPage` tests   | ✅ 3 passed                                                      |
 | Route + nav             | ✅ `/approvals` protected route; nav link when `hitl_enabled`    |
@@ -2002,6 +2002,6 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 | 1.8     | 2026-08-11 | Phase 6 unified approval REST API & audit complete — `ApprovalsStore` aggregation, `GET /api/approvals` list/detail, cross-kind revisions endpoint, health HITL fields, 8-test router verify suite + store integration test. Part II only. |
 | 1.9     | 2026-08-11 | Phase 7 HITL observability complete — `approval_span`, HITL metrics (`agent_tool_approval_pending_count`, `approval_decisions_total`, three latency histograms), `approval_correlation_id` on `tool_span`, instrumentation wired into agent pause/revise/decide/resume and workflow pause/decide; `tests/ai/hitl/test_observability.py`. Part II only. |
 | 1.10    | 2026-08-11 | Phase 8 reference scenarios & eval cases complete — `send_notification` reference stub, `--level hitl` eval harness (`HitlEvalRunner`, 5 cases), reference/adversarial integration tests, README operator steps + deferred-gap table. Part II only. |
-| 1.13    | 2026-08-12 | Reconciled Part II phase completion — Phase Status table (Phases 0–10 all ✅), exit criteria for Phases 3/6, dates on Phases 4/5/7/8 status lines, Phase 10 completion record, Definition of Done public-API freeze. Part II only. |
-| 1.12    | 2026-08-12 | Phase 9 frontend approval inbox & audit UI complete — `ApprovalsPage`, `approvalsClient`, chat `approval_required` inline card, WorkflowsPage edit/reason; 300 frontend tests (50 files). Phase 10 metrics updated. Epic status `completed`. Part II only. |
 | 1.11    | 2026-08-12 | Phase 10 validation & release — full gates (1912 backend, 291 frontend, eval 15/15 + hitl 5/5 + plugin 3/3, flag-off parity); release summary published; eval runner HITL policy wiring fix; settings default test hardening. Phase 9 frontend remains not started. Part II only. |
+| 1.12    | 2026-08-12 | Phase 9 frontend approval inbox & audit UI complete — `ApprovalsPage`, `approvalsClient`, chat `approval_required` inline card, WorkflowsPage edit/reason; 300 frontend tests (50 files). Phase 10 metrics updated. Epic status `completed`. Part II only. |
+| 1.13    | 2026-08-12 | Reconciled Part II phase completion — Phase Status table (Phases 0–10 all ✅), exit criteria for Phases 3/6, dates on Phases 4/5/7/8 status lines, Phase 10 completion record, Definition of Done public-API freeze. Part II only. |

@@ -42,7 +42,16 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
         const decoder = new TextDecoder()
         const parser = new SseParser()
 
-        while (true) {
+        const releaseStream = async (): Promise<void> => {
+          try {
+            await reader.cancel()
+          } catch {
+            // Stream may already be closed after natural end or abort.
+          }
+          controller.abort()
+        }
+
+        readLoop: while (true) {
           const { done, value } = await reader.read()
           if (done) break
 
@@ -63,10 +72,12 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
               options.onToolEnd?.(chunk)
             } else if (chunk.type === 'approval_required') {
               options.onApprovalRequired?.(chunk)
-              return
+              await releaseStream()
+              break readLoop
             } else if (chunk.type === 'error') {
               options.onError?.(chunk)
-              return
+              await releaseStream()
+              break readLoop
             }
           }
         }

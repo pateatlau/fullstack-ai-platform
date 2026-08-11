@@ -7,7 +7,7 @@ import {
   streamApproveApproval,
 } from '../api/approvalsClient'
 import type { ProposedToolCall } from '../types/approvals'
-import type { PendingApprovalContext } from '../types/chat'
+import type { ChatChunk, PendingApprovalContext } from '../types/chat'
 
 interface ApprovalDecisionCardProps {
   messageId: string
@@ -16,6 +16,7 @@ interface ApprovalDecisionCardProps {
     onDelta: (content: string) => void
     onComplete: () => void
     onError: (message: string) => void
+    onApprovalRequired?: (chunk: Extract<ChatChunk, { type: 'approval_required' }>) => void
   }
   onRejected: () => void
   onRevised?: (calls: ProposedToolCall[]) => void
@@ -55,7 +56,11 @@ function parseEditedCalls(raw: string): ProposedToolCall[] {
   })
 }
 
-export function ApprovalDecisionCard({
+export function ApprovalDecisionCard(props: ApprovalDecisionCardProps) {
+  return <ApprovalDecisionCardContent key={props.pendingApproval.approvalId} {...props} />
+}
+
+function ApprovalDecisionCardContent({
   messageId,
   pendingApproval,
   onApproveStream,
@@ -144,6 +149,9 @@ export function ApprovalDecisionCard({
           },
           onEnd: () => {
             onApproveStream?.onComplete()
+          },
+          onApprovalRequired: (chunk) => {
+            onApproveStream?.onApprovalRequired?.(chunk)
           },
           onError: (error) => {
             const message =

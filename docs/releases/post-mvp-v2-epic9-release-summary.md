@@ -3,7 +3,7 @@
 **Release name:** Post-MVP V2 Epic 09 — Human-in-the-Loop (Phases 0–10)
 **Release date:** 2026-08-12
 **Validation:** Phase 10 final acceptance (see [post-mvp-v2-epic-09-human-in-the-loop.md](../plans/post-mvp-v2-epic-09-human-in-the-loop.md))
-**Git commit (validation base):** pending — Epic 09 Phases 9–10 combined release
+**Git commit (validation base):** `077cfc0` — Epic 09 Phases 9–10 validation & release
 
 ---
 
@@ -83,6 +83,8 @@ Additional settings (see `backend-python/.env.example`): `HITL_REQUIRED_TOOL_NAM
 ---
 
 ## Manual E2E Smoke (documented procedure)
+
+**Status:** Pending — **not a Phase 10 release gate**; scheduled as a **post-release operator smoke** once `HITL_ENABLED=true` is exercised in a local/staging environment. Merge acceptance relies on the automated gates in **Verification Metrics** below.
 
 Run with `HITL_ENABLED=true`, backend on `:8000`, frontend dev server, authenticated user:
 

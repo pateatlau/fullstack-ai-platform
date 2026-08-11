@@ -147,4 +147,47 @@ describe('useChatStream', () => {
     })
     expect(onEnd).not.toHaveBeenCalled()
   })
+
+  it('aborts the fetch when approval_required arrives on an open stream', async () => {
+    const onApprovalRequired = vi.fn()
+    let capturedSignal: AbortSignal | undefined
+
+    vi.spyOn(chatClient, 'streamChat').mockImplementation((_request, signal) => {
+      capturedSignal = signal
+      const encoder = new TextEncoder()
+      return Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  [
+                    'event: approval_required',
+                    'data: {"type":"approval_required","id":"resp_1","approval_id":"a1","approval_correlation_id":"c1","proposed_calls":[{"name":"echo","arguments":{},"call_id":"call-1"}],"timestamp":"t1"}',
+                    '',
+                    '',
+                  ].join('\n'),
+                ),
+              )
+            },
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          },
+        ),
+      )
+    })
+
+    const { result } = renderHook(() => useChatStream({ onApprovalRequired }))
+
+    await result.current.start({
+      messages: [{ role: 'user', content: 'Notify me' }],
+    })
+
+    await waitFor(() => {
+      expect(onApprovalRequired).toHaveBeenCalled()
+      expect(capturedSignal?.aborted).toBe(true)
+    })
+  })
 })

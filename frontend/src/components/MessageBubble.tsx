@@ -1,4 +1,4 @@
-import type { Message } from '../types/chat'
+import type { ChatChunk, Message } from '../types/chat'
 import { ApprovalDecisionCard } from './ApprovalDecisionCard'
 import { CitationList } from './CitationList'
 import { MessageContent } from './MessageContent'
@@ -15,6 +15,10 @@ export interface MessageBubbleProps {
     onDelta: (messageId: string, content: string) => void
     onComplete: (messageId: string) => void
     onError: (messageId: string, errorMessage: string) => void
+    onApprovalRequired?: (
+      messageId: string,
+      chunk: Extract<ChatChunk, { type: 'approval_required' }>,
+    ) => void
   }
   onApprovalRejected?: (messageId: string) => void
 }
@@ -107,6 +111,8 @@ export function MessageBubble({
             onDelta: (content) => onApprovalApproveStream?.onDelta(message.id, content),
             onComplete: () => onApprovalApproveStream?.onComplete(message.id),
             onError: (errorMessage) => onApprovalApproveStream?.onError(message.id, errorMessage),
+            onApprovalRequired: (chunk) =>
+              onApprovalApproveStream?.onApprovalRequired?.(message.id, chunk),
           }}
         />
       ) : null}

@@ -165,7 +165,6 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
                 ...message,
                 status: 'streaming',
                 pendingApproval: undefined,
-                content: '',
                 canRetry: false,
               }
             : message,

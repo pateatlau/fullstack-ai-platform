@@ -26,12 +26,23 @@ function isInvalidAccessTokenError(error: unknown): boolean {
   )
 }
 
+function approvalsPageErrorMessage(error: unknown): string {
+  if (error instanceof ApprovalsApiError || error instanceof WorkflowApiError) {
+    return error.message
+  }
+  return 'Something went wrong. Please try again.'
+}
+
 function formatTimestamp(value: string | null): string {
   if (!value) {
     return '—'
   }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
   try {
-    return new Date(value).toLocaleString()
+    return date.toLocaleString()
   } catch {
     return value
   }
@@ -39,7 +50,7 @@ function formatTimestamp(value: string | null): string {
 
 function callsToJson(calls: ProposedToolCall[] | null): string {
   if (!calls || calls.length === 0) {
-    return '{}'
+    return '[]'
   }
   return JSON.stringify(calls, null, 2)
 }
@@ -114,7 +125,6 @@ function RevisionHistory({ approvalId }: RevisionHistoryProps) {
       setRevisions(items)
     } catch (apiError) {
       setError(apiError instanceof ApprovalsApiError ? apiError.message : 'Could not load history.')
-      setRevisions([])
     } finally {
       setLoading(false)
     }
@@ -228,7 +238,6 @@ function PendingApprovalCard({ entry, onChanged, onApiError }: PendingApprovalCa
           },
         },
       )
-      onChanged()
     } catch (error) {
       if (!onApiError(error)) {
         setLocalError(error instanceof ApprovalsApiError ? error.message : 'Approve failed.')
@@ -483,12 +492,7 @@ function ApprovalsContent() {
         setFeatureDisabled(true)
         return true
       }
-      if (apiError instanceof ApprovalsApiError || apiError instanceof WorkflowApiError) {
-        setError(apiError.message)
-        return true
-      }
-      setError('Something went wrong. Please try again.')
-      return true
+      return false
     },
     [handleInvalidAccessToken],
   )
@@ -505,7 +509,9 @@ function ApprovalsContent() {
       setPending(pendingResponse.approvals)
       setHistory(allResponse.approvals.filter((entry) => entry.status !== 'pending'))
     } catch (apiError) {
-      handleApiError(apiError)
+      if (!handleApiError(apiError)) {
+        setError(approvalsPageErrorMessage(apiError))
+      }
       setPending([])
       setHistory([])
     } finally {
@@ -531,7 +537,9 @@ function ApprovalsContent() {
         }
       } catch (apiError) {
         if (!cancelled) {
-          handleApiError(apiError)
+          if (!handleApiError(apiError)) {
+            setError(approvalsPageErrorMessage(apiError))
+          }
           setPending([])
           setHistory([])
         }

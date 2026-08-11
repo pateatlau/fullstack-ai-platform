@@ -169,4 +169,50 @@ describe('approvalsClient', () => {
     )
     expect(onEnd).toHaveBeenCalled()
   })
+
+  it('streamApproveApproval cancels the reader when an SSE error frame arrives', async () => {
+    storeSession('approvals-jwt', user)
+    const encoder = new TextEncoder()
+    const cancel = vi.fn().mockResolvedValue(undefined)
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce({
+        done: false,
+        value: encoder.encode(
+          [
+            'event: error',
+            'data: {"type":"error","id":"msg-1","message":"Resume failed.","timestamp":"t0"}',
+            '',
+            '',
+          ].join('\n'),
+        ),
+      })
+      .mockResolvedValue({ done: true, value: undefined })
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'Content-Type': 'text/event-stream' }),
+        body: {
+          getReader: () => ({
+            read,
+            cancel,
+            releaseLock: vi.fn(),
+            closed: Promise.resolve(undefined),
+          }),
+        },
+      }),
+    )
+
+    const onError = vi.fn()
+
+    await streamApproveApproval('approval-1', {}, { onError })
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'error', message: 'Resume failed.' }),
+    )
+    expect(cancel).toHaveBeenCalled()
+    expect(read).toHaveBeenCalledTimes(1)
+  })
 })

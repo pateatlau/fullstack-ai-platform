@@ -523,6 +523,19 @@ function ChatPageContent() {
         approvalResumeStartedRef.current.delete(messageId)
         dispatch({ type: 'STREAM_ERROR', id: messageId, message: errorMessage })
       },
+      onApprovalRequired: (
+        messageId: string,
+        chunk: Extract<ChatChunk, { type: 'approval_required' }>,
+      ) => {
+        approvalResumeStartedRef.current.delete(messageId)
+        dispatch({
+          type: 'APPROVAL_REQUIRED',
+          id: messageId,
+          approvalId: chunk.approval_id,
+          approvalCorrelationId: chunk.approval_correlation_id,
+          proposedCalls: chunk.proposed_calls,
+        })
+      },
     }),
     [dispatch],
   )
