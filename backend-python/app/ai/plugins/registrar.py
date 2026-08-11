@@ -181,6 +181,7 @@ class PluginRegistrar:
                             plugin_id=self._plugin_id,
                             node_type=staged.node_type,
                             executor_factory=staged.executor_factory,
+                            config_schema=staged.config_schema,
                         )
                         registered_workflow_nodes.append(
                             (self._plugin_id, staged.node_type)

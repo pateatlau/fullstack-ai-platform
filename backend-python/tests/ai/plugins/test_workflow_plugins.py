@@ -23,6 +23,7 @@ from app.ai.workflow.models import (
     WorkflowNode,
     WorkflowRun,
 )
+from app.ai.workflow.nodes.base import NodeExecutionRequest, WorkflowNodeExecutionError
 from app.core.config import Settings
 from tests.ai.plugins.conftest import load_plugins, plugin_settings
 from tests.ai.workflow.test_interfaces import FakeWorkflowStore
@@ -37,7 +38,7 @@ def _plugin_node(
     *,
     plugin_id: str = PLUGIN_ID,
     plugin_node_type: str = NODE_TYPE,
-    message_key: str = "input_text",
+    message_key: str | object = "input_text",
 ) -> WorkflowNode:
     return WorkflowNode(
         id=node_id,
@@ -105,6 +106,9 @@ class TestWorkflowPluginLoad:
         assert record.status is PluginStatus.LOADED
         assert PluginContributionKind.WORKFLOW_NODE in record.contributions
         assert workflow_plugin_registry.has(PLUGIN_ID, NODE_TYPE)
+        schema = workflow_plugin_registry.get_config_schema(PLUGIN_ID, NODE_TYPE)
+        assert schema is not None
+        assert schema["required"] == ["plugin_id", "plugin_node_type"]
 
 
 class TestGraphValidatorPluginNodes:
@@ -112,6 +116,21 @@ class TestGraphValidatorPluginNodes:
         definition = _definition(
             nodes=[
                 _plugin_node(),
+                WorkflowNode(id="end", type=NodeType.TERMINAL, config={}),
+            ],
+            edges=[WorkflowEdge(id="e1", from_node_id="echo_step", to_node_id="end")],
+        )
+        validator = GraphValidator(plugins_enabled=False)
+
+        with pytest.raises(WorkflowValidationError, match="PLUGINS_ENABLED is false"):
+            validator.validate(definition)
+
+    def test_flag_off_rejects_malformed_plugin_node_before_config_validation(
+        self,
+    ) -> None:
+        definition = _definition(
+            nodes=[
+                WorkflowNode(id="echo_step", type=NodeType.PLUGIN, config={}),
                 WorkflowNode(id="end", type=NodeType.TERMINAL, config={}),
             ],
             edges=[WorkflowEdge(id="e1", from_node_id="echo_step", to_node_id="end")],
@@ -191,6 +210,30 @@ class TestGraphValidatorPluginNodes:
         )
 
         validator.validate(definition)
+
+    def test_invalid_plugin_config_schema_rejected(
+        self,
+        workflow_plugin_registry: WorkflowPluginRegistry,
+    ) -> None:
+        _, plugin_registry, _, _ = load_plugins(
+            plugin_settings(allowlist=[PLUGIN_ID]),
+            workflow_plugin_registry=workflow_plugin_registry,
+        )
+        definition = _definition(
+            nodes=[
+                _plugin_node(message_key=123),  # type: ignore[arg-type]
+                WorkflowNode(id="end", type=NodeType.TERMINAL, config={}),
+            ],
+            edges=[WorkflowEdge(id="e1", from_node_id="echo_step", to_node_id="end")],
+        )
+        validator = GraphValidator(
+            plugins_enabled=True,
+            plugin_registry=plugin_registry,
+            workflow_plugin_registry=workflow_plugin_registry,
+        )
+
+        with pytest.raises(WorkflowValidationError, match="message_key"):
+            validator.validate(definition)
 
 
 class TestWorkflowPluginExecution:
@@ -287,3 +330,82 @@ class TestWorkflowManagerPluginValidation:
         created = await manager.create_definition(definition)
 
         assert created == definition
+
+
+class TestPluginNodeExecutorValidation:
+    @pytest.mark.anyio
+    async def test_sync_execute_method_rejected(self) -> None:
+        registry = WorkflowPluginRegistry()
+
+        class SyncExecutor:
+            def execute(
+                self,
+                node: WorkflowNode,
+                context: WorkflowContext,
+                request: NodeExecutionRequest,
+            ) -> dict[str, object]:
+                del node, context, request
+                return {}
+
+        registry.register(
+            plugin_id="com.test.bad",
+            node_type="sync",
+            executor_factory=lambda _ctx: SyncExecutor(),
+        )
+        dispatcher = PluginNodeExecutor(
+            workflow_plugin_registry=registry,
+            settings=Settings(plugins_enabled=True),
+        )
+        node = WorkflowNode(
+            id="bad",
+            type=NodeType.PLUGIN,
+            config={
+                "plugin_id": "com.test.bad",
+                "plugin_node_type": "sync",
+            },
+        )
+
+        with pytest.raises(WorkflowNodeExecutionError, match="not async") as exc:
+            await dispatcher.execute(
+                node,
+                WorkflowContext(),
+                NodeExecutionRequest(
+                    owner_id=uuid.uuid4(),
+                    execution_receipt_id="receipt-1",
+                ),
+            )
+
+        assert exc.value.error_code == "invalid_executor"
+
+    @pytest.mark.anyio
+    async def test_missing_execute_rejected(self) -> None:
+        registry = WorkflowPluginRegistry()
+        registry.register(
+            plugin_id="com.test.bad",
+            node_type="missing",
+            executor_factory=lambda _ctx: object(),
+        )
+        dispatcher = PluginNodeExecutor(
+            workflow_plugin_registry=registry,
+            settings=Settings(plugins_enabled=True),
+        )
+        node = WorkflowNode(
+            id="bad",
+            type=NodeType.PLUGIN,
+            config={
+                "plugin_id": "com.test.bad",
+                "plugin_node_type": "missing",
+            },
+        )
+
+        with pytest.raises(WorkflowNodeExecutionError, match="NodeExecutor") as exc:
+            await dispatcher.execute(
+                node,
+                WorkflowContext(),
+                NodeExecutionRequest(
+                    owner_id=uuid.uuid4(),
+                    execution_receipt_id="receipt-1",
+                ),
+            )
+
+        assert exc.value.error_code == "invalid_executor"

@@ -46,8 +46,11 @@ class GraphValidator:
         self._validate_node_count(definition)
         self._validate_entry_node(definition, node_ids)
         self._validate_node_types(definition)
+        if not self._plugins_enabled:
+            self._reject_plugin_nodes_when_disabled(definition)
         self._validate_node_configs(definition)
-        self._validate_plugin_nodes(definition)
+        if self._plugins_enabled:
+            self._validate_plugin_nodes(definition)
         self._validate_dangling_edges(definition, node_ids)
         self._validate_edge_conditions(definition)
         self._validate_cycles(definition, node_ids)
@@ -78,7 +81,21 @@ class GraphValidator:
                 )
 
     def _validate_node_configs(self, definition: WorkflowDefinition) -> None:
-        validate_node_configs(definition.nodes)
+        validate_node_configs(
+            definition.nodes,
+            workflow_plugin_registry=(
+                self._workflow_plugin_registry if self._plugins_enabled else None
+            ),
+        )
+
+    def _reject_plugin_nodes_when_disabled(
+        self, definition: WorkflowDefinition
+    ) -> None:
+        for node in definition.nodes:
+            if node.type is NodeType.PLUGIN:
+                raise WorkflowValidationError(
+                    f"Node {node.id!r} has type 'plugin' but PLUGINS_ENABLED is false."
+                )
 
     def _validate_plugin_nodes(self, definition: WorkflowDefinition) -> None:
         from app.ai.plugins.models import PluginStatus
@@ -86,10 +103,6 @@ class GraphValidator:
         for node in definition.nodes:
             if node.type is not NodeType.PLUGIN:
                 continue
-            if not self._plugins_enabled:
-                raise WorkflowValidationError(
-                    f"Node {node.id!r} has type 'plugin' but PLUGINS_ENABLED is false."
-                )
 
             plugin_id = node.config.get("plugin_id")
             plugin_node_type = node.config.get("plugin_node_type")

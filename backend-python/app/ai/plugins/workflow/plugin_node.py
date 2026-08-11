@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 from app.ai.plugins.workflow.context import WorkflowPluginExecutorContext
 from app.ai.plugins.workflow.registry import WorkflowPluginRegistry
 from app.ai.workflow.models import WorkflowContext, WorkflowNode
@@ -57,14 +59,10 @@ class PluginNodeExecutor:
         executor = self._executor_cache.get(cache_key)
         if executor is None:
             factory_context = WorkflowPluginExecutorContext(settings=self._settings)
-            created = factory(factory_context)
-            if not hasattr(created, "execute"):
-                raise WorkflowNodeExecutionError(
-                    f"Plugin node {node.id!r} executor factory did not return a "
-                    "NodeExecutor.",
-                    error_code="invalid_executor",
-                )
-            executor = created
+            executor = _validate_plugin_executor(
+                factory(factory_context),
+                node_id=node.id,
+            )
             self._executor_cache[cache_key] = executor
 
         result = await executor.execute(node, context, request)
@@ -74,3 +72,19 @@ class PluginNodeExecutor:
                 error_code="invalid_output",
             )
         return result
+
+
+def _validate_plugin_executor(created: object, *, node_id: str) -> NodeExecutor:
+    execute = getattr(created, "execute", None)
+    if not callable(execute):
+        raise WorkflowNodeExecutionError(
+            f"Plugin node {node_id!r} executor factory did not return a NodeExecutor.",
+            error_code="invalid_executor",
+        )
+    if not inspect.iscoroutinefunction(execute):
+        raise WorkflowNodeExecutionError(
+            f"Plugin node {node_id!r} executor factory returned an object whose "
+            "execute method is not async.",
+            error_code="invalid_executor",
+        )
+    return created  # type: ignore[return-value]
