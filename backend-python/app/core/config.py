@@ -235,6 +235,15 @@ class Settings(BaseSettings):
     # interrupt in-process plugin code (see Epic 08 § Registration timeout).
     plugin_registration_wait_timeout_seconds: int = Field(default=30, ge=1)
 
+    # V2 Epic 9 Phase 1: Human-in-the-loop infrastructure flag (default false).
+    # When true: ApprovalPolicy gates flagged tool calls on agent and workflow
+    # surfaces; REST inbox/decide endpoints and resume wiring follow in later
+    # phases. Flag-off keeps all Epic 08 pipeline paths unchanged.
+    hitl_enabled: bool = False
+    hitl_required_tool_names: list[str] = Field(default_factory=list)
+    hitl_approval_timeout_hours: int = Field(default=0, ge=0)
+    hitl_max_reason_length: int = Field(default=2000, ge=1)
+
     # OpenTelemetry configuration (honoured only when OBSERVABILITY_ENABLED=true).
     otel_service_name: str = "fullstack-ai-platform"
     # Empty string selects the console span exporter (dev default).

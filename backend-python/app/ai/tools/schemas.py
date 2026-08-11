@@ -16,6 +16,7 @@ class ToolDefinition(BaseModel):
     name: str
     description: str
     parameters: dict[str, Any]
+    requires_approval: bool = False
 
 
 class ToolCall(BaseModel):
