@@ -77,12 +77,12 @@ class ChatAgentAdapter:
             settings=self._settings,
             allowed_tool_names=allowed_tool_names,
         )
-        agent_context = build_agent_context(
-            caller=caller,
-            allowed_tool_names=allowed_tool_names,
-        )
 
         if not self._chat_service._persistence_active(caller):
+            agent_context = build_agent_context(
+                caller=caller,
+                allowed_tool_names=allowed_tool_names,
+            )
             return await self._complete_stateless(
                 agent_request=agent_request,
                 agent_context=agent_context,
@@ -134,6 +134,12 @@ class ChatAgentAdapter:
         except (OperationalError, InterfaceError, DBAPIError) as exc:
             raise DbUnavailableError() from exc
 
+        agent_context = build_agent_context(
+            caller=caller,
+            allowed_tool_names=allowed_tool_names,
+            session_id=chat_session.id,
+        )
+
         try:
             if on_activity is not None:
                 await on_activity("web_search")
@@ -170,6 +176,18 @@ class ChatAgentAdapter:
             await chat_store.mark_last_message_at(chat_session.id)
             await self._chat_service._commit()
             raise app_error from exc
+
+        if agent_response.finish_reason == "waiting_approval":
+            await chat_store.mark_last_message_at(chat_session.id)
+            await self._chat_service._commit()
+            return ChatResponseSchema(
+                id=f"resp_{uuid.uuid4().hex[:12]}",
+                content=agent_response.content,
+                model=model,
+                provider=provider_name,
+                session_id=chat_session.id,
+                tools_used=agent_response.tools_used or None,
+            )
 
         assistant_seq = await chat_store.allocate_seq(chat_session.id)
         assistant = await chat_store.add_message(

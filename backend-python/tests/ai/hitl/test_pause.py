@@ -7,7 +7,7 @@ import uuid
 import pytest
 
 from app.ai.agent.models.plan import PlannedStep, StepAction
-from app.ai.agent.models.state import AgentExecutionState
+from app.ai.agent.models.state import AgentExecutionState, AgentExecutionStatus
 from app.ai.agent.scratchpad import Scratchpad, ScratchpadEntry
 from app.ai.agent.streaming import InMemoryStreamPublisher
 from app.ai.hitl.exceptions import AgentApprovalPauseError
@@ -105,7 +105,10 @@ async def test_pause_persists_approval_and_placeholder_message() -> None:
     publisher = InMemoryStreamPublisher()
     scratchpad = Scratchpad("exec-pause")
     scratchpad.append_thought("about to run sensitive tool")
-    state = AgentExecutionState(execution_id="exec-pause")
+    state = AgentExecutionState(
+        execution_id="exec-pause",
+        status=AgentExecutionStatus.EXECUTING,
+    )
     step = PlannedStep(
         step_id="step-1",
         action=StepAction.TOOL_CALL,
@@ -130,6 +133,7 @@ async def test_pause_persists_approval_and_placeholder_message() -> None:
     assert approval.proposed_calls == [
         ProposedToolCall(name="delete_file", arguments={"path": "/tmp/x"}, call_id="c1")
     ]
+    assert approval.paused_state["status"] == AgentExecutionStatus.WAITING_APPROVAL
     assert approval.pending_message_id is not None
     messages = await chat_store.list_messages(session.id)
     placeholder = next(m for m in messages if m.id == approval.pending_message_id)
@@ -202,3 +206,69 @@ async def test_agent_tool_approval_store_create(db_session) -> None:
     fetched = await store.get(approval.id)
     assert fetched is not None
     assert fetched.proposed_calls[0].name == "echo"
+
+
+@pytest.mark.anyio
+async def test_link_pending_message_refreshes_updated_at(db_session) -> None:
+    import datetime
+
+    from sqlalchemy import text, update
+
+    from app.db.models import AgentToolApprovalRecord, ChatMessage
+
+    result = await db_session.execute(
+        text("SELECT to_regclass('public.agent_tool_approvals') IS NOT NULL")
+    )
+    if not result.scalar():
+        pytest.skip("agent_tool_approvals not available — run alembic upgrade head")
+
+    user = User(
+        auth_provider="google",
+        external_auth_id=f"hitl-{uuid.uuid4().hex}",
+        email=f"hitl-{uuid.uuid4().hex[:8]}@example.com",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    chat_session = ChatSession(user_id=user.id, next_seq=1)
+    db_session.add(chat_session)
+    await db_session.flush()
+
+    store = AgentToolApprovalStore(db_session)
+    approval = await store.create(
+        session_id=chat_session.id,
+        owner_id=user.id,
+        execution_id="exec-link",
+        approval_correlation_id=uuid.uuid4(),
+        proposed_calls=[
+            ProposedToolCall(name="echo", arguments={"message": "hi"}, call_id="c1")
+        ],
+        paused_scratchpad=[{"kind": "thought", "content": "x"}],
+        paused_state={"execution_id": "exec-link", "status": "waiting_approval"},
+    )
+    stale_updated_at = approval.updated_at - datetime.timedelta(minutes=5)
+    await db_session.execute(
+        update(AgentToolApprovalRecord)
+        .where(AgentToolApprovalRecord.id == approval.id)
+        .values(updated_at=stale_updated_at)
+    )
+    await db_session.flush()
+
+    placeholder = ChatMessage(
+        session_id=chat_session.id,
+        seq=1,
+        role="assistant",
+        content="",
+        status="waiting_approval",
+        pending_approval_id=approval.id,
+    )
+    db_session.add(placeholder)
+    await db_session.flush()
+
+    linked = await store.link_pending_message(
+        approval.id,
+        pending_message_id=placeholder.id,
+    )
+
+    assert linked is not None
+    assert linked.pending_message_id == placeholder.id
+    assert linked.updated_at > stale_updated_at

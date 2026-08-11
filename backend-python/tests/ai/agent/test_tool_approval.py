@@ -13,7 +13,7 @@ from app.ai.agent.models.context import AgentContext
 from app.ai.agent.models.events import AgentStreamEventType
 from app.ai.agent.models.messages import AgentMessage
 from app.ai.agent.models.plan import PlannedStep, StepAction
-from app.ai.agent.models.state import AgentExecutionState
+from app.ai.agent.models.state import AgentExecutionState, AgentExecutionStatus
 from app.ai.agent.models.request import AgentRequest
 from app.ai.agent.planner import ReActPlanner
 from app.ai.agent.scratchpad import ScratchpadStore
@@ -37,12 +37,15 @@ from tests.fakes import FakeChatStore, FakeProvider
 
 
 class SensitiveHandler:
+    call_count: int = 0
+
     async def execute(
         self,
         args: dict[str, object],
         context: ToolExecutionContext,
     ) -> ToolResult:
-        del args, context
+        del context
+        SensitiveHandler.call_count += 1
         return ToolResult(success=True, data={"deleted": True})
 
 
@@ -62,6 +65,7 @@ class TrackingHandler:
 @pytest.fixture(autouse=True)
 def _reset_tracking() -> Iterator[None]:
     TrackingHandler.calls = []
+    SensitiveHandler.call_count = 0
     yield
 
 
@@ -120,7 +124,10 @@ async def test_tool_runner_does_not_dispatch_when_approval_required(
     )
     scratchpad_store = ScratchpadStore()
     scratchpad = scratchpad_store.create("exec-gate")
-    state = AgentExecutionState(execution_id="exec-gate")
+    state = AgentExecutionState(
+        execution_id="exec-gate",
+        status=AgentExecutionStatus.EXECUTING,
+    )
     step = PlannedStep(
         step_id="s1",
         action=StepAction.TOOL_CALL,
@@ -138,7 +145,7 @@ async def test_tool_runner_does_not_dispatch_when_approval_required(
             owner_id=tool_context.caller.user_id,  # type: ignore[union-attr]
         )
 
-    assert SensitiveHandler.__name__  # handler never invoked — no call counter needed
+    assert SensitiveHandler.call_count == 0
     assert publisher.events[-1].type == AgentStreamEventType.APPROVAL_REQUIRED
     messages = await chat_store.list_messages(session.id)
     assert any(m.status == "waiting_approval" for m in messages)
@@ -200,7 +207,10 @@ async def test_mixed_step_pauses_entire_step(
     )
     scratchpad_store = ScratchpadStore()
     scratchpad = scratchpad_store.create("exec-mix")
-    state = AgentExecutionState(execution_id="exec-mix")
+    state = AgentExecutionState(
+        execution_id="exec-mix",
+        status=AgentExecutionStatus.EXECUTING,
+    )
     step = PlannedStep(
         step_id="s1",
         action=StepAction.TOOL_CALL,
@@ -214,6 +224,133 @@ async def test_mixed_step_pauses_entire_step(
         await runner.run_tool_steps(
             [step],
             execution_id="exec-mix",
+            tool_context=tool_context,
+            scratchpad=scratchpad,
+            state=state,
+            session_id=session.id,
+            owner_id=tool_context.caller.user_id,  # type: ignore[union-attr]
+        )
+
+    assert TrackingHandler.calls == []
+
+
+@pytest.mark.anyio
+async def test_parallel_batch_preflights_before_any_dispatch(
+    tool_context: ToolExecutionContext,
+) -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            name="delete_file",
+            description="delete",
+            parameters={"type": "object", "properties": {}},
+            requires_approval=True,
+        ),
+        SensitiveHandler(),
+    )
+    registry.register(ECHO_TOOL_DEFINITION, TrackingHandler())
+    executor = ToolExecutor(registry=registry, settings=Settings())
+    chat_store = FakeChatStore()
+    session = await chat_store.create_session(user_id=tool_context.caller.user_id)  # type: ignore[union-attr]
+    runner = ToolRunner(
+        tool_executor=executor,
+        tool_registry=registry,
+        hitl_enabled=True,
+        parallel_tools_enabled=True,
+        approval_policy=ApprovalPolicy(required_tool_names=frozenset()),
+        approval_service=_approval_service(chat_store),
+    )
+    scratchpad_store = ScratchpadStore()
+    scratchpad = scratchpad_store.create("exec-parallel-preflight")
+    state = AgentExecutionState(
+        execution_id="exec-parallel-preflight",
+        status=AgentExecutionStatus.EXECUTING,
+    )
+    steps = [
+        PlannedStep(
+            step_id="safe",
+            action=StepAction.TOOL_CALL,
+            tool_calls=[
+                ToolCall(name="echo", arguments={"message": "safe"}, call_id="c1")
+            ],
+        ),
+        PlannedStep(
+            step_id="delete",
+            action=StepAction.TOOL_CALL,
+            tool_calls=[
+                ToolCall(name="delete_file", arguments={"path": "/tmp/x"}, call_id="c2")
+            ],
+        ),
+    ]
+
+    with pytest.raises(AgentApprovalPauseError):
+        await runner.run_tool_steps(
+            steps,
+            execution_id="exec-parallel-preflight",
+            tool_context=tool_context,
+            scratchpad=scratchpad,
+            state=state,
+            session_id=session.id,
+            owner_id=tool_context.caller.user_id,  # type: ignore[union-attr]
+        )
+
+    assert TrackingHandler.calls == []
+
+
+@pytest.mark.anyio
+async def test_later_batch_preflights_before_earlier_batch_runs(
+    tool_context: ToolExecutionContext,
+) -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            name="delete_file",
+            description="delete",
+            parameters={"type": "object", "properties": {}},
+            requires_approval=True,
+        ),
+        SensitiveHandler(),
+    )
+    registry.register(ECHO_TOOL_DEFINITION, TrackingHandler())
+    executor = ToolExecutor(registry=registry, settings=Settings())
+    chat_store = FakeChatStore()
+    session = await chat_store.create_session(user_id=tool_context.caller.user_id)  # type: ignore[union-attr]
+    runner = ToolRunner(
+        tool_executor=executor,
+        tool_registry=registry,
+        hitl_enabled=True,
+        parallel_tools_enabled=True,
+        approval_policy=ApprovalPolicy(required_tool_names=frozenset()),
+        approval_service=_approval_service(chat_store),
+    )
+    scratchpad_store = ScratchpadStore()
+    scratchpad = scratchpad_store.create("exec-chain-preflight")
+    state = AgentExecutionState(
+        execution_id="exec-chain-preflight",
+        status=AgentExecutionStatus.EXECUTING,
+    )
+    steps = [
+        PlannedStep(
+            step_id="safe",
+            action=StepAction.TOOL_CALL,
+            tool_calls=[
+                ToolCall(name="echo", arguments={"message": "safe"}, call_id="c1")
+            ],
+        ),
+        PlannedStep(
+            step_id="delete",
+            action=StepAction.TOOL_CALL,
+            tool_calls=[
+                ToolCall(name="delete_file", arguments={"path": "/tmp/x"}, call_id="c2")
+            ],
+            depends_on=["safe"],
+        ),
+    ]
+
+    with pytest.raises(AgentApprovalPauseError):
+        await runner.run_tool_steps(
+            steps,
+            execution_id="exec-chain-preflight",
             tool_context=tool_context,
             scratchpad=scratchpad,
             state=state,
@@ -351,6 +488,223 @@ async def test_agent_executor_pause_emits_no_complete_event(
     assert AgentStreamEventType.APPROVAL_REQUIRED in event_types
     assert AgentStreamEventType.COMPLETE not in event_types
     assert AgentStreamEventType.ERROR not in event_types
+
+
+@pytest.mark.anyio
+async def test_complete_chat_waiting_approval_preserves_placeholder(
+    sensitive_registry: ToolRegistry,
+    tool_context: ToolExecutionContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ai.agent.adapters.chat_adapter import ChatAgentAdapter
+    from app.ai.agent.runtime import create_default_agent
+    from app.ai.prompts.manager import create_prompt_manager
+    from app.providers.factory import ProviderFactory
+    from app.schemas.chat import ChatMessageSchema, ChatRequestSchema
+    from app.services.chat_service import ChatService
+    from app.services.quota_service import QuotaService
+    from tests.fakes import FakeGuestQuotaStore, FakeUsageStore
+
+    provider = FakeProvider(
+        tool_completions=[
+            ProviderToolCompletion(
+                content="Deleting now.",
+                tool_calls=[
+                    ProviderToolCall(
+                        id="tc-1",
+                        name="delete_file",
+                        arguments={"path": "/tmp/x"},
+                    )
+                ],
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        ProviderFactory,
+        "get_provider",
+        staticmethod(lambda _name, _settings: provider),
+    )
+    chat_store = FakeChatStore()
+    approval_service = _approval_service(chat_store)
+    settings = Settings(
+        chat_persistence_enabled=True,
+        hitl_enabled=True,
+        tools_enabled=True,
+        request_timeout_seconds=5,
+    )
+    tool_executor = ToolExecutor(registry=sensitive_registry, settings=settings)
+    agent = create_default_agent(
+        settings=settings,
+        tool_registry=sensitive_registry,
+        prompt_manager=create_prompt_manager(),
+        tool_executor=tool_executor,
+        approval_policy=ApprovalPolicy(required_tool_names=frozenset()),
+        approval_service=approval_service,
+    )
+    chat_service = ChatService(
+        settings,
+        chat_store=chat_store,
+        usage_store=FakeUsageStore(),
+        quota_service=QuotaService(store=FakeGuestQuotaStore(), settings=settings),
+        prompt_manager=create_prompt_manager(),
+    )
+    adapter = ChatAgentAdapter(
+        agent=agent, chat_service=chat_service, settings=settings
+    )
+
+    response = await adapter.complete_chat(
+        ChatRequestSchema(
+            messages=[ChatMessageSchema(role="user", content="delete /tmp/x")],
+            provider="openai",
+            model="gpt-4o-mini",
+        ),
+        tool_context.caller,
+        allowed_tool_names=frozenset({"delete_file"}),
+    )
+
+    assert response.content == ""
+    assert response.session_id is not None
+    messages = await chat_store.list_messages(response.session_id)
+    assert [message.role for message in messages] == ["user", "assistant"]
+    assert messages[1].status == "waiting_approval"
+    assert messages[1].content == ""
+    assert messages[1].pending_approval_id is not None
+
+
+def _hitl_executor(
+    *,
+    sensitive_registry: ToolRegistry,
+    chat_store: FakeChatStore,
+    scratchpad_store: ScratchpadStore,
+    publisher: InMemoryStreamPublisher,
+) -> AgentExecutor:
+    from app.ai.prompts.manager import create_prompt_manager
+
+    provider = FakeProvider()
+    tool_executor = ToolExecutor(registry=sensitive_registry, settings=Settings())
+    runner = ToolRunner(
+        tool_executor=tool_executor,
+        tool_registry=sensitive_registry,
+        stream_publisher=publisher,
+        hitl_enabled=True,
+        approval_policy=ApprovalPolicy(required_tool_names=frozenset()),
+        approval_service=_approval_service(chat_store),
+    )
+    return AgentExecutor(
+        planner=ReActPlanner(
+            provider=provider,
+            tool_registry=sensitive_registry,
+            prompt_manager=create_prompt_manager(),
+            scratchpad_store=scratchpad_store,
+        ),
+        provider=provider,
+        tool_runner=runner,
+        stream_publisher=publisher,
+        scratchpad_store=scratchpad_store,
+        prompt_manager=create_prompt_manager(),
+    )
+
+
+def _delete_step() -> PlannedStep:
+    return PlannedStep(
+        step_id="delete-step",
+        action=StepAction.TOOL_CALL,
+        tool_calls=[ToolCall(name="delete_file", arguments={"path": "/tmp/x"})],
+        reasoning="Delete the file.",
+    )
+
+
+@pytest.mark.anyio
+async def test_execute_plan_waiting_approval(
+    sensitive_registry: ToolRegistry,
+    tool_context: ToolExecutionContext,
+) -> None:
+    from app.ai.agent.models.config import AgentConfig
+    from app.ai.agent.models.context import AgentContext
+    from app.ai.agent.models.messages import AgentMessage
+    from app.ai.agent.models.plan import ExecutionPlan
+    from app.ai.agent.models.request import AgentRequest
+    from app.ai.agent.models.response import AgentResponse
+
+    scratchpad_store = ScratchpadStore()
+    publisher = InMemoryStreamPublisher()
+    chat_store = FakeChatStore()
+    session = await chat_store.create_session(user_id=tool_context.caller.user_id)  # type: ignore[union-attr]
+    executor = _hitl_executor(
+        sensitive_registry=sensitive_registry,
+        chat_store=chat_store,
+        scratchpad_store=scratchpad_store,
+        publisher=publisher,
+    )
+    context = AgentContext(
+        execution_id="exec-plan-pause",
+        caller=tool_context.caller,
+        session_id=session.id,
+    )
+    request = AgentRequest(
+        messages=[AgentMessage(role="user", content="delete /tmp/x")],
+        model="gpt-4o-mini",
+        config=AgentConfig(max_iterations=2),
+    )
+
+    response = await executor.execute_plan(
+        ExecutionPlan(steps=[_delete_step()], iteration=0),
+        request,
+        context,
+        tool_context=tool_context,
+    )
+
+    assert isinstance(response, AgentResponse)
+    assert response.finish_reason == "waiting_approval"
+    assert response.metadata["approval_id"]
+    messages = await chat_store.list_messages(session.id)
+    assert any(message.status == "waiting_approval" for message in messages)
+
+
+@pytest.mark.anyio
+async def test_execute_step_waiting_approval(
+    sensitive_registry: ToolRegistry,
+    tool_context: ToolExecutionContext,
+) -> None:
+    from app.ai.agent.models.config import AgentConfig
+    from app.ai.agent.models.context import AgentContext
+    from app.ai.agent.models.messages import AgentMessage
+    from app.ai.agent.models.request import AgentRequest
+    from app.ai.agent.models.response import AgentResponse
+
+    scratchpad_store = ScratchpadStore()
+    publisher = InMemoryStreamPublisher()
+    chat_store = FakeChatStore()
+    session = await chat_store.create_session(user_id=tool_context.caller.user_id)  # type: ignore[union-attr]
+    executor = _hitl_executor(
+        sensitive_registry=sensitive_registry,
+        chat_store=chat_store,
+        scratchpad_store=scratchpad_store,
+        publisher=publisher,
+    )
+    context = AgentContext(
+        execution_id="exec-step-pause",
+        caller=tool_context.caller,
+        session_id=session.id,
+    )
+    request = AgentRequest(
+        messages=[AgentMessage(role="user", content="delete /tmp/x")],
+        model="gpt-4o-mini",
+        config=AgentConfig(max_iterations=2),
+    )
+
+    result = await executor.execute_step(
+        _delete_step(),
+        request,
+        context,
+        tool_context=tool_context,
+    )
+
+    assert isinstance(result, AgentResponse)
+    assert result.finish_reason == "waiting_approval"
+    assert result.metadata["approval_id"]
+    messages = await chat_store.list_messages(session.id)
+    assert any(message.status == "waiting_approval" for message in messages)
 
 
 @pytest.mark.anyio

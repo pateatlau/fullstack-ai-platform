@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -119,7 +119,7 @@ class ChatResponseSchema(BaseModel):
     provider: ProviderName
     # Populated when persistence is active so the client can continue the session.
     session_id: uuid.UUID | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     # Optional unified-chat metadata (V1.1b).
     retrieved_chunks: list[RetrievedChunkMetaSchema] | None = None
     tools_used: list[str] | None = None
@@ -143,21 +143,21 @@ class StartFrame(BaseModel):
     id: str
     # Populated when persistence is active so streaming clients learn the session.
     session_id: uuid.UUID | None = None
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class DeltaFrame(BaseModel):
     type: Literal["delta"] = "delta"
     id: str
     content: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class EndFrame(BaseModel):
     type: Literal["end"] = "end"
     id: str
     finish_reason: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ErrorFrame(BaseModel):
@@ -165,7 +165,7 @@ class ErrorFrame(BaseModel):
     id: str
     code: str
     message: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ToolStartFrame(BaseModel):
@@ -173,7 +173,7 @@ class ToolStartFrame(BaseModel):
     id: str
     tool_name: str
     call_id: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ToolEndFrame(BaseModel):
@@ -182,7 +182,7 @@ class ToolEndFrame(BaseModel):
     tool_name: str
     call_id: str
     success: bool
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ProposedToolCallFrame(BaseModel):
@@ -199,7 +199,7 @@ class ApprovalRequiredFrame(BaseModel):
     approval_id: uuid.UUID
     approval_correlation_id: uuid.UUID
     proposed_calls: list[ProposedToolCallFrame] = Field(default_factory=list)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class RetrievalCompleteFrame(BaseModel):
@@ -208,7 +208,7 @@ class RetrievalCompleteFrame(BaseModel):
     chunk_count: int
     # Additive (Epic 02 Phase 8); keep chunk_count. Default 0 on V1 path.
     citation_count: int = 0
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ChatMessageOut(BaseModel):

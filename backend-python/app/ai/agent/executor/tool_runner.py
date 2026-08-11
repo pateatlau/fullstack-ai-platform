@@ -105,6 +105,16 @@ class ToolRunner:
     ) -> AggregatedToolResults:
         """Execute tool-call steps respecting dependencies and parallel settings."""
         batches = resolve_step_batches(steps)
+        await self._preflight_approval_for_steps(
+            steps,
+            execution_id=execution_id,
+            scratchpad=scratchpad,
+            state=state,
+            session_id=session_id,
+            owner_id=owner_id,
+            provider=provider,
+            model=model,
+        )
         records: list[ToolRunRecord] = []
 
         for batch in batches:
@@ -188,17 +198,6 @@ class ToolRunner:
         if not step.tool_calls:
             return []
 
-        await self._maybe_pause_for_approval(
-            step,
-            execution_id=execution_id,
-            scratchpad=scratchpad,
-            state=state,
-            session_id=session_id,
-            owner_id=owner_id,
-            provider=provider,
-            model=model,
-        )
-
         if len(step.tool_calls) > 1 and self._parallel_tools_enabled:
             results = await asyncio.gather(
                 *[
@@ -270,6 +269,33 @@ class ToolRunner:
             model=model,
         )
         raise_pause(approval)
+
+    async def _preflight_approval_for_steps(
+        self,
+        steps: list[PlannedStep],
+        *,
+        execution_id: str,
+        scratchpad: Scratchpad | None,
+        state: AgentExecutionState | None,
+        session_id: uuid.UUID | None,
+        owner_id: uuid.UUID | None,
+        provider: str | None,
+        model: str | None,
+    ) -> None:
+        """Pause before any tool dispatch when a planned step requires approval."""
+        for step in steps:
+            if not step.tool_calls:
+                continue
+            await self._maybe_pause_for_approval(
+                step,
+                execution_id=execution_id,
+                scratchpad=scratchpad,
+                state=state,
+                session_id=session_id,
+                owner_id=owner_id,
+                provider=provider,
+                model=model,
+            )
 
     async def _run_single_tool(
         self,

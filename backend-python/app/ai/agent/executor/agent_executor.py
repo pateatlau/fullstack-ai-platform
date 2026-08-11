@@ -222,17 +222,7 @@ class AgentExecutor:
                 last_planner_content=last_planner_content,
             )
         except AgentApprovalPauseError as exc:
-            state = AgentStateManager.transition(
-                state,
-                AgentExecutionStatus.WAITING_APPROVAL,
-            )
-            return AgentResponse(
-                content="",
-                tools_used=list(state.tools_used),
-                iterations=state.current_iteration,
-                finish_reason="waiting_approval",
-                metadata={"approval_id": str(exc.approval.id)},
-            )
+            return self._waiting_approval_response(exc, state)
         except AgentError as exc:
             await self._publisher.publish(
                 AgentStreamEvent.error(
@@ -297,15 +287,18 @@ class AgentExecutor:
             raise ValueError("tool_context is required for non-final plans")
 
         state = AgentStateManager.transition(state, AgentExecutionStatus.EXECUTING)
-        state, _ = await self._execute_tool_plan(
-            plan,
-            context=context,
-            state=state,
-            tool_context=tool_context,
-            scratchpad=scratchpad,
-            request=request,
-            provider_name=_provider_name_from_request(request),
-        )
+        try:
+            state, _ = await self._execute_tool_plan(
+                plan,
+                context=context,
+                state=state,
+                tool_context=tool_context,
+                scratchpad=scratchpad,
+                request=request,
+                provider_name=_provider_name_from_request(request),
+            )
+        except AgentApprovalPauseError as exc:
+            return self._waiting_approval_response(exc, state)
         return AgentResponse(
             content="",
             tools_used=list(state.tools_used),
@@ -330,15 +323,38 @@ class AgentExecutor:
         if step.action == StepAction.TOOL_CALL:
             if tool_context is None:
                 raise ValueError("tool_context is required for tool steps")
+            config = request.config or AgentConfig()
+            state = AgentExecutionState(
+                execution_id=context.execution_id,
+                max_iterations=config.max_iterations,
+                metadata=dict(context.metadata),
+            )
+            state = AgentStateManager.transition(
+                state,
+                AgentExecutionStatus.PLANNING,
+            )
+            state = AgentStateManager.transition(
+                state,
+                AgentExecutionStatus.EXECUTING,
+            )
             if step.tool_calls:
                 scratchpad.append_provider_message(
                     _assistant_tool_call_message(step.reasoning, step.tool_calls)
                 )
-            results = await self._tool_runner.run_tool_steps(
-                [step],
-                execution_id=context.execution_id,
-                tool_context=tool_context,
-            )
+            try:
+                results = await self._tool_runner.run_tool_steps(
+                    [step],
+                    execution_id=context.execution_id,
+                    tool_context=tool_context,
+                    scratchpad=scratchpad,
+                    state=state,
+                    session_id=context.session_id,
+                    owner_id=_resolve_owner_id(context.caller),
+                    provider=_provider_name_from_request(request),
+                    model=request.model,
+                )
+            except AgentApprovalPauseError as exc:
+                return self._waiting_approval_response(exc, state)
             _record_tool_results(scratchpad, results.records)
             return results
 
@@ -515,6 +531,23 @@ class AgentExecutor:
             tools_used=list(state.tools_used),
             iterations=state.current_iteration,
             finish_reason=result.finish_reason,
+        )
+
+    @staticmethod
+    def _waiting_approval_response(
+        exc: AgentApprovalPauseError,
+        state: AgentExecutionState,
+    ) -> AgentResponse:
+        paused_state = AgentStateManager.transition(
+            state,
+            AgentExecutionStatus.WAITING_APPROVAL,
+        )
+        return AgentResponse(
+            content="",
+            tools_used=list(paused_state.tools_used),
+            iterations=paused_state.current_iteration,
+            finish_reason="waiting_approval",
+            metadata={"approval_id": str(exc.approval.id)},
         )
 
 

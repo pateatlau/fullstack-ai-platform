@@ -8,8 +8,9 @@ from typing import Protocol
 from app.ai.agent.interfaces.streaming import StreamPublisher
 from app.ai.agent.models.events import AgentStreamEvent
 from app.ai.agent.models.plan import PlannedStep
-from app.ai.agent.models.state import AgentExecutionState
+from app.ai.agent.models.state import AgentExecutionState, AgentExecutionStatus
 from app.ai.agent.scratchpad.scratchpad import Scratchpad
+from app.ai.agent.state.manager import AgentStateManager
 from app.ai.hitl.exceptions import AgentApprovalPauseError
 from app.ai.hitl.models import AgentToolApproval, ProposedToolCall
 from app.db.models import ChatMessage
@@ -85,6 +86,10 @@ class AgentApprovalService:
         """Snapshot state, persist approval + placeholder message, emit SSE event."""
         proposed_calls = _proposed_calls_from_step(step)
         approval_correlation_id = uuid.uuid4()
+        paused_state = AgentStateManager.transition(
+            state,
+            AgentExecutionStatus.WAITING_APPROVAL,
+        )
         approval = await self._approval_store.create(
             session_id=session_id,
             owner_id=owner_id,
@@ -92,7 +97,7 @@ class AgentApprovalService:
             approval_correlation_id=approval_correlation_id,
             proposed_calls=proposed_calls,
             paused_scratchpad=scratchpad.to_snapshot(),
-            paused_state=state.model_dump(mode="json"),
+            paused_state=paused_state.model_dump(mode="json"),
         )
 
         assistant_seq = await self._chat_store.allocate_seq(session_id)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.hitl.models import AgentToolApproval, ApprovalStatus, ProposedToolCall
@@ -88,7 +88,10 @@ class AgentToolApprovalStore:
         stmt = (
             update(AgentToolApprovalRecord)
             .where(AgentToolApprovalRecord.id == approval_id)
-            .values(pending_message_id=pending_message_id)
+            .values(
+                pending_message_id=pending_message_id,
+                updated_at=func.now(),
+            )
             .returning(AgentToolApprovalRecord)
         )
         row = (await self._session.execute(stmt)).scalar_one_or_none()

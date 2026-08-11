@@ -538,3 +538,77 @@ async def test_stream_agent_chat_error_persists_when_sse_mapping_returns_none(
     persist.assert_awaited_once()
     assert persist.await_args is not None
     assert persist.await_args.kwargs["status"] == "error"
+
+
+@pytest.mark.anyio
+async def test_stream_agent_chat_approval_required_commits_before_sse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.ai.agent.adapters.chat_stream_adapter import stream_agent_chat
+    from app.ai.agent.models.events import AgentStreamEvent
+    from app.schemas.chat import ChatMessageSchema, ChatRequestSchema
+
+    approval_id = uuid.uuid4()
+    correlation_id = uuid.uuid4()
+    approval_event = AgentStreamEvent.approval_required(
+        "exec-approval",
+        approval_id=approval_id,
+        approval_correlation_id=correlation_id,
+        proposed_calls=[
+            {"name": "delete_file", "arguments": {"path": "/x"}, "call_id": "c1"}
+        ],
+    )
+
+    async def _approval_stream(*_args, **_kwargs):
+        yield approval_event
+
+    agent = MagicMock()
+    agent.stream = _approval_stream
+
+    order: list[str] = []
+
+    async def _commit() -> None:
+        order.append("commit")
+
+    chat_service = MagicMock()
+    chat_service._commit = _commit
+
+    request = ChatRequestSchema(
+        messages=[ChatMessageSchema(role="user", content="delete /tmp/x")],
+        provider="openai",
+        model="gpt-4o-mini",
+    )
+    http_request = MagicMock()
+    http_request.is_disconnected = AsyncMock(return_value=False)
+    provider = MagicMock()
+
+    frames = [
+        frame
+        async for frame in stream_agent_chat(
+            agent=agent,
+            chat_service=chat_service,
+            settings=Settings(openai_api_key="test-key", tools_enabled=True),
+            request=request,
+            http_request=http_request,
+            caller=CallerContext.for_user(uuid.uuid4()),
+            prep=MagicMock(),
+            response_id="resp_approval",
+            session_id=uuid.uuid4(),
+            provider=provider,
+            provider_name="openai",
+            model="gpt-4o-mini",
+            allowed_tool_names=frozenset({"delete_file"}),
+        )
+    ]
+
+    assert any("event: start" in frame for frame in frames)
+    assert any("event: approval_required" in frame for frame in frames)
+    assert str(approval_id) in "".join(frames)
+    assert order == ["commit"]
+    start_index = next(i for i, frame in enumerate(frames) if "event: start" in frame)
+    approval_index = next(
+        i for i, frame in enumerate(frames) if "event: approval_required" in frame
+    )
+    assert start_index < approval_index

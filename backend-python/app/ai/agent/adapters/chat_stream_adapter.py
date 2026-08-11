@@ -131,11 +131,11 @@ async def stream_agent_chat(
                 if not start_emitted:
                     yield _emit_start()
                 mapped = sse_frame_from_agent_event(event, response_id=response_id)
+                if prep is not None:
+                    await chat_service._commit()
                 if mapped is not None:
                     event_name, frame = mapped
                     yield format_sse(event_name, frame)
-                if prep is not None:
-                    await chat_service._commit()
                 return
 
             if event.type == AgentStreamEventType.TOKEN:

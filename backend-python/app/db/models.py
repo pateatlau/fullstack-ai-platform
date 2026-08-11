@@ -737,7 +737,10 @@ class AgentToolApprovalRecord(Base):
         TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
     )
     updated_at: Mapped[datetime.datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=_NOW,
+        onupdate=_NOW,
     )
 
     __table_args__ = (
