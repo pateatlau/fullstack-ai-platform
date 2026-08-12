@@ -263,9 +263,8 @@ async def test_failing_eval_surfaces_handler_failure_with_last_error(
         del kwargs
         return failing_report, None
 
-    settings = Settings(
-        openai_api_key="test-key",
-        background_jobs_enabled=True,
+    settings = _eval_settings(
+        evaluation_schedule_level="prompt",
         background_jobs_default_max_attempts=3,
         background_jobs_worker_batch_size=10,
         background_jobs_claim_lease_seconds=300,
@@ -273,7 +272,6 @@ async def test_failing_eval_surfaces_handler_failure_with_last_error(
         background_jobs_retry_base_delay_seconds=0.0,
         background_jobs_retry_max_delay_seconds=0.0,
         background_jobs_worker_poll_interval_seconds=60,
-        evaluation_schedule_level="prompt",
     )
     factory = make_queue_session_factory(db_session.bind)
     queue = PostgresJobQueue(factory, settings)
@@ -284,21 +282,18 @@ async def test_failing_eval_surfaces_handler_failure_with_last_error(
             job,
             settings=settings,
             output_dir=tmp_path,
+            run_with_session=fake_run_with_session,
         )
 
     registry.register("scheduled_evaluation_run", handler)
     worker = JobWorker(queue=queue, registry=registry, settings=settings)
 
-    with patch(
-        "app.ai.jobs.handlers.scheduled_eval._run_with_session",
-        fake_run_with_session,
-    ):
-        job = await queue.enqueue(
-            job_type="scheduled_evaluation_run",
-            payload={"version": 1},
-            max_attempts=3,
-        )
-        await worker.poll_once()
+    job = await queue.enqueue(
+        job_type="scheduled_evaluation_run",
+        payload={"version": 1},
+        max_attempts=3,
+    )
+    await worker.poll_once()
 
     updated = await queue.get(job.id)
     assert updated is not None
@@ -335,14 +330,15 @@ async def test_failing_eval_raises_evaluation_run_failed_error(
     job = _sample_job()
     settings = _eval_settings(evaluation_schedule_level="prompt")
 
-    with patch(
-        "app.ai.jobs.handlers.scheduled_eval._run_with_session",
-        fake_run_with_session,
+    with pytest.raises(
+        EvaluationRunFailedError, match="evaluation failed at level prompt"
     ):
-        with pytest.raises(
-            EvaluationRunFailedError, match="evaluation failed at level prompt"
-        ):
-            await scheduled_evaluation_run(job, settings=settings, output_dir=tmp_path)
+        await scheduled_evaluation_run(
+            job,
+            settings=settings,
+            output_dir=tmp_path,
+            run_with_session=fake_run_with_session,
+        )
 
 
 @pytest.mark.anyio

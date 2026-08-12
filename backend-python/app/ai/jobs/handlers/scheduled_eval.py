@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.ai.evaluation.cli import (
@@ -23,6 +24,8 @@ DEFAULT_SCHEDULED_EVAL_OUTPUT_DIR = Path(".eval")
 _RECONCILE_MAX_ATTEMPTS = 5
 
 _logger = get_logger(__name__)
+
+RunWithSessionFn = Callable[..., Awaitable[tuple[EvalRunReport, int | None]]]
 
 
 class EvaluationRunFailedError(NonRetryableJobError):
@@ -64,6 +67,7 @@ async def scheduled_evaluation_run(
     *,
     settings: Settings,
     output_dir: Path = DEFAULT_SCHEDULED_EVAL_OUTPUT_DIR,
+    run_with_session: RunWithSessionFn = _run_with_session,
 ) -> JobResult:
     """Run the evaluation framework on a schedule and persist the JSON report."""
     if not settings.background_jobs_enabled:
@@ -76,7 +80,7 @@ async def scheduled_evaluation_run(
 
     level = settings.evaluation_schedule_level
     levels = _levels_to_run(level)
-    report, early_exit = await _run_with_session(
+    report, early_exit = await run_with_session(
         settings=settings,
         dataset_path=DEFAULT_DATASET,
         levels=levels,
