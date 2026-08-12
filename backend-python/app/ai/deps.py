@@ -38,6 +38,8 @@ if TYPE_CHECKING:
     from app.ai.workflow.manager import WorkflowManager
     from app.ai.workflow.providers.postgres import PostgresWorkflowStore
     from app.ai.observability.aggregation.usage_aggregator import UsageAggregator
+    from app.ai.jobs.queue import PostgresJobQueue
+    from app.ai.jobs.schedule_store import PostgresJobScheduleStore
 
 from app.ai.agent.runtime.default_agent import DefaultAgent
 from app.ai.agent.runtime.factory import create_default_agent
@@ -395,6 +397,24 @@ def get_knowledge_service(
         quota_service=quota_service,
         job_queue=job_queue,
     )
+
+
+def get_job_queue(
+    settings: Settings = Depends(get_ai_settings),
+) -> "PostgresJobQueue":
+    """Return a request-scoped Postgres job queue."""
+    from app.ai.jobs.queue import PostgresJobQueue
+    from app.db.engine import get_sessionmaker
+
+    return PostgresJobQueue(get_sessionmaker(), settings)
+
+
+def get_job_schedule_store() -> "PostgresJobScheduleStore":
+    """Return a request-scoped schedule store."""
+    from app.ai.jobs.schedule_store import PostgresJobScheduleStore
+    from app.db.engine import get_sessionmaker
+
+    return PostgresJobScheduleStore(get_sessionmaker())
 
 
 def get_retriever(
