@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Iterator
 
 import pytest
 from opentelemetry import metrics
+from sqlalchemy import text
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -16,15 +18,18 @@ from opentelemetry.trace import StatusCode
 from app.ai.jobs.models import BackgroundJob, JobResult, JobStatus
 from app.ai.jobs.queue import PostgresJobQueue
 from app.ai.jobs.registry import JobHandlerRegistry
+from app.ai.jobs.schedule_store import PostgresJobScheduleStore
+from app.ai.jobs.scheduler import JobScheduler
 from app.ai.jobs.worker import JobWorker
 from app.ai.observability.metrics.instruments import (
     MetricInstruments,
     record_job_dead_lettered,
     record_job_duration_ms,
     record_job_enqueued,
-    record_job_manual_retry,
     record_job_retry,
     record_job_succeeded,
+    reconcile_job_queue_depth_metrics,
+    reset_job_queue_depth_reconciliation_for_tests,
 )
 from app.ai.observability.metrics.meter import MeterRegistry
 from app.ai.observability.tracing.provider import TracerRegistry
@@ -32,6 +37,7 @@ from app.ai.observability.tracing.spans import job_span, record_job_dispatch_out
 from app.core.config import Settings
 from app.core.logging import clear_context, get_log_context
 from tests.ai.jobs.conftest import (
+    background_job_schedules_table_available,
     background_jobs_table_available,
     make_queue_session_factory,
 )
@@ -190,16 +196,19 @@ def test_queue_metrics_all_six_instruments(
     _exporter, reader = observability_stack
 
     record_job_enqueued(job_type="rag_document_indexing")
+    reconcile_job_queue_depth_metrics(pending_count=1, dead_letter_count=0)
     record_job_retry(job_type="rag_document_indexing")
     record_job_succeeded(job_type="rag_document_indexing")
+    reconcile_job_queue_depth_metrics(pending_count=0, dead_letter_count=0)
     record_job_dead_lettered(job_type="hitl_approval_expiry_sweep")
-    record_job_manual_retry()
+    reconcile_job_queue_depth_metrics(pending_count=0, dead_letter_count=1)
+    reconcile_job_queue_depth_metrics(pending_count=1, dead_letter_count=0)
     record_job_duration_ms(job_type="scheduled_evaluation_run", duration_ms=100)
 
     assert _metric_sum(reader, "jobs_enqueued_total") == 1.0
     assert _metric_sum(reader, "job_retries_total") == 1.0
     assert _metric_sum(reader, "jobs_completed_total") == 2.0
-    assert _metric_sum(reader, "jobs_pending_count") == 0.0
+    assert _metric_sum(reader, "jobs_pending_count") == 1.0
     assert _metric_sum(reader, "jobs_dead_letter_count") == 0.0
     assert _metric_present(reader, "job_duration_ms")
 
@@ -259,6 +268,16 @@ def worker_settings() -> Settings:
         background_jobs_retry_base_delay_seconds=0.0,
         background_jobs_retry_max_delay_seconds=0.0,
         background_jobs_worker_poll_interval_seconds=60,
+    )
+
+
+@pytest.fixture
+def scheduler_settings() -> Settings:
+    return Settings(
+        openai_api_key="test-key",
+        observability_enabled=True,
+        background_jobs_default_max_attempts=3,
+        background_jobs_scheduler_poll_interval_seconds=60,
     )
 
 
@@ -380,3 +399,115 @@ async def test_manual_retry_adjusts_depth_gauges(
     assert retried.status is JobStatus.QUEUED
     assert _metric_sum(reader, "jobs_dead_letter_count") == 0.0
     assert _metric_sum(reader, "jobs_pending_count") == 1.0
+
+
+@pytest.mark.anyio
+async def test_depth_metrics_initialize_pre_existing_jobs(
+    db_session,
+    observability_stack: tuple[InMemorySpanExporter, InMemoryMetricReader],
+    worker_settings: Settings,
+) -> None:
+    if not await background_jobs_table_available(db_session):
+        pytest.skip("background_jobs not available — run alembic upgrade head")
+
+    _exporter, reader = observability_stack
+    reset_job_queue_depth_reconciliation_for_tests()
+    factory = make_queue_session_factory(db_session.bind)
+    queue = PostgresJobQueue(factory, worker_settings)
+
+    await db_session.execute(
+        text(
+            """
+            INSERT INTO background_jobs (
+                id, job_type, status, payload, attempt_count, max_attempts,
+                version, run_at, created_at, updated_at
+            ) VALUES (
+                gen_random_uuid(), 'rag_document_indexing', 'queued',
+                CAST('{"version": 1}' AS jsonb), 0, 3, 1, now(), now(), now()
+            )
+            """
+        )
+    )
+    await db_session.execute(
+        text(
+            """
+            INSERT INTO background_jobs (
+                id, job_type, status, payload, attempt_count, max_attempts,
+                version, run_at, created_at, updated_at, finished_at
+            ) VALUES (
+                gen_random_uuid(), 'hitl_approval_expiry_sweep', 'dead_letter',
+                CAST('{"version": 1}' AS jsonb), 1, 3, 2, now(), now(), now(), now()
+            )
+            """
+        )
+    )
+    await db_session.commit()
+
+    await queue.reconcile_depth_metrics()
+
+    assert _metric_sum(reader, "jobs_pending_count") == 1.0
+    assert _metric_sum(reader, "jobs_dead_letter_count") == 1.0
+
+
+@pytest.mark.anyio
+async def test_stale_schedule_tick_does_not_drift_pending_depth(
+    db_session,
+    observability_stack: tuple[InMemorySpanExporter, InMemoryMetricReader],
+    scheduler_settings: Settings,
+) -> None:
+    if not await background_jobs_table_available(db_session):
+        pytest.skip("background_jobs not available — run alembic upgrade head")
+    if not await background_job_schedules_table_available(db_session):
+        pytest.skip("background_job_schedules not available — run alembic upgrade head")
+
+    _exporter, reader = observability_stack
+    reset_job_queue_depth_reconciliation_for_tests()
+    factory = make_queue_session_factory(db_session.bind)
+    queue = PostgresJobQueue(factory, scheduler_settings)
+    store = PostgresJobScheduleStore(factory)
+    scheduler = JobScheduler(queue=queue, store=store, settings=scheduler_settings)
+
+    due_at = datetime.datetime(2026, 1, 1, 10, 0, tzinfo=datetime.UTC)
+    schedule = await store.insert_schedule(
+        name="fixture-stale-metrics",
+        job_type="fixture_stale_metrics",
+        payload={"version": 1},
+        interval_seconds=300,
+        next_run_at=due_at,
+    )
+    await store.advance(
+        schedule.id,
+        expected_version=schedule.version,
+        next_run_at=due_at + datetime.timedelta(hours=1),
+    )
+
+    await scheduler._process_schedule(
+        schedule,
+        due_at + datetime.timedelta(seconds=30),
+    )
+
+    assert await queue.count_pending() == 0
+    assert not _metric_present(reader, "jobs_pending_count")
+    assert not _metric_present(reader, "jobs_enqueued_total")
+
+
+@pytest.mark.anyio
+async def test_cancel_reconciles_pending_depth(
+    db_session,
+    observability_stack: tuple[InMemorySpanExporter, InMemoryMetricReader],
+    worker_settings: Settings,
+) -> None:
+    if not await background_jobs_table_available(db_session):
+        pytest.skip("background_jobs not available — run alembic upgrade head")
+
+    _exporter, reader = observability_stack
+    factory = make_queue_session_factory(db_session.bind)
+    queue = PostgresJobQueue(factory, worker_settings)
+
+    job = await queue.enqueue(job_type="rag_document_indexing", payload={"version": 1})
+    assert _metric_sum(reader, "jobs_pending_count") == 1.0
+
+    cancelled = await queue.cancel(job_id=job.id, expected_version=job.version)
+    assert cancelled is not None
+    assert cancelled.status is JobStatus.CANCELLED
+    assert _metric_sum(reader, "jobs_pending_count") == 0.0

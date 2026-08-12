@@ -15,6 +15,53 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+_reconciled_pending_count: int | None = None
+_reconciled_dead_letter_count: int | None = None
+
+
+def reset_job_queue_depth_reconciliation_for_tests() -> None:
+    """Clear cached DB depth snapshots between tests."""
+    global _reconciled_pending_count, _reconciled_dead_letter_count
+    _reconciled_pending_count = None
+    _reconciled_dead_letter_count = None
+
+
+def reconcile_job_queue_depth_metrics(
+    *,
+    pending_count: int,
+    dead_letter_count: int,
+) -> None:
+    """Sync depth UpDownCounters to committed DB queue state."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    global _reconciled_pending_count, _reconciled_dead_letter_count
+
+    def _emit() -> None:
+        global _reconciled_pending_count, _reconciled_dead_letter_count
+        if _reconciled_pending_count is None:
+            if pending_count:
+                instruments.jobs_pending_count.add(pending_count)
+        elif pending_count != _reconciled_pending_count:
+            instruments.jobs_pending_count.add(
+                pending_count - _reconciled_pending_count
+            )
+
+        if _reconciled_dead_letter_count is None:
+            if dead_letter_count:
+                instruments.jobs_dead_letter_count.add(dead_letter_count)
+        elif dead_letter_count != _reconciled_dead_letter_count:
+            instruments.jobs_dead_letter_count.add(
+                dead_letter_count - _reconciled_dead_letter_count
+            )
+
+        _reconciled_pending_count = pending_count
+        _reconciled_dead_letter_count = dead_letter_count
+
+    _record("jobs_pending_count", _emit)
+
+
 _INSTRUMENT_LABEL_KEYS: dict[str, frozenset[str]] = {
     "llm_requests_total": frozenset({"provider", "model", "status"}),
     "llm_token_usage": frozenset({"provider", "model"}),
@@ -184,6 +231,7 @@ class MetricInstruments:
     @classmethod
     def reset_for_tests(cls) -> None:
         cls._instance = None
+        reset_job_queue_depth_reconciliation_for_tests()
 
 
 def _record(
@@ -527,7 +575,7 @@ def record_hitl_tool_execution_latency_ms(*, kind: str, latency_ms: int) -> None
 
 
 def record_job_enqueued(*, job_type: str) -> None:
-    """Queue metric: increment enqueue counter and pending depth (queued + running)."""
+    """Queue metric: increment enqueue counter (depth reconciled separately)."""
     instruments = MetricInstruments.get()
     if instruments is None:
         return
@@ -536,13 +584,12 @@ def record_job_enqueued(*, job_type: str) -> None:
 
     def _emit() -> None:
         instruments.jobs_enqueued_total.add(1, labels)
-        instruments.jobs_pending_count.add(1)
 
     _record("jobs_enqueued_total", _emit)
 
 
 def record_job_succeeded(*, job_type: str) -> None:
-    """Queue metric: record terminal success and decrement pending depth."""
+    """Queue metric: record terminal success (depth reconciled separately)."""
     instruments = MetricInstruments.get()
     if instruments is None:
         return
@@ -551,13 +598,12 @@ def record_job_succeeded(*, job_type: str) -> None:
 
     def _emit() -> None:
         instruments.jobs_completed_total.add(1, labels)
-        instruments.jobs_pending_count.add(-1)
 
     _record("jobs_completed_total", _emit)
 
 
 def record_job_dead_lettered(*, job_type: str) -> None:
-    """Queue metric: record dead-letter terminal outcome and adjust depth gauges."""
+    """Queue metric: record dead-letter terminal outcome (depth reconciled separately)."""
     instruments = MetricInstruments.get()
     if instruments is None:
         return
@@ -566,8 +612,6 @@ def record_job_dead_lettered(*, job_type: str) -> None:
 
     def _emit() -> None:
         instruments.jobs_completed_total.add(1, labels)
-        instruments.jobs_pending_count.add(-1)
-        instruments.jobs_dead_letter_count.add(1)
 
     _record("jobs_completed_total", _emit)
 
@@ -584,19 +628,6 @@ def record_job_retry(*, job_type: str) -> None:
         instruments.job_retries_total.add(1, labels)
 
     _record("job_retries_total", _emit)
-
-
-def record_job_manual_retry() -> None:
-    """Queue metric: move a dead-lettered job back to pending (manual retry API)."""
-    instruments = MetricInstruments.get()
-    if instruments is None:
-        return
-
-    def _emit() -> None:
-        instruments.jobs_pending_count.add(1)
-        instruments.jobs_dead_letter_count.add(-1)
-
-    _record("jobs_pending_count", _emit)
 
 
 def record_job_duration_ms(*, job_type: str, duration_ms: int) -> None:

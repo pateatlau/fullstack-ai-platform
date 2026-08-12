@@ -155,6 +155,7 @@ class JobScheduler:
                         )
             if newly_enqueued:
                 record_job_enqueued(job_type=schedule.job_type)
+                await self._queue.reconcile_depth_metrics()
         except JobConcurrencyError:
             _logger.debug(
                 "Schedule tick lost concurrent race; enqueue rolled back",

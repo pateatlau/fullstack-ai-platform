@@ -17,9 +17,9 @@ from app.ai.jobs.models import BackgroundJob, JobResult, JobStatus
 from app.ai.observability.metrics.instruments import (
     record_job_dead_lettered,
     record_job_enqueued,
-    record_job_manual_retry,
     record_job_retry,
     record_job_succeeded,
+    reconcile_job_queue_depth_metrics,
 )
 from app.core.config import Settings
 
@@ -144,6 +144,8 @@ class JobQueue(Protocol):
 
     async def count_dead_letter(self) -> int: ...
 
+    async def reconcile_depth_metrics(self) -> None: ...
+
 
 class PostgresJobQueue:
     """Postgres implementation using claim-and-lease row locking."""
@@ -190,6 +192,7 @@ class PostgresJobQueue:
                     )
             if newly_enqueued:
                 record_job_enqueued(job_type=job.job_type)
+                await self.reconcile_depth_metrics()
             return job
         except IntegrityError as exc:
             if idempotency_key is None or not _is_idempotency_key_violation(exc):
@@ -336,6 +339,8 @@ class PostgresJobQueue:
 
         for job_type in dead_lettered_job_types:
             record_job_dead_lettered(job_type=job_type)
+        if dead_lettered_job_types:
+            await self.reconcile_depth_metrics()
         return [_row_to_job(row) for row in rows]
 
     async def complete(
@@ -363,6 +368,7 @@ class PostgresJobQueue:
                 )
         job = _row_to_job(row)
         record_job_succeeded(job_type=job.job_type)
+        await self.reconcile_depth_metrics()
         return job
 
     async def fail(
@@ -410,6 +416,7 @@ class PostgresJobQueue:
         job = _row_to_job(row)
         if dead_letter:
             record_job_dead_lettered(job_type=job.job_type)
+            await self.reconcile_depth_metrics()
         else:
             record_job_retry(job_type=job.job_type)
         return job
@@ -441,6 +448,7 @@ class PostgresJobQueue:
                 row = result.one_or_none()
         if row is None:
             return None
+        await self.reconcile_depth_metrics()
         return _row_to_job(row)
 
     async def get(self, job_id: uuid.UUID) -> BackgroundJob | None:
@@ -510,7 +518,7 @@ class PostgresJobQueue:
                 row = result.one_or_none()
         if row is None:
             return None
-        record_job_manual_retry()
+        await self.reconcile_depth_metrics()
         return _row_to_job(row)
 
     async def count_pending(self) -> int:
@@ -538,6 +546,13 @@ class PostgresJobQueue:
                 )
             )
         return int(count or 0)
+
+    async def reconcile_depth_metrics(self) -> None:
+        """Sync depth UpDownCounters to committed DB queue state."""
+        reconcile_job_queue_depth_metrics(
+            pending_count=await self.count_pending(),
+            dead_letter_count=await self.count_dead_letter(),
+        )
 
     async def _update_with_version(
         self,
