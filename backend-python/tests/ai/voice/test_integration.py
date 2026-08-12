@@ -18,10 +18,12 @@ from app.ai.voice.streaming import VoiceStreamBridge
 from app.ai.voice.tts import TtsPipeline
 from app.core.caller import CallerContext
 from app.schemas.chat import (
+    ApprovalRequiredFrame,
     ChatMessageSchema,
     ChatRequestSchema,
     DeltaFrame,
     EndFrame,
+    ProposedToolCallFrame,
     StartFrame,
     ToolEndFrame,
     ToolStartFrame,
@@ -258,4 +260,63 @@ async def test_voice_chat_bridge_cancelled_turn_skips_turn_complete() -> None:
     with pytest.raises(asyncio.CancelledError):
         await turn_task
 
+    assert not any(message.get("type") == "turn_complete" for message in sent)
+
+
+async def test_voice_chat_bridge_surfaces_approval_required_error() -> None:
+    """Voice turns cannot resume HITL approvals; surface a clear WS error."""
+
+    class ApprovalUnified(FakeUnifiedChatService):
+        async def stream_execute(self, request, http_request, caller=None, prep=None):
+            del request, http_request, caller, prep
+            response_id = "resp_approval"
+            approval_id = uuid.uuid4()
+            correlation_id = uuid.uuid4()
+            yield format_sse("start", StartFrame(id=response_id))
+            yield format_sse(
+                "approval_required",
+                ApprovalRequiredFrame(
+                    id=response_id,
+                    approval_id=approval_id,
+                    approval_correlation_id=correlation_id,
+                    proposed_calls=[
+                        ProposedToolCallFrame(
+                            name="web_search",
+                            arguments={"query": "news"},
+                            call_id="call_1",
+                        )
+                    ],
+                ),
+            )
+
+    bridge = VoiceStreamBridge(VoiceConfig())
+    interrupt = InterruptController()
+    tts = TtsPipeline(FakeTtsProvider(), VoiceConfig())
+    sent: list[dict[str, Any]] = []
+
+    async def capture(payload: str) -> None:
+        sent.append(json.loads(payload))
+
+    chat_bridge = VoiceChatBridge(
+        stream_bridge=bridge,
+        tts_pipeline=tts,
+        interrupt=interrupt,
+        voice_session_id="vs_approval",
+        send_json=capture,
+    )
+    await chat_bridge.run_turn(
+        unified_service=ApprovalUnified(),  # type: ignore[arg-type]
+        chat_service=NoopChatService(),  # type: ignore[arg-type]
+        request=ChatRequestSchema(
+            messages=[ChatMessageSchema(role="user", content="Search the web")],
+            use_web_search=True,
+        ),
+        http_request=Request({"type": "http", "method": "GET", "path": "/"}),
+        caller=CallerContext.for_user(uuid.uuid4()),
+        prep=None,
+    )
+
+    errors = [message for message in sent if message.get("type") == "error"]
+    assert len(errors) == 1
+    assert errors[0]["code"] == "approval_required"
     assert not any(message.get("type") == "turn_complete" for message in sent)

@@ -168,6 +168,20 @@ class VoiceChatBridge:
                         )
                     )
                     continue
+                if event == "approval_required":
+                    await self._send_json(
+                        self._stream_bridge.encode_message(
+                            ErrorMessage(
+                                code="approval_required",
+                                message=(
+                                    "This turn needs human approval before the tool "
+                                    "can run. Use text chat to approve or reject, or "
+                                    "remove the tool from HITL_REQUIRED_TOOL_NAMES."
+                                ),
+                            )
+                        )
+                    )
+                    return
                 if event == "delta":
                     text = str(data.get("content", ""))
                     if text:
