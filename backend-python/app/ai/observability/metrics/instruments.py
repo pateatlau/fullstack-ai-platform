@@ -45,6 +45,14 @@ _INSTRUMENT_LABEL_KEYS: dict[str, frozenset[str]] = {
     "approval_expired_total": frozenset({"kind"}),
     "approval_cancelled_total": frozenset({"kind"}),
     "approval_duration_seconds": frozenset({"kind", "decision"}),
+    # Queue metrics (Epic 10) — infrastructure-level depth/throughput counters.
+    "jobs_enqueued_total": frozenset({"job_type"}),
+    "jobs_completed_total": frozenset({"job_type", "outcome"}),
+    "job_retries_total": frozenset({"job_type"}),
+    "jobs_pending_count": frozenset(),
+    "jobs_dead_letter_count": frozenset(),
+    # Handler metrics (Epic 10) — per-attempt execution duration by handler type.
+    "job_duration_ms": frozenset({"job_type"}),
 }
 
 
@@ -144,6 +152,21 @@ class MetricInstruments:
         self.approval_duration_seconds: Histogram = meter.create_histogram(
             "approval_duration_seconds",
             unit="s",
+        )
+        self.jobs_enqueued_total: Counter = meter.create_counter("jobs_enqueued_total")
+        self.jobs_completed_total: Counter = meter.create_counter(
+            "jobs_completed_total"
+        )
+        self.job_retries_total: Counter = meter.create_counter("job_retries_total")
+        self.jobs_pending_count: UpDownCounter = meter.create_up_down_counter(
+            "jobs_pending_count"
+        )
+        self.jobs_dead_letter_count: UpDownCounter = meter.create_up_down_counter(
+            "jobs_dead_letter_count"
+        )
+        self.job_duration_ms: Histogram = meter.create_histogram(
+            "job_duration_ms",
+            unit="ms",
         )
 
     @classmethod
@@ -501,6 +524,93 @@ def record_hitl_tool_execution_latency_ms(*, kind: str, latency_ms: int) -> None
         instruments.hitl_tool_execution_latency_ms.record(latency_ms, labels)
 
     _record("hitl_tool_execution_latency_ms", _emit)
+
+
+def record_job_enqueued(*, job_type: str) -> None:
+    """Queue metric: increment enqueue counter and pending depth (queued + running)."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(job_type=job_type)
+
+    def _emit() -> None:
+        instruments.jobs_enqueued_total.add(1, labels)
+        instruments.jobs_pending_count.add(1)
+
+    _record("jobs_enqueued_total", _emit)
+
+
+def record_job_succeeded(*, job_type: str) -> None:
+    """Queue metric: record terminal success and decrement pending depth."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(job_type=job_type, outcome="succeeded")
+
+    def _emit() -> None:
+        instruments.jobs_completed_total.add(1, labels)
+        instruments.jobs_pending_count.add(-1)
+
+    _record("jobs_completed_total", _emit)
+
+
+def record_job_dead_lettered(*, job_type: str) -> None:
+    """Queue metric: record dead-letter terminal outcome and adjust depth gauges."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(job_type=job_type, outcome="dead_letter")
+
+    def _emit() -> None:
+        instruments.jobs_completed_total.add(1, labels)
+        instruments.jobs_pending_count.add(-1)
+        instruments.jobs_dead_letter_count.add(1)
+
+    _record("jobs_completed_total", _emit)
+
+
+def record_job_retry(*, job_type: str) -> None:
+    """Queue metric: increment retry counter when a failed attempt is re-queued."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(job_type=job_type)
+
+    def _emit() -> None:
+        instruments.job_retries_total.add(1, labels)
+
+    _record("job_retries_total", _emit)
+
+
+def record_job_manual_retry() -> None:
+    """Queue metric: move a dead-lettered job back to pending (manual retry API)."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    def _emit() -> None:
+        instruments.jobs_pending_count.add(1)
+        instruments.jobs_dead_letter_count.add(-1)
+
+    _record("jobs_pending_count", _emit)
+
+
+def record_job_duration_ms(*, job_type: str, duration_ms: int) -> None:
+    """Handler metric: per-attempt handler execution duration by ``job_type``."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(job_type=job_type)
+
+    def _emit() -> None:
+        instruments.job_duration_ms.record(duration_ms, labels)
+
+    _record("job_duration_ms", _emit)
 
 
 def assert_label_keys_allowlisted() -> None:

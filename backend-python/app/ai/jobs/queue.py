@@ -14,6 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.jobs.exceptions import JobConcurrencyError
 from app.ai.jobs.models import BackgroundJob, JobResult, JobStatus
+from app.ai.observability.metrics.instruments import (
+    record_job_dead_lettered,
+    record_job_enqueued,
+    record_job_manual_retry,
+    record_job_retry,
+    record_job_succeeded,
+)
 from app.core.config import Settings
 
 _IDEMPOTENCY_KEY_UNIQUE_INDEX = "uq_background_jobs_idempotency_key"
@@ -247,6 +254,7 @@ class PostgresJobQueue:
                 raise
             return existing
 
+        record_job_enqueued(job_type=job_type)
         return _row_to_job(row)
 
     async def claim_due(
@@ -258,7 +266,7 @@ class PostgresJobQueue:
     ) -> list[BackgroundJob]:
         async with self._session_factory() as session:
             async with session.begin():
-                await session.execute(
+                expired_result = await session.execute(
                     text(
                         """
                         UPDATE background_jobs
@@ -275,10 +283,13 @@ class PostgresJobQueue:
                         WHERE status = 'running'
                           AND locked_at < now() - make_interval(secs => :lease_seconds)
                           AND attempt_count >= max_attempts
+                        RETURNING job_type
                         """
                     ),
                     {"lease_seconds": lease_seconds},
                 )
+                for expired_row in expired_result.fetchall():
+                    record_job_dead_lettered(job_type=expired_row._mapping["job_type"])
                 result = await session.execute(
                     text(
                         """
@@ -339,7 +350,9 @@ class PostgresJobQueue:
                     """,
                     params={"result": _json_payload(result.model_dump())},
                 )
-        return _row_to_job(row)
+        job = _row_to_job(row)
+        record_job_succeeded(job_type=job.job_type)
+        return job
 
     async def fail(
         self,
@@ -383,7 +396,12 @@ class PostgresJobQueue:
                     set_clause=set_clause,
                     params=params,
                 )
-        return _row_to_job(row)
+        job = _row_to_job(row)
+        if dead_letter:
+            record_job_dead_lettered(job_type=job.job_type)
+        else:
+            record_job_retry(job_type=job.job_type)
+        return job
 
     async def cancel(
         self,
@@ -481,6 +499,7 @@ class PostgresJobQueue:
                 row = result.one_or_none()
         if row is None:
             return None
+        record_job_manual_retry()
         return _row_to_job(row)
 
     async def count_pending(self) -> int:

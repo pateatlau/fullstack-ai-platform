@@ -13,6 +13,8 @@ ALLOWED_LABEL_KEYS = frozenset(
         "failure_code",
         "kind",
         "decision",
+        "job_type",
+        "outcome",
     }
 )
 
@@ -27,6 +29,7 @@ FORBIDDEN_LABEL_KEYS = frozenset(
         "workflow_run_id",
         "workflow_node_id",
         "message_id",
+        "job_id",
     }
 )
 
@@ -62,6 +65,17 @@ FAILURE_CODE_REGISTRY = frozenset(
 )
 APPROVAL_KIND_REGISTRY = frozenset({"agent_tool", "workflow_node", "other"})
 DECISION_REGISTRY = frozenset({"approved", "rejected", "other"})
+JOB_TYPE_REGISTRY = frozenset(
+    {
+        "hitl_approval_expiry_sweep",
+        "hitl_orphaned_snapshot_sweep",
+        "workflow_run_retention_cleanup",
+        "rag_document_indexing",
+        "scheduled_evaluation_run",
+        "other",
+    }
+)
+OUTCOME_REGISTRY = frozenset({"succeeded", "dead_letter", "other"})
 
 _OTHER = "other"
 
@@ -107,6 +121,10 @@ def normalize_metric_label(dimension: str, raw_value: str | None) -> str:
         return value if value in APPROVAL_KIND_REGISTRY else _OTHER
     if dimension == "decision":
         return value if value in DECISION_REGISTRY else _OTHER
+    if dimension == "job_type":
+        return value if value in JOB_TYPE_REGISTRY else _OTHER
+    if dimension == "outcome":
+        return value if value in OUTCOME_REGISTRY else _OTHER
     return _OTHER
 
 
