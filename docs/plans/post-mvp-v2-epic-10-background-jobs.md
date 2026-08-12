@@ -1894,7 +1894,7 @@ Add job span/metric instrumentation, mirroring Epic 07/09's helper style.
 
 **Verify**
 
-- `pytest tests/ai/jobs/test_observability.py tests/ai/observability/`
+- `pytest tests/ai/jobs/test_jobs_observability.py tests/ai/observability/`
 
 **Acceptance**
 
@@ -2241,7 +2241,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
-| 3.9     | 2026-08-12 | Part II Phase 8 complete — `job_span`/`record_job_dispatch_outcome` in `spans.py`, six job metrics in `instruments.py` (`jobs_enqueued_total`, `jobs_completed_total`, `job_retries_total`, `jobs_pending_count`, `jobs_dead_letter_count`, `job_duration_ms`), `JobWorker` dispatch instrumentation + log context, `PostgresJobQueue` metric hooks, `tests/ai/jobs/test_observability.py` (8/8), combined verify `tests/ai/jobs/test_observability.py tests/ai/observability/` (87/87). |
+| 3.9     | 2026-08-12 | Part II Phase 8 complete — `job_span`/`record_job_dispatch_outcome` in `spans.py`, six job metrics in `instruments.py` (`jobs_enqueued_total`, `jobs_completed_total`, `job_retries_total`, `jobs_pending_count`, `jobs_dead_letter_count`, `job_duration_ms`), `JobWorker` dispatch instrumentation + log context, `PostgresJobQueue` metric hooks, `tests/ai/jobs/test_jobs_observability.py` (8/8), combined verify `tests/ai/jobs/test_jobs_observability.py tests/ai/observability/` (87/87). |
 | 3.8     | 2026-08-12 | Part II Phase 7 complete — `app/schemas/jobs.py`, `app/routers/jobs.py` (list/detail/retry/schedules + payload/result redaction), health extension (`background_jobs_enabled`, `background_jobs_pending_count`, `background_jobs_dead_letter_count`), `PostgresJobQueue.retry_dead_letter`/`count_pending`/`count_dead_letter`, `get_job_queue`/`get_job_schedule_store`, `tests/test_jobs_router.py` (13/13). |
 | 3.7     | 2026-08-12 | Part II Phase 6 complete — `scheduled_eval.py` handler (`scheduled_evaluation_run`), `evaluation_schedule_enabled`/`evaluation_schedule_level` config, startup schedule reconciliation (`reconcile_evaluation_schedule_status`), `PostgresJobScheduleStore.get_by_name`/`set_status`, `tests/ai/jobs/handlers/test_scheduled_eval.py` (7/7). |
 | 3.6     | 2026-08-12 | Part II Phase 5 complete — migration `0015_document_upload_staging`, `QueueIndexingRunner` (`queue_runner.py`), `rag_document_indexing` handler, shared `run_indexing_work`, `rag_indexing_runner` config, `KnowledgeService` runner selection, `tests/ai/rag/test_queue_indexing_runner.py` (5/5). |
