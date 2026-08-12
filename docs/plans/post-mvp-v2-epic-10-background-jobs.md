@@ -1279,10 +1279,10 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 
 | Area                     | State (as of Epic 10 Phase 0)                                                   |
 | ------------------------ | ------------------------------------------------------------------------------- |
-| Backend tests / coverage | 2004 passed, 88.73% `app/` coverage (flag-on)                                   |
+| Backend tests / coverage | 2004 passed, 88.73% `app/` coverage (`make test-cov`)                           |
 | HITL package coverage    | 83.8% on `app/ai/hitl/`                                                         |
 | Frontend tests           | 303 passed (50 files); lint + build pass                                        |
-| Integration tests        | 172 collected (Epic 09 HITL + approvals router paths)                           |
+| Integration tests        | 172 passed (Epic 09 HITL + approvals router paths)                              |
 | Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
 | Feature Flag Regression  | Not re-run in Phase 0 (Epic 09 Phase 10: 1912 passed with `HITL_ENABLED=false`)   |
 | Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |

@@ -11,7 +11,7 @@
 
 ## Executive Summary
 
-Baseline audit before implementing Epic 10 (Background Jobs). All quality gates pass. Epic 09 is complete with release summary published. **No Epic 10 Background Jobs code exists** — `app/ai/jobs/` absent, `BACKGROUND_JOBS_ENABLED` absent, no `background_jobs` migration. All five deferred-work closure targets are inventoried (`TODO(epic-9)`/`TODO(epic-10)` markers, config-only timeout/retention fields, lazy-only HITL expiry). Extension points for reuse (`schedule_run_task`, `SyncIndexingRunner`, `AgentApprovalService`, workflow CAS) verified present and documented as **DO NOT MODIFY** (Epic 06/05 in-process tasks) or **wire in Phases 3–6**.
+Baseline audit before implementing Epic 10 (Background Jobs). All quality gates pass. Epic 09 is complete with release summary published. **No Epic 10 Background Jobs code exists** — `app/ai/jobs/` absent, `BACKGROUND_JOBS_ENABLED` absent, no `background_jobs` migration. All six deferred-work closure targets are inventoried (`TODO(epic-9)`/`TODO(epic-10)` markers, config-only timeout/retention fields, lazy-only HITL expiry). Extension points for reuse (`schedule_run_task`, `SyncIndexingRunner`, `AgentApprovalService`, workflow CAS) verified present and documented as **DO NOT MODIFY** (Epic 06/05 in-process tasks) or **wire in Phases 3–6**.
 
 **Key findings:**
 
@@ -21,7 +21,7 @@ Baseline audit before implementing Epic 10 (Background Jobs). All quality gates 
 - ✅ Extension points verified: workflow/memory background tasks, `IndexingJob`/`SyncIndexingRunner`, HITL store/service, `ApprovalNodeExecutor`, config timeout/retention fields
 - ✅ CHECK constraints: `agent_tool_approvals.status` includes `expired`/`cancelled`; `chat_messages.status` and `workflow_node_executions.decision` do **not** yet include `expired`
 - ❌ `BACKGROUND_JOBS_ENABLED` absent; `app/ai/jobs/` does not exist (expected Phase 1+)
-- ⚠️ Alembic head is `0011_hitl_lifecycle_audit`; **next revision is 0012** (epic doc Files index still references `0011_background_jobs.py` — update in Phase 1)
+- ✅ Alembic head: `0011_hitl_lifecycle_audit` (validation base); Epic 10 Phase 1 migration: `0012_background_jobs.py` (revision **0012**)
 - ✅ **Phase 0 authorized** (user requested Phase 0 implementation)
 - ⬜ **Phase 1 not authorized** — explicit user confirmation pending
 
@@ -243,14 +243,19 @@ No `evaluation_schedule_enabled` or scheduled eval config in `app/core/config.py
 
 ## 8. Platform Test-Backed Baseline
 
-Automated test evidence only:
+Automated test evidence only. The full backend suite (`make test-cov`: **2004 passed**) includes these paths; the Epic 09 integration subset below was also executed directly:
 
-| Capability | Test path | Count (this audit) |
-| ---------- | --------- | ------------------ |
-| HITL package + router | `tests/ai/hitl/`, `tests/test_approvals_router.py`, `tests/test_cancel_and_stage_router.py` | **172** collected |
-| Workflow package | `tests/ai/workflow/` | High |
-| RAG indexing | `tests/ai/rag/test_indexing_job.py` | Present |
-| Plugins | `tests/ai/plugins/`, `tests/test_plugins_router.py` | Present |
+```bash
+uv run pytest tests/ai/hitl/ tests/test_approvals_router.py tests/test_cancel_and_stage_router.py -q
+# Result: 172 passed
+```
+
+| Capability | Test path | Outcome (this audit) |
+| ---------- | --------- | -------------------- |
+| HITL package + router | `tests/ai/hitl/`, `tests/test_approvals_router.py`, `tests/test_cancel_and_stage_router.py` | **172 passed** |
+| Workflow package | `tests/ai/workflow/` | Included in full suite (all passed) |
+| RAG indexing | `tests/ai/rag/test_indexing_job.py` | Included in full suite (all passed) |
+| Plugins | `tests/ai/plugins/`, `tests/test_plugins_router.py` | Included in full suite (all passed) |
 
 ---
 
@@ -264,7 +269,7 @@ Automated test evidence only:
 | `0010_hitl_tables.py` | Epic 09 — HITL tables, chat status CHECK extension |
 | `0011_hitl_lifecycle_audit.py` | Epic 09 — lifecycle audit columns, `version` on approvals |
 
-**Epic 10 Phase 1:** `0012_background_jobs.py` (epic doc Files index references `0011` — superseded by Epic 09 migration `0011`; correct in Phase 1).
+**Epic 10 Phase 1:** `0012_background_jobs.py` (revision **0012**) — `background_jobs` table.
 
 ---
 
