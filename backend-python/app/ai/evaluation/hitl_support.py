@@ -394,6 +394,42 @@ class EvalHitlApprovalStore:
             key=lambda item: item.revision_number,
         )
 
+    async def claim_pause_snapshot(
+        self, approval_id: uuid.UUID
+    ) -> AgentToolApproval | None:
+        row = await self.get(approval_id)
+        if row is None or row.status is not ApprovalStatus.APPROVED:
+            return None
+        if not (bool(row.paused_scratchpad) or bool(row.paused_state)):
+            return None
+        claimed = row.model_copy(deep=True)
+        self._replace(
+            row.model_copy(
+                update={
+                    "paused_scratchpad": [],
+                    "paused_state": {},
+                    "version": row.version + 1,
+                    "updated_at": datetime.datetime.now(datetime.UTC),
+                }
+            )
+        )
+        return claimed
+
+    async def clear_pause_snapshot(self, approval_id: uuid.UUID) -> None:
+        row = await self.get(approval_id)
+        if row is None or row.status is ApprovalStatus.PENDING:
+            return
+        self._replace(
+            row.model_copy(
+                update={
+                    "paused_scratchpad": [],
+                    "paused_state": {},
+                    "version": row.version + 1,
+                    "updated_at": datetime.datetime.now(datetime.UTC),
+                }
+            )
+        )
+
     def _replace(self, updated: AgentToolApproval) -> None:
         self.rows = [
             updated if existing.id == updated.id else existing for existing in self.rows
@@ -483,6 +519,12 @@ class EvalHitlChatStore:
 
     async def get_message(self, message_id: uuid.UUID) -> ChatMessage | None:
         return self.messages.get(message_id)
+
+    async def list_messages(self, session_id: uuid.UUID) -> list[ChatMessage]:
+        return sorted(
+            (m for m in self.messages.values() if m.session_id == session_id),
+            key=lambda m: m.seq,
+        )
 
     async def mark_last_message_at(self, session_id: uuid.UUID) -> None:
         del session_id

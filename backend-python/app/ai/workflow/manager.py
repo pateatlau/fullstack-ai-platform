@@ -95,11 +95,12 @@ def _build_workflow_approval_result(
     *,
     decision: ApprovalDecision,
 ) -> ApprovalResult:
-    status = (
-        ApprovalStatus.APPROVED
-        if decision is ApprovalDecision.APPROVED
-        else ApprovalStatus.REJECTED
-    )
+    if decision is ApprovalDecision.APPROVED:
+        status = ApprovalStatus.APPROVED
+    elif decision is ApprovalDecision.EXPIRED:
+        status = ApprovalStatus.EXPIRED
+    else:
+        status = ApprovalStatus.REJECTED
     decided_at = execution.decided_at or datetime.datetime.now(datetime.UTC)
     edited_arguments = execution.edited_arguments
     return ApprovalResult(
@@ -557,7 +558,8 @@ class WorkflowManager:
             )
             now = datetime.datetime.now(datetime.UTC)
             reject_ends_run = (
-                decision is ApprovalDecision.REJECTED and not selected_edge_ids
+                decision in {ApprovalDecision.REJECTED, ApprovalDecision.EXPIRED}
+                and not selected_edge_ids
             )
             output = build_approval_decision_output(
                 node_id=approval_node.id,
@@ -589,7 +591,11 @@ class WorkflowManager:
                     "context": updated_context,
                     "current_node_ids": remaining_current_node_ids,
                     "error": (
-                        f"Approval node {approval_node.id!r} was rejected."
+                        (
+                            f"Approval node {approval_node.id!r} was rejected."
+                            if decision is ApprovalDecision.REJECTED
+                            else f"Approval node {approval_node.id!r} expired."
+                        )
                         if reject_ends_run
                         else None
                     ),
@@ -647,14 +653,16 @@ class WorkflowManager:
         approval_result = _build_workflow_approval_result(
             decided_execution, decision=decision
         )
-        decision_label = (
-            "approved" if decision is ApprovalDecision.APPROVED else "rejected"
-        )
-        status_label = (
-            ApprovalStatus.APPROVED.value
-            if decision is ApprovalDecision.APPROVED
-            else ApprovalStatus.REJECTED.value
-        )
+        decision_label = {
+            ApprovalDecision.APPROVED: "approved",
+            ApprovalDecision.REJECTED: "rejected",
+            ApprovalDecision.EXPIRED: "expired",
+        }[decision]
+        status_label = {
+            ApprovalDecision.APPROVED: ApprovalStatus.APPROVED.value,
+            ApprovalDecision.REJECTED: ApprovalStatus.REJECTED.value,
+            ApprovalDecision.EXPIRED: ApprovalStatus.EXPIRED.value,
+        }[decision]
         resume_start = time.perf_counter()
         with approval_span(
             approval_id=str(decided_execution.id),

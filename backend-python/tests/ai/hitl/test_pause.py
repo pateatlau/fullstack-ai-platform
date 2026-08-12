@@ -12,7 +12,8 @@ from app.ai.agent.scratchpad import Scratchpad, ScratchpadEntry
 from app.ai.agent.streaming import InMemoryStreamPublisher
 from app.ai.hitl.exceptions import AgentApprovalPauseError
 from app.ai.hitl.models import AgentToolApproval, ApprovalStatus, ProposedToolCall
-from app.ai.hitl.service import AgentApprovalService
+from app.ai.hitl.service import AgentApprovalService, _resolve_orphan_resume_model
+from app.db.models import ChatMessage
 from app.ai.hitl.store import AgentToolApprovalStore
 from app.ai.tools.schemas import ToolCall
 from app.db.models import ChatSession, User
@@ -105,6 +106,49 @@ async def test_raise_pause_raises_canonical_error() -> None:
     with pytest.raises(AgentApprovalPauseError) as exc_info:
         raise_pause(approval)
     assert exc_info.value.approval.id == approval.id
+
+
+@pytest.mark.anyio
+async def test_resume_orphaned_approval_propagates_pause_error_when_fail_safe() -> None:
+    import datetime
+    from unittest.mock import AsyncMock, patch
+
+    approval_id = uuid.uuid4()
+    approval = AgentToolApproval(
+        id=approval_id,
+        session_id=uuid.uuid4(),
+        owner_id=uuid.uuid4(),
+        execution_id="exec-orphan",
+        approval_correlation_id=uuid.uuid4(),
+        status=ApprovalStatus.APPROVED,
+        proposed_calls=[
+            ProposedToolCall(name="echo", arguments={"message": "x"}, call_id="c1")
+        ],
+        paused_scratchpad=[{"kind": "thought", "content": "resume"}],
+        paused_state={"execution_id": "exec-orphan", "status": "waiting_approval"},
+        requested_at=datetime.datetime.now(datetime.UTC),
+        created_at=datetime.datetime.now(datetime.UTC),
+        updated_at=datetime.datetime.now(datetime.UTC),
+    )
+    store = InMemoryApprovalStore()
+    store.rows.append(approval)
+    service = AgentApprovalService(
+        approval_store=store,
+        chat_store=FakeChatStore(),
+    )
+    pause_error = AgentApprovalPauseError(approval)
+
+    with patch.object(
+        service,
+        "_resume_after_approval_decision",
+        AsyncMock(side_effect=pause_error),
+    ):
+        with pytest.raises(AgentApprovalPauseError):
+            await service.resume_orphaned_approval(
+                approval_id,
+                executor=AsyncMock(),
+                fail_safe=True,
+            )
 
 
 @pytest.mark.anyio
@@ -210,3 +254,105 @@ async def test_link_pending_message_refreshes_updated_at(db_session) -> None:
     assert linked is not None
     assert linked.pending_message_id == placeholder.id
     assert linked.updated_at > stale_updated_at
+
+
+class TestResolveOrphanResumeModel:
+    @staticmethod
+    def _message(
+        *,
+        message_id: uuid.UUID,
+        session_id: uuid.UUID,
+        seq: int,
+        role: str,
+        content: str,
+        model: str | None,
+    ) -> ChatMessage:
+        message = ChatMessage(
+            session_id=session_id,
+            seq=seq,
+            role=role,
+            content=content,
+            model=model,
+        )
+        message.id = message_id
+        return message
+
+    def test_prefers_pending_placeholder_model(self) -> None:
+        session_id = uuid.uuid4()
+        pending_id = uuid.uuid4()
+        messages = [
+            self._message(
+                message_id=uuid.uuid4(),
+                session_id=session_id,
+                seq=0,
+                role="user",
+                content="hi",
+                model="gpt-4o",
+            ),
+            self._message(
+                message_id=pending_id,
+                session_id=session_id,
+                seq=1,
+                role="assistant",
+                content="",
+                model="gpt-4.1",
+            ),
+        ]
+        assert (
+            _resolve_orphan_resume_model(
+                messages,
+                pending_message_id=pending_id,
+                default_model="fallback",
+            )
+            == "gpt-4.1"
+        )
+
+    def test_falls_back_to_latest_message_with_model(self) -> None:
+        session_id = uuid.uuid4()
+        messages = [
+            self._message(
+                message_id=uuid.uuid4(),
+                session_id=session_id,
+                seq=0,
+                role="user",
+                content="hi",
+                model="gpt-4o",
+            ),
+            self._message(
+                message_id=uuid.uuid4(),
+                session_id=session_id,
+                seq=1,
+                role="assistant",
+                content="done",
+                model="claude-3-opus",
+            ),
+        ]
+        assert (
+            _resolve_orphan_resume_model(
+                messages,
+                pending_message_id=None,
+                default_model="fallback",
+            )
+            == "claude-3-opus"
+        )
+
+    def test_uses_default_when_no_message_models(self) -> None:
+        session_id = uuid.uuid4()
+        messages = [
+            self._message(
+                message_id=uuid.uuid4(),
+                session_id=session_id,
+                seq=0,
+                role="user",
+                content="hi",
+                model=None,
+            ),
+        ]
+        assert (
+            _resolve_orphan_resume_model(
+                messages,
+                pending_message_id=None,
+                default_model="fallback-model",
+            )
+            == "fallback-model"
+        )

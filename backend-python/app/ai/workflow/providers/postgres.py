@@ -502,6 +502,38 @@ class PostgresWorkflowStore:
         await self._session.refresh(execution_row)
         return _node_execution_to_domain(execution_row)
 
+    async def list_stale_waiting_approval_executions(
+        self,
+        *,
+        timeout_hours: int,
+    ) -> list[tuple[WorkflowNodeExecution, uuid.UUID, uuid.UUID]]:
+        """Approval nodes waiting longer than ``timeout_hours`` since ``started_at``."""
+        if timeout_hours <= 0:
+            return []
+        cutoff = func.now() - datetime.timedelta(hours=timeout_hours)
+        rows = await self._session.execute(
+            select(
+                WorkflowNodeExecutionRecord,
+                WorkflowRunRecord.id,
+                WorkflowRunRecord.owner_id,
+            )
+            .join(
+                WorkflowRunRecord,
+                WorkflowRunRecord.id == WorkflowNodeExecutionRecord.run_id,
+            )
+            .where(
+                WorkflowNodeExecutionRecord.node_type == NodeType.APPROVAL.value,
+                WorkflowNodeExecutionRecord.status == NodeStatus.WAITING_APPROVAL.value,
+                WorkflowNodeExecutionRecord.decision.is_(None),
+                WorkflowNodeExecutionRecord.started_at.is_not(None),
+                WorkflowNodeExecutionRecord.started_at < cutoff,
+            )
+        )
+        return [
+            (_node_execution_to_domain(execution), run_id, owner_id)
+            for execution, run_id, owner_id in rows.all()
+        ]
+
     async def _append_workflow_approval_revision(
         self,
         *,

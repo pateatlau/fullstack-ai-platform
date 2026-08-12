@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 import time
 import uuid
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -20,13 +20,16 @@ from app.ai.agent.executor.result_aggregator import (
 from app.ai.agent.interfaces.streaming import StreamPublisher
 from app.ai.agent.models.context import AgentContext
 from app.ai.agent.models.events import AgentStreamEvent
+from app.ai.agent.models.messages import AgentMessage, AgentMessageRole
 from app.ai.agent.models.plan import PlannedStep
 from app.ai.agent.models.request import AgentRequest
 from app.ai.agent.models.response import AgentResponse
 from app.ai.agent.models.state import AgentExecutionState, AgentExecutionStatus
+from app.ai.agent.models.config import AgentConfig
 from app.ai.agent.scratchpad.scratchpad import Scratchpad
 from app.ai.agent.scratchpad.store import ScratchpadStore, get_scratchpad_store
 from app.ai.agent.state.manager import AgentStateManager
+from app.ai.agent.streaming import NoOpStreamPublisher
 from app.ai.hitl.exceptions import (
     AgentApprovalPauseError,
     ApprovalValidationError,
@@ -63,6 +66,7 @@ from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext
 from app.ai.tools.validator import ToolValidator
+from app.core.caller import CallerContext
 from app.db.models import ChatMessage
 from app.middleware.correlation_id import get_request_id
 
@@ -206,6 +210,14 @@ class AgentApprovalStore(Protocol):
         approval_kind: ApprovalKind,
     ) -> list[ApprovalRevision]: ...
 
+    async def get(self, approval_id: uuid.UUID) -> AgentToolApproval | None: ...
+
+    async def claim_pause_snapshot(
+        self, approval_id: uuid.UUID
+    ) -> AgentToolApproval | None: ...
+
+    async def clear_pause_snapshot(self, approval_id: uuid.UUID) -> None: ...
+
 
 class HitlChatStore(Protocol):
     async def allocate_seq(self, session_id: uuid.UUID) -> int: ...
@@ -238,6 +250,8 @@ class HitlChatStore(Protocol):
 
     async def get_message(self, message_id: uuid.UUID) -> ChatMessage | None: ...
 
+    async def list_messages(self, session_id: uuid.UUID) -> list[ChatMessage]: ...
+
     async def mark_last_message_at(self, session_id: uuid.UUID) -> None: ...
 
 
@@ -254,6 +268,7 @@ class AgentApprovalService:
         tool_validator: ToolValidator | None = None,
         scratchpad_store: ScratchpadStore | None = None,
         approval_timeout_hours: int = 0,
+        default_model: str = "gpt-4o-mini",
         notification_dispatcher: NotificationDispatcher | None = None,
     ) -> None:
         self._approval_store = approval_store
@@ -263,6 +278,7 @@ class AgentApprovalService:
         self._tool_validator = tool_validator or ToolValidator()
         self._scratchpad_store = scratchpad_store or get_scratchpad_store()
         self._approval_timeout_hours = approval_timeout_hours
+        self._default_model = default_model
         self._notification_dispatcher = notification_dispatcher
 
     async def _notify(self, event: ApprovalNotificationEvent) -> None:
@@ -673,7 +689,6 @@ class AgentApprovalService:
 
         _assert_terminal_approve_allowed(approval, approval_id)
 
-        resume_start = time.perf_counter()
         with approval_span(
             approval_id=str(approval_id),
             approval_kind=ApprovalKind.AGENT_TOOL.value,
@@ -722,106 +737,211 @@ class AgentApprovalService:
                 final_payload=_resolve_final_payload(decided),
                 edited=_has_edits(decided),
             )
-            calls = _calls_from_payload(result.final_payload, decided.proposed_calls)
-
-            existing = self._scratchpad_store.get(decided.execution_id)
-            if existing is not None:
-                self._scratchpad_store.remove(decided.execution_id)
-            stored = Scratchpad.from_snapshot(
-                decided.execution_id,
-                decided.paused_scratchpad,
-            )
-            self._scratchpad_store.create(decided.execution_id)
-            scratchpad = self._scratchpad_store.require(decided.execution_id)
-            for entry in stored.entries:
-                scratchpad.append(entry)
-
-            state = AgentExecutionState.model_validate(decided.paused_state)
-            approved_context = tool_context.model_copy(
-                update={
-                    "session_id": decided.session_id,
-                    "approval_correlation_id": decided.approval_correlation_id,
-                }
-            )
-            try:
-                tool_results = await self._execute_approved_calls(
-                    calls,
-                    execution_id=decided.execution_id,
-                    tool_context=approved_context,
-                    scratchpad=scratchpad,
-                    stream_publisher=stream_publisher,
-                )
-            except Exception:
-                await self._update_placeholder_message(
-                    decided,
-                    content="",
-                    status="error",
-                    finish_reason="error",
-                    clear_pending=True,
-                )
-                raise
-            for tool_name in tool_results.tools_used:
-                state = AgentStateManager.record_tool_used(state, tool_name)
-
-            last_planner_content = _extract_last_planner_content(scratchpad)
-            # Correlation applies only to the approved gated execution (Stage 3).
-            resume_context = approved_context.model_copy(
-                update={"approval_correlation_id": None}
-            )
-            try:
-                response = await executor.resume_from_approval(
-                    request,
-                    context,
-                    scratchpad=scratchpad,
-                    state=state,
-                    tool_context=resume_context,
-                    tool_results=tool_results,
-                    last_planner_content=last_planner_content,
-                )
-            except AgentApprovalPauseError:
-                raise
-            except Exception:
-                await self._update_placeholder_message(
-                    decided,
-                    content="",
-                    status="error",
-                    finish_reason="error",
-                    clear_pending=True,
-                )
-                raise
-
-            if response.finish_reason == "waiting_approval":
-                await self._update_placeholder_message(
-                    decided,
-                    content=response.content,
-                    status="complete",
-                    finish_reason="stop",
-                    clear_pending=True,
-                )
-                await self._chat_store.mark_last_message_at(decided.session_id)
-            else:
-                tool_failed = any(
-                    not record.result.success for record in tool_results.records
-                )
-                message_status = (
-                    "error"
-                    if tool_failed or response.finish_reason == "error"
-                    else "complete"
-                )
-                await self._update_placeholder_message(
-                    decided,
-                    content=response.content,
-                    status=message_status,
-                    finish_reason=response.finish_reason,
-                    clear_pending=True,
-                )
-                await self._chat_store.mark_last_message_at(decided.session_id)
-
-            record_hitl_resume_latency_ms(
-                kind=ApprovalKind.AGENT_TOOL.value,
-                latency_ms=elapsed_ms_since(resume_start),
+            response = await self._resume_after_approval_decision(
+                decided,
+                executor=executor,
+                request=request,
+                context=context,
+                tool_context=tool_context,
+                stream_publisher=stream_publisher,
             )
         return result, response
+
+    async def resume_orphaned_approval(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        executor: AgentExecutor,
+        fail_safe: bool = False,
+    ) -> bool:
+        """Re-run Stages 2–4 for a crash-orphaned approved approval row."""
+        approval = await self._approval_store.claim_pause_snapshot(approval_id)
+        if approval is None:
+            return False
+
+        request, context, tool_context = await self._build_orphan_resume_context(
+            approval
+        )
+        try:
+            await self._resume_after_approval_decision(
+                approval,
+                executor=executor,
+                request=request,
+                context=context,
+                tool_context=tool_context,
+                stream_publisher=NoOpStreamPublisher(),
+            )
+        except AgentApprovalPauseError:
+            raise
+        except Exception:
+            if fail_safe:
+                await self._update_placeholder_message(
+                    approval,
+                    content="",
+                    status="error",
+                    finish_reason="error",
+                    clear_pending=True,
+                )
+                return False
+            raise
+        return True
+
+    async def _resume_after_approval_decision(
+        self,
+        decided: AgentToolApproval,
+        *,
+        executor: AgentExecutor,
+        request: AgentRequest,
+        context: AgentContext,
+        tool_context: ToolExecutionContext,
+        stream_publisher: StreamPublisher,
+    ) -> AgentResponse:
+        """Execute approved tool calls and resume the ReAct loop (Stages 2–4)."""
+        resume_start = time.perf_counter()
+        result = _build_approval_result(
+            decided,
+            final_payload=_resolve_final_payload(decided),
+            edited=_has_edits(decided),
+        )
+        calls = _calls_from_payload(result.final_payload, decided.proposed_calls)
+
+        existing = self._scratchpad_store.get(decided.execution_id)
+        if existing is not None:
+            self._scratchpad_store.remove(decided.execution_id)
+        stored = Scratchpad.from_snapshot(
+            decided.execution_id,
+            decided.paused_scratchpad,
+        )
+        self._scratchpad_store.create(decided.execution_id)
+        scratchpad = self._scratchpad_store.require(decided.execution_id)
+        for entry in stored.entries:
+            scratchpad.append(entry)
+
+        state = AgentExecutionState.model_validate(decided.paused_state)
+        approved_context = tool_context.model_copy(
+            update={
+                "session_id": decided.session_id,
+                "approval_correlation_id": decided.approval_correlation_id,
+            }
+        )
+        try:
+            tool_results = await self._execute_approved_calls(
+                calls,
+                execution_id=decided.execution_id,
+                tool_context=approved_context,
+                scratchpad=scratchpad,
+                stream_publisher=stream_publisher,
+            )
+        except Exception:
+            await self._update_placeholder_message(
+                decided,
+                content="",
+                status="error",
+                finish_reason="error",
+                clear_pending=True,
+            )
+            raise
+        for tool_name in tool_results.tools_used:
+            state = AgentStateManager.record_tool_used(state, tool_name)
+
+        last_planner_content = _extract_last_planner_content(scratchpad)
+        resume_context = approved_context.model_copy(
+            update={"approval_correlation_id": None}
+        )
+        try:
+            response = await executor.resume_from_approval(
+                request,
+                context,
+                scratchpad=scratchpad,
+                state=state,
+                tool_context=resume_context,
+                tool_results=tool_results,
+                last_planner_content=last_planner_content,
+            )
+        except AgentApprovalPauseError:
+            raise
+        except Exception:
+            await self._update_placeholder_message(
+                decided,
+                content="",
+                status="error",
+                finish_reason="error",
+                clear_pending=True,
+            )
+            raise
+
+        if response.finish_reason == "waiting_approval":
+            await self._update_placeholder_message(
+                decided,
+                content=response.content,
+                status="complete",
+                finish_reason="stop",
+                clear_pending=True,
+            )
+            await self._chat_store.mark_last_message_at(decided.session_id)
+        else:
+            tool_failed = any(
+                not record.result.success for record in tool_results.records
+            )
+            message_status = (
+                "error"
+                if tool_failed or response.finish_reason == "error"
+                else "complete"
+            )
+            await self._update_placeholder_message(
+                decided,
+                content=response.content,
+                status=message_status,
+                finish_reason=response.finish_reason,
+                clear_pending=True,
+            )
+            await self._chat_store.mark_last_message_at(decided.session_id)
+
+        record_hitl_resume_latency_ms(
+            kind=ApprovalKind.AGENT_TOOL.value,
+            latency_ms=elapsed_ms_since(resume_start),
+        )
+        return response
+
+    async def _build_orphan_resume_context(
+        self,
+        approval: AgentToolApproval,
+    ) -> tuple[AgentRequest, AgentContext, ToolExecutionContext]:
+        messages = await self._chat_store.list_messages(approval.session_id)
+        agent_messages = [
+            AgentMessage(
+                role=cast(AgentMessageRole, message.role),
+                content=message.content,
+            )
+            for message in messages
+            if message.role in {"user", "system", "assistant"} and message.content
+        ]
+        if not agent_messages:
+            agent_messages = [AgentMessage(role="user", content="continue")]
+        state = AgentExecutionState.model_validate(approval.paused_state)
+        caller = CallerContext.for_user(approval.owner_id)
+        resume_model = _resolve_orphan_resume_model(
+            messages,
+            pending_message_id=approval.pending_message_id,
+            default_model=self._default_model,
+        )
+        return (
+            AgentRequest(
+                messages=agent_messages,
+                model=resume_model,
+                config=AgentConfig(max_iterations=max(2, state.current_iteration + 2)),
+            ),
+            AgentContext(
+                execution_id=approval.execution_id,
+                caller=caller,
+                session_id=approval.session_id,
+            ),
+            ToolExecutionContext(
+                caller=caller,
+                session_id=approval.session_id,
+                approval_correlation_id=approval.approval_correlation_id,
+            ),
+        )
 
     async def list_revisions(
         self,
@@ -1057,6 +1177,27 @@ def _build_approval_result(
         approval_correlation_id=approval.approval_correlation_id,
         comments=approval.comments,
     )
+
+
+def _has_pause_snapshot(approval: AgentToolApproval) -> bool:
+    return bool(approval.paused_scratchpad) or bool(approval.paused_state)
+
+
+def _resolve_orphan_resume_model(
+    messages: list[ChatMessage],
+    *,
+    pending_message_id: uuid.UUID | None,
+    default_model: str,
+) -> str:
+    """Pick the session model for orphan resume from persisted chat rows."""
+    if pending_message_id is not None:
+        for message in messages:
+            if message.id == pending_message_id and message.model:
+                return message.model
+    for message in reversed(messages):
+        if message.model:
+            return message.model
+    return default_model
 
 
 def _compute_expires_at(

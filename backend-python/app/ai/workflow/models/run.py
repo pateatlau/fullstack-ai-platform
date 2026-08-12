@@ -40,6 +40,7 @@ class ApprovalDecision(StrEnum):
 
     APPROVED = "approved"
     REJECTED = "rejected"
+    EXPIRED = "expired"
 
 
 APPROVAL_REQUESTED_AT_OUTPUT_KEY = "approval_requested_at"

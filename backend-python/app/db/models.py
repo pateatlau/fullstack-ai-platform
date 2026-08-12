@@ -179,7 +179,7 @@ class ChatMessage(Base):
         ),
         CheckConstraint(
             "status IN ('complete', 'stopped', 'error', 'interrupted', "
-            "'waiting_approval', 'rejected')",
+            "'waiting_approval', 'rejected', 'expired')",
             name="status_valid",
         ),
         # Idempotent append when a client_message_id is supplied (plan Section 2.5).
@@ -684,7 +684,7 @@ class WorkflowNodeExecutionRecord(Base):
             name="workflow_node_execution_status_valid",
         ),
         CheckConstraint(
-            "decision IS NULL OR decision IN ('approved', 'rejected')",
+            "decision IS NULL OR decision IN ('approved', 'rejected', 'expired')",
             name="workflow_node_execution_decision_valid",
         ),
         UniqueConstraint(

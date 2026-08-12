@@ -30,7 +30,6 @@ class ApprovalNodeExecutor:
         request: NodeExecutionRequest,
     ) -> dict[str, object]:
         del request
-        # TODO(epic-10): enforce workflow_approval_timeout_hours via background jobs.
         return {
             "status": _APPROVAL_OUTPUT_STATUS,
             "node_id": node.id,

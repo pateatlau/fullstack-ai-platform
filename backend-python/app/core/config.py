@@ -254,6 +254,9 @@ class Settings(BaseSettings):
     # hop; otherwise use the direct ASGI client address.
     hitl_trust_forwarded_client_ip: bool = False
     hitl_max_user_agent_length: int = Field(default=512, ge=1)
+    # Minimum age before an approved row with a pause snapshot is treated as
+    # crash-orphaned by ``hitl_orphaned_snapshot_sweep``.
+    hitl_orphan_sweep_grace_seconds: int = Field(default=120, ge=0)
 
     # V2 Epic 10 Phase 1: Background Jobs infrastructure flag (default false).
     # When true: JobWorker and JobScheduler start in app lifespan; queue-backed
@@ -369,6 +372,16 @@ class Settings(BaseSettings):
             f"Document upload exceeds the {limit} byte limit. "
             "Reduce file size and retry."
         )
+
+    def default_llm_model(self) -> str:
+        """Default model name for the configured ``llm_provider``."""
+        defaults: dict[str, str] = {
+            "openai": self.openai_model,
+            "gemini": self.gemini_model,
+            "groq": self.groq_model,
+            "anthropic": self.anthropic_model,
+        }
+        return defaults[self.llm_provider]
 
     def validate_provider_key(self) -> None:
         """Fail fast if the selected provider's API key is missing."""
