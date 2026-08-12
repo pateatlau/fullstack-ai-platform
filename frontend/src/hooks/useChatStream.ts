@@ -10,6 +10,7 @@ export interface UseChatStreamOptions {
   onRetrievalComplete?: (chunk: Extract<ChatChunk, { type: 'retrieval_complete' }>) => void
   onToolStart?: (chunk: Extract<ChatChunk, { type: 'tool_start' }>) => void
   onToolEnd?: (chunk: Extract<ChatChunk, { type: 'tool_end' }>) => void
+  onApprovalRequired?: (chunk: Extract<ChatChunk, { type: 'approval_required' }>) => void
   onError?: (error: Extract<ChatChunk, { type: 'error' }> | Error) => void
 }
 
@@ -41,7 +42,16 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
         const decoder = new TextDecoder()
         const parser = new SseParser()
 
-        while (true) {
+        const releaseStream = async (): Promise<void> => {
+          try {
+            await reader.cancel()
+          } catch {
+            // Stream may already be closed after natural end or abort.
+          }
+          controller.abort()
+        }
+
+        readLoop: while (true) {
           const { done, value } = await reader.read()
           if (done) break
 
@@ -60,9 +70,14 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
               options.onToolStart?.(chunk)
             } else if (chunk.type === 'tool_end') {
               options.onToolEnd?.(chunk)
+            } else if (chunk.type === 'approval_required') {
+              options.onApprovalRequired?.(chunk)
+              await releaseStream()
+              break readLoop
             } else if (chunk.type === 'error') {
               options.onError?.(chunk)
-              return
+              await releaseStream()
+              break readLoop
             }
           }
         }

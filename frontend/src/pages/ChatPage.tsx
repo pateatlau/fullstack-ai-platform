@@ -94,6 +94,7 @@ function ChatPageContent() {
   const messageRequestMapRef = useRef(new Map<string, ChatRequest>())
   const streamMessageMapRef = useRef(new Map<string, string>())
   const stoppedStreamIdsRef = useRef(new Set<string>())
+  const approvalResumeStartedRef = useRef(new Set<string>())
   // SSE exposes counts only (no citation payloads); used for "Grounded in N…".
   const streamingRetrievedChunkCountRef = useRef<number | undefined>(undefined)
   type ActiveChatTransport = 'streaming' | 'completion'
@@ -505,6 +506,47 @@ function ChatPageContent() {
     onError: handleCompletionError,
   })
 
+  const approvalStreamHandlers = useMemo(
+    () => ({
+      onDelta: (messageId: string, content: string) => {
+        if (!approvalResumeStartedRef.current.has(messageId)) {
+          approvalResumeStartedRef.current.add(messageId)
+          dispatch({ type: 'RESUME_AFTER_APPROVAL', id: messageId })
+        }
+        dispatch({ type: 'APPEND_DELTA', id: messageId, content })
+      },
+      onComplete: (messageId: string) => {
+        approvalResumeStartedRef.current.delete(messageId)
+        dispatch({ type: 'END_MESSAGE', id: messageId })
+      },
+      onError: (messageId: string, errorMessage: string) => {
+        approvalResumeStartedRef.current.delete(messageId)
+        dispatch({ type: 'STREAM_ERROR', id: messageId, message: errorMessage })
+      },
+      onApprovalRequired: (
+        messageId: string,
+        chunk: Extract<ChatChunk, { type: 'approval_required' }>,
+      ) => {
+        approvalResumeStartedRef.current.delete(messageId)
+        dispatch({
+          type: 'APPROVAL_REQUIRED',
+          id: messageId,
+          approvalId: chunk.approval_id,
+          approvalCorrelationId: chunk.approval_correlation_id,
+          proposedCalls: chunk.proposed_calls,
+        })
+      },
+    }),
+    [dispatch],
+  )
+
+  const handleApprovalRejected = useCallback(
+    (messageId: string) => {
+      dispatch({ type: 'APPROVAL_DECIDED', id: messageId, status: 'rejected' })
+    },
+    [dispatch],
+  )
+
   const { start, stop, isStreaming } = useChatStream({
     onRetrievalComplete: (chunk) => {
       streamingRetrievedChunkCountRef.current =
@@ -516,6 +558,29 @@ function ChatPageContent() {
     },
     onToolEnd: () => {
       setStreamingToolActive(false)
+    },
+    onApprovalRequired: (chunk) => {
+      setStreamingToolActive(false)
+      setStreamingRetrievalActive(false)
+      streamingRetrievedChunkCountRef.current = undefined
+      activeTransportRef.current = null
+
+      const localMessageId =
+        streamMessageMapRef.current.get(chunk.id) ?? currentMessageIdRef.current ?? chunk.id
+
+      dispatch({
+        type: 'APPROVAL_REQUIRED',
+        id: localMessageId,
+        approvalId: chunk.approval_id,
+        approvalCorrelationId: chunk.approval_correlation_id,
+        proposedCalls: chunk.proposed_calls,
+      })
+
+      streamMessageMapRef.current.delete(chunk.id)
+      currentMessageIdRef.current = null
+      currentStreamIdRef.current = null
+      pendingRequestRef.current = null
+      retryTargetMessageIdRef.current = null
     },
     onStart: (chunk) => {
       setStreamingRetrievalActive(false)
@@ -1351,6 +1416,8 @@ function ChatPageContent() {
             isAuthenticated={isAuthenticated}
             toolsEnabled={toolsEnabled}
             ragEnabled={ragEnabled}
+            onApprovalApproveStream={approvalStreamHandlers}
+            onApprovalRejected={handleApprovalRejected}
           />
           <Composer
             onSend={handleSend}

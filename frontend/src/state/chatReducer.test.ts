@@ -295,4 +295,62 @@ describe('chatReducer', () => {
     })
     expect(errored.error).toBeNull()
   })
+
+  it('APPROVAL_REQUIRED marks assistant message waiting with pending context', () => {
+    const started = chatReducer(initialChatState, {
+      type: 'START_MESSAGE',
+      id: 'assistant-1',
+      createdAt: 't1',
+    })
+
+    const paused = chatReducer(started, {
+      type: 'APPROVAL_REQUIRED',
+      id: 'assistant-1',
+      approvalId: 'approval-1',
+      approvalCorrelationId: 'corr-1',
+      proposedCalls: [{ name: 'echo', arguments: { message: 'hi' }, call_id: 'c1' }],
+    })
+
+    expect(paused.messages[0]).toMatchObject({
+      status: 'waiting_approval',
+      pendingApproval: {
+        approvalId: 'approval-1',
+        approvalCorrelationId: 'corr-1',
+        proposedCalls: [{ name: 'echo', arguments: { message: 'hi' }, call_id: 'c1' }],
+      },
+    })
+  })
+
+  it('RESUME_AFTER_APPROVAL preserves assistant content emitted before approval pause', () => {
+    const started = chatReducer(initialChatState, {
+      type: 'START_MESSAGE',
+      id: 'assistant-1',
+      createdAt: 't1',
+    })
+
+    const withDelta = chatReducer(started, {
+      type: 'APPEND_DELTA',
+      id: 'assistant-1',
+      content: 'Partial reply',
+    })
+
+    const paused = chatReducer(withDelta, {
+      type: 'APPROVAL_REQUIRED',
+      id: 'assistant-1',
+      approvalId: 'approval-1',
+      approvalCorrelationId: 'corr-1',
+      proposedCalls: [{ name: 'echo', arguments: { message: 'hi' }, call_id: 'c1' }],
+    })
+
+    const resumed = chatReducer(paused, {
+      type: 'RESUME_AFTER_APPROVAL',
+      id: 'assistant-1',
+    })
+
+    expect(resumed.messages[0]).toMatchObject({
+      status: 'streaming',
+      content: 'Partial reply',
+      pendingApproval: undefined,
+    })
+  })
 })

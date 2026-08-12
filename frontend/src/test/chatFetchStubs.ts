@@ -10,6 +10,8 @@ export function jsonHealthResponse(
   workflowEngineEnabled = false,
   observabilityEnabled = false,
   pluginsEnabled = false,
+  hitlEnabled = false,
+  hitlPendingApprovalsCount = 0,
 ): Response {
   return new Response(
     JSON.stringify({
@@ -24,6 +26,8 @@ export function jsonHealthResponse(
       workflow_engine_enabled: workflowEngineEnabled,
       observability_enabled: observabilityEnabled,
       plugins_enabled: pluginsEnabled,
+      hitl_enabled: hitlEnabled,
+      hitl_pending_approvals_count: hitlPendingApprovalsCount,
       capabilities: {
         by_provider: {
           openai: { supports_streaming: true, supports_tool_calling: true },
@@ -52,6 +56,8 @@ export function withChatPageFetchStubs(
     workflowEngineEnabled?: boolean
     observabilityEnabled?: boolean
     pluginsEnabled?: boolean
+    hitlEnabled?: boolean
+    hitlPendingApprovalsCount?: number
   },
 ): ReturnType<typeof vi.fn> {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -68,6 +74,8 @@ export function withChatPageFetchStubs(
         options?.workflowEngineEnabled ?? false,
         options?.observabilityEnabled ?? false,
         options?.pluginsEnabled ?? false,
+        options?.hitlEnabled ?? false,
+        options?.hitlPendingApprovalsCount ?? 0,
       )
     }
 

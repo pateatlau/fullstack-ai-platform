@@ -8,7 +8,8 @@ export interface Message {
   id: string
   role: Role
   content: string
-  status: 'complete' | 'streaming' | 'stopped' | 'error' | 'interrupted'
+  status:
+    'complete' | 'streaming' | 'stopped' | 'error' | 'interrupted' | 'waiting_approval' | 'rejected'
   createdAt: string
   errorMessage?: string
   errorCode?: string
@@ -17,6 +18,20 @@ export interface Message {
   retrievedChunkCount?: number
   /** Present when advanced RAG returned citations (non-streaming chat). */
   citations?: Citation[] | null
+  /** Set when an agent turn pauses for human tool-call approval (Epic 09). */
+  pendingApproval?: PendingApprovalContext
+}
+
+export interface PendingApprovalContext {
+  approvalId: string
+  approvalCorrelationId: string
+  proposedCalls: ProposedToolCallFrame[]
+}
+
+export interface ProposedToolCallFrame {
+  name: string
+  arguments: Record<string, unknown>
+  call_id: string
 }
 
 export interface ChatRequest {
@@ -67,6 +82,14 @@ export type ChatChunk =
       success: boolean
       timestamp: string
     }
+  | {
+      type: 'approval_required'
+      id: string
+      approval_id: string
+      approval_correlation_id: string
+      proposed_calls: ProposedToolCallFrame[]
+      timestamp: string
+    }
 
 export interface ChatSession {
   id: string // anticipates future persistence; unused server-side in MVP
@@ -98,7 +121,7 @@ export interface PersistedChatMessage {
   content: string
   provider: string | null
   model: string | null
-  status: 'complete' | 'stopped' | 'error' | 'interrupted'
+  status: 'complete' | 'stopped' | 'error' | 'interrupted' | 'waiting_approval' | 'rejected'
   finish_reason: string | null
   created_at: string
 }

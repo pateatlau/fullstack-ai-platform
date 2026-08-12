@@ -12,6 +12,8 @@ export interface HealthResponse {
   workflow_engine_enabled: boolean
   observability_enabled: boolean
   plugins_enabled: boolean
+  hitl_enabled: boolean
+  hitl_pending_approvals_count?: number
   capabilities?: {
     by_provider: Record<
       string,

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Message } from '../types/chat'
 import { ArrowDownIcon } from './icons/ShellIcons'
 import { MessageBubble } from './MessageBubble'
+import type { MessageBubbleProps } from './MessageBubble'
 import type { StreamingIndicatorVariant } from './StreamingIndicator'
 
 interface MessageListProps {
@@ -13,6 +14,8 @@ interface MessageListProps {
   isAuthenticated?: boolean
   toolsEnabled?: boolean
   ragEnabled?: boolean
+  onApprovalApproveStream?: MessageBubbleProps['onApprovalApproveStream']
+  onApprovalRejected?: MessageBubbleProps['onApprovalRejected']
 }
 
 const NEAR_BOTTOM_THRESHOLD_PX = 120
@@ -26,6 +29,8 @@ export function MessageList({
   isAuthenticated = false,
   toolsEnabled = false,
   ragEnabled = false,
+  onApprovalApproveStream,
+  onApprovalRejected,
 }: MessageListProps) {
   const showToolHints = isAuthenticated && (toolsEnabled || ragEnabled)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -88,6 +93,8 @@ export function MessageList({
             onRetry={onRetryMessage}
             showStreamingStatus={showStreamingStatus}
             waitingVariant={waitingVariant}
+            onApprovalApproveStream={onApprovalApproveStream}
+            onApprovalRejected={onApprovalRejected}
           />
         ))}
       </div>

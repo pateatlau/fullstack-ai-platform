@@ -205,12 +205,17 @@ export async function resumeWorkflowRun(runId: string): Promise<WorkflowRun> {
 export async function approveWorkflowNode(
   runId: string,
   nodeExecutionId: string,
+  body?: {
+    edited_arguments?: Record<string, unknown> | null
+    reason?: string | null
+  },
 ): Promise<WorkflowRun> {
   const response = await fetch(
     `${API_BASE_URL}/api/workflow-runs/${runId}/nodes/${nodeExecutionId}/approve`,
     {
       method: 'POST',
-      headers: buildAuthHeaders(),
+      headers: buildAuthHeaders({ json: true }),
+      body: JSON.stringify(body ?? {}),
     },
   )
 
@@ -226,12 +231,14 @@ export async function approveWorkflowNode(
 export async function rejectWorkflowNode(
   runId: string,
   nodeExecutionId: string,
+  body?: { reason?: string | null },
 ): Promise<WorkflowRun> {
   const response = await fetch(
     `${API_BASE_URL}/api/workflow-runs/${runId}/nodes/${nodeExecutionId}/reject`,
     {
       method: 'POST',
-      headers: buildAuthHeaders(),
+      headers: buildAuthHeaders({ json: true }),
+      body: JSON.stringify(body ?? {}),
     },
   )
 

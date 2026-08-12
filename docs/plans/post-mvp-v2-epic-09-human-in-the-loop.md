@@ -1,8 +1,8 @@
 ---
 epic: v2-09
 title: Human-in-the-Loop
-status: in_progress
-version: 1.10
+status: completed
+version: 1.13
 depends_on: [v2-06, v2-07, v2-08]
 provides:
   [
@@ -971,19 +971,21 @@ _Re-verified in Epic 09 Phase 0 (2026-08-11); source of truth: [post-mvp-v2-epic
 
 ## Phase Status
 
-| Phase | Name                                       | Effort | Status      |
-| ----- | ------------------------------------------ | ------ | ----------- |
-| 0     | Baseline Audit                             | XS     | Completed   |
-| 1     | HITL Foundations                           | M      | Completed   |
-| 2     | Agent Tool-Call Approval Gate              | L      | Completed   |
-| 3     | Agent Approval Decision & Resume           | L      | Completed   |
-| 4     | Workflow Approval Enhancements             | M      | Completed   |
-| 5     | Workflow Graph Guard & MCP/Plugin Coverage | M      | Completed   |
-| 6     | Unified Approval REST API & Audit          | S      | Completed   |
-| 7     | HITL Observability                         | S      | Completed |
-| 8     | Reference Scenarios & Eval Cases           | M      | Completed |
-| 9     | Frontend Approval Inbox & Audit UI         | S      | Not Started |
-| 10    | Validation & Release                       | M      | Not Started |
+| Phase | Name                                       | Effort | Status                          |
+| ----- | ------------------------------------------ | ------ | ------------------------------- |
+| 0     | Baseline Audit                             | XS     | ✅ Completed (2026-08-11)        |
+| 1     | HITL Foundations                           | M      | ✅ Completed (2026-08-11)        |
+| 2     | Agent Tool-Call Approval Gate              | L      | ✅ Completed (2026-08-11)        |
+| 3     | Agent Approval Decision & Resume           | L      | ✅ Completed (2026-08-11)        |
+| 4     | Workflow Approval Enhancements             | M      | ✅ Completed (2026-08-11)        |
+| 5     | Workflow Graph Guard & MCP/Plugin Coverage | M      | ✅ Completed (2026-08-11)        |
+| 6     | Unified Approval REST API & Audit          | S      | ✅ Completed (2026-08-11)        |
+| 7     | HITL Observability                         | S      | ✅ Completed (2026-08-11)        |
+| 8     | Reference Scenarios & Eval Cases           | M      | ✅ Completed (2026-08-11)        |
+| 9     | Frontend Approval Inbox & Audit UI         | S      | ✅ Completed (2026-08-12)        |
+| 10    | Validation & Release                       | M      | ✅ Completed (2026-08-12)        |
+
+**Epic 09 overall:** Phases 0–10 **completed** (2026-08-12). Next gate: user authorization to proceed to platform Epic 10.
 
 ---
 
@@ -1319,7 +1321,7 @@ Implement `AgentApprovalService.decide()`: record the decision via Compare-And-S
 **Exit criteria**
 
 - [x] Decision/resume tests pass.
-- [ ] User confirmation to proceed to Phase 4.
+- [x] User confirmation to proceed to Phase 4.
 
 **Rollback**
 
@@ -1343,11 +1345,7 @@ Implement `AgentApprovalService.decide()`: record the decision via Compare-And-S
 # Phase 4 — Workflow Approval Enhancements
 
 **Effort:** M
-**Status:** Completed
-
-**Objective**
-
-Extend Epic 06's workflow approval nodes with editable arguments and a decision reason, additively, with zero behavioural change when the new fields are omitted.
+**Status:** Completed (2026-08-11) with editable arguments and a decision reason, additively, with zero behavioural change when the new fields are omitted.
 
 **Deliverables**
 
@@ -1416,7 +1414,7 @@ Extend Epic 06's workflow approval nodes with editable arguments and a decision 
 # Phase 5 — Workflow Graph Guard & MCP/Plugin Coverage
 
 **Effort:** M
-**Status:** Completed
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1539,7 +1537,7 @@ Expose the read-only, cross-surface approval inbox/audit API and extend health w
 **Exit criteria**
 
 - [x] Router tests pass.
-- [ ] User confirmation to proceed to Phase 7.
+- [x] User confirmation to proceed to Phase 7.
 
 **Rollback**
 
@@ -1563,7 +1561,7 @@ Expose the read-only, cross-surface approval inbox/audit API and extend health w
 # Phase 7 — HITL Observability
 
 **Effort:** S
-**Status:** Completed
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1636,7 +1634,7 @@ Add approval span/metric instrumentation closing Epic 07's deferred "approval la
 # Phase 8 — Reference Scenarios & Eval Cases
 
 **Effort:** M
-**Status:** Completed
+**Status:** Completed (2026-08-11)
 
 **Objective**
 
@@ -1703,7 +1701,7 @@ Implemented as integration tests (and, where the harness supports it, `--level h
 
 - [x] Reference scenario tests pass.
 - [x] Adversarial scenario tests pass.
-- [ ] User confirmation to proceed to Phase 9.
+- [x] User confirmation to proceed to Phase 9.
 
 **Rollback**
 
@@ -1719,14 +1717,14 @@ Implemented as integration tests (and, where the harness supports it, `--level h
 | Eval harness tests         | ✅ 6 passed (`tests/ai/evaluation/test_hitl_runner.py`)                                |
 | README                     | ✅ HITL operator steps + adversarial coverage table (`backend-python/README.md`)       |
 | Phase 8 status             | ✅ Completed                                                                            |
-| Phase 9 authorized         | ⬜ Pending user confirmation                                                            |
+| Phase 9 authorized         | ✅ User confirmed — Phase 9 implemented (2026-08-12)                                   |
 
 ---
 
 # Phase 9 — Frontend Approval Inbox & Audit UI
 
 **Effort:** S
-**Status:** Not Started
+**Status:** Completed (2026-08-12)
 
 **Objective**
 
@@ -1745,26 +1743,26 @@ Add a frontend approval inbox (pending, cross-surface) with inline argument edit
 
 ## API Client
 
-- [ ] `GET /api/approvals` (list, filters) and `GET /api/approvals/{id}` (detail).
-- [ ] `GET /api/approvals/{id}/revisions` and `POST /api/approvals/{id}/revise`.
-- [ ] `POST /api/approvals/{id}/decide` — handle SSE response on approve, JSON on reject.
-- [ ] Handle `503 feature_disabled` with a friendly empty state.
+- [x] `GET /api/approvals` (list, filters) and `GET /api/approvals/{id}` (detail).
+- [x] `GET /api/approvals/{id}/revisions` and `POST /api/approvals/{id}/revise`.
+- [x] `POST /api/approvals/{id}/decide` — handle SSE response on approve, JSON on reject.
+- [x] Handle `503 feature_disabled` with a friendly empty state.
 
 ## Chat UI
 
-- [ ] Handle the `approval_required` SSE frame: render an inline decision card (proposed arguments, editable JSON, approve/reject, reason) or a link into the inbox.
-- [ ] Render `waiting_approval`/`rejected` message statuses distinctly from `complete`/`error`.
+- [x] Handle the `approval_required` SSE frame: render an inline decision card (proposed arguments, editable JSON, approve/reject, reason) or a link into the inbox.
+- [x] Render `waiting_approval`/`rejected` message statuses distinctly from `complete`/`error`.
 
 ## Inbox & Audit UI
 
-- [ ] Pending tab: cross-surface list with editable arguments per entry; edits on an agent-tool approval call `revise` (not `decide`) so the user can keep editing before submitting a final decision.
-- [ ] History tab: decided entries with `decision`, `reason`, `edited`, `decided_by`, `decided_at`; show only the latest revision by default (per Part I § Approval Revision History) with a "view revision history" expander that fetches and lists the full `ApprovalRevision[]`.
-- [ ] `WorkflowsPage`: add edit-args (JSON) and reason inputs to the existing approve/reject actions.
+- [x] Pending tab: cross-surface list with editable arguments per entry; edits on an agent-tool approval call `revise` (not `decide`) so the user can keep editing before submitting a final decision.
+- [x] History tab: decided entries with `decision`, `reason`, `edited`, `decided_by`, `decided_at`; show only the latest revision by default (per Part I § Approval Revision History) with a "view revision history" expander that fetches and lists the full `ApprovalRevision[]`.
+- [x] `WorkflowsPage`: add edit-args (JSON) and reason inputs to the existing approve/reject actions.
 
 ## Testing
 
-- [ ] MSW/mock tests for list, detail, decide (approve/reject), and disabled states.
-- [ ] Chat streaming test for `approval_required` handling.
+- [x] MSW/mock tests for list, detail, decide (approve/reject), and disabled states.
+- [x] Chat streaming test for `approval_required` handling.
 
 **Verify**
 
@@ -1777,8 +1775,8 @@ Add a frontend approval inbox (pending, cross-surface) with inline argument edit
 
 **Exit criteria**
 
-- [ ] Frontend tests pass.
-- [ ] User confirmation to proceed to Phase 10.
+- [x] Frontend tests pass.
+- [x] User confirmation to proceed to Phase 10.
 
 **Rollback**
 
@@ -1786,22 +1784,24 @@ Add a frontend approval inbox (pending, cross-surface) with inline argument edit
 
 **Completion Record**
 
-| Metric                  | Result          |
-| ----------------------- | --------------- |
-| Lint                    | Pending Phase 9 |
-| Frontend tests          | Pending Phase 9 |
-| `approvalsClient` tests | Pending Phase 9 |
-| `ApprovalsPage` tests   | Pending Phase 9 |
-| Route + nav             | Pending Phase 9 |
-| Phase 9 status          | Not Started     |
-| Phase 10 authorized     | Pending         |
+| Metric                  | Result                                                          |
+| ----------------------- | --------------------------------------------------------------- |
+| Lint                    | ✅ Clean                                                         |
+| Frontend tests          | ✅ **300** passed (50 files; +9 vs Phase 0 baseline of 291)      |
+| `approvalsClient` tests | ✅ 4 passed                                                      |
+| `ApprovalsPage` tests   | ✅ 3 passed                                                      |
+| Route + nav             | ✅ `/approvals` protected route; nav link when `hitl_enabled`    |
+| Chat inline approval    | ✅ `ApprovalDecisionCard` + `approval_required` SSE handling     |
+| WorkflowsPage edit/reason | ✅ `WorkflowPendingApprovalPanel` with JSON args + reason     |
+| Phase 9 status          | ✅ Completed (2026-08-12)                                        |
+| Phase 10 authorized     | ✅ Completed in same release cycle                               |
 
 ---
 
 # Phase 10 — Validation & Release
 
 **Effort:** M
-**Status:** Not Started
+**Status:** Completed (2026-08-12 — see [post-mvp-v2-epic9-release-summary.md](../releases/post-mvp-v2-epic9-release-summary.md))
 
 **Objective**
 
@@ -1817,16 +1817,16 @@ Full-platform validation, flag-off regression, release summary, and epic complet
 
 ## Validation
 
-- [ ] Full backend test suite + coverage ≥80% on `app/ai/hitl/`.
-- [ ] Frontend tests + build.
-- [ ] Integration tests (agent tool approval, workflow approval, MCP, plugins, approvals router).
-- [ ] Eval suite + regression check.
-- [ ] Flag-off regression: entire suite with `HITL_ENABLED=false`.
+- [x] Full backend test suite + coverage ≥80% on `app/ai/hitl/`.
+- [x] Frontend tests + build.
+- [x] Integration tests (agent tool approval, workflow approval, MCP, plugins, approvals router).
+- [x] Eval suite + regression check.
+- [x] Flag-off regression: entire suite with `HITL_ENABLED=false`.
 
 ## Documentation
 
-- [ ] Publish release summary.
-- [ ] Update `backend-python/.env.example` with HITL settings.
+- [x] Publish release summary.
+- [x] Update `backend-python/.env.example` with HITL settings (present since Phase 1).
 
 **Verify**
 
@@ -1844,8 +1844,8 @@ Full-platform validation, flag-off regression, release summary, and epic complet
 
 **Exit criteria**
 
-- Release summary published.
-- User authorizes Epic 10.
+- [x] Release summary published.
+- [ ] User authorizes Epic 10.
 
 **Rollback**
 
@@ -1854,17 +1854,20 @@ Full-platform validation, flag-off regression, release summary, and epic complet
 
 **Completion Record**
 
-| Metric                    | Result                    |
-| ------------------------- | ------------------------- |
-| Backend Tests             | Pending Phase 10          |
-| HITL package coverage     | Pending Phase 10          |
-| Frontend Tests            | Pending Phase 10          |
-| Integration Tests         | Pending Phase 10          |
-| Eval Suite                | Pending Phase 10          |
-| Feature Flag Regression   | Pending Phase 10          |
-| Release Summary Published | Pending Phase 10          |
-| Epic Status               | Not Started               |
-| Epic 10 authorization     | Pending user confirmation |
+| Metric                    | Result                                                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------- |
+| Backend Tests             | ✅ 1912 passed, 88.95% `app/` coverage (flag-on)                                       |
+| HITL package coverage     | ✅ 84% on `app/ai/hitl/`                                                               |
+| Frontend Tests            | ✅ **300** passed (50 files); lint + build pass                                          |
+| Integration Tests         | ✅ 157 passed (Epic 09 test paths)                                                     |
+| Eval Suite                | ✅ 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean     |
+| Feature Flag Regression   | ✅ 1912 passed with `HITL_ENABLED=false` (88.99% coverage)                              |
+| Release Summary Published | ✅ [post-mvp-v2-epic9-release-summary.md](../releases/post-mvp-v2-epic9-release-summary.md) |
+| Phase 9 frontend          | ✅ Completed — inbox, audit, chat inline card, WorkflowsPage edit/reason (2026-08-12)     |
+| Phase 10 status           | ✅ Completed (2026-08-12)                                                                 |
+| Phase 10 authorized       | ✅ User confirmed — validation & release (2026-08-12)                                     |
+| Epic Status               | ✅ `completed` (Phases 0–10); platform Epic 10 authorization pending user confirmation    |
+| Epic 10 authorization     | ⬜ Pending user confirmation                                                            |
 
 ---
 
@@ -1925,17 +1928,17 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 
 # Definition of Done
 
-- [ ] All Part I architectural invariants preserved.
-- [ ] Public APIs frozen after Phase 1.
-- [ ] Agent tool-call approval gate and resume operational (approve, approve-with-edits, reject).
-- [ ] Workflow approval nodes support editable arguments and decision reason; graph guard enforced.
-- [ ] MCP and plugin tools gated identically to native tools with no origin-specific code.
-- [ ] Unified Approval REST API and frontend inbox/audit UI operational, including per-approval revision history.
-- [ ] Reference scenarios and adversarial/edge-case eval coverage shipped (or explicitly documented as deferred gaps).
-- [ ] Approval-scoped tracing attributes and correlation ids present on every decision and correctly linked to the resulting tool execution span.
-- [ ] `HITL_ENABLED=false` preserves Epic 08 behaviour.
-- [ ] Backend coverage ≥80% on `app/ai/hitl/`.
-- [ ] Release summary published.
+- [x] All Part I architectural invariants preserved.
+- [x] Public APIs frozen after Phase 1.
+- [x] Agent tool-call approval gate and resume operational (approve, approve-with-edits, reject).
+- [x] Workflow approval nodes support editable arguments and decision reason; graph guard enforced.
+- [x] MCP and plugin tools gated identically to native tools with no origin-specific code.
+- [x] Unified Approval REST API and frontend inbox/audit UI operational, including per-approval revision history.
+- [x] Reference scenarios and adversarial/edge-case eval coverage shipped (or explicitly documented as deferred gaps).
+- [x] Approval-scoped tracing attributes and correlation ids present on every decision and correctly linked to the resulting tool execution span.
+- [x] `HITL_ENABLED=false` preserves Epic 08 behaviour.
+- [x] Backend coverage ≥80% on `app/ai/hitl/`.
+- [x] Release summary published.
 - [ ] User authorizes Epic 10.
 
 ---
@@ -1999,3 +2002,6 @@ Tool execution itself continues to emit existing `tool_span` events — no dupli
 | 1.8     | 2026-08-11 | Phase 6 unified approval REST API & audit complete — `ApprovalsStore` aggregation, `GET /api/approvals` list/detail, cross-kind revisions endpoint, health HITL fields, 8-test router verify suite + store integration test. Part II only. |
 | 1.9     | 2026-08-11 | Phase 7 HITL observability complete — `approval_span`, HITL metrics (`agent_tool_approval_pending_count`, `approval_decisions_total`, three latency histograms), `approval_correlation_id` on `tool_span`, instrumentation wired into agent pause/revise/decide/resume and workflow pause/decide; `tests/ai/hitl/test_observability.py`. Part II only. |
 | 1.10    | 2026-08-11 | Phase 8 reference scenarios & eval cases complete — `send_notification` reference stub, `--level hitl` eval harness (`HitlEvalRunner`, 5 cases), reference/adversarial integration tests, README operator steps + deferred-gap table. Part II only. |
+| 1.11    | 2026-08-12 | Phase 10 validation & release — full gates (1912 backend, 291 frontend, eval 15/15 + hitl 5/5 + plugin 3/3, flag-off parity); release summary published; eval runner HITL policy wiring fix; settings default test hardening. Phase 9 frontend remains not started. Part II only. |
+| 1.12    | 2026-08-12 | Phase 9 frontend approval inbox & audit UI complete — `ApprovalsPage`, `approvalsClient`, chat `approval_required` inline card, WorkflowsPage edit/reason; 300 frontend tests (50 files). Phase 10 metrics updated. Epic status `completed`. Part II only. |
+| 1.13    | 2026-08-12 | Reconciled Part II phase completion — Phase Status table (Phases 0–10 all ✅), exit criteria for Phases 3/6, dates on Phases 4/5/7/8 status lines, Phase 10 completion record, Definition of Done public-API freeze. Part II only. |
