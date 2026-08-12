@@ -49,6 +49,7 @@ async def start_background_jobs(settings: Settings) -> BackgroundJobsRuntime | N
 
     session_factory = get_sessionmaker()
     queue = PostgresJobQueue(session_factory, settings)
+    await queue.reconcile_depth_metrics()
     store = PostgresJobScheduleStore(session_factory)
     await reconcile_evaluation_schedule_status(store, settings)
     registry = JobHandlerRegistry()

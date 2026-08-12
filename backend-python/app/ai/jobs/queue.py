@@ -14,6 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.jobs.exceptions import JobConcurrencyError
 from app.ai.jobs.models import BackgroundJob, JobResult, JobStatus
+from app.ai.observability.metrics.instruments import (
+    record_job_dead_lettered,
+    record_job_enqueued,
+    record_job_retry,
+    record_job_succeeded,
+    reconcile_job_queue_depth_metrics,
+)
 from app.core.config import Settings
 
 _IDEMPOTENCY_KEY_UNIQUE_INDEX = "uq_background_jobs_idempotency_key"
@@ -137,6 +144,8 @@ class JobQueue(Protocol):
 
     async def count_dead_letter(self) -> int: ...
 
+    async def reconcile_depth_metrics(self) -> None: ...
+
 
 class PostgresJobQueue:
     """Postgres implementation using claim-and-lease row locking."""
@@ -172,7 +181,7 @@ class PostgresJobQueue:
         try:
             async with self._session_factory() as session:
                 async with session.begin():
-                    return await self.enqueue_in_transaction(
+                    job, newly_enqueued = await self.enqueue_in_transaction(
                         session,
                         job_type=job_type,
                         payload=payload,
@@ -181,6 +190,10 @@ class PostgresJobQueue:
                         idempotency_key=idempotency_key,
                         schedule_id=schedule_id,
                     )
+            if newly_enqueued:
+                record_job_enqueued(job_type=job.job_type)
+                await self.reconcile_depth_metrics()
+            return job
         except IntegrityError as exc:
             if idempotency_key is None or not _is_idempotency_key_violation(exc):
                 raise
@@ -202,8 +215,12 @@ class PostgresJobQueue:
         max_attempts: int | None = None,
         idempotency_key: str | None = None,
         schedule_id: uuid.UUID | None = None,
-    ) -> BackgroundJob:
-        """Insert a queued job within an existing transaction."""
+    ) -> tuple[BackgroundJob, bool]:
+        """Insert a queued job within an existing transaction.
+
+        Returns ``(job, newly_enqueued)`` where ``newly_enqueued`` is ``False``
+        when an idempotency-key duplicate was returned instead of inserting.
+        """
         effective_max_attempts = (
             max_attempts
             if max_attempts is not None
@@ -245,9 +262,9 @@ class PostgresJobQueue:
             existing = await self._fetch_by_idempotency_key(session, idempotency_key)
             if existing is None:
                 raise
-            return existing
+            return existing, False
 
-        return _row_to_job(row)
+        return _row_to_job(row), True
 
     async def claim_due(
         self,
@@ -256,9 +273,10 @@ class PostgresJobQueue:
         batch_size: int,
         lease_seconds: int,
     ) -> list[BackgroundJob]:
+        dead_lettered_job_types: list[str] = []
         async with self._session_factory() as session:
             async with session.begin():
-                await session.execute(
+                expired_result = await session.execute(
                     text(
                         """
                         UPDATE background_jobs
@@ -275,10 +293,15 @@ class PostgresJobQueue:
                         WHERE status = 'running'
                           AND locked_at < now() - make_interval(secs => :lease_seconds)
                           AND attempt_count >= max_attempts
+                        RETURNING job_type
                         """
                     ),
                     {"lease_seconds": lease_seconds},
                 )
+                dead_lettered_job_types = [
+                    expired_row._mapping["job_type"]
+                    for expired_row in expired_result.fetchall()
+                ]
                 result = await session.execute(
                     text(
                         """
@@ -314,6 +337,10 @@ class PostgresJobQueue:
                 )
                 rows = result.fetchall()
 
+        for job_type in dead_lettered_job_types:
+            record_job_dead_lettered(job_type=job_type)
+        if dead_lettered_job_types:
+            await self.reconcile_depth_metrics()
         return [_row_to_job(row) for row in rows]
 
     async def complete(
@@ -339,7 +366,10 @@ class PostgresJobQueue:
                     """,
                     params={"result": _json_payload(result.model_dump())},
                 )
-        return _row_to_job(row)
+        job = _row_to_job(row)
+        record_job_succeeded(job_type=job.job_type)
+        await self.reconcile_depth_metrics()
+        return job
 
     async def fail(
         self,
@@ -383,7 +413,13 @@ class PostgresJobQueue:
                     set_clause=set_clause,
                     params=params,
                 )
-        return _row_to_job(row)
+        job = _row_to_job(row)
+        if dead_letter:
+            record_job_dead_lettered(job_type=job.job_type)
+            await self.reconcile_depth_metrics()
+        else:
+            record_job_retry(job_type=job.job_type)
+        return job
 
     async def cancel(
         self,
@@ -412,6 +448,7 @@ class PostgresJobQueue:
                 row = result.one_or_none()
         if row is None:
             return None
+        await self.reconcile_depth_metrics()
         return _row_to_job(row)
 
     async def get(self, job_id: uuid.UUID) -> BackgroundJob | None:
@@ -481,6 +518,7 @@ class PostgresJobQueue:
                 row = result.one_or_none()
         if row is None:
             return None
+        await self.reconcile_depth_metrics()
         return _row_to_job(row)
 
     async def count_pending(self) -> int:
@@ -508,6 +546,13 @@ class PostgresJobQueue:
                 )
             )
         return int(count or 0)
+
+    async def reconcile_depth_metrics(self) -> None:
+        """Sync depth UpDownCounters to committed DB queue state."""
+        reconcile_job_queue_depth_metrics(
+            pending_count=await self.count_pending(),
+            dead_letter_count=await self.count_dead_letter(),
+        )
 
     async def _update_with_version(
         self,

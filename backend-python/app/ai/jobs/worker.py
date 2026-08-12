@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import time
 from collections.abc import Sequence
 
 from app.ai.jobs.exceptions import JobHandlerNotFoundError
-from app.ai.jobs.models import BackgroundJob
+from app.ai.jobs.models import BackgroundJob, JobStatus
 from app.ai.jobs.queue import JobQueue, generate_worker_id
 from app.ai.jobs.registry import JobHandlerRegistry
 from app.ai.jobs.retry import NonRetryableJobError, compute_backoff_seconds
+from app.ai.observability.tracing.spans import (
+    elapsed_ms_since,
+    job_span,
+    record_job_dispatch_outcome,
+)
 from app.core.config import Settings
-from app.core.logging import get_logger
+from app.core.logging import bind_context, get_logger
 
 _logger = get_logger(__name__)
 
@@ -116,35 +122,81 @@ class JobWorker:
         _log_gather_exceptions(results, jobs=claimed, tasks=tasks)
 
     async def _dispatch(self, job: BackgroundJob) -> None:
-        try:
-            handler = self._registry.resolve(job.job_type)
-        except JobHandlerNotFoundError as exc:
-            await self._dead_letter(job, error=str(exc))
-            return
+        bind_context(
+            job_id=str(job.id),
+            job_type=job.job_type,
+            attempt_count=job.attempt_count,
+        )
+        dispatch_start = time.perf_counter()
+        handler_duration_ms = 0
+        terminal_status = job.status.value
+        failed = False
 
-        timeout = self._settings.background_jobs_handler_timeout_seconds
-        try:
-            result = await asyncio.wait_for(handler(job), timeout=timeout)
-        except NonRetryableJobError as exc:
-            await self._dead_letter(job, error=str(exc))
-        except TimeoutError:
-            await self._handle_failure(
-                job,
-                error=f"TimeoutError: handler exceeded {timeout}s",
-            )
-        except Exception as exc:
-            await self._handle_failure(job, error=_format_handler_error(exc))
-        else:
-            await self._queue.complete(
-                job.id,
-                result=result,
-                expected_version=job.version,
-            )
+        with job_span(
+            job_id=str(job.id),
+            job_type=job.job_type,
+            job_status=job.status.value,
+            attempt_count=job.attempt_count,
+        ) as span:
+            try:
+                try:
+                    handler = self._registry.resolve(job.job_type)
+                except JobHandlerNotFoundError as exc:
+                    failed = True
+                    await self._dead_letter(job, error=str(exc))
+                    terminal_status = JobStatus.DEAD_LETTER.value
+                else:
+                    timeout = self._settings.background_jobs_handler_timeout_seconds
+                    handler_start = time.perf_counter()
+                    try:
+                        try:
+                            result = await asyncio.wait_for(
+                                handler(job), timeout=timeout
+                            )
+                        except NonRetryableJobError as exc:
+                            failed = True
+                            await self._dead_letter(job, error=str(exc))
+                            terminal_status = JobStatus.DEAD_LETTER.value
+                        except TimeoutError:
+                            failed = True
+                            terminal_status = await self._handle_failure_with_status(
+                                job,
+                                error=f"TimeoutError: handler exceeded {timeout}s",
+                            )
+                        except Exception as exc:
+                            failed = True
+                            terminal_status = await self._handle_failure_with_status(
+                                job,
+                                error=_format_handler_error(exc),
+                            )
+                        else:
+                            await self._queue.complete(
+                                job.id,
+                                result=result,
+                                expected_version=job.version,
+                            )
+                            terminal_status = JobStatus.SUCCEEDED.value
+                    finally:
+                        handler_duration_ms = elapsed_ms_since(handler_start)
+            finally:
+                record_job_dispatch_outcome(
+                    span,
+                    job_status=terminal_status,
+                    handler_duration_ms=handler_duration_ms,
+                    dispatch_duration_ms=elapsed_ms_since(dispatch_start),
+                    job_type=job.job_type,
+                    failed=failed,
+                )
 
-    async def _handle_failure(self, job: BackgroundJob, *, error: str) -> None:
+    async def _handle_failure_with_status(
+        self,
+        job: BackgroundJob,
+        *,
+        error: str,
+    ) -> str:
         if job.attempt_count >= job.max_attempts:
             await self._dead_letter(job, error=error)
-            return
+            return JobStatus.DEAD_LETTER.value
 
         delay = compute_backoff_seconds(
             job.attempt_count - 1,
@@ -160,6 +212,10 @@ class JobWorker:
             expected_version=job.version,
             retry_at=retry_at,
         )
+        return JobStatus.QUEUED.value
+
+    async def _handle_failure(self, job: BackgroundJob, *, error: str) -> None:
+        await self._handle_failure_with_status(job, error=error)
 
     async def _dead_letter(self, job: BackgroundJob, *, error: str) -> None:
         await self._queue.fail(

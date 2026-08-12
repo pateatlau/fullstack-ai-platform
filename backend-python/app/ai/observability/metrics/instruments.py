@@ -15,6 +15,53 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+_reconciled_pending_count: int | None = None
+_reconciled_dead_letter_count: int | None = None
+
+
+def reset_job_queue_depth_reconciliation_for_tests() -> None:
+    """Clear cached DB depth snapshots between tests."""
+    global _reconciled_pending_count, _reconciled_dead_letter_count
+    _reconciled_pending_count = None
+    _reconciled_dead_letter_count = None
+
+
+def reconcile_job_queue_depth_metrics(
+    *,
+    pending_count: int,
+    dead_letter_count: int,
+) -> None:
+    """Sync depth UpDownCounters to committed DB queue state."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    global _reconciled_pending_count, _reconciled_dead_letter_count
+
+    def _emit() -> None:
+        global _reconciled_pending_count, _reconciled_dead_letter_count
+        if _reconciled_pending_count is None:
+            if pending_count:
+                instruments.jobs_pending_count.add(pending_count)
+        elif pending_count != _reconciled_pending_count:
+            instruments.jobs_pending_count.add(
+                pending_count - _reconciled_pending_count
+            )
+
+        if _reconciled_dead_letter_count is None:
+            if dead_letter_count:
+                instruments.jobs_dead_letter_count.add(dead_letter_count)
+        elif dead_letter_count != _reconciled_dead_letter_count:
+            instruments.jobs_dead_letter_count.add(
+                dead_letter_count - _reconciled_dead_letter_count
+            )
+
+        _reconciled_pending_count = pending_count
+        _reconciled_dead_letter_count = dead_letter_count
+
+    _record("jobs_pending_count", _emit)
+
+
 _INSTRUMENT_LABEL_KEYS: dict[str, frozenset[str]] = {
     "llm_requests_total": frozenset({"provider", "model", "status"}),
     "llm_token_usage": frozenset({"provider", "model"}),
@@ -45,6 +92,14 @@ _INSTRUMENT_LABEL_KEYS: dict[str, frozenset[str]] = {
     "approval_expired_total": frozenset({"kind"}),
     "approval_cancelled_total": frozenset({"kind"}),
     "approval_duration_seconds": frozenset({"kind", "decision"}),
+    # Queue metrics (Epic 10) — infrastructure-level depth/throughput counters.
+    "jobs_enqueued_total": frozenset({"job_type"}),
+    "jobs_completed_total": frozenset({"job_type", "outcome"}),
+    "job_retries_total": frozenset({"job_type"}),
+    "jobs_pending_count": frozenset(),
+    "jobs_dead_letter_count": frozenset(),
+    # Handler metrics (Epic 10) — per-attempt execution duration by handler type.
+    "job_duration_ms": frozenset({"job_type"}),
 }
 
 
@@ -145,6 +200,21 @@ class MetricInstruments:
             "approval_duration_seconds",
             unit="s",
         )
+        self.jobs_enqueued_total: Counter = meter.create_counter("jobs_enqueued_total")
+        self.jobs_completed_total: Counter = meter.create_counter(
+            "jobs_completed_total"
+        )
+        self.job_retries_total: Counter = meter.create_counter("job_retries_total")
+        self.jobs_pending_count: UpDownCounter = meter.create_up_down_counter(
+            "jobs_pending_count"
+        )
+        self.jobs_dead_letter_count: UpDownCounter = meter.create_up_down_counter(
+            "jobs_dead_letter_count"
+        )
+        self.job_duration_ms: Histogram = meter.create_histogram(
+            "job_duration_ms",
+            unit="ms",
+        )
 
     @classmethod
     def initialize(cls) -> None:
@@ -161,6 +231,7 @@ class MetricInstruments:
     @classmethod
     def reset_for_tests(cls) -> None:
         cls._instance = None
+        reset_job_queue_depth_reconciliation_for_tests()
 
 
 def _record(
@@ -501,6 +572,76 @@ def record_hitl_tool_execution_latency_ms(*, kind: str, latency_ms: int) -> None
         instruments.hitl_tool_execution_latency_ms.record(latency_ms, labels)
 
     _record("hitl_tool_execution_latency_ms", _emit)
+
+
+def record_job_enqueued(*, job_type: str) -> None:
+    """Queue metric: increment enqueue counter (depth reconciled separately)."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(job_type=job_type)
+
+    def _emit() -> None:
+        instruments.jobs_enqueued_total.add(1, labels)
+
+    _record("jobs_enqueued_total", _emit)
+
+
+def record_job_succeeded(*, job_type: str) -> None:
+    """Queue metric: record terminal success (depth reconciled separately)."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(job_type=job_type, outcome="succeeded")
+
+    def _emit() -> None:
+        instruments.jobs_completed_total.add(1, labels)
+
+    _record("jobs_completed_total", _emit)
+
+
+def record_job_dead_lettered(*, job_type: str) -> None:
+    """Queue metric: record dead-letter terminal outcome (depth reconciled separately)."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(job_type=job_type, outcome="dead_letter")
+
+    def _emit() -> None:
+        instruments.jobs_completed_total.add(1, labels)
+
+    _record("jobs_completed_total", _emit)
+
+
+def record_job_retry(*, job_type: str) -> None:
+    """Queue metric: increment retry counter when a failed attempt is re-queued."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(job_type=job_type)
+
+    def _emit() -> None:
+        instruments.job_retries_total.add(1, labels)
+
+    _record("job_retries_total", _emit)
+
+
+def record_job_duration_ms(*, job_type: str, duration_ms: int) -> None:
+    """Handler metric: per-attempt handler execution duration by ``job_type``."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(job_type=job_type)
+
+    def _emit() -> None:
+        instruments.job_duration_ms.record(duration_ms, labels)
+
+    _record("job_duration_ms", _emit)
 
 
 def assert_label_keys_allowlisted() -> None:

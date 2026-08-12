@@ -11,6 +11,7 @@ from app.ai.jobs.exceptions import JobConcurrencyError
 from app.ai.jobs.models import JobSchedule
 from app.ai.jobs.queue import JobQueue, PostgresJobQueue
 from app.ai.jobs.schedule_store import JobScheduleStore, PostgresJobScheduleStore
+from app.ai.observability.metrics.instruments import record_job_enqueued
 from app.core.config import Settings
 from app.core.logging import get_logger
 
@@ -126,12 +127,13 @@ class JobScheduler:
             )
 
         try:
+            newly_enqueued = False
             async with self._session_factory() as session:
                 async with session.begin():
                     # Enqueue before advance so a crash after insert but before
                     # advance can retry idempotently; roll back both when the
                     # schedule row changed underneath us (stale version).
-                    await self._queue.enqueue_in_transaction(
+                    _job, newly_enqueued = await self._queue.enqueue_in_transaction(
                         session,
                         job_type=schedule.job_type,
                         payload=payload,
@@ -151,6 +153,9 @@ class JobScheduler:
                             f"{schedule.name} (expected version "
                             f"{schedule.version})."
                         )
+            if newly_enqueued:
+                record_job_enqueued(job_type=schedule.job_type)
+                await self._queue.reconcile_depth_metrics()
         except JobConcurrencyError:
             _logger.debug(
                 "Schedule tick lost concurrent race; enqueue rolled back",

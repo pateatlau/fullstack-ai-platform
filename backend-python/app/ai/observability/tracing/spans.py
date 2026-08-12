@@ -31,6 +31,7 @@ from app.ai.observability.metrics.instruments import (
     record_hitl_decision_metrics,
     record_hitl_resume_latency_ms,
     record_hitl_tool_execution_latency_ms,
+    record_job_duration_ms,
     record_plugin_load_metrics,
     record_tool_call_metrics,
     record_workflow_node_execution_metric,
@@ -312,6 +313,55 @@ def approval_span(
         attributes["approval_correlation_id"] = approval_correlation_id
     with _observability_span("approval.decide", attributes=attributes) as span:
         yield span
+
+
+@contextmanager
+def job_span(
+    *,
+    job_id: str,
+    job_type: str,
+    job_status: str,
+    attempt_count: int,
+) -> Generator[Span | None, None, None]:
+    """Per-dispatch job span — ids/type/status only, never payload content (Epic 10)."""
+    with _observability_span(
+        "job.dispatch",
+        attributes={
+            "job_id": job_id,
+            "job_type": job_type,
+            "job_status": job_status,
+            "attempt_count": attempt_count,
+        },
+    ) as span:
+        yield span
+
+
+def record_job_dispatch_outcome(
+    span: Span | None,
+    *,
+    job_status: str,
+    handler_duration_ms: int,
+    job_type: str,
+    dispatch_duration_ms: int | None = None,
+    failed: bool = False,
+) -> None:
+    """Attach terminal dispatch attributes and record handler execution duration."""
+    record_job_duration_ms(job_type=job_type, duration_ms=handler_duration_ms)
+    if span is None:
+        return
+    _set_span_attributes(
+        span,
+        {
+            "job_status": job_status,
+            "duration_ms": (
+                dispatch_duration_ms
+                if dispatch_duration_ms is not None
+                else handler_duration_ms
+            ),
+        },
+    )
+    if failed:
+        mark_span_error_status(span, span_name="job.dispatch")
 
 
 def hitl_decision_latency_ms(
