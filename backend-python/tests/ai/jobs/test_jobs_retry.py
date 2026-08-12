@@ -15,8 +15,18 @@ def test_compute_backoff_exponential_and_capped() -> None:
 
 
 def test_compute_backoff_rejects_negative_attempt_count() -> None:
-    with pytest.raises(ValueError, match="non-negative"):
+    with pytest.raises(ValueError, match="attempt_count must be non-negative"):
         compute_backoff_seconds(-1, base=5.0, cap=300.0)
+
+
+def test_compute_backoff_rejects_negative_base() -> None:
+    with pytest.raises(ValueError, match="base must be non-negative"):
+        compute_backoff_seconds(0, base=-1.0, cap=300.0)
+
+
+def test_compute_backoff_rejects_negative_cap() -> None:
+    with pytest.raises(ValueError, match="cap must be non-negative"):
+        compute_backoff_seconds(0, base=5.0, cap=-1.0)
 
 
 def test_non_retryable_job_error_is_exception() -> None:

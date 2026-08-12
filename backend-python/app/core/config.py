@@ -262,7 +262,7 @@ class Settings(BaseSettings):
     background_jobs_enabled: bool = False
     background_jobs_worker_poll_interval_seconds: int = Field(default=5, ge=1)
     background_jobs_worker_batch_size: int = Field(default=10, ge=1)
-    background_jobs_claim_lease_seconds: int = Field(default=300, ge=1)
+    background_jobs_claim_lease_seconds: int = Field(default=900, ge=1)
     background_jobs_handler_timeout_seconds: int = Field(default=600, ge=1)
     background_jobs_default_max_attempts: int = Field(default=3, ge=1)
     background_jobs_retry_base_delay_seconds: float = Field(default=5.0, ge=0.0)
@@ -610,6 +610,21 @@ class Settings(BaseSettings):
                 f"Supported providers: {supported}."
             )
 
+    def validate_background_jobs_requirements(self) -> None:
+        """Fail fast when Background Jobs is enabled but configuration is invalid."""
+        if not self.background_jobs_enabled:
+            return
+
+        if (
+            self.background_jobs_handler_timeout_seconds
+            >= self.background_jobs_claim_lease_seconds
+        ):
+            raise ValueError(
+                "BACKGROUND_JOBS_HANDLER_TIMEOUT_SECONDS must be strictly less than "
+                "BACKGROUND_JOBS_CLAIM_LEASE_SECONDS so in-flight handlers are not "
+                "reclaimed before they can finish."
+            )
+
     def log_development_warnings(self, logger: object) -> None:
         """Emit human-readable warnings for permissive development defaults."""
         if not self.is_development:
@@ -646,6 +661,7 @@ class Settings(BaseSettings):
         self.validate_memory_requirements()
         self.validate_workflow_requirements()
         self.validate_hitl_requirements()
+        self.validate_background_jobs_requirements()
         self.validate_production_requirements()
 
 

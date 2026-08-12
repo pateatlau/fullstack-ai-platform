@@ -16,4 +16,8 @@ def compute_backoff_seconds(
     """Exponential backoff capped at ``cap`` seconds."""
     if attempt_count < 0:
         raise ValueError("attempt_count must be non-negative.")
+    if base < 0:
+        raise ValueError("base must be non-negative.")
+    if cap < 0:
+        raise ValueError("cap must be non-negative.")
     return min(base * (2**attempt_count), cap)

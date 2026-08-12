@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import uuid
 
 import pytest
 from sqlalchemy import text
@@ -14,7 +15,7 @@ from app.ai.jobs.models import BackgroundJob, JobResult, JobStatus
 from app.ai.jobs.queue import PostgresJobQueue
 from app.ai.jobs.registry import JobHandlerRegistry
 from app.ai.jobs.retry import NonRetryableJobError
-from app.ai.jobs.worker import JobWorker
+from app.ai.jobs.worker import JobWorker, _log_gather_exceptions
 from app.core.config import Settings
 from tests.ai.jobs.conftest import (
     background_jobs_table_available,
@@ -242,3 +243,31 @@ async def test_claim_transaction_commits_before_handler_runs(
     assert final.status is JobStatus.SUCCEEDED
 
     await engine.dispose()
+
+
+def test_log_gather_exceptions_includes_job_identity(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    caplog.set_level(logging.ERROR)
+    now = datetime.datetime.now(datetime.UTC)
+    job = BackgroundJob(
+        id=uuid.uuid4(),
+        job_type="fixture_persist",
+        status=JobStatus.RUNNING,
+        payload={"version": 1},
+        attempt_count=1,
+        max_attempts=3,
+        version=2,
+        run_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+
+    _log_gather_exceptions([RuntimeError("complete failed")], jobs=[job])
+
+    record = caplog.records[-1]
+    assert record.job_id == str(job.id)  # type: ignore[attr-defined]
+    assert record.job_type == job.job_type  # type: ignore[attr-defined]
+    assert record.attempt_count == job.attempt_count  # type: ignore[attr-defined]

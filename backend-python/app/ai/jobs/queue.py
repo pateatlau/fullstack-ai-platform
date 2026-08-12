@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import socket
 import uuid
 from typing import Protocol
 
@@ -15,16 +16,37 @@ from app.ai.jobs.exceptions import JobConcurrencyError
 from app.ai.jobs.models import BackgroundJob, JobResult, JobStatus
 from app.core.config import Settings
 
+_IDEMPOTENCY_KEY_UNIQUE_INDEX = "uq_background_jobs_idempotency_key"
+
 
 def generate_worker_id() -> str:
     """Return ``{hostname}:{pid}:{uuid4}`` for ``locked_by``."""
-    return f"{os.uname().nodename}:{os.getpid()}:{uuid.uuid4()}"
+    return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4()}"
 
 
 def _truncate_error(error: str, *, max_len: int = 2000) -> str:
     if len(error) <= max_len:
         return error
     return error[: max_len - 3] + "..."
+
+
+def _is_idempotency_key_violation(exc: IntegrityError) -> bool:
+    def _matches(orig: object | None) -> bool:
+        if orig is None:
+            return False
+        constraint_name = getattr(orig, "constraint_name", None)
+        return constraint_name == _IDEMPOTENCY_KEY_UNIQUE_INDEX
+
+    if _matches(exc.orig):
+        return True
+
+    inner = getattr(exc.orig, "__cause__", None)
+    if _matches(inner):
+        return True
+
+    # SQLAlchemy's asyncpg adapter may omit constraint_name on the wrapper.
+    message = str(exc.orig or exc)
+    return f'"{_IDEMPOTENCY_KEY_UNIQUE_INDEX}"' in message
 
 
 def _row_to_job(row: object) -> BackgroundJob:
@@ -169,8 +191,8 @@ class PostgresJobQueue:
                         insert_params,
                     )
                     row = result.one()
-        except IntegrityError:
-            if idempotency_key is None:
+        except IntegrityError as exc:
+            if idempotency_key is None or not _is_idempotency_key_violation(exc):
                 raise
             async with self._session_factory() as session:
                 existing = await self._fetch_by_idempotency_key(
@@ -191,6 +213,27 @@ class PostgresJobQueue:
     ) -> list[BackgroundJob]:
         async with self._session_factory() as session:
             async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        UPDATE background_jobs
+                        SET status = 'dead_letter',
+                            last_error = COALESCE(
+                                last_error,
+                                'Lease expired with no remaining attempts'
+                            ),
+                            finished_at = now(),
+                            locked_by = NULL,
+                            locked_at = NULL,
+                            updated_at = now(),
+                            version = version + 1
+                        WHERE status = 'running'
+                          AND locked_at < now() - make_interval(secs => :lease_seconds)
+                          AND attempt_count >= max_attempts
+                        """
+                    ),
+                    {"lease_seconds": lease_seconds},
+                )
                 result = await session.execute(
                     text(
                         """
@@ -209,10 +252,11 @@ class PostgresJobQueue:
                             ) OR (
                                 status = 'running'
                                 AND locked_at < now() - make_interval(secs => :lease_seconds)
+                                AND attempt_count < max_attempts
                             )
                             ORDER BY run_at
-                            FOR UPDATE SKIP LOCKED
                             LIMIT :batch_size
+                            FOR UPDATE SKIP LOCKED
                         )
                         RETURNING *
                         """
@@ -384,7 +428,9 @@ class PostgresJobQueue:
                 UPDATE background_jobs
                 SET {set_clause},
                     version = version + 1
-                WHERE id = :job_id AND version = :expected_version
+                WHERE id = :job_id
+                  AND version = :expected_version
+                  AND status = 'running'
                 RETURNING *
                 """
             ),

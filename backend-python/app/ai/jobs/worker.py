@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+from collections.abc import Sequence
 
 from app.ai.jobs.exceptions import JobHandlerNotFoundError
 from app.ai.jobs.models import BackgroundJob
@@ -18,6 +19,34 @@ _logger = get_logger(__name__)
 
 def _format_handler_error(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
+
+
+def _log_gather_exceptions(
+    results: Sequence[object],
+    *,
+    jobs: list[BackgroundJob] | None = None,
+    tasks: list[asyncio.Task[None]] | None = None,
+) -> None:
+    for index, result in enumerate(results):
+        if not isinstance(result, BaseException):
+            continue
+        log_kwargs: dict[str, object] = {
+            "error": _format_handler_error(result),
+        }
+        if jobs is not None and index < len(jobs):
+            job = jobs[index]
+            log_kwargs["job_id"] = str(job.id)
+            log_kwargs["job_type"] = job.job_type
+            log_kwargs["attempt_count"] = job.attempt_count
+        elif tasks is not None and index < len(tasks):
+            task_name = tasks[index].get_name()
+            if task_name:
+                log_kwargs["job_id"] = task_name
+        _logger.error(
+            "Job dispatch task failed unexpectedly",
+            exc_info=(type(result), result, result.__traceback__),
+            **log_kwargs,
+        )
 
 
 class JobWorker:
@@ -57,7 +86,11 @@ class JobWorker:
                 continue
 
         if self._in_flight:
-            await asyncio.gather(*self._in_flight, return_exceptions=True)
+            in_flight = list(self._in_flight)
+            _log_gather_exceptions(
+                await asyncio.gather(*in_flight, return_exceptions=True),
+                tasks=in_flight,
+            )
 
     async def poll_once(self) -> None:
         """Claim one batch and dispatch all claimed jobs concurrently."""
@@ -72,11 +105,15 @@ class JobWorker:
         if not claimed:
             return
 
-        tasks = [asyncio.create_task(self._dispatch(job)) for job in claimed]
+        tasks = [
+            asyncio.create_task(self._dispatch(job), name=str(job.id))
+            for job in claimed
+        ]
         for task in tasks:
             self._in_flight.add(task)
             task.add_done_callback(self._in_flight.discard)
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        _log_gather_exceptions(results, jobs=claimed, tasks=tasks)
 
     async def _dispatch(self, job: BackgroundJob) -> None:
         try:

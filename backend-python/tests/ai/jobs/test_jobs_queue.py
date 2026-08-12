@@ -8,17 +8,51 @@ import uuid
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.ai.jobs.exceptions import JobConcurrencyError
 from app.ai.jobs.models import JobResult, JobStatus
-from app.ai.jobs.queue import PostgresJobQueue, generate_worker_id
+from app.ai.jobs.queue import (
+    PostgresJobQueue,
+    _is_idempotency_key_violation,
+    generate_worker_id,
+)
 from app.core.config import Settings
 from tests.ai.jobs.conftest import (
     background_jobs_table_available,
     make_queue_session_factory,
 )
+
+
+def test_is_idempotency_key_violation_matches_unique_index() -> None:
+    exc = IntegrityError(
+        "INSERT",
+        {},
+        orig=type(  # type: ignore[arg-type]
+            "Orig", (), {"constraint_name": "uq_background_jobs_idempotency_key"}
+        )(),
+    )
+    assert _is_idempotency_key_violation(exc) is True
+
+
+def test_is_idempotency_key_violation_rejects_other_constraints() -> None:
+    exc = IntegrityError(
+        "INSERT",
+        {},
+        orig=type("Orig", (), {"constraint_name": "pk_background_jobs"})(),  # type: ignore[arg-type]
+    )
+    assert _is_idempotency_key_violation(exc) is False
+
+
+def test_is_idempotency_key_violation_matches_message_fallback() -> None:
+    exc = IntegrityError(
+        "INSERT",
+        {},
+        orig='duplicate key violates unique constraint "uq_background_jobs_idempotency_key"',  # type: ignore[arg-type]
+    )
+    assert _is_idempotency_key_violation(exc) is True
 
 
 @pytest.fixture
@@ -239,6 +273,53 @@ async def test_lease_expiry_reclaim(db_session, job_settings: Settings) -> None:
 
 
 @pytest.mark.anyio
+async def test_lease_expiry_dead_letters_exhausted_job(
+    db_session,
+    job_settings: Settings,
+) -> None:
+    if not await background_jobs_table_available(db_session):
+        pytest.skip("background_jobs not available — run alembic upgrade head")
+
+    factory = make_queue_session_factory(db_session.bind)
+    queue = PostgresJobQueue(factory, job_settings)
+    worker_id = "worker-exhausted:1:00000000-0000-0000-0000-000000000001"
+
+    job = await queue.enqueue(
+        job_type="fixture_success",
+        payload={"version": 1},
+        max_attempts=1,
+    )
+    claimed = await queue.claim_due(
+        worker_id=worker_id, batch_size=1, lease_seconds=300
+    )
+    assert claimed[0].attempt_count == 1
+
+    await db_session.execute(
+        text(
+            """
+            UPDATE background_jobs
+            SET locked_at = now() - make_interval(secs => 400)
+            WHERE id = :job_id
+            """
+        ),
+        {"job_id": job.id},
+    )
+    await db_session.commit()
+
+    reclaimed = await queue.claim_due(
+        worker_id="worker-reclaim:2:00000000-0000-0000-0000-000000000002",
+        batch_size=1,
+        lease_seconds=300,
+    )
+    assert reclaimed == []
+
+    final = await queue.get(job.id)
+    assert final is not None
+    assert final.status is JobStatus.DEAD_LETTER
+    assert final.attempt_count == 1
+
+
+@pytest.mark.anyio
 async def test_complete_stale_version_raises_concurrency_error(
     db_session,
     job_settings: Settings,
@@ -260,6 +341,27 @@ async def test_complete_stale_version_raises_concurrency_error(
             job.id,
             result=JobResult(summary="stale"),
             expected_version=claimed[0].version - 1,
+        )
+
+
+@pytest.mark.anyio
+async def test_complete_on_queued_job_raises_concurrency_error(
+    db_session,
+    job_settings: Settings,
+) -> None:
+    if not await background_jobs_table_available(db_session):
+        pytest.skip("background_jobs not available — run alembic upgrade head")
+
+    factory = make_queue_session_factory(db_session.bind)
+    queue = PostgresJobQueue(factory, job_settings)
+
+    job = await queue.enqueue(job_type="fixture_success", payload={"version": 1})
+
+    with pytest.raises(JobConcurrencyError):
+        await queue.complete(
+            job.id,
+            result=JobResult(summary="skipped claim"),
+            expected_version=job.version,
         )
 
 

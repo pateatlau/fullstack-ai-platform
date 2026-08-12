@@ -1286,7 +1286,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
 | Feature Flag Regression  | Not re-run in Phase 0 (Epic 09 Phase 10: 1912 passed with `HITL_ENABLED=false`)   |
 | Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |
-| Background Jobs          | Not started — `app/ai/jobs/` absent; `BACKGROUND_JOBS_ENABLED` absent           |
+| Background Jobs          | Phase 1 **Completed** (2026-08-12) — `app/ai/jobs/` foundations, migration `0012_background_jobs`, `BACKGROUND_JOBS_ENABLED` (default off); no handler wiring yet |
 
 ---
 
@@ -1295,7 +1295,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | Phase | Name                                           | Effort | Status      |
 | ----- | ---------------------------------------------- | ------ | ----------- |
 | 0     | Baseline Audit                                 | XS     | ✅ Completed (2026-08-12) |
-| 1     | Job Queue & Worker Foundations                 | L      | Not Started |
+| 1     | Job Queue & Worker Foundations                 | L      | ✅ Completed (2026-08-12) |
 | 2     | Job Scheduler & Recurring Jobs                 | M      | Not Started |
 | 3     | HITL Approval Expiry & Orphaned-Snapshot Sweep | L      | Not Started |
 | 4     | Workflow Run Retention Cleanup                 | M      | Not Started |
@@ -1307,7 +1307,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 10    | Frontend Jobs & Schedules Dashboard            | S      | Not Started |
 | 11    | Validation & Release                           | M      | Not Started |
 
-**Epic 10 overall:** Phase 0 complete. Next gate: user authorization to begin Phase 1.
+**Epic 10 overall:** Phase 1 complete. Next gate: user authorization to begin Phase 2.
 
 ---
 
@@ -1374,7 +1374,7 @@ Establish a verified implementation baseline before introducing Background Jobs.
 **Exit criteria**
 
 - [x] Baseline audit published.
-- [ ] User confirmation to proceed to Phase 1.
+- [x] User confirmation to proceed to Phase 1.
 
 **Rollback**
 
@@ -1385,6 +1385,7 @@ Establish a verified implementation baseline before introducing Background Jobs.
 # Phase 1 — Job Queue & Worker Foundations
 
 **Effort:** L
+**Status:** Completed (2026-08-12)
 
 **Objective**
 
@@ -1407,53 +1408,53 @@ Introduce the core `app/ai/jobs/` package, domain models, database migration, an
 
 ## Package Structure
 
-- [ ] Create `app/ai/jobs/` per Part I package layout (`models.py`, `queue.py`, `registry.py`, `worker.py`, `retry.py`, `exceptions.py`; `scheduler.py`/`handlers/` stubbed for Phase 2+).
-- [ ] Export public API from `__init__.py`.
-- [ ] Verify import cycle freedom.
+- [x] Create `app/ai/jobs/` per Part I package layout (`models.py`, `queue.py`, `registry.py`, `worker.py`, `retry.py`, `exceptions.py`; `scheduler.py`/`handlers/` stubbed for Phase 2+).
+- [x] Export public API from `__init__.py`.
+- [x] Verify import cycle freedom.
 
 ## Models
 
-- [ ] Implement `JobStatus` enum (`queued`, `running`, `succeeded`, `failed`, `dead_letter`, `cancelled`).
-- [ ] Implement `BackgroundJob`, `JobResult` Pydantic models matching Part I schema (including `version` field).
-- [ ] Implement `JobHandler` protocol and `JobHandlerRegistry.register()`/`resolve()`.
-- [ ] Add `JobConcurrencyError` to `exceptions.py`.
+- [x] Implement `JobStatus` enum (`queued`, `running`, `succeeded`, `failed`, `dead_letter`, `cancelled`).
+- [x] Implement `BackgroundJob`, `JobResult` Pydantic models matching Part I schema (including `version` field).
+- [x] Implement `JobHandler` protocol and `JobHandlerRegistry.register()`/`resolve()`.
+- [x] Add `JobConcurrencyError` to `exceptions.py`.
 
 ## Migration
 
-- [ ] Create `background_jobs` table (all columns per Part I § Job Handlers — Domain Model, including `version INT NOT NULL DEFAULT 1`).
-- [ ] Add indexes supporting the claim query (`status`, `run_at`) and a unique index on `idempotency_key` (partial, `WHERE idempotency_key IS NOT NULL`).
-- [ ] Verify migration upgrade/downgrade round-trip.
+- [x] Create `background_jobs` table (all columns per Part I § Job Handlers — Domain Model, including `version INT NOT NULL DEFAULT 1`).
+- [x] Add indexes supporting the claim query (`status`, `run_at`) and a unique index on `idempotency_key` (partial, `WHERE idempotency_key IS NOT NULL`).
+- [x] Verify migration upgrade/downgrade round-trip.
 
 ## Queue Implementation
 
-- [ ] Implement `PostgresJobQueue.enqueue()` — insert; on `idempotency_key` unique-violation, fetch and return the existing row instead of raising.
-- [ ] Implement `PostgresJobQueue.claim_due()` — the combined fresh-or-lease-expired `SELECT … FOR UPDATE SKIP LOCKED` query per Part I § Claim-and-Lease Mechanism (increment `version` on claim).
-- [ ] Implement `PostgresJobQueue.complete()`/`fail()`/`cancel()`/`get()`/`list()` — all mutating ops use `WHERE id = :id AND version = :expected_version`; raise `JobConcurrencyError` on zero-row update.
-- [ ] Implement worker identity generation (`{hostname}:{pid}:{uuid4}`) for `locked_by`.
-- [ ] Enforce transaction boundaries per Part I § Transaction Boundaries — claim transaction commits before handler dispatch; handler never runs inside claim session.
+- [x] Implement `PostgresJobQueue.enqueue()` — insert; on `idempotency_key` unique-violation, fetch and return the existing row instead of raising.
+- [x] Implement `PostgresJobQueue.claim_due()` — the combined fresh-or-lease-expired `SELECT … FOR UPDATE SKIP LOCKED` query per Part I § Claim-and-Lease Mechanism (increment `version` on claim).
+- [x] Implement `PostgresJobQueue.complete()`/`fail()`/`cancel()`/`get()`/`list()` — all mutating ops use `WHERE id = :id AND version = :expected_version`; raise `JobConcurrencyError` on zero-row update.
+- [x] Implement worker identity generation (`{hostname}:{pid}:{uuid4}`) for `locked_by`.
+- [x] Enforce transaction boundaries per Part I § Transaction Boundaries — claim transaction commits before handler dispatch; handler never runs inside claim session.
 
 ## Worker Implementation
 
-- [ ] Implement `JobWorker.run_forever()` — poll loop: claim batch, dispatch each claimed job to `JobHandlerRegistry.resolve(job.job_type)`, run concurrently (`asyncio.gather`), complete/fail each.
-- [ ] Wrap handler dispatch in `asyncio.wait_for(..., timeout=background_jobs_handler_timeout_seconds)`.
-- [ ] Implement backoff computation and dead-letter transition per Part I § Retry & Backoff Policy.
-- [ ] Implement graceful shutdown per Part I § Graceful Worker Shutdown (stop polling → finish in-flight → persist → release → terminate).
+- [x] Implement `JobWorker.run_forever()` — poll loop: claim batch, dispatch each claimed job to `JobHandlerRegistry.resolve(job.job_type)`, run concurrently (`asyncio.gather`), complete/fail each.
+- [x] Wrap handler dispatch in `asyncio.wait_for(..., timeout=background_jobs_handler_timeout_seconds)`.
+- [x] Implement backoff computation and dead-letter transition per Part I § Retry & Backoff Policy.
+- [x] Implement graceful shutdown per Part I § Graceful Worker Shutdown (stop polling → finish in-flight → persist → release → terminate).
 
 ## Configuration
 
-- [ ] Add `BACKGROUND_JOBS_ENABLED` (default `false`), worker/retry settings, and `background_jobs_handler_timeout_seconds` to `app/core/config.py`.
-- [ ] Document settings in `backend-python/.env.example`.
+- [x] Add `BACKGROUND_JOBS_ENABLED` (default `false`), worker/retry settings, and `background_jobs_handler_timeout_seconds` to `app/core/config.py`.
+- [x] Document settings in `backend-python/.env.example`.
 
 ## Testing
 
-- [ ] `PostgresJobQueue` tests: enqueue, idempotent duplicate enqueue, claim, complete, fail-with-backoff, dead-letter after `max_attempts`.
-- [ ] **Genuine concurrency test**: two simulated workers calling `claim_due()` against the same pool of jobs concurrently — assert no job is claimed by both.
-- [ ] Lease-expiry reclaim test: a `running` job with a stale `locked_at` is reclaimed by a subsequent `claim_due()` call.
-- [ ] `JobWorker` end-to-end test against a fixture handler (success, transient failure retried, permanent failure dead-lettered, `NonRetryableJobError` dead-letters immediately, handler timeout dead-letters/retries).
-- [ ] Optimistic concurrency test: concurrent `complete()` on same job with stale version raises `JobConcurrencyError`.
-- [ ] Transaction boundary test: assert claim session is committed/closed before handler coroutine starts (no lock held during handler).
-- [ ] Cancellation test: `cancel()` on `queued` job prevents subsequent claim; `cancel()` on `running` job is rejected/no-op.
-- [ ] Migration upgrade/downgrade test.
+- [x] `PostgresJobQueue` tests: enqueue, idempotent duplicate enqueue, claim, complete, fail-with-backoff, dead-letter after `max_attempts`.
+- [x] **Genuine concurrency test**: two simulated workers calling `claim_due()` against the same pool of jobs concurrently — assert no job is claimed by both.
+- [x] Lease-expiry reclaim test: a `running` job with a stale `locked_at` is reclaimed by a subsequent `claim_due()` call.
+- [x] `JobWorker` end-to-end test against a fixture handler (success, transient failure retried, permanent failure dead-lettered, `NonRetryableJobError` dead-letters immediately, handler timeout dead-letters/retries).
+- [x] Optimistic concurrency test: concurrent `complete()` on same job with stale version raises `JobConcurrencyError`.
+- [x] Transaction boundary test: assert claim session is committed/closed before handler coroutine starts (no lock held during handler).
+- [x] Cancellation test: `cancel()` on `queued` job prevents subsequent claim; `cancel()` on `running` job is rejected/no-op.
+- [x] Migration upgrade/downgrade test.
 
 **Verify**
 
@@ -1469,8 +1470,8 @@ Introduce the core `app/ai/jobs/` package, domain models, database migration, an
 
 **Exit criteria**
 
-- [ ] Foundation tests pass.
-- [ ] Public model/queue/worker APIs frozen.
+- [x] Foundation tests pass.
+- [x] Public model/queue/worker APIs frozen.
 - [ ] User confirmation to proceed to Phase 2.
 
 **Rollback**
@@ -2177,7 +2178,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 # Definition of Done
 
 - [ ] All Part I architectural invariants preserved (including handler idempotency and transaction boundaries).
-- [ ] Public APIs frozen after Phase 1.
+- [x] Public APIs frozen after Phase 1.
 - [ ] Claim-and-lease queue, worker, and scheduler operational under genuine concurrency (verified, not assumed).
 - [ ] HITL approval-timeout enforcement operational on both surfaces; orphaned-snapshot sweep resumes or fail-safes crash-orphaned approvals.
 - [ ] Workflow run retention cleanup enforces `workflow_run_retention_days`.
@@ -2229,6 +2230,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.2     | 2026-08-12 | Part II Phase 1 complete — `app/ai/jobs/` queue/worker foundations, migration `0012_background_jobs`, PR review hardening, `tests/ai/jobs/test_jobs_*` suite. |
 | 3.1     | 2026-08-12 | Part II Phase 0 complete — baseline audit published; Phase status updated; Alembic next revision corrected to **0012** (Epic 09 `0011_hitl_lifecycle_audit` consumed `0011`). |
 | 3       | 2026-08-12 | Final review integration — transaction boundaries (claim commits before handler), cancellation semantics + state table, handler idempotency as required invariant, handler categories (sweep/cleanup/processing/scheduled), observability correlation chain (`job_id`→trace→logs→metrics), recommended health thresholds, expanded scalability operating ranges, handler implementation checklist appendix, failure-injection test scenarios, async API eventual consistency documentation. |
 | 2       | 2026-08-12 | Architecture review integration — optimistic concurrency (`version` column), `JobScheduleStore` separation, payload schema versioning, handler execution timeouts, poison-job/`NonRetryableJobError` guidance, dead-letter operational runbook, scheduler clock/missed-tick semantics, graceful shutdown sequence, worker identity format, queue vs handler metrics split, throughput/scalability assumptions, sequence diagrams, handler registration lifecycle, job type naming conventions, per-handler lifecycle summaries, RAG eventual consistency, polling rationale, future queue partitioning. |
