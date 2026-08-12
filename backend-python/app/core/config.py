@@ -373,6 +373,16 @@ class Settings(BaseSettings):
             "Reduce file size and retry."
         )
 
+    def default_llm_model(self) -> str:
+        """Default model name for the configured ``llm_provider``."""
+        defaults: dict[str, str] = {
+            "openai": self.openai_model,
+            "gemini": self.gemini_model,
+            "groq": self.groq_model,
+            "anthropic": self.anthropic_model,
+        }
+        return defaults[self.llm_provider]
+
     def validate_provider_key(self) -> None:
         """Fail fast if the selected provider's API key is missing."""
         supported_providers = {"openai", "gemini", "groq", "anthropic"}

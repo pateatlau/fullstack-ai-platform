@@ -267,7 +267,7 @@ def get_agent_approval_service(
         tool_registry=tool_registry,
         tool_executor=tool_executor,
         approval_timeout_hours=settings.hitl_approval_timeout_hours,
-        default_model=settings.openai_model,
+        default_model=settings.default_llm_model(),
         notification_dispatcher=get_hitl_notification_dispatcher(),
     )
 
@@ -847,7 +847,7 @@ def build_agent_approval_service_for_session(
         tool_executor=_create_tool_executor(registry=registry, settings=settings),
         scratchpad_store=scratchpad_store or ScratchpadStore(),
         approval_timeout_hours=settings.hitl_approval_timeout_hours,
-        default_model=settings.openai_model,
+        default_model=settings.default_llm_model(),
         notification_dispatcher=get_hitl_notification_dispatcher(),
     )
 

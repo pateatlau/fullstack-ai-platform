@@ -12,7 +12,7 @@ from sqlalchemy import text, update
 from app.ai.agent.executor.result_aggregator import AggregatedToolResults
 from app.ai.agent.models.response import AgentResponse
 from app.ai.agent.models.state import AgentExecutionState, AgentExecutionStatus
-from app.ai.hitl.models import ApprovalStatus, ProposedToolCall
+from app.ai.hitl.models import AgentToolApproval, ApprovalStatus, ProposedToolCall
 from app.ai.hitl.service import AgentApprovalService
 from app.ai.hitl.store import AgentToolApprovalStore
 from app.ai.jobs.handlers.hitl_orphan_sweep import hitl_orphaned_snapshot_sweep
@@ -455,29 +455,37 @@ async def test_orphan_sweep_isolates_failures_with_savepoints(db_session) -> Non
 
     executor.resume_from_approval = _stub_resume  # type: ignore[method-assign]
 
-    original_orphan_resume = AgentApprovalService.resume_orphaned_approval
+    original_resume_after = AgentApprovalService._resume_after_approval_decision
+    original_update_message = AgentApprovalService._update_placeholder_message
 
-    async def _resume_with_forced_failure(
+    async def _resume_after_with_forced_failure(
         self,
-        approval_id: uuid.UUID,
-        *,
-        executor,
-        fail_safe: bool = False,
-    ) -> bool:
-        if approval_id == bad_approval.id:
+        decided: AgentToolApproval,
+        **kwargs: object,
+    ) -> AgentResponse:
+        if decided.id == bad_approval.id:
             raise RuntimeError("forced orphan failure")
-        return await original_orphan_resume(
-            self,
-            approval_id,
-            executor=executor,
-            fail_safe=fail_safe,
-        )
+        return await original_resume_after(self, decided, **kwargs)  # type: ignore[arg-type]
+
+    async def _update_message_with_forced_failure(
+        self,
+        approval: AgentToolApproval,
+        **kwargs: object,
+    ) -> ChatMessage | None:
+        if approval.id == bad_approval.id and kwargs.get("status") == "error":
+            raise RuntimeError("forced fail-safe failure")
+        return await original_update_message(self, approval, **kwargs)  # type: ignore[arg-type]
 
     with (
         patch.object(
             AgentApprovalService,
-            "resume_orphaned_approval",
-            _resume_with_forced_failure,
+            "_resume_after_approval_decision",
+            _resume_after_with_forced_failure,
+        ),
+        patch.object(
+            AgentApprovalService,
+            "_update_placeholder_message",
+            _update_message_with_forced_failure,
         ),
         patch.object(
             AgentApprovalService,
