@@ -17,6 +17,16 @@ async def background_jobs_table_available(session: AsyncSession) -> bool:
     return result == 1
 
 
+async def background_job_schedules_table_available(session: AsyncSession) -> bool:
+    result = await session.scalar(
+        text(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = 'background_job_schedules'"
+        )
+    )
+    return result == 1
+
+
 def make_queue_session_factory(
     engine,
 ) -> async_sessionmaker[AsyncSession]:
@@ -28,5 +38,11 @@ async def _truncate_background_jobs(db_session) -> None:
     """Isolate queue integration tests — queue ops commit outside db_session."""
     if not await background_jobs_table_available(db_session):
         return
-    await db_session.execute(text("TRUNCATE background_jobs"))
+
+    if await background_job_schedules_table_available(db_session):
+        await db_session.execute(
+            text("TRUNCATE background_jobs, background_job_schedules")
+        )
+    else:
+        await db_session.execute(text("TRUNCATE background_jobs"))
     await db_session.commit()

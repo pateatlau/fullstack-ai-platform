@@ -1286,7 +1286,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
 | Feature Flag Regression  | Not re-run in Phase 0 (Epic 09 Phase 10: 1912 passed with `HITL_ENABLED=false`)   |
 | Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |
-| Background Jobs          | Phase 1 **Completed** (2026-08-12) — `app/ai/jobs/` foundations, migration `0012_background_jobs`, `BACKGROUND_JOBS_ENABLED` (default off); no handler wiring yet |
+| Background Jobs          | Phase 2 **Completed** (2026-08-12) — scheduler, `background_job_schedules` migration `0013`, lifespan wiring; stub handlers only (real handlers Phases 3–6) |
 
 ---
 
@@ -1296,7 +1296,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | ----- | ---------------------------------------------- | ------ | ----------- |
 | 0     | Baseline Audit                                 | XS     | ✅ Completed (2026-08-12) |
 | 1     | Job Queue & Worker Foundations                 | L      | ✅ Completed (2026-08-12) |
-| 2     | Job Scheduler & Recurring Jobs                 | M      | Not Started |
+| 2     | Job Scheduler & Recurring Jobs                 | M      | ✅ Completed (2026-08-12) |
 | 3     | HITL Approval Expiry & Orphaned-Snapshot Sweep | L      | Not Started |
 | 4     | Workflow Run Retention Cleanup                 | M      | Not Started |
 | 5     | RAG Queue-Backed Indexing                      | M      | Not Started |
@@ -1307,7 +1307,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 10    | Frontend Jobs & Schedules Dashboard            | S      | Not Started |
 | 11    | Validation & Release                           | M      | Not Started |
 
-**Epic 10 overall:** Phase 1 complete. Next gate: user authorization to begin Phase 2.
+**Epic 10 overall:** Phase 2 complete. Next gate: user authorization to begin Phase 3.
 
 ---
 
@@ -1484,6 +1484,7 @@ Introduce the core `app/ai/jobs/` package, domain models, database migration, an
 # Phase 2 — Job Scheduler & Recurring Jobs
 
 **Effort:** M
+**Status:** Completed (2026-08-12)
 
 **Objective**
 
@@ -1502,33 +1503,33 @@ Implement `JobScheduler`'s recurring-tick evaluation loop, the `background_job_s
 
 ## Models & Store
 
-- [ ] Implement `ScheduleStatus` enum (`enabled`, `disabled`) and `JobSchedule` model (including `version`).
-- [ ] Implement `JobScheduleStore` protocol and `PostgresJobScheduleStore` in `schedule_store.py` — `list_due()`, `advance(expected_version)`, `list_all()` with optimistic versioning per Part I § Schedule Persistence.
+- [x] Implement `ScheduleStatus` enum (`enabled`, `disabled`) and `JobSchedule` model (including `version`).
+- [x] Implement `JobScheduleStore` protocol and `PostgresJobScheduleStore` in `schedule_store.py` — `list_due()`, `advance(expected_version)`, `list_all()` with optimistic versioning per Part I § Schedule Persistence.
 
 ## Migration
 
-- [ ] Create `background_job_schedules` table (including `version INT NOT NULL DEFAULT 1`).
-- [ ] Seed the four default schedule rows with `"version": 1` in payload (idempotent — guarded by `name` uniqueness so re-running the migration is a no-op).
-- [ ] Verify migration upgrade/downgrade round-trip (downgrade removes seeded rows).
+- [x] Create `background_job_schedules` table (including `version INT NOT NULL DEFAULT 1`).
+- [x] Seed the four default schedule rows with `"version": 1` in payload (idempotent — guarded by `name` uniqueness so re-running the migration is a no-op).
+- [x] Verify migration upgrade/downgrade round-trip (downgrade removes seeded rows).
 
 ## Scheduler Implementation
 
-- [ ] Implement `JobScheduler.run_forever()` per Part I § Scheduler Design — load due schedules from `JobScheduleStore`, enqueue with `idempotency_key=f"{name}:{next_run_at.isoformat()}"`, advance via store with missed-tick skip semantics.
-- [ ] Ensure schedule advancement and its corresponding enqueue happen in the same transaction (no gap where a crash duplicates or skips a tick).
-- [ ] Register handlers before worker/scheduler startup per Part I § Handler Registration Lifecycle.
+- [x] Implement `JobScheduler.run_forever()` per Part I § Scheduler Design — load due schedules from `JobScheduleStore`, enqueue with `idempotency_key=f"{name}:{next_run_at.isoformat()}"`, advance via store with missed-tick skip semantics.
+- [x] Ensure schedule advancement and its corresponding enqueue happen in the same transaction (no gap where a crash duplicates or skips a tick).
+- [x] Register handlers before worker/scheduler startup per Part I § Handler Registration Lifecycle.
 
 ## Lifespan Wiring
 
-- [ ] Start `JobWorker.run_forever()` and `JobScheduler.run_forever()` as retained background tasks in `app/main.py`'s lifespan when `BACKGROUND_JOBS_ENABLED=true` (mirror `app/ai/workflow/engine/background.py`'s task-retention pattern so neither is garbage-collected).
-- [ ] Implement graceful shutdown on app teardown per Part I § Graceful Worker Shutdown (stop polling → finish in-flight → persist → release → terminate; cancel loops only after step 3).
+- [x] Start `JobWorker.run_forever()` and `JobScheduler.run_forever()` as retained background tasks in `app/main.py`'s lifespan when `BACKGROUND_JOBS_ENABLED=true` (mirror `app/ai/workflow/engine/background.py`'s task-retention pattern so neither is garbage-collected).
+- [x] Implement graceful shutdown on app teardown per Part I § Graceful Worker Shutdown (stop polling → finish in-flight → persist → release → terminate; cancel loops only after step 3).
 
 ## Testing
 
-- [ ] Scheduler tick test: a due schedule enqueues exactly one job and advances `next_run_at` by `interval_seconds`.
-- [ ] Missed-tick test: scheduler delayed past multiple intervals enqueues one job and skips intermediate ticks per Part I § Missed Ticks.
-- [ ] Double-tick idempotency test: two concurrent scheduler evaluations of the same due schedule enqueue exactly one job (simulating two app instances).
-- [ ] Test: a `disabled` schedule never enqueues.
-- [ ] Test: flag off — no worker/scheduler task starts; verify via absence of any claim activity.
+- [x] Scheduler tick test: a due schedule enqueues exactly one job and advances `next_run_at` by `interval_seconds`.
+- [x] Missed-tick test: scheduler delayed past multiple intervals enqueues one job and skips intermediate ticks per Part I § Missed Ticks.
+- [x] Double-tick idempotency test: two concurrent scheduler evaluations of the same due schedule enqueue exactly one job (simulating two app instances).
+- [x] Test: a `disabled` schedule never enqueues.
+- [x] Test: flag off — no worker/scheduler task starts; verify via absence of any claim activity.
 
 **Verify**
 
@@ -1541,7 +1542,7 @@ Implement `JobScheduler`'s recurring-tick evaluation loop, the `background_job_s
 
 **Exit criteria**
 
-- [ ] Scheduler tests pass.
+- [x] Scheduler tests pass.
 - [ ] User confirmation to proceed to Phase 3.
 
 **Rollback**
@@ -2230,6 +2231,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.3     | 2026-08-12 | Part II Phase 2 complete — `JobScheduler`, `PostgresJobScheduleStore`, migration `0013_background_job_schedules` (seeded schedules), lifespan wiring, `tests/ai/jobs/test_scheduler.py` + `test_worker_lifespan.py`. |
 | 3.2     | 2026-08-12 | Part II Phase 1 complete — `app/ai/jobs/` queue/worker foundations, migration `0012_background_jobs`, PR review hardening, `tests/ai/jobs/test_jobs_*` suite. |
 | 3.1     | 2026-08-12 | Part II Phase 0 complete — baseline audit published; Phase status updated; Alembic next revision corrected to **0012** (Epic 09 `0011_hitl_lifecycle_audit` consumed `0011`). |
 | 3       | 2026-08-12 | Final review integration — transaction boundaries (claim commits before handler), cancellation semantics + state table, handler idempotency as required invariant, handler categories (sweep/cleanup/processing/scheduled), observability correlation chain (`job_id`→trace→logs→metrics), recommended health thresholds, expanded scalability operating ranges, handler implementation checklist appendix, failure-injection test scenarios, async API eventual consistency documentation. |

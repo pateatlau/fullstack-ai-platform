@@ -7,6 +7,7 @@ from fastapi.responses import Response
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import Message
 
+from app.ai.jobs.background import start_background_jobs, stop_background_jobs
 from app.ai.deps import (
     get_mcp_server_registry,
     get_plugin_registry,
@@ -104,7 +105,11 @@ async def lifespan(_: FastAPI):
                 exc_info=True,
             )
 
+    jobs_runtime = await start_background_jobs(settings)
+
     yield
+
+    await stop_background_jobs(jobs_runtime)
 
     # Phase 9: Disconnect all MCP servers on shutdown
     if settings.mcp_enabled:

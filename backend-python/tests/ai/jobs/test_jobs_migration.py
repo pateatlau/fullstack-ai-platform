@@ -78,3 +78,48 @@ async def test_background_jobs_table_exists(db_session) -> None:
     definition = status_check.scalar_one()
     assert "dead_letter" in definition
     assert "cancelled" in definition
+
+
+@pytest.mark.anyio
+async def test_background_job_schedules_table_exists(db_session) -> None:
+    result = await db_session.execute(
+        text("SELECT to_regclass('public.background_job_schedules') IS NOT NULL")
+    )
+    if not result.scalar():
+        pytest.skip("background_job_schedules not available — run alembic upgrade head")
+
+    columns = await db_session.execute(
+        text(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'background_job_schedules'
+            """
+        )
+    )
+    names = {row[0] for row in columns.fetchall()}
+    assert {
+        "id",
+        "name",
+        "job_type",
+        "payload",
+        "interval_seconds",
+        "next_run_at",
+        "version",
+        "status",
+        "created_at",
+        "updated_at",
+    }.issubset(names)
+
+
+def test_migration_0013_upgrade_downgrade_smoke() -> None:
+    alembic_cfg = Config(str(_BACKEND_ROOT / "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", str(_BACKEND_ROOT / "alembic"))
+
+    script = ScriptDirectory.from_config(alembic_cfg)
+    revision = script.get_revision("0013_background_job_schedules")
+    assert revision is not None
+    assert revision.down_revision == "0012_background_jobs"
+    assert callable(revision.module.downgrade)
+    assert callable(revision.module.upgrade)

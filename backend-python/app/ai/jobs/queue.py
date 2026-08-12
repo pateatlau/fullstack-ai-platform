@@ -143,6 +143,10 @@ class PostgresJobQueue:
         self._session_factory = session_factory
         self._settings = settings
 
+    @property
+    def session_factory(self) -> async_sessionmaker[AsyncSession]:
+        return self._session_factory
+
     async def enqueue(
         self,
         *,
@@ -159,38 +163,18 @@ class PostgresJobQueue:
             if max_attempts is not None
             else self._settings.background_jobs_default_max_attempts
         )
-        job_id = uuid.uuid4()
-        insert_params = {
-            "id": job_id,
-            "job_type": job_type,
-            "payload": _json_payload(payload),
-            "max_attempts": effective_max_attempts,
-            "run_at": effective_run_at,
-            "idempotency_key": idempotency_key,
-            "schedule_id": schedule_id,
-        }
-
         try:
             async with self._session_factory() as session:
                 async with session.begin():
-                    result = await session.execute(
-                        text(
-                            """
-                            INSERT INTO background_jobs (
-                                id, job_type, status, payload, attempt_count,
-                                max_attempts, version, run_at, idempotency_key,
-                                schedule_id, created_at, updated_at
-                            ) VALUES (
-                                :id, :job_type, 'queued', CAST(:payload AS jsonb),
-                                0, :max_attempts, 1, :run_at, :idempotency_key,
-                                :schedule_id, now(), now()
-                            )
-                            RETURNING *
-                            """
-                        ),
-                        insert_params,
+                    return await self.enqueue_in_transaction(
+                        session,
+                        job_type=job_type,
+                        payload=payload,
+                        run_at=effective_run_at,
+                        max_attempts=effective_max_attempts,
+                        idempotency_key=idempotency_key,
+                        schedule_id=schedule_id,
                     )
-                    row = result.one()
         except IntegrityError as exc:
             if idempotency_key is None or not _is_idempotency_key_violation(exc):
                 raise
@@ -198,6 +182,61 @@ class PostgresJobQueue:
                 existing = await self._fetch_by_idempotency_key(
                     session, idempotency_key
                 )
+            if existing is None:
+                raise
+            return existing
+
+    async def enqueue_in_transaction(
+        self,
+        session: AsyncSession,
+        *,
+        job_type: str,
+        payload: dict[str, object],
+        run_at: datetime.datetime,
+        max_attempts: int | None = None,
+        idempotency_key: str | None = None,
+        schedule_id: uuid.UUID | None = None,
+    ) -> BackgroundJob:
+        """Insert a queued job within an existing transaction."""
+        effective_max_attempts = (
+            max_attempts
+            if max_attempts is not None
+            else self._settings.background_jobs_default_max_attempts
+        )
+        job_id = uuid.uuid4()
+        insert_params = {
+            "id": job_id,
+            "job_type": job_type,
+            "payload": _json_payload(payload),
+            "max_attempts": effective_max_attempts,
+            "run_at": run_at,
+            "idempotency_key": idempotency_key,
+            "schedule_id": schedule_id,
+        }
+        try:
+            async with session.begin_nested():
+                result = await session.execute(
+                    text(
+                        """
+                        INSERT INTO background_jobs (
+                            id, job_type, status, payload, attempt_count,
+                            max_attempts, version, run_at, idempotency_key,
+                            schedule_id, created_at, updated_at
+                        ) VALUES (
+                            :id, :job_type, 'queued', CAST(:payload AS jsonb),
+                            0, :max_attempts, 1, :run_at, :idempotency_key,
+                            :schedule_id, now(), now()
+                        )
+                        RETURNING *
+                        """
+                    ),
+                    insert_params,
+                )
+                row = result.one()
+        except IntegrityError as exc:
+            if idempotency_key is None or not _is_idempotency_key_violation(exc):
+                raise
+            existing = await self._fetch_by_idempotency_key(session, idempotency_key)
             if existing is None:
                 raise
             return existing
