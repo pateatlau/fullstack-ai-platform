@@ -2,7 +2,7 @@
 epic: v2-10
 title: Background Jobs
 status: in_progress
-version: 3.6
+version: 3.7
 depends_on: [v2-02, v2-06, v2-07, v2-09]
 provides:
   [
@@ -1286,7 +1286,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
 | Feature Flag Regression  | Not re-run in Phase 0 (Epic 09 Phase 10: 1912 passed with `HITL_ENABLED=false`)   |
 | Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |
-| Background Jobs          | Phase 5 **Completed** (2026-08-12) — `QueueIndexingRunner` + `rag_document_indexing` handler, `document_upload_staging` migration `0015`, `rag_indexing_runner` config; scheduled eval handler remains stubbed (Phase 6) |
+| Background Jobs          | Phase 6 **Completed** (2026-08-12) — `scheduled_eval.py` handler (`scheduled_evaluation_run`), `evaluation_schedule_enabled`/`evaluation_schedule_level` config, startup schedule reconciliation, `tests/ai/jobs/handlers/test_scheduled_eval.py` (7/7); all five first-class handlers shipped |
 
 ---
 
@@ -1300,14 +1300,14 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 3     | HITL Approval Expiry & Orphaned-Snapshot Sweep | L      | ✅ Completed (2026-08-12) |
 | 4     | Workflow Run Retention Cleanup                 | M      | ✅ Completed (2026-08-12) |
 | 5     | RAG Queue-Backed Indexing                      | M      | ✅ Completed (2026-08-12) |
-| 6     | Scheduled Evaluation Runs                      | S      | Not Started |
+| 6     | Scheduled Evaluation Runs                      | S      | ✅ Completed (2026-08-12) |
 | 7     | Jobs REST API & Health                         | S      | Not Started |
 | 8     | Background Jobs Observability                  | S      | Not Started |
 | 9     | Reference Scenarios & Eval Cases               | M      | Not Started |
 | 10    | Frontend Jobs & Schedules Dashboard            | S      | Not Started |
 | 11    | Validation & Release                           | M      | Not Started |
 
-**Epic 10 overall:** Phase 5 complete. Next gate: user authorization to begin Phase 6.
+**Epic 10 overall:** Phase 6 complete. Next gate: user authorization to begin Phase 7.
 
 ---
 
@@ -1735,7 +1735,7 @@ Ship `QueueIndexingRunner` implementing the existing `IndexingJob` protocol on t
 **Exit criteria**
 
 - [x] RAG queue-indexing tests pass.
-- [ ] User confirmation to proceed to Phase 6.
+- [x] User confirmation to proceed to Phase 6.
 
 **Rollback**
 
@@ -1747,6 +1747,7 @@ Ship `QueueIndexingRunner` implementing the existing `IndexingJob` protocol on t
 # Phase 6 — Scheduled Evaluation Runs
 
 **Effort:** S
+**Status:** Completed (2026-08-12)
 
 **Objective**
 
@@ -1762,15 +1763,15 @@ Ship `scheduled_evaluation_run`, invoking the existing evaluation runner on a co
 
 ## Handler Implementation
 
-- [ ] Implement `scheduled_evaluation_run`: call the same runner function `app/ai/evaluation/cli.py` already calls (no subprocess spawn), using `evaluation_schedule_level`.
-- [ ] Store the produced report's summary/pass-rate/path on `JobResult`.
-- [ ] Ensure the seeded `scheduled-evaluation-run` schedule row stays `disabled` unless `evaluation_schedule_enabled=true` at startup (a startup check reconciles the schedule's `status` to match config, without a user-facing schedule-editing API).
+- [x] Implement `scheduled_evaluation_run`: call the same runner function `app/ai/evaluation/cli.py` already calls (no subprocess spawn), using `evaluation_schedule_level`.
+- [x] Store the produced report's summary/pass-rate/path on `JobResult`.
+- [x] Ensure the seeded `scheduled-evaluation-run` schedule row stays `disabled` unless `evaluation_schedule_enabled=true` at startup (a startup check reconciles the schedule's `status` to match config, without a user-facing schedule-editing API).
 
 ## Testing
 
-- [ ] Test: a scheduled eval run at `--level agent` (or similar) produces a `JobResult` whose summary matches a manual CLI invocation at the same level.
-- [ ] Test: `evaluation_schedule_enabled=false` (default) — the seeded schedule stays disabled; no eval runs are triggered automatically.
-- [ ] Test: a failing eval run (regression) surfaces as a handler failure with a useful `last_error`, not a silently "successful" job.
+- [x] Test: a scheduled eval run at `--level agent` (or similar) produces a `JobResult` whose summary matches a manual CLI invocation at the same level.
+- [x] Test: `evaluation_schedule_enabled=false` (default) — the seeded schedule stays disabled; no eval runs are triggered automatically.
+- [x] Test: a failing eval run (regression) surfaces as a handler failure with a useful `last_error`, not a silently "successful" job.
 
 **Verify**
 
@@ -1783,7 +1784,7 @@ Ship `scheduled_evaluation_run`, invoking the existing evaluation runner on a co
 
 **Exit criteria**
 
-- [ ] Scheduled eval tests pass.
+- [x] Scheduled eval tests pass.
 - [ ] User confirmation to proceed to Phase 7.
 
 **Rollback**
@@ -2237,6 +2238,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.7     | 2026-08-12 | Part II Phase 6 complete — `scheduled_eval.py` handler (`scheduled_evaluation_run`), `evaluation_schedule_enabled`/`evaluation_schedule_level` config, startup schedule reconciliation (`reconcile_evaluation_schedule_status`), `PostgresJobScheduleStore.get_by_name`/`set_status`, `tests/ai/jobs/handlers/test_scheduled_eval.py` (7/7). |
 | 3.6     | 2026-08-12 | Part II Phase 5 complete — migration `0015_document_upload_staging`, `QueueIndexingRunner` (`queue_runner.py`), `rag_document_indexing` handler, shared `run_indexing_work`, `rag_indexing_runner` config, `KnowledgeService` runner selection, `tests/ai/rag/test_queue_indexing_runner.py` (5/5). |
 | 3.5     | 2026-08-12 | Part II Phase 4 complete — `workflow_retention.py` handler (`workflow_run_retention_cleanup`), batched terminal `workflow_runs` + `background_jobs` self-retention purge, `workflow_run_retention_days` now enforced, `tests/ai/jobs/handlers/test_workflow_retention.py`. |
 | 3.4     | 2026-08-12 | Part II Phase 3 complete — migration `0014_hitl_expired_status_checks`, `hitl_expiry.py` + `hitl_orphan_sweep.py` handlers, `hitl_orphan_sweep_grace_seconds`, Epic 09/10 HITL closure, `tests/ai/jobs/handlers/test_hitl_*.py` + adversarial race coverage. |

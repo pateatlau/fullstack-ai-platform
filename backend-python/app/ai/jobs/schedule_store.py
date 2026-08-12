@@ -43,6 +43,16 @@ class JobScheduleStore(Protocol):
 
     async def list_all(self) -> list[JobSchedule]: ...
 
+    async def get_by_name(self, name: str) -> JobSchedule | None: ...
+
+    async def set_status(
+        self,
+        schedule_id: uuid.UUID,
+        *,
+        expected_version: int,
+        status: ScheduleStatus,
+    ) -> JobSchedule | None: ...
+
 
 class PostgresJobScheduleStore:
     """Postgres-backed schedule store with optimistic versioning."""
@@ -143,6 +153,51 @@ class PostgresJobScheduleStore:
                 {"schedule_id": schedule_id},
             )
             row = result.one_or_none()
+        if row is None:
+            return None
+        return _row_to_schedule(row)
+
+    async def get_by_name(self, name: str) -> JobSchedule | None:
+        """Load a schedule by its unique name."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                text("SELECT * FROM background_job_schedules WHERE name = :name"),
+                {"name": name},
+            )
+            row = result.one_or_none()
+        if row is None:
+            return None
+        return _row_to_schedule(row)
+
+    async def set_status(
+        self,
+        schedule_id: uuid.UUID,
+        *,
+        expected_version: int,
+        status: ScheduleStatus,
+    ) -> JobSchedule | None:
+        """Update schedule status with optimistic versioning."""
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        """
+                        UPDATE background_job_schedules
+                        SET status = :status,
+                            updated_at = now(),
+                            version = version + 1
+                        WHERE id = :schedule_id
+                          AND version = :expected_version
+                        RETURNING *
+                        """
+                    ),
+                    {
+                        "schedule_id": schedule_id,
+                        "expected_version": expected_version,
+                        "status": status.value,
+                    },
+                )
+                row = result.one_or_none()
         if row is None:
             return None
         return _row_to_schedule(row)
