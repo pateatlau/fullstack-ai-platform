@@ -64,16 +64,18 @@ async def test_background_jobs_flag_on_starts_worker_and_scheduler(
         runtime = await start_background_jobs(settings)
 
     assert runtime is not None
+    assert len(runtime.tasks) == 2
+    assert not runtime.tasks[0].done()
+    assert not runtime.tasks[1].done()
     try:
-        await asyncio.sleep(0.05)
+        await runtime.scheduler.tick_once()
         queue = PostgresJobQueue(factory, settings)
         jobs = await queue.list(job_type="hitl_approval_expiry_sweep")
-        assert len(jobs) >= 1
+        assert len(jobs) == 1
         assert jobs[0].schedule_id == schedule.id
         assert jobs[0].status is JobStatus.QUEUED
     finally:
         await stop_background_jobs(runtime)
-        await asyncio.sleep(0.05)
 
 
 @pytest.mark.anyio
