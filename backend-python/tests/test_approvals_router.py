@@ -18,6 +18,7 @@ from app.ai.hitl.models import (
     ApprovalRevision,
     ApprovalStatus,
     ProposedToolCall,
+    RequestMetadata,
 )
 from app.ai.hitl.service import AgentApprovalService
 from app.core.caller import CallerContext
@@ -248,6 +249,9 @@ async def test_approve_stream_emits_error_frame_on_resume_failure() -> None:
     stream = _stream_approved_decision(
         approval_id=approval.id,
         body=ApprovalDecideRequest(decision="approved"),
+        reason=None,
+        comments=None,
+        request_metadata=RequestMetadata(),
         caller=caller,
         settings=settings,
         approval_service=service,

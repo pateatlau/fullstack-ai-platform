@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Literal, NoReturn
 
 from sqlalchemy import and_, func, literal, or_, select, union_all, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.hitl.exceptions import ApprovalDecisionConflictError, ApprovalNotFoundError
+from app.ai.hitl.exceptions import (
+    ApprovalDecisionConflictError,
+    ApprovalExpiredError,
+    ApprovalNotFoundError,
+)
 from app.ai.hitl.models import (
     AgentToolApproval,
     ApprovalAuditEntry,
@@ -16,6 +21,12 @@ from app.ai.hitl.models import (
     ApprovalRevision,
     ApprovalStatus,
     ProposedToolCall,
+    RequestMetadata,
+    StageDecision,
+)
+from app.ai.observability.metrics.instruments import (
+    record_agent_tool_approval_pending_delta,
+    record_approval_expired_metric,
 )
 from app.ai.workflow.models import ApprovalDecision, NodeStatus, NodeType
 from app.db.models import (
@@ -42,6 +53,9 @@ class AgentToolApprovalStore:
         proposed_calls: list[ProposedToolCall],
         paused_scratchpad: list[dict[str, object]],
         paused_state: dict[str, object],
+        expires_at: datetime.datetime | None = None,
+        required_stages: list[str] | None = None,
+        request_metadata: RequestMetadata | None = None,
     ) -> AgentToolApproval:
         row = AgentToolApprovalRecord(
             session_id=session_id,
@@ -52,6 +66,13 @@ class AgentToolApprovalStore:
             proposed_calls=[call.model_dump(mode="json") for call in proposed_calls],
             paused_scratchpad=paused_scratchpad,
             paused_state=paused_state,
+            expires_at=expires_at,
+            required_stages=list(required_stages or []),
+            request_id=request_metadata.request_id if request_metadata else None,
+            source_ip=request_metadata.source_ip if request_metadata else None,
+            client_metadata=(
+                request_metadata.client_metadata if request_metadata else {}
+            ),
         )
         self._session.add(row)
         await self._session.flush()
@@ -70,6 +91,14 @@ class AgentToolApprovalStore:
         *,
         owner_id: uuid.UUID,
     ) -> AgentToolApproval | None:
+        """Fetch one owned approval, lazily flipping it to ``expired`` if due.
+
+        This is the single choke point for expiration (recommendation #3):
+        every read/decide/revise/cancel path funnels through here (directly
+        or via :meth:`require_for_owner`), so a stale ``pending`` row is
+        transitioned the next time anyone touches it. There is no proactive
+        background sweep for untouched rows (deferred to Epic 10).
+        """
         row = await self._session.scalar(
             select(AgentToolApprovalRecord).where(
                 AgentToolApprovalRecord.id == approval_id,
@@ -78,7 +107,11 @@ class AgentToolApprovalStore:
         )
         if row is None:
             return None
-        return _to_domain(row)
+        approval = _to_domain(row)
+        if _is_due_for_expiry(approval):
+            expired = await self._expire_if_due(approval_id, owner_id=owner_id)
+            return expired or approval
+        return approval
 
     async def require_for_owner(
         self,
@@ -91,7 +124,64 @@ class AgentToolApprovalStore:
             raise ApprovalNotFoundError(
                 f"Approval {approval_id} not found or not owned by caller."
             )
+        if approval.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at "
+                f"{approval.expires_at.isoformat() if approval.expires_at else 'unknown'}."
+            )
         return approval
+
+    async def _expire_if_due(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+    ) -> AgentToolApproval | None:
+        """Compare-and-swap ``pending`` → ``expired`` when the deadline has passed."""
+        stmt = (
+            update(AgentToolApprovalRecord)
+            .where(
+                AgentToolApprovalRecord.id == approval_id,
+                AgentToolApprovalRecord.owner_id == owner_id,
+                AgentToolApprovalRecord.status == ApprovalStatus.PENDING.value,
+                AgentToolApprovalRecord.expires_at.is_not(None),
+                AgentToolApprovalRecord.expires_at <= func.now(),
+            )
+            .values(
+                status=ApprovalStatus.EXPIRED.value,
+                version=AgentToolApprovalRecord.version + 1,
+                updated_at=func.now(),
+            )
+            .returning(AgentToolApprovalRecord)
+        )
+        row = (await self._session.execute(stmt)).scalar_one_or_none()
+        if row is None:
+            return None
+        await self._session.flush()
+        record_agent_tool_approval_pending_delta(-1)
+        record_approval_expired_metric(kind=ApprovalKind.AGENT_TOOL.value)
+        return _to_domain(row)
+
+    async def _resolve_cas_miss(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+    ) -> NoReturn:
+        """Raise the precise HITL error a failed CAS write should surface."""
+        existing = await self.get_for_owner(approval_id, owner_id=owner_id)
+        if existing is None:
+            raise ApprovalNotFoundError(
+                f"Approval {approval_id} not found or not owned by caller."
+            )
+        if existing.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at "
+                f"{existing.expires_at.isoformat() if existing.expires_at else 'unknown'}."
+            )
+        raise ApprovalDecisionConflictError(
+            f"Approval {approval_id} is no longer pending (status={existing.status.value})."
+        )
 
     async def list_for_owner(
         self,
@@ -152,7 +242,9 @@ class AgentToolApprovalStore:
         status: ApprovalStatus,
         decided_by: uuid.UUID,
         reason: str | None = None,
+        comments: str | None = None,
         edited_calls: list[ProposedToolCall] | None = None,
+        request_metadata: RequestMetadata | None = None,
     ) -> AgentToolApproval:
         """Compare-and-swap ``pending`` → terminal decision status."""
         now = datetime.datetime.now(datetime.UTC)
@@ -161,12 +253,18 @@ class AgentToolApprovalStore:
             "decided_by": decided_by,
             "decided_at": now,
             "reason": reason,
+            "comments": comments,
+            "version": AgentToolApprovalRecord.version + 1,
             "updated_at": func.now(),
         }
         if edited_calls is not None:
             values["edited_calls"] = [
                 call.model_dump(mode="json") for call in edited_calls
             ]
+        if request_metadata is not None:
+            values["request_id"] = request_metadata.request_id
+            values["source_ip"] = request_metadata.source_ip
+            values["client_metadata"] = request_metadata.client_metadata
 
         stmt = (
             update(AgentToolApprovalRecord)
@@ -180,14 +278,48 @@ class AgentToolApprovalStore:
         )
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         if row is None:
-            existing = await self.get_for_owner(approval_id, owner_id=owner_id)
-            if existing is None:
-                raise ApprovalNotFoundError(
-                    f"Approval {approval_id} not found or not owned by caller."
-                )
-            raise ApprovalDecisionConflictError(
-                f"Approval {approval_id} is no longer pending (status={existing.status.value})."
+            await self._resolve_cas_miss(approval_id, owner_id=owner_id)
+            raise AssertionError("unreachable: _resolve_cas_miss always raises")
+        await self._session.flush()
+        return _to_domain(row)
+
+    async def cas_cancel(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        reason: str | None = None,
+        request_metadata: RequestMetadata | None = None,
+    ) -> AgentToolApproval:
+        """Compare-and-swap ``pending`` → ``cancelled`` (requester withdrawal)."""
+        now = datetime.datetime.now(datetime.UTC)
+        values: dict[str, object] = {
+            "status": ApprovalStatus.CANCELLED.value,
+            "decided_by": owner_id,
+            "decided_at": now,
+            "reason": reason,
+            "version": AgentToolApprovalRecord.version + 1,
+            "updated_at": func.now(),
+        }
+        if request_metadata is not None:
+            values["request_id"] = request_metadata.request_id
+            values["source_ip"] = request_metadata.source_ip
+            values["client_metadata"] = request_metadata.client_metadata
+
+        stmt = (
+            update(AgentToolApprovalRecord)
+            .where(
+                AgentToolApprovalRecord.id == approval_id,
+                AgentToolApprovalRecord.owner_id == owner_id,
+                AgentToolApprovalRecord.status == ApprovalStatus.PENDING.value,
             )
+            .values(**values)
+            .returning(AgentToolApprovalRecord)
+        )
+        row = (await self._session.execute(stmt)).scalar_one_or_none()
+        if row is None:
+            await self._resolve_cas_miss(approval_id, owner_id=owner_id)
+            raise AssertionError("unreachable: _resolve_cas_miss always raises")
         await self._session.flush()
         return _to_domain(row)
 
@@ -208,21 +340,64 @@ class AgentToolApprovalStore:
             )
             .values(
                 edited_calls=[call.model_dump(mode="json") for call in edited_calls],
+                version=AgentToolApprovalRecord.version + 1,
                 updated_at=func.now(),
             )
             .returning(AgentToolApprovalRecord)
         )
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         if row is None:
-            existing = await self.get_for_owner(approval_id, owner_id=owner_id)
-            if existing is None:
-                raise ApprovalNotFoundError(
-                    f"Approval {approval_id} not found or not owned by caller."
-                )
-            raise ApprovalDecisionConflictError(
-                f"Approval {approval_id} is no longer pending (status={existing.status.value})."
-            )
+            await self._resolve_cas_miss(approval_id, owner_id=owner_id)
+            raise AssertionError("unreachable: _resolve_cas_miss always raises")
         await self._session.flush()
+        return _to_domain(row)
+
+    async def append_stage_decision(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        stage: str,
+        decision: Literal["approved", "rejected"],
+        decided_by: uuid.UUID,
+        reason: str | None = None,
+    ) -> AgentToolApproval:
+        """Append one multi-stage checklist entry while the approval stays ``pending``.
+
+        Locks the row (``FOR UPDATE``) rather than a bare CAS because the
+        update is a JSONB list append, not a single-column swap.
+        """
+        row = await self._session.scalar(
+            select(AgentToolApprovalRecord)
+            .where(
+                AgentToolApprovalRecord.id == approval_id,
+                AgentToolApprovalRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if row is None:
+            raise ApprovalNotFoundError(
+                f"Approval {approval_id} not found or not owned by caller."
+            )
+        if row.status != ApprovalStatus.PENDING.value:
+            raise ApprovalDecisionConflictError(
+                f"Approval {approval_id} is no longer pending (status={row.status})."
+            )
+        entry = StageDecision(
+            stage=stage,
+            decision=decision,
+            decided_by=decided_by,
+            decided_at=datetime.datetime.now(datetime.UTC),
+            reason=reason,
+        )
+        row.stage_decisions = [
+            *(row.stage_decisions or []),
+            entry.model_dump(mode="json"),
+        ]
+        row.version = row.version + 1
+        row.updated_at = func.now()
+        await self._session.flush()
+        await self._session.refresh(row)
         return _to_domain(row)
 
     async def append_revision(
@@ -563,6 +738,13 @@ class ApprovalsStore:
         return counts
 
 
+def _is_due_for_expiry(approval: AgentToolApproval) -> bool:
+    """True when a pending approval's deadline has passed but it hasn't flipped yet."""
+    if approval.status is not ApprovalStatus.PENDING or approval.expires_at is None:
+        return False
+    return approval.expires_at <= datetime.datetime.now(datetime.UTC)
+
+
 def _agent_decide_url(approval_id: uuid.UUID) -> str:
     return f"/api/approvals/{approval_id}/decide"
 
@@ -593,9 +775,13 @@ def _agent_audit_entry(
             else None
         ),
         reason=approval.reason,
+        comments=approval.comments,
         edited=edited,
         revision_count=revision_count,
         decide_url=_agent_decide_url(approval.id),
+        expires_at=approval.expires_at,
+        required_stages=list(approval.required_stages),
+        stage_decisions=list(approval.stage_decisions),
     )
 
 
@@ -778,6 +964,7 @@ def _to_domain(row: AgentToolApprovalRecord) -> AgentToolApproval:
         if isinstance(edited_raw, list)
         else None
     )
+    stage_decisions_raw = row.stage_decisions
     return AgentToolApproval(
         id=row.id,
         session_id=row.session_id,
@@ -788,6 +975,7 @@ def _to_domain(row: AgentToolApprovalRecord) -> AgentToolApproval:
         proposed_calls=proposed_calls,
         edited_calls=edited_calls,
         reason=row.reason,
+        comments=row.comments,
         paused_scratchpad=[
             dict(item) if isinstance(item, dict) else {}
             for item in (row.paused_scratchpad or [])
@@ -799,6 +987,18 @@ def _to_domain(row: AgentToolApprovalRecord) -> AgentToolApproval:
         decided_by=row.decided_by,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        expires_at=row.expires_at,
+        request_id=row.request_id,
+        source_ip=row.source_ip,
+        client_metadata=dict(row.client_metadata or {}),
+        required_stages=[str(item) for item in (row.required_stages or [])],
+        stage_decisions=[
+            StageDecision.model_validate(item)
+            for item in (
+                stage_decisions_raw if isinstance(stage_decisions_raw, list) else []
+            )
+        ],
+        version=row.version,
     )
 
 

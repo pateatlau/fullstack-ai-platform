@@ -15,14 +15,20 @@ class ToolDefinition(BaseModel):
 
     ``name``, ``description``, and ``parameters`` are exposed to LLM
     function-calling APIs via ``ToolRegistry.get_schemas_for_llm()``.
-    ``requires_approval`` is platform-only HITL metadata and is intentionally
-    omitted from LLM schemas.
+    ``requires_approval``, ``category``, ``risk_level``, and
+    ``data_sensitivity`` are platform-only HITL metadata (see
+    ``app.ai.hitl.rules``) and are intentionally omitted from LLM schemas.
     """
 
     name: str
     description: str
     parameters: dict[str, Any]
     requires_approval: bool = False
+    # Optional HITL rule-engine inputs (recommendation #1). Left unset, tools
+    # simply do not match category/risk/sensitivity-based rule conditions.
+    category: str | None = None
+    risk_level: str | None = None
+    data_sensitivity: str | None = None
 
 
 class ToolCall(BaseModel):
