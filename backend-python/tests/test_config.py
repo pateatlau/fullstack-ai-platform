@@ -363,3 +363,34 @@ def test_hitl_duplicate_notification_providers_rejected() -> None:
             hitl_notification_providers=["slack", "slack"],
             hitl_notification_slack_webhook_url="https://hooks.slack.example/abc",
         ).validate_hitl_requirements()
+
+
+def test_background_jobs_enabled_rejects_handler_timeout_not_below_lease() -> None:
+    with pytest.raises(
+        ValueError,
+        match="BACKGROUND_JOBS_HANDLER_TIMEOUT_SECONDS must be strictly less than",
+    ):
+        Settings(
+            openai_api_key="test-key",
+            background_jobs_enabled=True,
+            background_jobs_handler_timeout_seconds=600,
+            background_jobs_claim_lease_seconds=300,
+        ).validate_startup()
+
+
+def test_background_jobs_enabled_accepts_handler_timeout_below_lease() -> None:
+    Settings(
+        openai_api_key="test-key",
+        background_jobs_enabled=True,
+        background_jobs_handler_timeout_seconds=600,
+        background_jobs_claim_lease_seconds=900,
+    ).validate_startup()
+
+
+def test_background_jobs_invalid_timeout_lease_skipped_when_flag_off() -> None:
+    Settings(
+        openai_api_key="test-key",
+        background_jobs_enabled=False,
+        background_jobs_handler_timeout_seconds=600,
+        background_jobs_claim_lease_seconds=300,
+    ).validate_startup()
