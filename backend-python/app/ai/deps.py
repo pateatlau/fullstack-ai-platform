@@ -17,6 +17,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
+    from app.ai.agent.executor.agent_executor import AgentExecutor
     from app.ai.hitl.notifications import NotificationDispatcher
     from app.ai.hitl.policy import ApprovalPolicy
     from app.ai.hitl.rules import RulePolicyEngine
@@ -818,6 +819,76 @@ def build_workflow_manager_for_session(
         prompt_manager=prompt_manager,
         agent_runtime=agent_runtime,
         background_store_factory=background_store_factory,
+    )
+
+
+def build_agent_approval_service_for_session(
+    session: AsyncSession,
+    settings: Settings,
+) -> "AgentApprovalService":
+    """Build an approval orchestrator for a standalone DB session."""
+    from app.ai.hitl.service import AgentApprovalService
+    from app.ai.hitl.store import AgentToolApprovalStore
+    from app.db.chat import SqlChatStore
+
+    registry = get_tool_registry()
+    return AgentApprovalService(
+        approval_store=AgentToolApprovalStore(
+            session,
+            client_audit_retention_days=settings.hitl_client_audit_retention_days,
+        ),
+        chat_store=SqlChatStore(session),
+        tool_registry=registry,
+        tool_executor=_create_tool_executor(registry=registry, settings=settings),
+        approval_timeout_hours=settings.hitl_approval_timeout_hours,
+        notification_dispatcher=get_hitl_notification_dispatcher(),
+    )
+
+
+def build_hitl_resume_executor(
+    settings: Settings,
+    *,
+    approval_service: "AgentApprovalService | None" = None,
+) -> "AgentExecutor":
+    """Build an ``AgentExecutor`` for background orphan-resume jobs."""
+    from app.ai.agent.executor.agent_executor import AgentExecutor
+    from app.ai.agent.executor.tool_runner import ToolRunner
+    from app.ai.agent.planner.react_planner import ReActPlanner
+    from app.ai.agent.scratchpad import ScratchpadStore
+    from app.ai.agent.streaming import NoOpStreamPublisher
+    from app.ai.hitl.policy import ApprovalPolicy
+    from app.providers.factory import ProviderFactory
+
+    registry = get_tool_registry()
+    prompt_manager = get_prompt_manager()
+    tool_executor = _create_tool_executor(registry=registry, settings=settings)
+    scratchpad_store = ScratchpadStore()
+    provider = ProviderFactory.get_provider(settings.llm_provider, settings)
+    approval_policy = (
+        ApprovalPolicy(required_tool_names=frozenset(settings.hitl_required_tool_names))
+        if settings.hitl_enabled
+        else None
+    )
+    runner = ToolRunner(
+        tool_executor=tool_executor,
+        tool_registry=registry,
+        stream_publisher=NoOpStreamPublisher(),
+        hitl_enabled=settings.hitl_enabled,
+        approval_policy=approval_policy,
+        approval_service=approval_service,
+    )
+    return AgentExecutor(
+        planner=ReActPlanner(
+            provider=provider,
+            tool_registry=registry,
+            prompt_manager=prompt_manager,
+            scratchpad_store=scratchpad_store,
+        ),
+        provider=provider,
+        tool_runner=runner,
+        stream_publisher=NoOpStreamPublisher(),
+        scratchpad_store=scratchpad_store,
+        prompt_manager=prompt_manager,
     )
 
 

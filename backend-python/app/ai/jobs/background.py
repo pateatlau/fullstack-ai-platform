@@ -50,7 +50,7 @@ async def start_background_jobs(settings: Settings) -> BackgroundJobsRuntime | N
     queue = PostgresJobQueue(session_factory, settings)
     store = PostgresJobScheduleStore(session_factory)
     registry = JobHandlerRegistry()
-    register_all_handlers(registry)
+    register_all_handlers(registry, settings=settings, session_factory=session_factory)
 
     worker = JobWorker(queue=queue, registry=registry, settings=settings)
     scheduler = JobScheduler(queue=queue, store=store, settings=settings)

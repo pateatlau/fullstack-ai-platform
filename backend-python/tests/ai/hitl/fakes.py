@@ -380,6 +380,74 @@ class InMemoryApprovalStore:
             key=lambda item: item.revision_number,
         )
 
+    async def list_pending_past_timeout_hours(
+        self,
+        timeout_hours: int,
+    ) -> list[AgentToolApproval]:
+        cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(
+            hours=timeout_hours
+        )
+        return [
+            row
+            for row in self.rows
+            if row.status is ApprovalStatus.PENDING and row.requested_at < cutoff
+        ]
+
+    async def cas_expire_pending_sweep(
+        self,
+        approval_id: uuid.UUID,
+    ) -> AgentToolApproval | None:
+        row = await self.get(approval_id)
+        if row is None or row.status is not ApprovalStatus.PENDING:
+            return None
+        updated = redact_terminal_client_audit_fields(
+            row.model_copy(
+                update={
+                    "status": ApprovalStatus.EXPIRED,
+                    "paused_scratchpad": [],
+                    "paused_state": {},
+                    "source_ip": None,
+                    "client_metadata": {},
+                    "version": row.version + 1,
+                    "updated_at": datetime.datetime.now(datetime.UTC),
+                }
+            )
+        )
+        self._replace(updated)
+        return updated
+
+    async def list_orphaned_approved_snapshots(
+        self,
+        *,
+        grace_seconds: int,
+    ) -> list[AgentToolApproval]:
+        cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(
+            seconds=grace_seconds
+        )
+        return [
+            row
+            for row in self.rows
+            if row.status is ApprovalStatus.APPROVED
+            and row.decided_at is not None
+            and row.decided_at < cutoff
+            and (bool(row.paused_scratchpad) or bool(row.paused_state))
+        ]
+
+    async def clear_pause_snapshot(self, approval_id: uuid.UUID) -> None:
+        row = await self.get(approval_id)
+        if row is None:
+            return
+        self._replace(
+            row.model_copy(
+                update={
+                    "paused_scratchpad": [],
+                    "paused_state": {},
+                    "version": row.version + 1,
+                    "updated_at": datetime.datetime.now(datetime.UTC),
+                }
+            )
+        )
+
     def _replace(self, updated: AgentToolApproval) -> None:
         self.rows = [
             updated if existing.id == updated.id else existing for existing in self.rows

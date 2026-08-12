@@ -1297,7 +1297,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 0     | Baseline Audit                                 | XS     | ✅ Completed (2026-08-12) |
 | 1     | Job Queue & Worker Foundations                 | L      | ✅ Completed (2026-08-12) |
 | 2     | Job Scheduler & Recurring Jobs                 | M      | ✅ Completed (2026-08-12) |
-| 3     | HITL Approval Expiry & Orphaned-Snapshot Sweep | L      | Not Started |
+| 3     | HITL Approval Expiry & Orphaned-Snapshot Sweep | L      | ✅ Completed (2026-08-12) |
 | 4     | Workflow Run Retention Cleanup                 | M      | Not Started |
 | 5     | RAG Queue-Backed Indexing                      | M      | Not Started |
 | 6     | Scheduled Evaluation Runs                      | S      | Not Started |
@@ -1307,7 +1307,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 10    | Frontend Jobs & Schedules Dashboard            | S      | Not Started |
 | 11    | Validation & Release                           | M      | Not Started |
 
-**Epic 10 overall:** Phase 2 complete. Next gate: user authorization to begin Phase 3.
+**Epic 10 overall:** Phase 3 complete. Next gate: user authorization to begin Phase 4.
 
 ---
 
@@ -1543,7 +1543,7 @@ Implement `JobScheduler`'s recurring-tick evaluation loop, the `background_job_s
 **Exit criteria**
 
 - [x] Scheduler tests pass.
-- [ ] User confirmation to proceed to Phase 3.
+- [x] User confirmation to proceed to Phase 3.
 
 **Rollback**
 
@@ -1555,6 +1555,7 @@ Implement `JobScheduler`'s recurring-tick evaluation loop, the `background_job_s
 # Phase 3 — HITL Approval Expiry & Orphaned-Snapshot Sweep
 
 **Effort:** L
+**Status:** Completed (2026-08-12)
 
 **Objective**
 
@@ -1573,41 +1574,41 @@ Ship the two HITL-closing handlers: `hitl_approval_expiry_sweep` (enforces `hitl
 
 ## Migration Extension
 
-- [ ] Extend `chat_messages.status` CHECK to add `'expired'` (drop/recreate `status_valid`, same pattern as `0010_hitl_tables.py`).
-- [ ] Extend `workflow_node_executions.decision` CHECK to add `'expired'`.
-- [ ] Verify migration upgrade/downgrade round-trip.
+- [x] Extend `chat_messages.status` CHECK to add `'expired'` (drop/recreate `status_valid`, same pattern as `0010_hitl_tables.py`).
+- [x] Extend `workflow_node_executions.decision` CHECK to add `'expired'`.
+- [x] Verify migration upgrade/downgrade round-trip.
 
 ## Agent Surface Expiry
 
-- [ ] Implement `hitl_approval_expiry_sweep`'s agent-tool branch: query `agent_tool_approvals` `status='pending'` with `requested_at + hitl_approval_timeout_hours < now()`; skip entirely when `hitl_approval_timeout_hours=0`.
-- [ ] Compare-And-Swap (CAS) transition each matched row `pending → expired` (reuse `AgentToolApprovalStore`'s existing CAS update pattern, guarded `WHERE status='pending'`).
-- [ ] Update the linked `ChatMessage.status = 'expired'` in the same transaction as the CAS write.
-- [ ] Null the pause snapshot columns on expiry (no resume will ever happen for this row — same cleanup contract as a rejection).
+- [x] Implement `hitl_approval_expiry_sweep`'s agent-tool branch: query `agent_tool_approvals` `status='pending'` with `requested_at + hitl_approval_timeout_hours < now()`; skip entirely when `hitl_approval_timeout_hours=0`.
+- [x] Compare-And-Swap (CAS) transition each matched row `pending → expired` (reuse `AgentToolApprovalStore`'s existing CAS update pattern, guarded `WHERE status='pending'`).
+- [x] Update the linked `ChatMessage.status = 'expired'` in the same transaction as the CAS write.
+- [x] Null the pause snapshot columns on expiry (no resume will ever happen for this row — same cleanup contract as a rejection).
 
 ## Workflow Surface Expiry
 
-- [ ] Implement `hitl_approval_expiry_sweep`'s workflow-node branch: query `workflow_node_executions` `node_type='approval'`, `status='waiting_approval'` with the node's `started_at + workflow_approval_timeout_hours < now()`; skip entirely when `workflow_approval_timeout_hours=0`.
-- [ ] Compare-And-Swap (CAS) transition each matched row `status='failed'`, `decision='expired'`.
-- [ ] Confirm the run then follows its existing failure/rejected-edge path with **zero new code** in `WorkflowExecutor` (Epic 06's existing continuation logic, unchanged).
+- [x] Implement `hitl_approval_expiry_sweep`'s workflow-node branch: query `workflow_node_executions` `node_type='approval'`, `status='waiting_approval'` with the node's `started_at + workflow_approval_timeout_hours < now()`; skip entirely when `workflow_approval_timeout_hours=0`.
+- [x] Compare-And-Swap (CAS) transition each matched row `status='failed'`, `decision='expired'`.
+- [x] Confirm the run then follows its existing failure/rejected-edge path with **zero new code** in `WorkflowExecutor` (Epic 06's existing continuation logic, unchanged).
 
 ## Orphaned Snapshot Sweep
 
-- [ ] Implement `hitl_orphaned_snapshot_sweep`: query `agent_tool_approvals` `status='approved'` with non-null `paused_scratchpad`/`paused_state` and `decided_at < now() - hitl_orphan_sweep_grace_seconds`.
-- [ ] For each matched row, re-run Stage 2–4 (rehydrate scratchpad/state → execute any approved-but-not-yet-executed calls via `ToolExecutor` → `AgentExecutor.resume_from_approval()`), finalizing the linked `ChatMessage` directly (no SSE stream target — this runs outside any request).
-- [ ] On handler success, null the snapshot columns (same cleanup contract as a normal resume).
-- [ ] On repeated failure past `max_attempts`, set the linked `ChatMessage.status='error'` and null the snapshot columns (fail-safe terminal outcome, per Part I Locked Decisions).
+- [x] Implement `hitl_orphaned_snapshot_sweep`: query `agent_tool_approvals` `status='approved'` with non-null `paused_scratchpad`/`paused_state` and `decided_at < now() - hitl_orphan_sweep_grace_seconds`.
+- [x] For each matched row, re-run Stage 2–4 (rehydrate scratchpad/state → execute any approved-but-not-yet-executed calls via `ToolExecutor` → `AgentExecutor.resume_from_approval()`), finalizing the linked `ChatMessage` directly (no SSE stream target — this runs outside any request).
+- [x] On handler success, null the snapshot columns (same cleanup contract as a normal resume).
+- [x] On repeated failure past `max_attempts`, set the linked `ChatMessage.status='error'` and null the snapshot columns (fail-safe terminal outcome, per Part I Locked Decisions).
 
 ## Testing
 
-- [ ] Test: agent tool approval past `hitl_approval_timeout_hours` expires; linked `ChatMessage.status='expired'`; tool never executes.
-- [ ] Test: `hitl_approval_timeout_hours=0` (default) → sweep finds nothing, no expiries occur regardless of age.
-- [ ] Test: workflow approval node past `workflow_approval_timeout_hours` expires; node `status=failed`, `decision=expired`; run follows its failure path.
-- [ ] Test: sweep never touches an already-terminal (`approved`/`rejected`) row (CAS guard verified).
-- [ ] Test: sweep racing a concurrent human decision — whichever transaction commits first wins; the other observes a non-`pending` row and no-ops (no `409` from a background sweep — it simply skips).
-- [ ] Test: orphaned approved snapshot (simulated crash — snapshot present, `decided_at` old) is successfully resumed to a `complete` `ChatMessage`.
-- [ ] Test: orphaned snapshot whose resume repeatedly fails lands on `ChatMessage.status='error'` with snapshot nulled after `max_attempts`.
-- [ ] Test: an `approved` row still within the grace period is **not** touched by the orphan sweep (avoids racing a normal, still-in-flight resume).
-- [ ] Test: flag off — no expiries, no orphan resumes, byte-for-byte Epic 09 behaviour.
+- [x] Test: agent tool approval past `hitl_approval_timeout_hours` expires; linked `ChatMessage.status='expired'`; tool never executes.
+- [x] Test: `hitl_approval_timeout_hours=0` (default) → sweep finds nothing, no expiries occur regardless of age.
+- [x] Test: workflow approval node past `workflow_approval_timeout_hours` expires; node `status=failed`, `decision=expired`; run follows its failure path.
+- [x] Test: sweep never touches an already-terminal (`approved`/`rejected`) row (CAS guard verified).
+- [x] Test: sweep racing a concurrent human decision — whichever transaction commits first wins; the other observes a non-`pending` row and no-ops (no `409` from a background sweep — it simply skips).
+- [x] Test: orphaned approved snapshot (simulated crash — snapshot present, `decided_at` old) is successfully resumed to a `complete` `ChatMessage`.
+- [x] Test: orphaned snapshot whose resume repeatedly fails lands on `ChatMessage.status='error'` with snapshot nulled after `max_attempts`.
+- [x] Test: an `approved` row still within the grace period is **not** touched by the orphan sweep (avoids racing a normal, still-in-flight resume).
+- [x] Test: flag off — no expiries, no orphan resumes, byte-for-byte Epic 09 behaviour.
 
 **Verify**
 
@@ -1621,7 +1622,7 @@ Ship the two HITL-closing handlers: `hitl_approval_expiry_sweep` (enforces `hitl
 
 **Exit criteria**
 
-- [ ] HITL handler tests pass.
+- [x] HITL handler tests pass.
 - [ ] User confirmation to proceed to Phase 4.
 
 **Rollback**
@@ -2231,6 +2232,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.4     | 2026-08-12 | Part II Phase 3 complete — migration `0014_hitl_expired_status_checks`, `hitl_expiry.py` + `hitl_orphan_sweep.py` handlers, `hitl_orphan_sweep_grace_seconds`, Epic 09/10 HITL closure, `tests/ai/jobs/handlers/test_hitl_*.py` + adversarial race coverage. |
 | 3.3     | 2026-08-12 | Part II Phase 2 complete — `JobScheduler`, `PostgresJobScheduleStore`, migration `0013_background_job_schedules` (seeded schedules), lifespan wiring, `tests/ai/jobs/test_scheduler.py` + `test_worker_lifespan.py`. |
 | 3.2     | 2026-08-12 | Part II Phase 1 complete — `app/ai/jobs/` queue/worker foundations, migration `0012_background_jobs`, PR review hardening, `tests/ai/jobs/test_jobs_*` suite. |
 | 3.1     | 2026-08-12 | Part II Phase 0 complete — baseline audit published; Phase status updated; Alembic next revision corrected to **0012** (Epic 09 `0011_hitl_lifecycle_audit` consumed `0011`). |

@@ -19,7 +19,12 @@ from app.ai.hitl.exceptions import (
     ApprovalNotFoundError,
     ApprovalValidationError,
 )
-from app.ai.hitl.models import ApprovalStatus, ProposedToolCall
+from app.ai.hitl.models import (
+    ApprovalStatus,
+    ProposedToolCall,
+    ApprovalResult,
+    AgentToolApproval,
+)
 from app.ai.tools.schemas import ToolExecutionContext
 from app.ai.tools.stubs.send_notification import SendNotificationHandler
 from app.ai.workflow.exceptions import WorkflowDecisionConflictError
@@ -558,3 +563,46 @@ async def test_workflow_concurrent_decisions_only_one_wins() -> None:
     assert len(successes) == 1
     assert len(errors) == 1
     assert isinstance(errors[0], WorkflowDecisionConflictError)
+
+
+@pytest.mark.anyio
+async def test_expiry_sweep_race_with_decide_only_one_wins() -> None:
+    owner_id = uuid.uuid4()
+    registry = reference_tool_registry()
+    service, approval_store, chat_store = build_approval_service(registry=registry)
+    session = await chat_store.create_session(user_id=owner_id)
+    approval = await approval_store.create(
+        session_id=session.id,
+        owner_id=owner_id,
+        execution_id="exec-expiry-race",
+        approval_correlation_id=uuid.uuid4(),
+        proposed_calls=[
+            ProposedToolCall(
+                name="send_notification",
+                arguments={"message": "x"},
+                call_id="c1",
+            )
+        ],
+        paused_scratchpad=[],
+        paused_state={"status": "waiting_approval"},
+    )
+
+    results = await asyncio.gather(
+        service.decide(approval.id, owner_id=owner_id, decision="rejected"),
+        approval_store.cas_expire_pending_sweep(approval.id),
+        return_exceptions=True,
+    )
+    assert not any(isinstance(item, Exception) for item in results)
+    final = await approval_store.get(approval.id)
+    assert final is not None
+    assert final.status in {ApprovalStatus.REJECTED, ApprovalStatus.EXPIRED}
+    transitioned = sum(
+        1
+        for item in results
+        if isinstance(item, ApprovalResult)
+        or (
+            isinstance(item, AgentToolApproval)
+            and item.status is ApprovalStatus.EXPIRED
+        )
+    )
+    assert transitioned == 1

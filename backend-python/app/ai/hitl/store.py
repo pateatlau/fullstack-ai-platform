@@ -563,6 +563,81 @@ class AgentToolApprovalStore:
         )
         return [_revision_to_domain(row) for row in rows]
 
+    async def list_pending_past_timeout_hours(
+        self,
+        timeout_hours: int,
+    ) -> list[AgentToolApproval]:
+        """Return pending approvals older than ``timeout_hours`` since request."""
+        cutoff = func.now() - datetime.timedelta(hours=timeout_hours)
+        rows = await self._session.scalars(
+            select(AgentToolApprovalRecord).where(
+                AgentToolApprovalRecord.status == ApprovalStatus.PENDING.value,
+                AgentToolApprovalRecord.requested_at < cutoff,
+            )
+        )
+        return [self._map_row(row) for row in rows]
+
+    async def cas_expire_pending_sweep(
+        self,
+        approval_id: uuid.UUID,
+    ) -> AgentToolApproval | None:
+        """Compare-and-swap ``pending`` → ``expired`` for background sweeps."""
+        stmt = (
+            update(AgentToolApprovalRecord)
+            .where(
+                AgentToolApprovalRecord.id == approval_id,
+                AgentToolApprovalRecord.status == ApprovalStatus.PENDING.value,
+            )
+            .values(
+                status=ApprovalStatus.EXPIRED.value,
+                paused_scratchpad=[],
+                paused_state={},
+                source_ip=None,
+                client_metadata={},
+                version=AgentToolApprovalRecord.version + 1,
+                updated_at=func.now(),
+            )
+            .returning(AgentToolApprovalRecord)
+        )
+        row = (await self._session.execute(stmt)).scalar_one_or_none()
+        if row is None:
+            return None
+        await self._session.flush()
+        record_agent_tool_approval_pending_delta(-1)
+        record_approval_expired_metric(kind=ApprovalKind.AGENT_TOOL.value)
+        return self._map_row(row)
+
+    async def list_orphaned_approved_snapshots(
+        self,
+        *,
+        grace_seconds: int,
+    ) -> list[AgentToolApproval]:
+        """Approved rows whose pause snapshot survived past the grace window."""
+        cutoff = func.now() - datetime.timedelta(seconds=grace_seconds)
+        rows = await self._session.scalars(
+            select(AgentToolApprovalRecord).where(
+                AgentToolApprovalRecord.status == ApprovalStatus.APPROVED.value,
+                AgentToolApprovalRecord.decided_at.is_not(None),
+                AgentToolApprovalRecord.decided_at < cutoff,
+            )
+        )
+        return [self._map_row(row) for row in rows if _has_pause_snapshot_row(row)]
+
+    async def clear_pause_snapshot(self, approval_id: uuid.UUID) -> None:
+        """Drop persisted pause payload once resume or fail-safe completes."""
+        stmt = (
+            update(AgentToolApprovalRecord)
+            .where(AgentToolApprovalRecord.id == approval_id)
+            .values(
+                paused_scratchpad=[],
+                paused_state={},
+                version=AgentToolApprovalRecord.version + 1,
+                updated_at=func.now(),
+            )
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
 
 class ApprovalsStore:
     """Read-only aggregation across agent-tool and workflow-node approvals."""
@@ -922,6 +997,8 @@ def _workflow_audit_status(status: str, decision: str | None) -> str:
         return ApprovalStatus.APPROVED.value
     if decision == ApprovalDecision.REJECTED.value:
         return ApprovalStatus.REJECTED.value
+    if decision == ApprovalDecision.EXPIRED.value:
+        return ApprovalStatus.EXPIRED.value
     if status == NodeStatus.CANCELLED.value:
         return ApprovalStatus.CANCELLED.value
     if status == NodeStatus.WAITING_APPROVAL.value and decision is None:
@@ -976,7 +1053,9 @@ def _apply_workflow_status_filter(
     if status is ApprovalStatus.CANCELLED:
         return stmt.where(_workflow_cancelled_audit_predicate())
     if status is ApprovalStatus.EXPIRED:
-        return stmt.where(WorkflowNodeExecutionRecord.id.is_(None))
+        return stmt.where(
+            WorkflowNodeExecutionRecord.decision == ApprovalDecision.EXPIRED.value
+        )
     return stmt
 
 
@@ -1044,6 +1123,10 @@ def _audit_listing_subquery(
         _agent_audit_listing_select(owner_id, status=status),
         _workflow_audit_listing_select(owner_id, status=status),
     ).subquery()
+
+
+def _has_pause_snapshot_row(row: AgentToolApprovalRecord) -> bool:
+    return bool(row.paused_scratchpad) or bool(row.paused_state)
 
 
 def _to_domain(

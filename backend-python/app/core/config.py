@@ -254,6 +254,9 @@ class Settings(BaseSettings):
     # hop; otherwise use the direct ASGI client address.
     hitl_trust_forwarded_client_ip: bool = False
     hitl_max_user_agent_length: int = Field(default=512, ge=1)
+    # Minimum age before an approved row with a pause snapshot is treated as
+    # crash-orphaned by ``hitl_orphaned_snapshot_sweep``.
+    hitl_orphan_sweep_grace_seconds: int = Field(default=120, ge=0)
 
     # V2 Epic 10 Phase 1: Background Jobs infrastructure flag (default false).
     # When true: JobWorker and JobScheduler start in app lifespan; queue-backed
