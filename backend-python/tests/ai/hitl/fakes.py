@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Literal
 
-from app.ai.hitl.exceptions import ApprovalDecisionConflictError, ApprovalNotFoundError
+from app.ai.hitl.exceptions import (
+    ApprovalDecisionConflictError,
+    ApprovalExpiredError,
+    ApprovalNotFoundError,
+)
 from app.ai.hitl.models import (
     AgentToolApproval,
     ApprovalAuditEntry,
@@ -13,15 +18,20 @@ from app.ai.hitl.models import (
     ApprovalRevision,
     ApprovalStatus,
     ProposedToolCall,
+    RequestMetadata,
+    StageDecision,
+    apply_client_audit_retention_policy,
+    redact_terminal_client_audit_fields,
 )
 
 
 class InMemoryApprovalStore:
     """In-memory approval store with CAS/revision support for HITL tests."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, client_audit_retention_days: int = 0) -> None:
         self.rows: list[AgentToolApproval] = []
         self.revisions: list[ApprovalRevision] = []
+        self._client_audit_retention_days = client_audit_retention_days
 
     async def create(
         self,
@@ -33,6 +43,9 @@ class InMemoryApprovalStore:
         proposed_calls: list[ProposedToolCall],
         paused_scratchpad: list[dict[str, object]],
         paused_state: dict[str, object],
+        expires_at: datetime.datetime | None = None,
+        required_stages: list[str] | None = None,
+        request_metadata: RequestMetadata | None = None,
     ) -> AgentToolApproval:
         now = datetime.datetime.now(datetime.UTC)
         row = AgentToolApproval(
@@ -53,6 +66,13 @@ class InMemoryApprovalStore:
             decided_by=None,
             created_at=now,
             updated_at=now,
+            expires_at=expires_at,
+            required_stages=list(required_stages or []),
+            request_id=request_metadata.request_id if request_metadata else None,
+            source_ip=request_metadata.source_ip if request_metadata else None,
+            client_metadata=(
+                request_metadata.client_metadata if request_metadata else {}
+            ),
         )
         self.rows.append(row)
         return row
@@ -69,7 +89,33 @@ class InMemoryApprovalStore:
         row = await self.get(approval_id)
         if row is None or row.owner_id != owner_id:
             return None
-        return row
+        if (
+            row.status is ApprovalStatus.PENDING
+            and row.expires_at is not None
+            and row.expires_at <= datetime.datetime.now(datetime.UTC)
+        ):
+            expired = redact_terminal_client_audit_fields(
+                row.model_copy(
+                    update={
+                        "status": ApprovalStatus.EXPIRED,
+                        "source_ip": None,
+                        "client_metadata": {},
+                        "version": row.version + 1,
+                        "updated_at": datetime.datetime.now(datetime.UTC),
+                    }
+                )
+            )
+            self._replace(expired)
+            return expired
+        mapped = apply_client_audit_retention_policy(
+            row,
+            retention_days=self._client_audit_retention_days,
+        )
+        if (row.source_ip or row.client_metadata) and not (
+            mapped.source_ip or mapped.client_metadata
+        ):
+            self._replace(mapped)
+        return mapped
 
     async def require_for_owner(
         self,
@@ -81,6 +127,11 @@ class InMemoryApprovalStore:
         if row is None:
             raise ApprovalNotFoundError(
                 f"Approval {approval_id} not found or not owned by caller."
+            )
+        if row.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at "
+                f"{row.expires_at.isoformat() if row.expires_at else 'unknown'}."
             )
         return row
 
@@ -105,12 +156,19 @@ class InMemoryApprovalStore:
         status: ApprovalStatus,
         decided_by: uuid.UUID,
         reason: str | None = None,
+        comments: str | None = None,
         edited_calls: list[ProposedToolCall] | None = None,
+        request_metadata: RequestMetadata | None = None,
     ) -> AgentToolApproval:
         row = await self.get_for_owner(approval_id, owner_id=owner_id)
         if row is None:
             raise ApprovalNotFoundError(
                 f"Approval {approval_id} not found or not owned by caller."
+            )
+        if row.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at "
+                f"{row.expires_at.isoformat() if row.expires_at else 'unknown'}."
             )
         if row.status != ApprovalStatus.PENDING:
             raise ApprovalDecisionConflictError(
@@ -122,11 +180,56 @@ class InMemoryApprovalStore:
             "decided_by": decided_by,
             "decided_at": now,
             "reason": reason,
+            "comments": comments,
+            "version": row.version + 1,
             "updated_at": now,
         }
         if edited_calls is not None:
             updates["edited_calls"] = edited_calls
-        updated = row.model_copy(update=updates)
+        updates["source_ip"] = None
+        updates["client_metadata"] = {}
+        if request_metadata is not None:
+            updates["request_id"] = request_metadata.request_id
+        updated = redact_terminal_client_audit_fields(row.model_copy(update=updates))
+        self._replace(updated)
+        return updated
+
+    async def cas_cancel(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        reason: str | None = None,
+        request_metadata: RequestMetadata | None = None,
+    ) -> AgentToolApproval:
+        row = await self.get_for_owner(approval_id, owner_id=owner_id)
+        if row is None:
+            raise ApprovalNotFoundError(
+                f"Approval {approval_id} not found or not owned by caller."
+            )
+        if row.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at "
+                f"{row.expires_at.isoformat() if row.expires_at else 'unknown'}."
+            )
+        if row.status != ApprovalStatus.PENDING:
+            raise ApprovalDecisionConflictError(
+                f"Approval {approval_id} is no longer pending (status={row.status.value})."
+            )
+        now = datetime.datetime.now(datetime.UTC)
+        updates: dict[str, object] = {
+            "status": ApprovalStatus.CANCELLED,
+            "decided_by": owner_id,
+            "decided_at": now,
+            "reason": reason,
+            "version": row.version + 1,
+            "updated_at": now,
+            "source_ip": None,
+            "client_metadata": {},
+        }
+        if request_metadata is not None:
+            updates["request_id"] = request_metadata.request_id
+        updated = redact_terminal_client_audit_fields(row.model_copy(update=updates))
         self._replace(updated)
         return updated
 
@@ -142,6 +245,11 @@ class InMemoryApprovalStore:
             raise ApprovalNotFoundError(
                 f"Approval {approval_id} not found or not owned by caller."
             )
+        if row.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at "
+                f"{row.expires_at.isoformat() if row.expires_at else 'unknown'}."
+            )
         if row.status != ApprovalStatus.PENDING:
             raise ApprovalDecisionConflictError(
                 f"Approval {approval_id} is no longer pending (status={row.status.value})."
@@ -149,11 +257,80 @@ class InMemoryApprovalStore:
         updated = row.model_copy(
             update={
                 "edited_calls": edited_calls,
+                "version": row.version + 1,
                 "updated_at": datetime.datetime.now(datetime.UTC),
             }
         )
         self._replace(updated)
         return updated
+
+    async def append_stage_decision(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        stage: str,
+        decision: Literal["approved", "rejected"],
+        decided_by: uuid.UUID,
+        reason: str | None = None,
+        comments: str | None = None,
+    ) -> AgentToolApproval:
+        row = await self.get_for_owner(approval_id, owner_id=owner_id)
+        if row is None:
+            raise ApprovalNotFoundError(
+                f"Approval {approval_id} not found or not owned by caller."
+            )
+        if row.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at "
+                f"{row.expires_at.isoformat() if row.expires_at else 'unknown'}."
+            )
+        if row.status != ApprovalStatus.PENDING:
+            raise ApprovalDecisionConflictError(
+                f"Approval {approval_id} is no longer pending (status={row.status.value})."
+            )
+        entry = StageDecision(
+            stage=stage,
+            decision=decision,
+            decided_by=decided_by,
+            decided_at=datetime.datetime.now(datetime.UTC),
+            reason=reason,
+            comments=comments,
+        )
+        updated = row.model_copy(
+            update={
+                "stage_decisions": [*row.stage_decisions, entry],
+                "version": row.version + 1,
+                "updated_at": datetime.datetime.now(datetime.UTC),
+            }
+        )
+        self._replace(updated)
+        return updated
+
+    async def rollback_last_stage_decision(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        stage: str,
+        decision: Literal["approved", "rejected"],
+    ) -> None:
+        row = await self.get_for_owner(approval_id, owner_id=owner_id)
+        if row is None or row.status != ApprovalStatus.PENDING:
+            return
+        if not row.stage_decisions:
+            return
+        last = row.stage_decisions[-1]
+        if last.stage != stage or last.decision != decision:
+            return
+        updated = row.model_copy(
+            update={
+                "stage_decisions": row.stage_decisions[:-1],
+                "version": row.version + 1,
+                "updated_at": datetime.datetime.now(datetime.UTC),
+            }
+        )
+        self._replace(updated)
 
     async def append_revision(
         self,

@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Literal, NoReturn
 
 from sqlalchemy import and_, func, literal, or_, select, union_all, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.hitl.exceptions import ApprovalDecisionConflictError, ApprovalNotFoundError
+from app.ai.hitl.exceptions import (
+    ApprovalDecisionConflictError,
+    ApprovalExpiredError,
+    ApprovalNotFoundError,
+)
 from app.ai.hitl.models import (
     AgentToolApproval,
     ApprovalAuditEntry,
@@ -16,8 +21,16 @@ from app.ai.hitl.models import (
     ApprovalRevision,
     ApprovalStatus,
     ProposedToolCall,
+    RequestMetadata,
+    StageDecision,
+    apply_client_audit_retention_policy,
+)
+from app.ai.observability.metrics.instruments import (
+    record_agent_tool_approval_pending_delta,
+    record_approval_expired_metric,
 )
 from app.ai.workflow.models import ApprovalDecision, NodeStatus, NodeType
+from app.ai.workflow.models.run import APPROVAL_REQUESTED_AT_OUTPUT_KEY
 from app.db.models import (
     AgentToolApprovalRecord,
     ApprovalRevisionRecord,
@@ -29,8 +42,38 @@ from app.db.models import (
 class AgentToolApprovalStore:
     """CRUD for ``agent_tool_approvals`` rows."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        client_audit_retention_days: int = 90,
+    ) -> None:
         self._session = session
+        self._client_audit_retention_days = client_audit_retention_days
+
+    def _map_row(self, row: AgentToolApprovalRecord) -> AgentToolApproval:
+        return _to_domain(
+            row,
+            client_audit_retention_days=self._client_audit_retention_days,
+        )
+
+    async def _map_row_persisting_retention(
+        self, row: AgentToolApprovalRecord
+    ) -> AgentToolApproval:
+        had_client_audit = bool(row.source_ip or row.client_metadata)
+        approval = self._map_row(row)
+        if (
+            had_client_audit
+            and approval.source_ip is None
+            and not approval.client_metadata
+            and approval.status is ApprovalStatus.PENDING
+        ):
+            row.source_ip = None
+            row.client_metadata = {}
+            row.version = row.version + 1
+            row.updated_at = func.now()
+            await self._session.flush()
+        return approval
 
     async def create(
         self,
@@ -42,6 +85,9 @@ class AgentToolApprovalStore:
         proposed_calls: list[ProposedToolCall],
         paused_scratchpad: list[dict[str, object]],
         paused_state: dict[str, object],
+        expires_at: datetime.datetime | None = None,
+        required_stages: list[str] | None = None,
+        request_metadata: RequestMetadata | None = None,
     ) -> AgentToolApproval:
         row = AgentToolApprovalRecord(
             session_id=session_id,
@@ -52,17 +98,24 @@ class AgentToolApprovalStore:
             proposed_calls=[call.model_dump(mode="json") for call in proposed_calls],
             paused_scratchpad=paused_scratchpad,
             paused_state=paused_state,
+            expires_at=expires_at,
+            required_stages=list(required_stages or []),
+            request_id=request_metadata.request_id if request_metadata else None,
+            source_ip=request_metadata.source_ip if request_metadata else None,
+            client_metadata=(
+                request_metadata.client_metadata if request_metadata else {}
+            ),
         )
         self._session.add(row)
         await self._session.flush()
         await self._session.refresh(row)
-        return _to_domain(row)
+        return self._map_row(row)
 
     async def get(self, approval_id: uuid.UUID) -> AgentToolApproval | None:
         row = await self._session.get(AgentToolApprovalRecord, approval_id)
         if row is None:
             return None
-        return _to_domain(row)
+        return self._map_row(row)
 
     async def get_for_owner(
         self,
@@ -70,6 +123,14 @@ class AgentToolApprovalStore:
         *,
         owner_id: uuid.UUID,
     ) -> AgentToolApproval | None:
+        """Fetch one owned approval, lazily flipping it to ``expired`` if due.
+
+        This is the single choke point for expiration (recommendation #3):
+        every read/decide/revise/cancel path funnels through here (directly
+        or via :meth:`require_for_owner`), so a stale ``pending`` row is
+        transitioned the next time anyone touches it. There is no proactive
+        background sweep for untouched rows (deferred to Epic 10).
+        """
         row = await self._session.scalar(
             select(AgentToolApprovalRecord).where(
                 AgentToolApprovalRecord.id == approval_id,
@@ -78,7 +139,17 @@ class AgentToolApprovalStore:
         )
         if row is None:
             return None
-        return _to_domain(row)
+        approval = await self._map_row_persisting_retention(row)
+        if (
+            approval.status is ApprovalStatus.PENDING
+            and approval.expires_at is not None
+        ):
+            # Always attempt the DB-side CAS; ``expires_at <= now()`` uses DB
+            # time so expiry is enforced even when the app server clock lags.
+            expired = await self._expire_if_due(approval_id, owner_id=owner_id)
+            if expired is not None:
+                return expired
+        return approval
 
     async def require_for_owner(
         self,
@@ -91,7 +162,66 @@ class AgentToolApprovalStore:
             raise ApprovalNotFoundError(
                 f"Approval {approval_id} not found or not owned by caller."
             )
+        if approval.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at "
+                f"{approval.expires_at.isoformat() if approval.expires_at else 'unknown'}."
+            )
         return approval
+
+    async def _expire_if_due(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+    ) -> AgentToolApproval | None:
+        """Compare-and-swap ``pending`` → ``expired`` when the deadline has passed."""
+        stmt = (
+            update(AgentToolApprovalRecord)
+            .where(
+                AgentToolApprovalRecord.id == approval_id,
+                AgentToolApprovalRecord.owner_id == owner_id,
+                AgentToolApprovalRecord.status == ApprovalStatus.PENDING.value,
+                AgentToolApprovalRecord.expires_at.is_not(None),
+                AgentToolApprovalRecord.expires_at <= func.now(),
+            )
+            .values(
+                status=ApprovalStatus.EXPIRED.value,
+                source_ip=None,
+                client_metadata={},
+                version=AgentToolApprovalRecord.version + 1,
+                updated_at=func.now(),
+            )
+            .returning(AgentToolApprovalRecord)
+        )
+        row = (await self._session.execute(stmt)).scalar_one_or_none()
+        if row is None:
+            return None
+        await self._session.flush()
+        record_agent_tool_approval_pending_delta(-1)
+        record_approval_expired_metric(kind=ApprovalKind.AGENT_TOOL.value)
+        return self._map_row(row)
+
+    async def _resolve_cas_miss(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+    ) -> NoReturn:
+        """Raise the precise HITL error a failed CAS write should surface."""
+        existing = await self.get_for_owner(approval_id, owner_id=owner_id)
+        if existing is None:
+            raise ApprovalNotFoundError(
+                f"Approval {approval_id} not found or not owned by caller."
+            )
+        if existing.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at "
+                f"{existing.expires_at.isoformat() if existing.expires_at else 'unknown'}."
+            )
+        raise ApprovalDecisionConflictError(
+            f"Approval {approval_id} is no longer pending (status={existing.status.value})."
+        )
 
     async def list_for_owner(
         self,
@@ -106,7 +236,7 @@ class AgentToolApprovalStore:
             stmt = stmt.where(AgentToolApprovalRecord.status == status.value)
         stmt = stmt.order_by(AgentToolApprovalRecord.requested_at.desc())
         rows = await self._session.scalars(stmt)
-        return [_to_domain(row) for row in rows]
+        return [self._map_row(row) for row in rows]
 
     async def list_for_session(
         self,
@@ -121,7 +251,7 @@ class AgentToolApprovalStore:
             stmt = stmt.where(AgentToolApprovalRecord.status == status.value)
         stmt = stmt.order_by(AgentToolApprovalRecord.requested_at.desc())
         rows = await self._session.scalars(stmt)
-        return [_to_domain(row) for row in rows]
+        return [self._map_row(row) for row in rows]
 
     async def link_pending_message(
         self,
@@ -142,7 +272,7 @@ class AgentToolApprovalStore:
         if row is None:
             return None
         await self._session.flush()
-        return _to_domain(row)
+        return self._map_row(row)
 
     async def cas_decide(
         self,
@@ -152,7 +282,9 @@ class AgentToolApprovalStore:
         status: ApprovalStatus,
         decided_by: uuid.UUID,
         reason: str | None = None,
+        comments: str | None = None,
         edited_calls: list[ProposedToolCall] | None = None,
+        request_metadata: RequestMetadata | None = None,
     ) -> AgentToolApproval:
         """Compare-and-swap ``pending`` → terminal decision status."""
         now = datetime.datetime.now(datetime.UTC)
@@ -161,12 +293,18 @@ class AgentToolApprovalStore:
             "decided_by": decided_by,
             "decided_at": now,
             "reason": reason,
+            "comments": comments,
+            "version": AgentToolApprovalRecord.version + 1,
             "updated_at": func.now(),
         }
         if edited_calls is not None:
             values["edited_calls"] = [
                 call.model_dump(mode="json") for call in edited_calls
             ]
+        values["source_ip"] = None
+        values["client_metadata"] = {}
+        if request_metadata is not None:
+            values["request_id"] = request_metadata.request_id
 
         stmt = (
             update(AgentToolApprovalRecord)
@@ -180,16 +318,50 @@ class AgentToolApprovalStore:
         )
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         if row is None:
-            existing = await self.get_for_owner(approval_id, owner_id=owner_id)
-            if existing is None:
-                raise ApprovalNotFoundError(
-                    f"Approval {approval_id} not found or not owned by caller."
-                )
-            raise ApprovalDecisionConflictError(
-                f"Approval {approval_id} is no longer pending (status={existing.status.value})."
-            )
+            await self._resolve_cas_miss(approval_id, owner_id=owner_id)
+            raise AssertionError("unreachable: _resolve_cas_miss always raises")
         await self._session.flush()
-        return _to_domain(row)
+        return self._map_row(row)
+
+    async def cas_cancel(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        reason: str | None = None,
+        request_metadata: RequestMetadata | None = None,
+    ) -> AgentToolApproval:
+        """Compare-and-swap ``pending`` → ``cancelled`` (requester withdrawal)."""
+        now = datetime.datetime.now(datetime.UTC)
+        values: dict[str, object] = {
+            "status": ApprovalStatus.CANCELLED.value,
+            "decided_by": owner_id,
+            "decided_at": now,
+            "reason": reason,
+            "version": AgentToolApprovalRecord.version + 1,
+            "updated_at": func.now(),
+            "source_ip": None,
+            "client_metadata": {},
+        }
+        if request_metadata is not None:
+            values["request_id"] = request_metadata.request_id
+
+        stmt = (
+            update(AgentToolApprovalRecord)
+            .where(
+                AgentToolApprovalRecord.id == approval_id,
+                AgentToolApprovalRecord.owner_id == owner_id,
+                AgentToolApprovalRecord.status == ApprovalStatus.PENDING.value,
+            )
+            .values(**values)
+            .returning(AgentToolApprovalRecord)
+        )
+        row = (await self._session.execute(stmt)).scalar_one_or_none()
+        if row is None:
+            await self._resolve_cas_miss(approval_id, owner_id=owner_id)
+            raise AssertionError("unreachable: _resolve_cas_miss always raises")
+        await self._session.flush()
+        return self._map_row(row)
 
     async def cas_revise(
         self,
@@ -208,22 +380,109 @@ class AgentToolApprovalStore:
             )
             .values(
                 edited_calls=[call.model_dump(mode="json") for call in edited_calls],
+                version=AgentToolApprovalRecord.version + 1,
                 updated_at=func.now(),
             )
             .returning(AgentToolApprovalRecord)
         )
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         if row is None:
-            existing = await self.get_for_owner(approval_id, owner_id=owner_id)
-            if existing is None:
-                raise ApprovalNotFoundError(
-                    f"Approval {approval_id} not found or not owned by caller."
-                )
-            raise ApprovalDecisionConflictError(
-                f"Approval {approval_id} is no longer pending (status={existing.status.value})."
-            )
+            await self._resolve_cas_miss(approval_id, owner_id=owner_id)
+            raise AssertionError("unreachable: _resolve_cas_miss always raises")
         await self._session.flush()
-        return _to_domain(row)
+        return self._map_row(row)
+
+    async def append_stage_decision(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        stage: str,
+        decision: Literal["approved", "rejected"],
+        decided_by: uuid.UUID,
+        reason: str | None = None,
+        comments: str | None = None,
+    ) -> AgentToolApproval:
+        """Append one multi-stage checklist entry while the approval stays ``pending``.
+
+        Locks the row (``FOR UPDATE``) rather than a bare CAS because the
+        update is a JSONB list append, not a single-column swap.
+        """
+        row = await self._session.scalar(
+            select(AgentToolApprovalRecord)
+            .where(
+                AgentToolApprovalRecord.id == approval_id,
+                AgentToolApprovalRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if row is None:
+            raise ApprovalNotFoundError(
+                f"Approval {approval_id} not found or not owned by caller."
+            )
+        if row.status == ApprovalStatus.PENDING.value and row.expires_at is not None:
+            expired = await self._expire_if_due(approval_id, owner_id=owner_id)
+            if expired is not None:
+                raise ApprovalExpiredError(
+                    f"Approval {approval_id} expired at "
+                    f"{expired.expires_at.isoformat() if expired.expires_at else 'unknown'}."
+                )
+        if row.status == ApprovalStatus.EXPIRED.value:
+            expired_at = row.expires_at.isoformat() if row.expires_at else "unknown"
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at {expired_at}."
+            )
+        if row.status != ApprovalStatus.PENDING.value:
+            raise ApprovalDecisionConflictError(
+                f"Approval {approval_id} is no longer pending (status={row.status})."
+            )
+        entry = StageDecision(
+            stage=stage,
+            decision=decision,
+            decided_by=decided_by,
+            decided_at=datetime.datetime.now(datetime.UTC),
+            reason=reason,
+            comments=comments,
+        )
+        row.stage_decisions = [
+            *(row.stage_decisions or []),
+            entry.model_dump(mode="json"),
+        ]
+        row.version = row.version + 1
+        row.updated_at = func.now()
+        await self._session.flush()
+        await self._session.refresh(row)
+        return self._map_row(row)
+
+    async def rollback_last_stage_decision(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        stage: str,
+        decision: Literal["approved", "rejected"],
+    ) -> None:
+        """Remove the last appended stage entry when a follow-up CAS fails."""
+        row = await self._session.scalar(
+            select(AgentToolApprovalRecord)
+            .where(
+                AgentToolApprovalRecord.id == approval_id,
+                AgentToolApprovalRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if row is None or row.status != ApprovalStatus.PENDING.value:
+            return
+        decisions_raw = list(row.stage_decisions or [])
+        if not decisions_raw:
+            return
+        last = StageDecision.model_validate(decisions_raw[-1])
+        if last.stage != stage or last.decision != decision:
+            return
+        row.stage_decisions = decisions_raw[:-1]
+        row.version = row.version + 1
+        row.updated_at = func.now()
+        await self._session.flush()
 
     async def append_revision(
         self,
@@ -308,9 +567,17 @@ class AgentToolApprovalStore:
 class ApprovalsStore:
     """Read-only aggregation across agent-tool and workflow-node approvals."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        client_audit_retention_days: int = 90,
+    ) -> None:
         self._session = session
-        self._agent_store = AgentToolApprovalStore(session)
+        self._agent_store = AgentToolApprovalStore(
+            session,
+            client_audit_retention_days=client_audit_retention_days,
+        )
 
     async def list_for_owner(
         self,
@@ -365,7 +632,9 @@ class ApprovalsStore:
                     AgentToolApprovalRecord.owner_id == owner_id,
                 )
             )
-            agents_by_id = {row.id: _to_domain(row) for row in agent_rows}
+            agents_by_id = {
+                row.id: self._agent_store._map_row(row) for row in agent_rows
+            }
 
         workflows_by_id: dict[
             uuid.UUID, tuple[WorkflowNodeExecutionRecord, uuid.UUID, datetime.datetime]
@@ -593,9 +862,13 @@ def _agent_audit_entry(
             else None
         ),
         reason=approval.reason,
+        comments=approval.comments,
         edited=edited,
         revision_count=revision_count,
         decide_url=_agent_decide_url(approval.id),
+        expires_at=approval.expires_at,
+        required_stages=list(approval.required_stages),
+        stage_decisions=list(approval.stage_decisions),
     )
 
 
@@ -604,6 +877,13 @@ def _workflow_requested_at(
     *,
     run_created_at: datetime.datetime,
 ) -> datetime.datetime:
+    if isinstance(row.output, dict):
+        raw = row.output.get(APPROVAL_REQUESTED_AT_OUTPUT_KEY)
+        if isinstance(raw, str):
+            parsed = datetime.datetime.fromisoformat(raw)
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=datetime.UTC)
+            return parsed
     return row.started_at or row.completed_at or run_created_at
 
 
@@ -766,7 +1046,11 @@ def _audit_listing_subquery(
     ).subquery()
 
 
-def _to_domain(row: AgentToolApprovalRecord) -> AgentToolApproval:
+def _to_domain(
+    row: AgentToolApprovalRecord,
+    *,
+    client_audit_retention_days: int = 0,
+) -> AgentToolApproval:
     proposed_raw = row.proposed_calls
     proposed_calls = [
         ProposedToolCall.model_validate(item)
@@ -778,7 +1062,8 @@ def _to_domain(row: AgentToolApprovalRecord) -> AgentToolApproval:
         if isinstance(edited_raw, list)
         else None
     )
-    return AgentToolApproval(
+    stage_decisions_raw = row.stage_decisions
+    approval = AgentToolApproval(
         id=row.id,
         session_id=row.session_id,
         owner_id=row.owner_id,
@@ -788,6 +1073,7 @@ def _to_domain(row: AgentToolApprovalRecord) -> AgentToolApproval:
         proposed_calls=proposed_calls,
         edited_calls=edited_calls,
         reason=row.reason,
+        comments=row.comments,
         paused_scratchpad=[
             dict(item) if isinstance(item, dict) else {}
             for item in (row.paused_scratchpad or [])
@@ -799,6 +1085,22 @@ def _to_domain(row: AgentToolApprovalRecord) -> AgentToolApproval:
         decided_by=row.decided_by,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        expires_at=row.expires_at,
+        request_id=row.request_id,
+        source_ip=row.source_ip,
+        client_metadata=dict(row.client_metadata or {}),
+        required_stages=[str(item) for item in (row.required_stages or [])],
+        stage_decisions=[
+            StageDecision.model_validate(item)
+            for item in (
+                stage_decisions_raw if isinstance(stage_decisions_raw, list) else []
+            )
+        ],
+        version=row.version,
+    )
+    return apply_client_audit_retention_policy(
+        approval,
+        retention_days=client_audit_retention_days,
     )
 
 

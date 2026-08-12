@@ -158,10 +158,19 @@ class DefaultAgent:
             if isinstance(receipt_raw, str) and receipt_raw.strip()
             else None
         )
+        workspace_raw = context.metadata.get("workspace")
+        tenant_raw = context.metadata.get("tenant")
+        cost_raw = context.metadata.get("estimated_cost")
         return ToolExecutionContext(
             caller=caller,
             request_id=context.request_id,
+            session_id=context.session_id,
             execution_receipt_id=execution_receipt_id,
+            workspace=workspace_raw if isinstance(workspace_raw, str) else None,
+            tenant=tenant_raw if isinstance(tenant_raw, str) else None,
+            estimated_cost=(
+                float(cost_raw) if isinstance(cost_raw, (int, float)) else None
+            ),
         )
 
     @staticmethod

@@ -43,6 +43,7 @@ from app.ai.workflow.graph.traversal import (
     resolve_ready_nodes,
 )
 from app.ai.workflow.models import (
+    APPROVAL_REQUESTED_AT_OUTPUT_KEY,
     NodeStatus,
     NodeType,
     RunStatus,
@@ -676,11 +677,15 @@ class WorkflowExecutor:
         if cancelled is not None:
             return cancelled
 
+        pause_at = _utcnow()
         await self._store.append_node_execution(
             execution.model_copy(
                 update={
                     "status": NodeStatus.WAITING_APPROVAL,
-                    "output": output,
+                    "output": {
+                        **output,
+                        APPROVAL_REQUESTED_AT_OUTPUT_KEY: pause_at.isoformat(),
+                    },
                 }
             )
         )

@@ -37,6 +37,14 @@ _INSTRUMENT_LABEL_KEYS: dict[str, frozenset[str]] = {
     "hitl_approval_decision_latency_ms": frozenset({"kind"}),
     "hitl_resume_latency_ms": frozenset({"kind"}),
     "hitl_tool_execution_latency_ms": frozenset({"kind"}),
+    # Business-level HITL metrics (recommendation #7). ``approval_decisions_total``
+    # already breaks decisions down by ``decision`` label; these add explicit
+    # request/expiry/cancellation counters and a seconds-unit duration
+    # histogram so dashboards can query familiar Prometheus-style names.
+    "approval_requests_total": frozenset({"kind"}),
+    "approval_expired_total": frozenset({"kind"}),
+    "approval_cancelled_total": frozenset({"kind"}),
+    "approval_duration_seconds": frozenset({"kind", "decision"}),
 }
 
 
@@ -123,6 +131,19 @@ class MetricInstruments:
         self.hitl_tool_execution_latency_ms: Histogram = meter.create_histogram(
             "hitl_tool_execution_latency_ms",
             unit="ms",
+        )
+        self.approval_requests_total: Counter = meter.create_counter(
+            "approval_requests_total"
+        )
+        self.approval_expired_total: Counter = meter.create_counter(
+            "approval_expired_total"
+        )
+        self.approval_cancelled_total: Counter = meter.create_counter(
+            "approval_cancelled_total"
+        )
+        self.approval_duration_seconds: Histogram = meter.create_histogram(
+            "approval_duration_seconds",
+            unit="s",
         )
 
     @classmethod
@@ -406,8 +427,54 @@ def record_hitl_decision_metrics(
             decision_latency_ms,
             kind_labels,
         )
+        instruments.approval_duration_seconds.record(
+            decision_latency_ms / 1000,
+            decision_labels,
+        )
 
     _record("approval_decisions_total", _emit)
+
+
+def record_approval_requested_metric(*, kind: str) -> None:
+    """Increment ``approval_requests_total`` when a new approval is created."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(kind=kind)
+
+    def _emit() -> None:
+        instruments.approval_requests_total.add(1, labels)
+
+    _record("approval_requests_total", _emit)
+
+
+def record_approval_expired_metric(*, kind: str) -> None:
+    """Increment ``approval_expired_total`` when a pending approval lapses."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(kind=kind)
+
+    def _emit() -> None:
+        instruments.approval_expired_total.add(1, labels)
+
+    _record("approval_expired_total", _emit)
+
+
+def record_approval_cancelled_metric(*, kind: str) -> None:
+    """Increment ``approval_cancelled_total`` when a requester withdraws."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(kind=kind)
+
+    def _emit() -> None:
+        instruments.approval_cancelled_total.add(1, labels)
+
+    _record("approval_cancelled_total", _emit)
 
 
 def record_hitl_resume_latency_ms(*, kind: str, latency_ms: int) -> None:

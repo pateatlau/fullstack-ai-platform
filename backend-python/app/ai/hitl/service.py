@@ -30,6 +30,7 @@ from app.ai.agent.state.manager import AgentStateManager
 from app.ai.hitl.exceptions import (
     AgentApprovalPauseError,
     ApprovalValidationError,
+    HitlError,
 )
 from app.ai.hitl.models import (
     AgentToolApproval,
@@ -38,9 +39,17 @@ from app.ai.hitl.models import (
     ApprovalRevision,
     ApprovalStatus,
     ProposedToolCall,
+    RequestMetadata,
+)
+from app.ai.hitl.notifications import (
+    ApprovalNotificationEvent,
+    ApprovalNotificationEventType,
+    NotificationDispatcher,
 )
 from app.ai.observability.metrics.instruments import (
     record_agent_tool_approval_pending_delta,
+    record_approval_cancelled_metric,
+    record_approval_requested_metric,
     record_hitl_decision_metrics,
     record_hitl_resume_latency_ms,
 )
@@ -55,6 +64,7 @@ from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext
 from app.ai.tools.validator import ToolValidator
 from app.db.models import ChatMessage
+from app.middleware.correlation_id import get_request_id
 
 
 def normalize_hitl_reason(reason: str | None, *, max_length: int) -> str | None:
@@ -109,6 +119,9 @@ class AgentApprovalStore(Protocol):
         proposed_calls: list[ProposedToolCall],
         paused_scratchpad: list[dict[str, object]],
         paused_state: dict[str, object],
+        expires_at: datetime.datetime | None = None,
+        required_stages: list[str] | None = None,
+        request_metadata: RequestMetadata | None = None,
     ) -> AgentToolApproval: ...
 
     async def link_pending_message(
@@ -151,8 +164,40 @@ class AgentApprovalStore(Protocol):
         status: ApprovalStatus,
         decided_by: uuid.UUID,
         reason: str | None = None,
+        comments: str | None = None,
         edited_calls: list[ProposedToolCall] | None = None,
+        request_metadata: RequestMetadata | None = None,
     ) -> AgentToolApproval: ...
+
+    async def cas_cancel(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        reason: str | None = None,
+        request_metadata: RequestMetadata | None = None,
+    ) -> AgentToolApproval: ...
+
+    async def append_stage_decision(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        stage: str,
+        decision: Literal["approved", "rejected"],
+        decided_by: uuid.UUID,
+        reason: str | None = None,
+        comments: str | None = None,
+    ) -> AgentToolApproval: ...
+
+    async def rollback_last_stage_decision(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        stage: str,
+        decision: Literal["approved", "rejected"],
+    ) -> None: ...
 
     async def list_revisions(
         self,
@@ -208,6 +253,8 @@ class AgentApprovalService:
         tool_executor: ToolExecutor | None = None,
         tool_validator: ToolValidator | None = None,
         scratchpad_store: ScratchpadStore | None = None,
+        approval_timeout_hours: int = 0,
+        notification_dispatcher: NotificationDispatcher | None = None,
     ) -> None:
         self._approval_store = approval_store
         self._chat_store = chat_store
@@ -215,6 +262,12 @@ class AgentApprovalService:
         self._tool_executor = tool_executor
         self._tool_validator = tool_validator or ToolValidator()
         self._scratchpad_store = scratchpad_store or get_scratchpad_store()
+        self._approval_timeout_hours = approval_timeout_hours
+        self._notification_dispatcher = notification_dispatcher
+
+    async def _notify(self, event: ApprovalNotificationEvent) -> None:
+        if self._notification_dispatcher is not None:
+            await self._notification_dispatcher.dispatch(event)
 
     async def pause(
         self,
@@ -228,6 +281,7 @@ class AgentApprovalService:
         stream_publisher: StreamPublisher,
         provider: str | None = None,
         model: str | None = None,
+        required_stages: list[str] | None = None,
     ) -> AgentToolApproval:
         """Snapshot state, persist approval + placeholder message, emit SSE event."""
         proposed_calls = _proposed_calls_from_step(step)
@@ -236,6 +290,8 @@ class AgentApprovalService:
             state,
             AgentExecutionStatus.WAITING_APPROVAL,
         )
+        expires_at = _compute_expires_at(self._approval_timeout_hours)
+        request_metadata = RequestMetadata(request_id=get_request_id())
         with approval_span(
             approval_id=str(approval_correlation_id),
             approval_kind=ApprovalKind.AGENT_TOOL.value,
@@ -249,6 +305,9 @@ class AgentApprovalService:
                 proposed_calls=proposed_calls,
                 paused_scratchpad=scratchpad.to_snapshot(),
                 paused_state=paused_state.model_dump(mode="json"),
+                expires_at=expires_at,
+                required_stages=required_stages,
+                request_metadata=request_metadata,
             )
 
             assistant_seq = await self._chat_store.allocate_seq(session_id)
@@ -281,12 +340,23 @@ class AgentApprovalService:
                 )
             )
             record_agent_tool_approval_pending_delta(1)
+            record_approval_requested_metric(kind=ApprovalKind.AGENT_TOOL.value)
             record_approval_span_outcome(
                 span,
                 approval_id=str(approval.id),
                 approval_status=ApprovalStatus.PENDING.value,
                 edited=False,
             )
+        await self._notify(
+            ApprovalNotificationEvent(
+                event_type=ApprovalNotificationEventType.REQUESTED,
+                approval_id=approval.id,
+                approval_kind=ApprovalKind.AGENT_TOOL,
+                occurred_at=approval.requested_at,
+                summary=f"Approval requested for {len(proposed_calls)} tool call(s).",
+                metadata={"execution_id": execution_id},
+            )
+        )
         return approval
 
     async def revise(
@@ -341,6 +411,8 @@ class AgentApprovalService:
         decision: Literal["approved", "rejected"],
         edited_calls: list[ProposedToolCall] | None = None,
         reason: str | None = None,
+        comments: str | None = None,
+        request_metadata: RequestMetadata | None = None,
     ) -> ApprovalResult:
         """Record a terminal decision. Approve path requires follow-up resume call."""
         approval = await self._approval_store.require_for_owner(
@@ -361,13 +433,27 @@ class AgentApprovalService:
                 approval_kind=ApprovalKind.AGENT_TOOL.value,
                 approval_correlation_id=str(approval.approval_correlation_id),
             ) as span:
-                decided = await self._approval_store.cas_decide(
-                    approval_id,
-                    owner_id=owner_id,
-                    status=ApprovalStatus.REJECTED,
-                    decided_by=owner_id,
-                    reason=reason,
-                )
+                if _has_outstanding_stages(approval):
+                    decided = await self._cas_decide_with_stage_append(
+                        approval_id,
+                        owner_id=owner_id,
+                        approval=approval,
+                        stage_decision="rejected",
+                        status=ApprovalStatus.REJECTED,
+                        reason=reason,
+                        comments=comments,
+                        request_metadata=request_metadata,
+                    )
+                else:
+                    decided = await self._approval_store.cas_decide(
+                        approval_id,
+                        owner_id=owner_id,
+                        status=ApprovalStatus.REJECTED,
+                        decided_by=owner_id,
+                        reason=reason,
+                        comments=comments,
+                        request_metadata=request_metadata,
+                    )
                 _emit_agent_decision_metrics(
                     span,
                     decided=decided,
@@ -381,6 +467,7 @@ class AgentApprovalService:
                     finish_reason="rejected",
                     clear_pending=True,
                 )
+            await self._notify_decided(decided)
             return _build_approval_result(
                 decided,
                 final_payload=_resolve_final_payload(decided),
@@ -388,19 +475,35 @@ class AgentApprovalService:
             )
 
         # Approved: validate first, CAS, then append inline revision on success.
+        _assert_terminal_approve_allowed(approval, approval_id)
         with approval_span(
             approval_id=str(approval_id),
             approval_kind=ApprovalKind.AGENT_TOOL.value,
             approval_correlation_id=str(approval.approval_correlation_id),
         ) as span:
-            decided = await self._approval_store.cas_decide(
-                approval_id,
-                owner_id=owner_id,
-                status=ApprovalStatus.APPROVED,
-                decided_by=owner_id,
-                reason=reason,
-                edited_calls=edited_calls,
-            )
+            if _has_outstanding_stages(approval):
+                decided = await self._cas_decide_with_stage_append(
+                    approval_id,
+                    owner_id=owner_id,
+                    approval=approval,
+                    stage_decision="approved",
+                    status=ApprovalStatus.APPROVED,
+                    reason=reason,
+                    comments=comments,
+                    edited_calls=edited_calls,
+                    request_metadata=request_metadata,
+                )
+            else:
+                decided = await self._approval_store.cas_decide(
+                    approval_id,
+                    owner_id=owner_id,
+                    status=ApprovalStatus.APPROVED,
+                    decided_by=owner_id,
+                    reason=reason,
+                    comments=comments,
+                    edited_calls=edited_calls,
+                    request_metadata=request_metadata,
+                )
             if edited_calls is not None:
                 await self._approval_store.append_revision(
                     approval_id=approval_id,
@@ -415,10 +518,129 @@ class AgentApprovalService:
                 decision="approved",
                 edited=_has_edits(decided),
             )
+        await self._notify_decided(decided)
         return _build_approval_result(
             decided,
             final_payload=_resolve_final_payload(decided),
             edited=_has_edits(decided),
+        )
+
+    async def record_stage_approval(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        reason: str | None = None,
+        comments: str | None = None,
+    ) -> ApprovalResult:
+        """Record one intermediate multi-stage checklist approval (recommendation #5).
+
+        Used only when :attr:`AgentToolApproval.required_stages` has more than
+        one outstanding stage after this decision — the approval stays
+        ``pending`` and no tool execution happens. Callers must route the
+        *final* stage's approval through :meth:`approve_and_resume` instead.
+        """
+        approval = await self._approval_store.require_for_owner(
+            approval_id,
+            owner_id=owner_id,
+        )
+        if not _has_outstanding_stages(approval) or _is_final_stage(approval):
+            raise ApprovalValidationError(
+                f"Approval {approval_id} must be finalized via decide()/"
+                "approve_and_resume(), not record_stage_approval()."
+            )
+        updated = await self._approval_store.append_stage_decision(
+            approval_id,
+            owner_id=owner_id,
+            stage=_current_stage(approval),
+            decision="approved",
+            decided_by=owner_id,
+            reason=reason,
+            comments=comments,
+        )
+        return ApprovalResult(
+            approval_id=updated.id,
+            approval_kind=ApprovalKind.AGENT_TOOL,
+            status=updated.status,
+            edited=_has_edits(updated),
+            final_payload=_resolve_final_payload(updated),
+            reason=reason,
+            approver=owner_id,
+            decided_at=datetime.datetime.now(datetime.UTC),
+            approval_correlation_id=updated.approval_correlation_id,
+            comments=comments,
+            outstanding_stages=_remaining_stages(updated),
+        )
+
+    async def cancel(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        reason: str | None = None,
+        request_metadata: RequestMetadata | None = None,
+    ) -> ApprovalResult:
+        """Withdraw a pending approval request (recommendation #2).
+
+        Distinct from ``rejected``: cancellation is a requester-initiated
+        withdrawal (for example the underlying chat/tool call is no longer
+        needed), not a reviewer declining the request.
+        """
+        approval = await self._approval_store.require_for_owner(
+            approval_id,
+            owner_id=owner_id,
+        )
+        with approval_span(
+            approval_id=str(approval_id),
+            approval_kind=ApprovalKind.AGENT_TOOL.value,
+            approval_correlation_id=str(approval.approval_correlation_id),
+        ) as span:
+            cancelled = await self._approval_store.cas_cancel(
+                approval_id,
+                owner_id=owner_id,
+                reason=reason,
+                request_metadata=request_metadata,
+            )
+            record_agent_tool_approval_pending_delta(-1)
+            record_approval_cancelled_metric(kind=ApprovalKind.AGENT_TOOL.value)
+            record_approval_span_outcome(
+                span,
+                approval_status=ApprovalStatus.CANCELLED.value,
+                edited=_has_edits(cancelled),
+            )
+            await self._update_placeholder_message(
+                cancelled,
+                content="",
+                status="stopped",
+                finish_reason="cancelled",
+                clear_pending=True,
+            )
+        await self._notify(
+            ApprovalNotificationEvent(
+                event_type=ApprovalNotificationEventType.CANCELLED,
+                approval_id=cancelled.id,
+                approval_kind=ApprovalKind.AGENT_TOOL,
+                occurred_at=cancelled.decided_at or datetime.datetime.now(datetime.UTC),
+                summary="Approval request cancelled by requester.",
+                metadata={},
+            )
+        )
+        return _build_approval_result(
+            cancelled,
+            final_payload=_resolve_final_payload(cancelled),
+            edited=_has_edits(cancelled),
+        )
+
+    async def _notify_decided(self, decided: AgentToolApproval) -> None:
+        await self._notify(
+            ApprovalNotificationEvent(
+                event_type=ApprovalNotificationEventType.DECIDED,
+                approval_id=decided.id,
+                approval_kind=ApprovalKind.AGENT_TOOL,
+                occurred_at=decided.decided_at or datetime.datetime.now(datetime.UTC),
+                summary=f"Approval {decided.status.value} by reviewer.",
+                metadata={"decision": decided.status.value},
+            )
         )
 
     async def approve_and_resume(
@@ -433,6 +655,8 @@ class AgentApprovalService:
         stream_publisher: StreamPublisher,
         edited_calls: list[ProposedToolCall] | None = None,
         reason: str | None = None,
+        comments: str | None = None,
+        request_metadata: RequestMetadata | None = None,
     ) -> tuple[ApprovalResult, AgentResponse]:
         """Record approval, execute gated tools, and resume the ReAct loop."""
         approval = await self._approval_store.require_for_owner(
@@ -447,20 +671,37 @@ class AgentApprovalService:
                 self._tool_validator,
             )
 
+        _assert_terminal_approve_allowed(approval, approval_id)
+
         resume_start = time.perf_counter()
         with approval_span(
             approval_id=str(approval_id),
             approval_kind=ApprovalKind.AGENT_TOOL.value,
             approval_correlation_id=str(approval.approval_correlation_id),
         ) as span:
-            decided = await self._approval_store.cas_decide(
-                approval_id,
-                owner_id=owner_id,
-                status=ApprovalStatus.APPROVED,
-                decided_by=owner_id,
-                reason=reason,
-                edited_calls=edited_calls,
-            )
+            if _has_outstanding_stages(approval):
+                decided = await self._cas_decide_with_stage_append(
+                    approval_id,
+                    owner_id=owner_id,
+                    approval=approval,
+                    stage_decision="approved",
+                    status=ApprovalStatus.APPROVED,
+                    reason=reason,
+                    comments=comments,
+                    edited_calls=edited_calls,
+                    request_metadata=request_metadata,
+                )
+            else:
+                decided = await self._approval_store.cas_decide(
+                    approval_id,
+                    owner_id=owner_id,
+                    status=ApprovalStatus.APPROVED,
+                    decided_by=owner_id,
+                    reason=reason,
+                    comments=comments,
+                    edited_calls=edited_calls,
+                    request_metadata=request_metadata,
+                )
             if edited_calls is not None:
                 await self._approval_store.append_revision(
                     approval_id=approval_id,
@@ -475,6 +716,7 @@ class AgentApprovalService:
                 decision="approved",
                 edited=_has_edits(decided),
             )
+            await self._notify_decided(decided)
             result = _build_approval_result(
                 decided,
                 final_payload=_resolve_final_payload(decided),
@@ -612,6 +854,50 @@ class AgentApprovalService:
         if approval.pending_message_id is None:
             return None
         return await self._chat_store.get_message(approval.pending_message_id)
+
+    async def _cas_decide_with_stage_append(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        approval: AgentToolApproval,
+        stage_decision: Literal["approved", "rejected"],
+        status: ApprovalStatus,
+        reason: str | None = None,
+        comments: str | None = None,
+        edited_calls: list[ProposedToolCall] | None = None,
+        request_metadata: RequestMetadata | None = None,
+    ) -> AgentToolApproval:
+        """Append the current stage, then CAS — rolling back the append on failure."""
+        stage = _current_stage(approval)
+        await self._approval_store.append_stage_decision(
+            approval_id,
+            owner_id=owner_id,
+            stage=stage,
+            decision=stage_decision,
+            decided_by=owner_id,
+            reason=reason,
+            comments=comments,
+        )
+        try:
+            return await self._approval_store.cas_decide(
+                approval_id,
+                owner_id=owner_id,
+                status=status,
+                decided_by=owner_id,
+                reason=reason,
+                comments=comments,
+                edited_calls=edited_calls,
+                request_metadata=request_metadata,
+            )
+        except HitlError:
+            await self._approval_store.rollback_last_stage_decision(
+                approval_id,
+                owner_id=owner_id,
+                stage=stage,
+                decision=stage_decision,
+            )
+            raise
 
     async def _execute_approved_calls(
         self,
@@ -769,7 +1055,53 @@ def _build_approval_result(
         approver=approval.decided_by,
         decided_at=decided_at,
         approval_correlation_id=approval.approval_correlation_id,
+        comments=approval.comments,
     )
+
+
+def _compute_expires_at(
+    approval_timeout_hours: int,
+) -> datetime.datetime | None:
+    """``None`` disables expiry (matches the ``hitl_approval_timeout_hours=0`` default)."""
+    if approval_timeout_hours <= 0:
+        return None
+    return datetime.datetime.now(datetime.UTC) + datetime.timedelta(
+        hours=approval_timeout_hours
+    )
+
+
+def _remaining_stages(approval: AgentToolApproval) -> list[str]:
+    """Required stages not yet recorded in ``stage_decisions``."""
+    return approval.required_stages[len(approval.stage_decisions) :]
+
+
+def _has_outstanding_stages(approval: AgentToolApproval) -> bool:
+    """True while at least one required checklist stage has no decision yet."""
+    return bool(_remaining_stages(approval))
+
+
+def _assert_terminal_approve_allowed(
+    approval: AgentToolApproval,
+    approval_id: uuid.UUID,
+) -> None:
+    """Reject decide/approve_and_resume when intermediate checklist stages remain."""
+    if _has_outstanding_stages(approval) and not _is_final_stage(approval):
+        raise ApprovalValidationError(
+            f"Approval {approval_id} has intermediate checklist stages remaining; "
+            "use record_stage_approval() before finalizing via decide()/"
+            "approve_and_resume()."
+        )
+
+
+def _is_final_stage(approval: AgentToolApproval) -> bool:
+    """True when exactly one required stage remains (the caller may finalize)."""
+    return len(_remaining_stages(approval)) == 1
+
+
+def _current_stage(approval: AgentToolApproval) -> str:
+    remaining = _remaining_stages(approval)
+    assert remaining, "caller must check _has_outstanding_stages first"
+    return remaining[0]
 
 
 def _extract_last_planner_content(scratchpad: Scratchpad) -> str | None:

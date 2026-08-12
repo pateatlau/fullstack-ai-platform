@@ -721,6 +721,7 @@ class AgentToolApprovalRecord(Base):
     proposed_calls: Mapped[list[object]] = mapped_column(JSONB, nullable=False)
     edited_calls: Mapped[list[object] | None] = mapped_column(JSONB, nullable=True)
     reason: Mapped[str | None] = mapped_column(nullable=True)
+    comments: Mapped[str | None] = mapped_column(nullable=True)
     paused_scratchpad: Mapped[list[object]] = mapped_column(JSONB, nullable=False)
     paused_state: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     pending_message_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -737,6 +738,25 @@ class AgentToolApprovalRecord(Base):
     decided_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    # Lazy expiration (recommendation #3): NULL disables expiry for this row.
+    expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    # Audit metadata (recommendation #4).
+    request_id: Mapped[str | None] = mapped_column(nullable=True)
+    source_ip: Mapped[str | None] = mapped_column(nullable=True)
+    client_metadata: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # Multi-stage approval checklist scaffold (recommendation #5).
+    required_stages: Mapped[list[object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    stage_decisions: Mapped[list[object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    # Optimistic-locking version counter (recommendation #8).
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     created_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
     )

@@ -14,6 +14,7 @@ from app.ai.hitl.models import (
     ApprovalResult,
     ApprovalRevision,
     ProposedToolCall,
+    StageDecision,
 )
 
 DEFAULT_APPROVALS_LIST_LIMIT = 50
@@ -29,6 +30,35 @@ class ApprovalDecideRequest(BaseModel):
     decision: Literal["approved", "rejected"]
     edited_calls: list[ProposedToolCall] | None = None
     reason: str | None = None
+    comments: str | None = None
+
+
+class StageDecisionResponse(BaseModel):
+    """One recorded multi-stage checklist step returned by the approvals API."""
+
+    stage: str
+    decision: Literal["approved", "rejected"]
+    decided_by: uuid.UUID
+    decided_at: datetime.datetime
+    reason: str | None = None
+    comments: str | None = None
+
+    @classmethod
+    def from_domain(cls, entry: StageDecision) -> StageDecisionResponse:
+        return cls(
+            stage=entry.stage,
+            decision=entry.decision,
+            decided_by=entry.decided_by,
+            decided_at=entry.decided_at,
+            reason=entry.reason,
+            comments=entry.comments,
+        )
+
+
+class ApprovalCancelRequest(BaseModel):
+    """Body for requester-initiated withdrawal (recommendation #2)."""
+
+    reason: str | None = None
 
 
 class ApprovalResultResponse(BaseModel):
@@ -38,9 +68,13 @@ class ApprovalResultResponse(BaseModel):
     edited: bool
     final_payload: dict[str, object] | list[ProposedToolCall] | None
     reason: str | None
+    comments: str | None = None
     approver: uuid.UUID | None
     decided_at: datetime.datetime
     approval_correlation_id: uuid.UUID
+    # Non-empty only while a multi-stage checklist (recommendation #5) still
+    # has stages left to decide (status remains ``pending``).
+    outstanding_stages: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_domain(cls, result: ApprovalResult) -> ApprovalResultResponse:
@@ -51,9 +85,11 @@ class ApprovalResultResponse(BaseModel):
             edited=result.edited,
             final_payload=result.final_payload,
             reason=result.reason,
+            comments=result.comments,
             approver=result.approver,
             decided_at=result.decided_at,
             approval_correlation_id=result.approval_correlation_id,
+            outstanding_stages=result.outstanding_stages,
         )
 
 
@@ -71,9 +107,13 @@ class ApprovalAuditEntryResponse(BaseModel):
     decided_by: uuid.UUID | None = None
     decision: str | None = None
     reason: str | None = None
+    comments: str | None = None
     edited: bool = False
     revision_count: int = 0
     decide_url: str
+    expires_at: datetime.datetime | None = None
+    required_stages: list[str] = Field(default_factory=list)
+    stage_decisions: list[StageDecisionResponse] = Field(default_factory=list)
 
     @classmethod
     def from_domain(cls, entry: ApprovalAuditEntry) -> ApprovalAuditEntryResponse:
@@ -91,9 +131,16 @@ class ApprovalAuditEntryResponse(BaseModel):
             decided_by=entry.decided_by,
             decision=entry.decision,
             reason=entry.reason,
+            comments=entry.comments,
             edited=entry.edited,
             revision_count=entry.revision_count,
             decide_url=entry.decide_url,
+            expires_at=entry.expires_at,
+            required_stages=entry.required_stages,
+            stage_decisions=[
+                StageDecisionResponse.from_domain(stage)
+                for stage in entry.stage_decisions
+            ],
         )
 
 

@@ -42,6 +42,9 @@ class ApprovalDecision(StrEnum):
     REJECTED = "rejected"
 
 
+APPROVAL_REQUESTED_AT_OUTPUT_KEY = "approval_requested_at"
+
+
 class WorkflowRun(BaseModel):
     """A single execution instance of a workflow definition."""
 
@@ -93,3 +96,21 @@ class WorkflowNodeExecution(BaseModel):
     reason: str | None = None
     started_at: datetime.datetime | None = None
     completed_at: datetime.datetime | None = None
+
+
+def workflow_approval_requested_at(
+    execution: WorkflowNodeExecution,
+    *,
+    run_created_at: datetime.datetime,
+) -> datetime.datetime:
+    """Return when the node entered ``waiting_approval`` (HITL request time)."""
+    if isinstance(execution.output, dict):
+        raw = execution.output.get(APPROVAL_REQUESTED_AT_OUTPUT_KEY)
+        if isinstance(raw, str):
+            parsed = datetime.datetime.fromisoformat(raw)
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=datetime.UTC)
+            return parsed
+    if execution.started_at is not None:
+        return execution.started_at
+    return run_created_at

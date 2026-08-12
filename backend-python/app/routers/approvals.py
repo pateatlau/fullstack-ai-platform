@@ -8,7 +8,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Literal, NoReturn
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.ai.agent.adapters.chat_adapter import _chat_agent_system_prompt
@@ -27,12 +27,19 @@ from app.ai.deps import (
 )
 from app.ai.hitl.exceptions import (
     ApprovalDecisionConflictError,
+    ApprovalExpiredError,
     ApprovalNotFoundError,
     ApprovalValidationError,
     HitlError,
 )
-from app.ai.hitl.models import AgentToolApproval, ApprovalKind, ApprovalStatus
-from app.ai.hitl.service import AgentApprovalService
+from app.ai.hitl.models import (
+    AgentToolApproval,
+    ApprovalKind,
+    ApprovalStatus,
+    RequestMetadata,
+)
+from app.ai.hitl.request_metadata import build_request_metadata
+from app.ai.hitl.service import AgentApprovalService, normalize_hitl_reason
 from app.ai.hitl.store import ApprovalsStore
 from app.ai.tools.schemas import ToolExecutionContext
 from app.core.caller import CallerContext, require_authenticated_caller
@@ -44,6 +51,7 @@ from app.middleware.correlation_id import get_request_id
 from app.schemas.approvals import (
     ApprovalAuditEntryResponse,
     ApprovalAuditListResponse,
+    ApprovalCancelRequest,
     ApprovalDecideRequest,
     ApprovalResultResponse,
     ApprovalRevisionResponse,
@@ -66,12 +74,24 @@ def _require_hitl_enabled(settings: Settings) -> None:
         )
 
 
+def _request_metadata_from_request(
+    request: Request, settings: Settings
+) -> RequestMetadata:
+    return build_request_metadata(request, settings)
+
+
 def _raise_hitl_error(exc: HitlError) -> NoReturn:
     if isinstance(exc, ApprovalNotFoundError):
         raise AppError(
             code="approval_not_found",
             message=str(exc),
             status_code=404,
+        ) from exc
+    if isinstance(exc, ApprovalExpiredError):
+        raise AppError(
+            code="approval_expired",
+            message=str(exc),
+            status_code=409,
         ) from exc
     if isinstance(exc, ApprovalDecisionConflictError):
         raise AppError(
@@ -95,6 +115,8 @@ def _raise_hitl_error(exc: HitlError) -> NoReturn:
 def _sse_error_from_hitl(exc: HitlError, *, response_id: str) -> str:
     if isinstance(exc, ApprovalDecisionConflictError):
         code = "approval_decision_conflict"
+    elif isinstance(exc, ApprovalExpiredError):
+        code = "approval_expired"
     elif isinstance(exc, ApprovalNotFoundError):
         code = "approval_not_found"
     elif isinstance(exc, ApprovalValidationError):
@@ -239,6 +261,7 @@ async def list_approval_revisions(
 async def decide_agent_approval(
     approval_id: uuid.UUID,
     body: ApprovalDecideRequest,
+    http_request: Request,
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     approval_service: AgentApprovalService = Depends(get_agent_approval_service),
@@ -248,13 +271,23 @@ async def decide_agent_approval(
     bind_context(user_id=str(caller.user_id))
     _require_hitl_enabled(settings)
 
+    reason = normalize_hitl_reason(
+        body.reason, max_length=settings.hitl_max_reason_length
+    )
+    comments = normalize_hitl_reason(
+        body.comments, max_length=settings.hitl_max_comment_length
+    )
+    request_metadata = _request_metadata_from_request(http_request, settings)
+
     if body.decision == "rejected":
         try:
             result = await approval_service.decide(
                 approval_id,
                 owner_id=caller.user_id,
                 decision="rejected",
-                reason=body.reason,
+                reason=reason,
+                comments=comments,
+                request_metadata=request_metadata,
             )
         except HitlError as exc:
             _raise_hitl_error(exc)
@@ -278,12 +311,30 @@ async def decide_agent_approval(
             status_code=409,
         )
 
+    # Multi-stage checklist (recommendation #5): only the *final* outstanding
+    # stage executes tools via the SSE resume flow below. Earlier stages just
+    # record a checklist entry and stay pending.
+    if _remaining_stage_count(approval) > 1:
+        try:
+            result = await approval_service.record_stage_approval(
+                approval_id,
+                owner_id=caller.user_id,
+                reason=reason,
+                comments=comments,
+            )
+        except HitlError as exc:
+            _raise_hitl_error(exc)
+        return ApprovalResultResponse.from_domain(result)
+
     placeholder = await approval_service.get_placeholder_message(approval)
 
     return StreamingResponse(
         _stream_approved_decision(
             approval_id=approval_id,
             body=body,
+            reason=reason,
+            comments=comments,
+            request_metadata=request_metadata,
             caller=caller,
             settings=settings,
             approval_service=approval_service,
@@ -295,10 +346,49 @@ async def decide_agent_approval(
     )
 
 
+def _remaining_stage_count(approval: AgentToolApproval) -> int:
+    return len(approval.required_stages) - len(approval.stage_decisions)
+
+
+@router.post(
+    "/api/approvals/{approval_id}/cancel",
+    response_model=ApprovalResultResponse,
+)
+async def cancel_agent_approval(
+    approval_id: uuid.UUID,
+    body: ApprovalCancelRequest,
+    http_request: Request,
+    caller: CallerContext = Depends(require_authenticated_caller),
+    settings: Settings = Depends(get_settings),
+    approval_service: AgentApprovalService = Depends(get_agent_approval_service),
+) -> ApprovalResultResponse:
+    """Requester-initiated withdrawal of a still-pending approval (recommendation #2)."""
+    assert caller.user_id is not None
+    bind_context(user_id=str(caller.user_id))
+    _require_hitl_enabled(settings)
+
+    reason = normalize_hitl_reason(
+        body.reason, max_length=settings.hitl_max_reason_length
+    )
+    try:
+        result = await approval_service.cancel(
+            approval_id,
+            owner_id=caller.user_id,
+            reason=reason,
+            request_metadata=_request_metadata_from_request(http_request, settings),
+        )
+    except HitlError as exc:
+        _raise_hitl_error(exc)
+    return ApprovalResultResponse.from_domain(result)
+
+
 async def _stream_approved_decision(
     *,
     approval_id: uuid.UUID,
     body: ApprovalDecideRequest,
+    reason: str | None,
+    comments: str | None,
+    request_metadata: RequestMetadata,
     caller: CallerContext,
     settings: Settings,
     approval_service: AgentApprovalService,
@@ -341,7 +431,9 @@ async def _stream_approved_decision(
                 tool_context=tool_context,
                 stream_publisher=publisher,
                 edited_calls=body.edited_calls,
-                reason=body.reason,
+                reason=reason,
+                comments=comments,
+                request_metadata=request_metadata,
             )
         finally:
             await publisher.close()

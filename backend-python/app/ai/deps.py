@@ -17,7 +17,9 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
+    from app.ai.hitl.notifications import NotificationDispatcher
     from app.ai.hitl.policy import ApprovalPolicy
+    from app.ai.hitl.rules import RulePolicyEngine
     from app.ai.hitl.store import ApprovalsStore
     from app.ai.hitl.service import AgentApprovalService
     from app.ai.mcp.registry import McpServerRegistry
@@ -158,21 +160,96 @@ def get_tool_executor(
     return _create_tool_executor(registry=registry, settings=settings)
 
 
+def get_hitl_rule_engine(
+    settings: Settings = Depends(get_ai_settings),
+) -> "RulePolicyEngine | None":
+    """Return the rule-based approval policy engine (recommendation #1).
+
+    ``None`` when unconfigured, so ``ApprovalPolicy`` falls back to the
+    legacy ``requires_approval``/``hitl_required_tool_names`` gate exactly as
+    before rule support existed.
+    """
+    if not settings.hitl_policy_rules:
+        return None
+    from app.ai.hitl.rules import RulePolicyEngine, load_rules_from_config
+
+    return RulePolicyEngine(load_rules_from_config(settings.hitl_policy_rules))
+
+
 def get_approval_policy(
     settings: Settings = Depends(get_ai_settings),
+    rule_engine: "RulePolicyEngine | None" = Depends(get_hitl_rule_engine),
 ) -> "ApprovalPolicy":
     """Return the process-wide approval policy from settings."""
     from app.ai.hitl.policy import ApprovalPolicy
 
     return ApprovalPolicy(
         required_tool_names=frozenset(settings.hitl_required_tool_names),
+        rule_engine=rule_engine,
+        environment=settings.app_env,
     )
+
+
+@lru_cache
+def get_hitl_notification_dispatcher() -> "NotificationDispatcher | None":
+    """Return the process-wide outbound approval notification dispatcher.
+
+    ``None`` when no providers are configured, matching ``ApprovalPolicy``'s
+    "absent means legacy/no-op behavior" convention.
+    """
+    settings = get_settings()
+    if not settings.hitl_notification_providers:
+        return None
+    from app.ai.hitl.notifications import (
+        DiscordNotificationProvider,
+        InAppNotificationProvider,
+        NotificationDispatcher,
+        NotificationProvider,
+        SlackNotificationProvider,
+        TeamsNotificationProvider,
+        WebhookNotificationProvider,
+    )
+
+    def _webhook_provider(
+        factory: Callable[..., NotificationProvider], webhook_url: str | None
+    ) -> NotificationProvider:
+        # ``Settings.validate_hitl_requirements`` already fails startup if a
+        # listed provider is missing its URL, so this is just narrowing the
+        # optional type for the constructor below.
+        assert webhook_url is not None
+        return factory(
+            webhook_url=webhook_url,
+            timeout_seconds=settings.hitl_notification_timeout_seconds,
+        )
+
+    provider_factories: dict[str, Callable[[], NotificationProvider]] = {
+        "webhook": lambda: _webhook_provider(
+            WebhookNotificationProvider, settings.hitl_notification_webhook_url
+        ),
+        "slack": lambda: _webhook_provider(
+            SlackNotificationProvider, settings.hitl_notification_slack_webhook_url
+        ),
+        "teams": lambda: _webhook_provider(
+            TeamsNotificationProvider, settings.hitl_notification_teams_webhook_url
+        ),
+        "discord": lambda: _webhook_provider(
+            DiscordNotificationProvider, settings.hitl_notification_discord_webhook_url
+        ),
+        "in_app": InAppNotificationProvider,
+    }
+    providers = [
+        provider_factories[name]()
+        for name in settings.hitl_notification_providers
+        if name in provider_factories
+    ]
+    return NotificationDispatcher(providers)
 
 
 def get_agent_approval_service(
     session: AsyncSession = Depends(get_db_session),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
     tool_executor: ToolExecutor = Depends(get_tool_executor),
+    settings: Settings = Depends(get_ai_settings),
 ) -> "AgentApprovalService":
     """Return a request-scoped agent approval orchestrator."""
     from app.ai.hitl.service import AgentApprovalService
@@ -180,20 +257,29 @@ def get_agent_approval_service(
     from app.db.chat import SqlChatStore
 
     return AgentApprovalService(
-        approval_store=AgentToolApprovalStore(session),
+        approval_store=AgentToolApprovalStore(
+            session,
+            client_audit_retention_days=settings.hitl_client_audit_retention_days,
+        ),
         chat_store=SqlChatStore(session),
         tool_registry=tool_registry,
         tool_executor=tool_executor,
+        approval_timeout_hours=settings.hitl_approval_timeout_hours,
+        notification_dispatcher=get_hitl_notification_dispatcher(),
     )
 
 
 def get_approvals_store(
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_ai_settings),
 ) -> "ApprovalsStore":
     """Return a request-scoped unified approvals read store."""
     from app.ai.hitl.store import ApprovalsStore
 
-    return ApprovalsStore(session)
+    return ApprovalsStore(
+        session,
+        client_audit_retention_days=settings.hitl_client_audit_retention_days,
+    )
 
 
 def get_agent_runtime(

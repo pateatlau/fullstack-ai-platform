@@ -241,8 +241,36 @@ class Settings(BaseSettings):
     # phases. Flag-off keeps all Epic 08 pipeline paths unchanged.
     hitl_enabled: bool = False
     hitl_required_tool_names: list[str] = Field(default_factory=list)
+    # 0 disables expiration; a pending approval past its timeout is lazily
+    # transitioned to ``expired`` the next time it is read/decided/revised.
     hitl_approval_timeout_hours: int = Field(default=0, ge=0)
     hitl_max_reason_length: int = Field(default=2000, ge=1)
+    hitl_max_comment_length: int = Field(default=2000, ge=1)
+    # Pending-only client audit fields (``source_ip``, ``client_metadata``) are
+    # redacted on terminal transitions and purged after this many days even if
+    # the approval is still pending. ``0`` disables time-based purge.
+    hitl_client_audit_retention_days: int = Field(default=90, ge=0)
+    # When true, resolve ``source_ip`` from the leftmost ``X-Forwarded-For``
+    # hop; otherwise use the direct ASGI client address.
+    hitl_trust_forwarded_client_ip: bool = False
+    hitl_max_user_agent_length: int = Field(default=512, ge=1)
+
+    # Rule-based approval policy (recommendation #1): an ordered list of rule
+    # dicts evaluated against tool name/category/risk/caller/environment/
+    # arguments. Empty list preserves the legacy ``requires_approval`` /
+    # ``hitl_required_tool_names`` gating exactly. See ``app/ai/hitl/rules.py``
+    # for the condition/outcome schema.
+    hitl_policy_rules: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Outbound approval notifications (recommendation #6). Providers fire
+    # best-effort (failures are logged, never raised) alongside the existing
+    # SSE/inbox notification path.
+    hitl_notification_providers: list[str] = Field(default_factory=list)
+    hitl_notification_webhook_url: str | None = None
+    hitl_notification_slack_webhook_url: str | None = None
+    hitl_notification_teams_webhook_url: str | None = None
+    hitl_notification_discord_webhook_url: str | None = None
+    hitl_notification_timeout_seconds: float = Field(default=5.0, gt=0.0)
 
     # OpenTelemetry configuration (honoured only when OBSERVABILITY_ENABLED=true).
     otel_service_name: str = "fullstack-ai-platform"
@@ -513,6 +541,47 @@ class Settings(BaseSettings):
                 "Set it in backend-python/.env (see .env.example)."
             )
 
+    def validate_hitl_requirements(self) -> None:
+        """Fail fast when a configured notification provider has no target URL."""
+        if not self.hitl_notification_providers:
+            return
+
+        supported_providers = {
+            "webhook",
+            "slack",
+            "teams",
+            "discord",
+            "in_app",
+        }
+        seen: set[str] = set()
+        for provider in self.hitl_notification_providers:
+            if provider in seen:
+                raise ValueError(
+                    f"HITL_NOTIFICATION_PROVIDERS contains duplicate entry "
+                    f"'{provider}'."
+                )
+            seen.add(provider)
+
+        provider_url_settings = {
+            "webhook": self.hitl_notification_webhook_url,
+            "slack": self.hitl_notification_slack_webhook_url,
+            "teams": self.hitl_notification_teams_webhook_url,
+            "discord": self.hitl_notification_discord_webhook_url,
+        }
+        for provider in self.hitl_notification_providers:
+            if provider not in supported_providers:
+                supported = ", ".join(sorted(supported_providers))
+                raise ValueError(
+                    f"Unsupported HITL_NOTIFICATION_PROVIDERS entry '{provider}'. "
+                    f"Supported providers: {supported}."
+                )
+            required_url = provider_url_settings.get(provider)
+            if provider in provider_url_settings and not required_url:
+                raise ValueError(
+                    f"HITL_NOTIFICATION_PROVIDERS includes '{provider}' but its "
+                    f"webhook URL setting is not configured."
+                )
+
     def validate_workflow_requirements(self) -> None:
         """Fail fast when Workflow Engine is enabled but configuration is invalid."""
         if not self.workflow_engine_enabled:
@@ -561,6 +630,7 @@ class Settings(BaseSettings):
         self.validate_voice_requirements()
         self.validate_memory_requirements()
         self.validate_workflow_requirements()
+        self.validate_hitl_requirements()
         self.validate_production_requirements()
 
 

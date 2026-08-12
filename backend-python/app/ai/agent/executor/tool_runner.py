@@ -23,8 +23,9 @@ from app.ai.agent.retry.executor import retry_operation
 from app.ai.agent.retry.policies import ToolRetryPolicy
 from app.ai.agent.scratchpad.scratchpad import Scratchpad
 from app.ai.agent.streaming.publisher import NoOpStreamPublisher
-from app.ai.hitl.exceptions import HitlError
+from app.ai.hitl.exceptions import HitlError, ToolCallRejectedByPolicyError
 from app.ai.hitl.policy import ApprovalPolicy
+from app.ai.hitl.rules import RuleOutcome
 from app.ai.hitl.service import AgentApprovalService, raise_pause
 from app.ai.observability.tracing.spans import (
     agent_span,
@@ -108,6 +109,7 @@ class ToolRunner:
         await self._preflight_approval_for_steps(
             steps,
             execution_id=execution_id,
+            tool_context=tool_context,
             scratchpad=scratchpad,
             state=state,
             session_id=session_id,
@@ -229,6 +231,7 @@ class ToolRunner:
         step: PlannedStep,
         *,
         execution_id: str,
+        tool_context: ToolExecutionContext,
         scratchpad: Scratchpad | None,
         state: AgentExecutionState | None,
         session_id: uuid.UUID | None,
@@ -242,8 +245,19 @@ class ToolRunner:
             raise HitlError(
                 "HITL is enabled but ToolRunner is missing ToolRegistry or ApprovalPolicy."
             )
-        if not _step_requires_approval(step, self._registry, self._approval_policy):
+        outcome = _evaluate_step_policy(
+            step,
+            self._registry,
+            self._approval_policy,
+            tool_context,
+        )
+        if outcome is None or outcome.outcome is RuleOutcome.AUTO_APPROVE:
             return
+        if outcome.outcome is RuleOutcome.REJECT:
+            raise ToolCallRejectedByPolicyError(
+                outcome.tool_name,
+                matched_rule=outcome.matched_rule,
+            )
         if self._approval_service is None:
             raise HitlError(
                 "HITL is enabled but ToolRunner is missing AgentApprovalService."
@@ -267,6 +281,7 @@ class ToolRunner:
             stream_publisher=self._publisher,
             provider=provider,
             model=model,
+            required_stages=outcome.required_stages,
         )
         raise_pause(approval)
 
@@ -275,6 +290,7 @@ class ToolRunner:
         steps: list[PlannedStep],
         *,
         execution_id: str,
+        tool_context: ToolExecutionContext,
         scratchpad: Scratchpad | None,
         state: AgentExecutionState | None,
         session_id: uuid.UUID | None,
@@ -289,6 +305,7 @@ class ToolRunner:
             await self._maybe_pause_for_approval(
                 step,
                 execution_id=execution_id,
+                tool_context=tool_context,
                 scratchpad=scratchpad,
                 state=state,
                 session_id=session_id,
@@ -384,16 +401,54 @@ class ToolRunner:
             return exc.result
 
 
-def _step_requires_approval(
+@dataclass(frozen=True, slots=True)
+class _StepPolicyOutcome:
+    """First non-auto-approve rule outcome found among a step's tool calls."""
+
+    tool_name: str
+    outcome: RuleOutcome
+    matched_rule: str | None
+    required_stages: list[str]
+
+
+def _evaluate_step_policy(
     step: PlannedStep,
     registry: ToolRegistry,
     policy: ApprovalPolicy,
-) -> bool:
+    tool_context: ToolExecutionContext,
+) -> _StepPolicyOutcome | None:
+    """Evaluate the rule-based policy for every call in a step.
+
+    A ``reject`` outcome takes priority over ``require_approval`` so a single
+    blocked call halts the step even when a sibling call would otherwise
+    pause for review.
+
+    ``caller_role``, ``workspace``, ``tenant``, and ``estimated_cost`` are
+    sourced from :meth:`ToolExecutionContext.trusted_policy_kwargs` (server
+    metadata) — never from LLM tool arguments.
+    """
+    pending: _StepPolicyOutcome | None = None
     for call in step.tool_calls:
         tool = registry.get(call.name)
-        if tool is not None and policy.requires_approval(tool):
-            return True
-    return False
+        if tool is None:
+            continue
+        decision = policy.evaluate(
+            tool,
+            arguments=call.arguments,
+            **tool_context.trusted_policy_kwargs(),
+        )
+        if decision.outcome is RuleOutcome.AUTO_APPROVE:
+            continue
+        found = _StepPolicyOutcome(
+            tool_name=tool.name,
+            outcome=decision.outcome,
+            matched_rule=decision.matched_rule,
+            required_stages=decision.required_stages,
+        )
+        if found.outcome is RuleOutcome.REJECT:
+            return found
+        pending = pending or found
+    return pending
 
 
 def _resolve_call_id(call: ToolCall, *, step_id: str) -> str:

@@ -62,6 +62,7 @@ from app.ai.workflow.models import (
     WorkflowDefinition,
     WorkflowNodeExecution,
     WorkflowRun,
+    workflow_approval_requested_at,
 )
 from app.ai.workflow.models.run import normalize_idempotency_key
 from app.ai.workflow.nodes.approval_node import (
@@ -471,6 +472,7 @@ class WorkflowManager:
 
         updated_run: WorkflowRun | None = None
         decided_execution: WorkflowNodeExecution | None = None
+        approval_requested_at: datetime.datetime | None = None
         run_status_after_decision: RunStatus | None = None
         reject_ends_run = False
         approval_node_id = ""
@@ -597,6 +599,10 @@ class WorkflowManager:
                 }
             )
             approval_node_id = approval_node.id
+            approval_requested_at = workflow_approval_requested_at(
+                execution,
+                run_created_at=run.created_at,
+            )
 
             try:
                 decided_execution = await self._store.record_approval_decision(
@@ -636,6 +642,7 @@ class WorkflowManager:
         assert updated_run is not None
         assert definition is not None
         assert decided_execution is not None
+        assert approval_requested_at is not None
 
         approval_result = _build_workflow_approval_result(
             decided_execution, decision=decision
@@ -647,11 +654,6 @@ class WorkflowManager:
             ApprovalStatus.APPROVED.value
             if decision is ApprovalDecision.APPROVED
             else ApprovalStatus.REJECTED.value
-        )
-        requested_at = (
-            decided_execution.started_at
-            or decided_execution.decided_at
-            or datetime.datetime.now(datetime.UTC)
         )
         resume_start = time.perf_counter()
         with approval_span(
@@ -666,7 +668,7 @@ class WorkflowManager:
                 execution=decided_execution,
                 decision_label=decision_label,
                 status_label=status_label,
-                requested_at=requested_at,
+                requested_at=approval_requested_at,
             )
             if reject_ends_run:
                 return updated_run, approval_result

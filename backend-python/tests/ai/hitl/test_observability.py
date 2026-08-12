@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, patch
@@ -43,8 +44,13 @@ from app.ai.tools.schemas import (
 )
 from app.ai.tools.stubs.echo import ECHO_TOOL_DEFINITION, echo_handler
 from app.providers.base import ProviderToolCall, ProviderToolCompletion
+from app.ai.observability.tracing.spans import hitl_decision_latency_ms
 from app.ai.workflow.manager import WorkflowManager
 from app.ai.workflow.models import ApprovalDecision, NodeType, RunStatus
+from app.ai.workflow.models.run import (
+    APPROVAL_REQUESTED_AT_OUTPUT_KEY,
+    workflow_approval_requested_at,
+)
 from app.ai.workflow.nodes.approval_node import ApprovalNodeExecutor
 from app.ai.prompts.manager import create_prompt_manager
 from app.core.caller import CallerContext
@@ -575,6 +581,76 @@ async def test_workflow_apply_decision_emits_span_and_metrics(
     assert _metric_sum(reader, "approval_decisions_total") >= 1.0
     assert _metric_present(reader, "hitl_approval_decision_latency_ms")
     assert _metric_present(reader, "hitl_resume_latency_ms")
+
+
+async def test_workflow_decision_latency_uses_waiting_approval_timestamp(
+    observability_stack: tuple[InMemorySpanExporter, InMemoryMetricReader],
+) -> None:
+    exporter, _reader = observability_stack
+    owner_id = uuid.uuid4()
+    store = FakeWorkflowStore()
+    definition = await store.create_definition(_approval_linear_definition(owner_id))
+    manager = WorkflowManager(
+        store,
+        node_executors={
+            NodeType.TASK: FakeTaskExecutor(),
+            NodeType.APPROVAL: ApprovalNodeExecutor(),
+        },
+    )
+    run = await manager.start_run(
+        definition.id, owner_id=owner_id, idempotency_key="key-obs-latency"
+    )
+    await _await_scheduled(manager)
+    with_executions = await store.get_run_with_executions(run.id, owner_id=owner_id)
+    assert with_executions is not None
+    run, executions = with_executions
+    approval_execution = next(
+        execution for execution in executions if execution.node_id == "approve"
+    )
+    assert isinstance(approval_execution.output, dict)
+    assert APPROVAL_REQUESTED_AT_OUTPUT_KEY in approval_execution.output
+
+    old_started = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=2)
+    pause_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=10)
+    approval_execution = await store.append_node_execution(
+        approval_execution.model_copy(
+            update={
+                "started_at": old_started,
+                "output": {
+                    **approval_execution.output,
+                    APPROVAL_REQUESTED_AT_OUTPUT_KEY: pause_at.isoformat(),
+                },
+            }
+        )
+    )
+
+    await manager.apply_decision(
+        run.id,
+        approval_execution.id,
+        owner_id=owner_id,
+        decision=ApprovalDecision.APPROVED,
+    )
+    await _await_scheduled(manager)
+
+    decided = store._executions[approval_execution.id]
+    assert decided.decided_at is not None
+    expected_latency_ms = hitl_decision_latency_ms(
+        workflow_approval_requested_at(
+            approval_execution, run_created_at=run.created_at
+        ),
+        decided.decided_at,
+    )
+    assert expected_latency_ms is not None
+    assert expected_latency_ms < 20 * 60 * 1000
+
+    decide_spans = [
+        span
+        for span in _approval_spans(exporter)
+        if dict(span.attributes or {}).get("decision_latency_ms") is not None
+    ]
+    assert decide_spans
+    recorded_latency = dict(decide_spans[-1].attributes or {})["decision_latency_ms"]
+    assert recorded_latency == expected_latency_ms
 
 
 async def test_workflow_apply_decision_records_metrics_before_continue_fails(
