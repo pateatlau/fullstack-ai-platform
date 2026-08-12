@@ -2,7 +2,7 @@
 epic: v2-10
 title: Background Jobs
 status: not_started
-version: 1
+version: 3
 depends_on: [v2-02, v2-06, v2-07, v2-09]
 provides:
   [
@@ -17,6 +17,7 @@ provides:
     PostgresJobQueue,
     JobWorker,
     JobScheduler,
+    JobScheduleStore,
     QueueIndexingRunner,
     BACKGROUND_JOBS_ENABLED,
     jobs_router,
@@ -53,7 +54,7 @@ Introduce a durable, provider-agnostic **background job execution platform** —
 
 **Delivers:** A `JobQueue` protocol with a `PostgresJobQueue` default implementation (new `background_jobs` table, claimed via `SELECT … FOR UPDATE SKIP LOCKED` with a lease timeout so a crashed worker's claim is automatically reclaimable — no separate startup reconciliation step, unlike Epic 06's `reconcile_orphaned_runs`); a `JobHandlerRegistry` mapping `job_type` strings to handler coroutines, mirroring `ToolRegistry`'s registration style; a `JobWorker` that polls, claims, executes, and retries with exponential backoff (capped, then `dead_letter`); a `JobScheduler` that evaluates interval-based `background_job_schedules` rows and enqueues idempotent jobs on their due tick; five first-class job handlers closing the named gaps above — `hitl_approval_expiry_sweep`, `hitl_orphaned_snapshot_sweep`, `workflow_run_retention_cleanup`, `rag_document_indexing` (a new `QueueIndexingRunner` implementing the existing `IndexingJob` protocol), and `scheduled_evaluation_run`; additive `chat_messages.status`/`workflow_node_executions.decision` CHECK extensions so expiry has a terminal state to land on; a read-only + operator-action **Jobs REST API** (`GET /api/jobs`, `GET /api/jobs/{id}`, `POST /api/jobs/{id}/retry`, `GET /api/jobs/schedules`); observability (job spans/metrics, health fields); reference eval scenarios covering retry exhaustion, dead-letter, worker-crash mid-job, and duplicate-claim races; and a minimal read-only frontend jobs/schedules dashboard — all behind `BACKGROUND_JOBS_ENABLED=false` (default).
 
-**Does not ship:** a distributed message broker (Redis/Celery/RQ/SQS) — the queue is Postgres-backed by design (`workflow_provider="postgres"` precedent, "avoid over-engineering"); the `JobQueue` protocol is the swap point if a future epic needs one, but none is implemented in V2; cron-expression scheduling (interval-seconds only in V2 — see Locked Decisions); multi-process/multi-replica worker *deployment* orchestration (the claim-and-lease mechanism is safe for N workers in N processes/replicas polling the same table, but V2 ships and documents a single in-process worker task per app instance, same "single-process posture" as Epic 06); migrating Epic 06's `schedule_run_task`/`reconcile_orphaned_runs` (initial workflow-run launch) or Epic 05's `schedule_extraction_task`/`schedule_lifecycle_task` (memory extraction) onto the new queue — those already work, are already tested, and are explicitly out of scope (see Locked Decisions "Scope of migration"); a generic "run arbitrary code" job API for plugin authors (Epic 08's own extension surface is unrelated; a plugin-triggered job type is `TODO(future):`); job priority tiers (FIFO by `run_at` only); a schedule-authoring UI (schedules are seeded via migration/config in V2, not visually authored); and an `ApprovalStatus.CANCELLED` sweep (analysis below shows no V2 code path leaves an agent tool approval orphaned-but-not-deleted — see Locked Decisions "Cancelled sweep").
+**Does not ship:** a distributed message broker (Redis/Celery/RQ/SQS) — the queue is Postgres-backed by design (`workflow_provider="postgres"` precedent, "avoid over-engineering"); the `JobQueue` protocol is the swap point if a future epic needs one, but none is implemented in V2; cron-expression scheduling (interval-seconds only in V2 — see Locked Decisions); multi-process/multi-replica worker _deployment_ orchestration (the claim-and-lease mechanism is safe for N workers in N processes/replicas polling the same table, but V2 ships and documents a single in-process worker task per app instance, same "single-process posture" as Epic 06); migrating Epic 06's `schedule_run_task`/`reconcile_orphaned_runs` (initial workflow-run launch) or Epic 05's `schedule_extraction_task`/`schedule_lifecycle_task` (memory extraction) onto the new queue — those already work, are already tested, and are explicitly out of scope (see Locked Decisions "Scope of migration"); a generic "run arbitrary code" job API for plugin authors (Epic 08's own extension surface is unrelated; a plugin-triggered job type is `TODO(future):`); job priority tiers (FIFO by `run_at` only); a schedule-authoring UI (schedules are seeded via migration/config in V2, not visually authored); and an `ApprovalStatus.CANCELLED` sweep (analysis below shows no V2 code path leaves an agent tool approval orphaned-but-not-deleted — see Locked Decisions "Cancelled sweep").
 
 Capabilities:
 
@@ -73,12 +74,14 @@ The Background Jobs capability is additive. When disabled, existing chat, RAG, M
 - Platform-first — one `JobQueue`/`JobWorker`/`JobScheduler` triad consulted by every deferred background-work gap (HITL, workflow retention, RAG indexing, evaluation), not a bespoke poller per feature
 - Composition over coupling — a **new**, additive primitive; Epic 06's `schedule_run_task` and Epic 05's `schedule_extraction_task` are left exactly as shipped (see Locked Decisions "Scope of migration") rather than forcing an unrelated rewrite of tested, working code
 - No new infrastructure — the queue is backed by the same PostgreSQL instance every other durable table already uses; no Redis, no broker, no new Docker Compose service
-- Interface-driven — `JobQueue` (enqueue/claim/complete/fail/get/list) and `JobHandler` (one `job_type` → one async callable) are the only two contracts callers/handler authors depend on
+- Interface-driven — `JobQueue` (enqueue/claim/complete/fail/cancel/get/list) and `JobHandler` (one `job_type` → one async callable) are the only two contracts callers/handler authors depend on
 - Explicit lifecycle — a job's state (`queued → running → succeeded|failed|dead_letter|cancelled`) is durable in Postgres from the moment it is enqueued; a worker process crash never silently loses a job (lease expiry makes it reclaimable)
 - Idempotent by construction — every enqueue accepts an optional `idempotency_key`; the scheduler always supplies one (`{schedule_name}:{tick}`) so a reconciliation replay or a double-fired scheduler tick can never double-enqueue the same scheduled work
+- Handler idempotency required — the queue guarantees at-least-once delivery (lease reclaim); every handler must be safe to execute more than once
 - Fail-safe retries — bounded exponential backoff with a hard `max_attempts` ceiling; a job that exhausts retries becomes `dead_letter` (visible, retriable by an operator) rather than silently disappearing or retrying forever
 - Feature-flag rollout
 - Avoid over-engineering — no priority queues, no cron parser, no distributed coordination protocol beyond row-level locking; reuse the codebase's existing Compare-And-Swap/claim idioms (Epic 06/09) generalized one level
+- Polling over push — workers and the scheduler poll Postgres on fixed intervals rather than using `LISTEN/NOTIFY` or an external broker; polling is simpler to operate, survives connection drops without missed notifications, and is sufficient at V2 throughput (see § Throughput & Scalability Assumptions and § Polling vs Alternatives)
 
 ---
 
@@ -86,20 +89,24 @@ The Background Jobs capability is additive. When disabled, existing chat, RAG, M
 
 ### In Scope
 
-- Background Jobs core (`app/ai/jobs/`): `BackgroundJob`, `JobStatus`, `JobResult`, `JobSchedule`, `ScheduleStatus`, `JobHandler`, `JobHandlerRegistry`, `JobQueue` protocol, `PostgresJobQueue`, `JobWorker`, `JobScheduler`, exceptions
+- Background Jobs core (`app/ai/jobs/`): `BackgroundJob`, `JobStatus`, `JobResult`, `JobSchedule`, `ScheduleStatus`, `JobHandler`, `JobHandlerRegistry`, `JobQueue` protocol, `PostgresJobQueue`, `JobWorker`, `JobScheduler`, `JobScheduleStore`, exceptions
 - `BACKGROUND_JOBS_ENABLED` feature flag (default `false`) plus per-handler/scheduling config (see § Configuration defaults)
 - New tables `background_jobs`, `background_job_schedules` (Postgres); additive `chat_messages.status` CHECK gains `'expired'`; additive `workflow_node_executions.decision` CHECK gains `'expired'`
 - **Claim-and-lease worker loop** — a single `SELECT … FOR UPDATE SKIP LOCKED` query claims both freshly-queued jobs (`status='queued' AND run_at<=now()`) and lease-expired in-flight jobs (`status='running' AND locked_at < now() - lease`) in one statement; no separate startup reconciliation pass is required (a design improvement generalizing Epic 06's `reconcile_orphaned_runs`, which only runs once at process start)
 - **Retry policy** — uniform exponential backoff (`base_delay_seconds * 2**attempt_count`, capped at `retry_max_delay_seconds`) applied by the worker on handler failure; `dead_letter` once `attempt_count >= max_attempts`
 - **Recurring jobs** — `background_job_schedules` rows evaluated by `JobScheduler` on a fixed poll interval; interval-seconds only (no cron expression parsing in V2 — see Locked Decisions)
-- **Five first-class job handlers**, each closing a named prior-epic gap (see § Job Handlers — Domain Model for full detail):
-  1. `hitl_approval_expiry_sweep` — enforces `hitl_approval_timeout_hours` (agent tool approvals) and `workflow_approval_timeout_hours` (workflow approval nodes); transitions timed-out `pending` rows to `expired`
-  2. `hitl_orphaned_snapshot_sweep` — detects `agent_tool_approvals` rows stuck `approved` with a non-null pause snapshot past a grace period (crash between Decision Execution Stage 1 and Stage 4) and attempts a safe resume, or fails the turn after exhausting attempts
-  3. `workflow_run_retention_cleanup` — purges terminal (`completed`/`failed`/`cancelled`) `workflow_runs` (cascading `workflow_node_executions`) older than `workflow_run_retention_days`
-  4. `rag_document_indexing` via `QueueIndexingRunner` — implements the existing `IndexingJob` protocol (`app/ai/interfaces/indexing_job.py`) on top of the new queue, selectable via `rag_indexing_runner` config alongside the unchanged default `SyncIndexingRunner`
-  5. `scheduled_evaluation_run` — invokes the existing `app/ai/evaluation` runner programmatically on a schedule and stores the report summary as the job's `result`
+- **Five first-class job handlers**, grouped by category (see § Job Handlers — Domain Model for full detail):
+  - **Sweep jobs** — periodic scans that transition stale rows:
+    1. `hitl_approval_expiry_sweep` — enforces `hitl_approval_timeout_hours` (agent tool approvals) and `workflow_approval_timeout_hours` (workflow approval nodes); transitions timed-out `pending` rows to `expired`
+    2. `hitl_orphaned_snapshot_sweep` — detects `agent_tool_approvals` rows stuck `approved` with a non-null pause snapshot past a grace period (crash between Decision Execution Stage 1 and Stage 4) and attempts a safe resume, or fails the turn after exhausting attempts
+  - **Cleanup jobs** — retention and purge:
+    3. `workflow_run_retention_cleanup` — purges terminal (`completed`/`failed`/`cancelled`) `workflow_runs` (cascading `workflow_node_executions`) older than `workflow_run_retention_days`
+  - **Processing jobs** — on-demand async work:
+    4. `rag_document_indexing` via `QueueIndexingRunner` — implements the existing `IndexingJob` protocol (`app/ai/interfaces/indexing_job.py`) on top of the new queue, selectable via `rag_indexing_runner` config alongside the unchanged default `SyncIndexingRunner`
+  - **Scheduled jobs** — recurring programmatic invocations:
+    5. `scheduled_evaluation_run` — invokes the existing `app/ai/evaluation` runner programmatically on a schedule and stores the report summary as the job's `result`
 - Jobs REST API — authenticated, operator-facing (no per-owner scoping — jobs are system-level, not user-owned records): list/detail/retry/schedules-list
-- Observability hooks — `job_span` (`job_id`, `job_type`, `job_status`, `attempt_count`), `jobs_enqueued_total`, `jobs_completed_total`, `job_duration_ms`, `job_retries_total`, `jobs_pending_count`, `jobs_dead_letter_count` (when `OBSERVABILITY_ENABLED`)
+- Observability hooks — `job_span` (`job_id`, `job_type`, `job_status`, `attempt_count`); **queue metrics** (`jobs_enqueued_total`, `jobs_completed_total`, `job_retries_total`, `jobs_pending_count`, `jobs_dead_letter_count`) separate from **handler metrics** (`job_duration_ms` per handler type) — see § Observability (when `OBSERVABILITY_ENABLED`)
 - Evaluation cases exercising each handler's happy path plus adversarial/edge cases (retry exhaustion → dead-letter, worker crash mid-job → lease reclaim, duplicate claim race, scheduler double-tick idempotency)
 - Minimal read-only frontend jobs/schedules dashboard with a manual "retry" action on dead-lettered jobs
 
@@ -107,13 +114,13 @@ The Background Jobs capability is additive. When disabled, existing chat, RAG, M
 
 - A distributed broker (Redis/Celery/RQ/SQS) — `JobQueue` is the swap point for a future epic, not implemented here
 - Cron-expression scheduling — `background_job_schedules.interval_seconds` only; a `cron_expression` column is a documented future extension point, not added now
-- Multi-process worker *orchestration* (process supervision, autoscaling) — the claim-and-lease query is safe under concurrent pollers, but V2 runs exactly one `JobWorker` asyncio task per app instance, same posture as Epic 06's single in-process executor
+- Multi-process worker _orchestration_ (process supervision, autoscaling) — the claim-and-lease query is safe under concurrent pollers, but V2 runs exactly one `JobWorker` asyncio task per app instance, same posture as Epic 06's single in-process executor
 - Migrating `schedule_run_task`/`reconcile_orphaned_runs` (Epic 06) or `schedule_extraction_task`/`schedule_lifecycle_task` (Epic 05) onto the new queue — both keep working exactly as shipped (see Locked Decisions "Scope of migration")
 - `ApprovalStatus.CANCELLED` sweep — no V2 code path orphans an `agent_tool_approvals` row without deleting it (session deletion cascades via `ON DELETE CASCADE`); the reserved enum value remains unimplemented, deferred again (see Locked Decisions "Cancelled sweep")
 - Job priority levels/tiers — strict FIFO by `run_at`
 - A visual schedule-authoring UI — schedules are seeded via migration/config; the frontend dashboard is read-only plus a retry action
 - RBAC-scoped job visibility, per-tenant job isolation (Epic 11)
-- Moving Epic 09's HITL "Decision Execution Stages 2–4" (resume scheduled → tool execution → continuation) off the synchronous request/response cycle for the *primary* approve flow — Epic 09 Part I named this as a future possibility, not a requirement; the decide endpoint's existing synchronous SSE-continuation behaviour is unchanged in V2 (see Locked Decisions "Decision Execution Stages")
+- Moving Epic 09's HITL "Decision Execution Stages 2–4" (resume scheduled → tool execution → continuation) off the synchronous request/response cycle for the _primary_ approve flow — Epic 09 Part I named this as a future possibility, not a requirement; the decide endpoint's existing synchronous SSE-continuation behaviour is unchanged in V2 (see Locked Decisions "Decision Execution Stages")
 - General-purpose plugin-triggered background jobs (Epic 08's plugin SDK is untouched)
 
 ---
@@ -130,58 +137,66 @@ The Background Jobs capability is additive. When disabled, existing chat, RAG, M
                                           ▼
                           ┌───────────────────────────────┐
                           │       PostgresJobQueue         │
-                          │  background_jobs table         │
+                          │  background_jobs (+ version)   │
                           │  SELECT … FOR UPDATE SKIP LOCKED│
                           └───────────────┬─────────────────┘
                     enqueue │                          │ claim (batch)
                             │                          ▼
         ┌───────────────────┼──────────────┐   ┌─────────────────┐
         │                   │              │   │    JobWorker    │
-        ▼                   ▼              ▼   │  poll → claim → │
+        ▼                   │              ▼   │  poll → claim → │
  JobScheduler         REST callers    Feature   │  dispatch →     │
  (recurring ticks)    (manual retry)  code paths │  complete/fail  │
-        │                                        │  (backoff/DLQ)  │
+        │ uses                                   │  (backoff/DLQ)  │
         ▼                                        └────────┬────────┘
- background_job_schedules                                  │ resolves job_type
-        │                                                   ▼
-        │                                        ┌─────────────────────┐
-        │                                        │  JobHandlerRegistry  │
-        │                                        └──────────┬───────────┘
-        │                                                   │
-        ▼                                                   ▼
-  seeds recurring ticks for            hitl_approval_expiry_sweep · hitl_orphaned_snapshot_sweep ·
-  each first-class handler             workflow_run_retention_cleanup · rag_document_indexing ·
-                                        scheduled_evaluation_run
-                                                   │
-                                                   ▼
-                                   job_span / metrics (when Observability on)
+ JobScheduleStore                                         │ resolves job_type
+ (list_due / advance)                                     ▼
+        │                                     ┌─────────────────────┐
+        ▼                                     │  JobHandlerRegistry  │
+ background_job_schedules                     └──────────┬───────────┘
+                                                         │
+        hitl_approval_expiry_sweep · hitl_orphaned_snapshot_sweep ·
+        workflow_run_retention_cleanup · rag_document_indexing ·
+        scheduled_evaluation_run
+                                                         │
+                                                         ▼
+                                   job_span / queue + handler metrics
+                                   (when Observability on)
 ```
 
-**One queue, many consumers:** `JobQueue`/`JobWorker` are consumed identically regardless of *why* the work exists — a periodic sweep (via `JobScheduler`), an on-demand enqueue (`QueueIndexingRunner.submit()` called from `KnowledgeService.ingest_document`), or a manual operator retry (`POST /api/jobs/{id}/retry`) all funnel through the same `enqueue`/`claim`/`complete`/`fail` contract and the same worker loop.
+**One queue, many consumers:** `JobQueue`/`JobWorker` are consumed identically regardless of _why_ the work exists — a periodic sweep (via `JobScheduler`), an on-demand enqueue (`QueueIndexingRunner.submit()` called from `KnowledgeService.ingest_document`), or a manual operator retry (`POST /api/jobs/{id}/retry`) all funnel through the same `enqueue`/`claim`/`complete`/`fail` contract and the same worker loop.
 
 ---
 
 ## Locked Architectural Decisions
 
-| Topic | Decision | Deferred to |
-| ----- | -------- | ----------- |
-| Queue backend | PostgreSQL-backed (`background_jobs` table, `SELECT … FOR UPDATE SKIP LOCKED`); no Redis/Celery/RQ — matches the platform's "no new infrastructure" posture (`workflow_provider="postgres"` precedent) | A pluggable non-Postgres `JobQueue` implementation (e.g. Redis-backed) → future, only if scale requires it |
-| Scope of migration | Epic 06's `schedule_run_task`/`reconcile_orphaned_runs` (workflow run launch) and Epic 05's `schedule_extraction_task`/`schedule_lifecycle_task` (memory extraction) are **not** migrated onto the new queue in V2 — both are already tested, working, in-process `asyncio.create_task` patterns; this epic adds the generic primitive and wires only the five named first-class handlers onto it | Generalizing all in-process background tasks onto one queue → future, only if a concrete need (e.g. multi-replica deployment) arises |
-| Claim mechanism | A single `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED)` claims both due `queued` jobs and lease-expired `running` jobs in one round trip; no separate "reconcile at startup" pass is needed — the next poll cycle naturally reclaims a crashed worker's job once its lease (`locked_at`) expires | Distributed lease coordination beyond single-Postgres row locking → future |
-| Recurring schedule granularity | `background_job_schedules.interval_seconds` (fixed interval from `next_run_at`); no cron expression parser | Cron-expression scheduling → future |
-| Retry policy | Exponential backoff: `retry_base_delay_seconds * 2 ** attempt_count`, capped at `retry_max_delay_seconds`; `status=dead_letter` once `attempt_count >= max_attempts` (default `3`, overridable per-enqueue) | Per-job-type custom backoff curves → future (today all handlers share one policy, configurable per enqueue call via `max_attempts` only) |
-| Idempotency | `background_jobs.idempotency_key` is a nullable-but-unique column; `JobScheduler` always supplies `f"{schedule.name}:{scheduled_tick.isoformat()}"`; `enqueue()` treats a unique-violation on this key as "already enqueued" and returns the existing row rather than raising, so a scheduler double-tick or a reconciliation replay is a safe no-op | — |
-| HITL approval expiry (agent surface) | `hitl_approval_expiry_sweep` finds `agent_tool_approvals` rows `status='pending'` with `requested_at + hitl_approval_timeout_hours < now()` (skipped entirely when `hitl_approval_timeout_hours=0`, the default); Compare-And-Swap (CAS) transitions `pending → expired`; the linked placeholder `ChatMessage.status` is set to the new additive `'expired'` value; no tool ever executes for an expired approval | Configurable per-tool timeout overrides → future |
-| HITL approval expiry (workflow surface) | `hitl_approval_expiry_sweep` finds `workflow_node_executions` rows `node_type='approval'`, `status='waiting_approval'` with `requested_at`-equivalent (`started_at`) `+ workflow_approval_timeout_hours < now()` (skipped when `0`); Compare-And-Swap (CAS) transitions the node to `status='failed'`, `decision='expired'` (new additive CHECK value) — reusing Epic 06's existing "node failed → run follows failure/rejected edge or ends" continuation path verbatim, not a new run-state transition | — |
-| HITL orphaned snapshot sweep | `hitl_orphaned_snapshot_sweep` finds `agent_tool_approvals` rows `status='approved'` with a non-null `paused_scratchpad`/`paused_state` whose `decided_at` is older than `hitl_orphan_sweep_grace_seconds` (a crash between Decision Execution Stage 1 and Stage 4 per Epic 09 § Snapshot Cleanup Strategy); the handler re-runs Stage 2–4 (rehydrate → execute any not-yet-executed approved calls → `AgentExecutor.resume_from_approval()`) exactly as `AgentApprovalService.decide()` already does, just invoked from a job instead of a request; on repeated failure past `max_attempts`, the linked `ChatMessage.status` is set to `error` and the snapshot columns are nulled (fail-safe, matching Epic 09's documented cleanup contract) | Automatic re-planning around a failed orphan-resume → future |
-| Cancelled sweep | Not implemented — audited every V2 code path that removes a session/run/plugin: chat session deletion cascades `agent_tool_approvals` via `ON DELETE CASCADE` (hard delete, no `cancelled` transition needed); `WorkflowManager.cancel_run()` already transitions a `waiting_approval` node to `NodeStatus.CANCELLED` inline (no sweep needed — Epic 06 handles this synchronously today). `ApprovalStatus.CANCELLED` remains a reserved-but-unused enum value | A future resource type that soft-deletes without cascading (e.g. a shared/team-owned approval queue, Epic 11) may need this sweep |
-| Workflow run retention | `workflow_run_retention_cleanup` deletes `workflow_runs` (cascading `workflow_node_executions` via existing `ON DELETE CASCADE`) where `status IN ('completed','failed','cancelled')` and `updated_at < now() - workflow_run_retention_days`; runs on `background_job_schedules` (default daily); `workflow_run_retention_days=90` unchanged default | Configurable retention by workflow definition or a soft-delete/archive tier instead of hard delete → future |
-| RAG queue-backed indexing | New `rag_indexing_runner: Literal["sync", "queue"] = "sync"` config selects between the existing `SyncIndexingRunner` (unchanged default) and the new `QueueIndexingRunner`; `QueueIndexingRunner.submit()` enqueues a `rag_document_indexing` job (payload: document id, owner id — never raw file bytes, see § Security Model) instead of awaiting the processor inline, and `get_status()` maps `BackgroundJob.status`/`result`/`last_error` onto the existing `IndexingJobStatus` shape (`IndexingJob` protocol is unchanged — no caller-visible API break) | A durable object-storage handoff for large files (today the caller still holds bytes in memory until the worker consumes them via a re-fetch path — see Implementation Risks) → future |
-| Scheduled evaluation | `scheduled_evaluation_run` invokes the existing `app/ai/evaluation` CLI's underlying runner function in-process (no subprocess spawn) with a configured `--level`; the produced report path/summary is stored on `BackgroundJob.result`; disabled by default (`evaluation_schedule_enabled=false`) — enabling it does not change `make eval`'s manual invocation path | Storing historical eval trend data / a dedicated eval-history table → future |
-| Job payload/result content | `payload`/`result` columns are `jsonb`; handlers must only place ids, small scalars, and short status strings there — never raw file bytes, provider credentials, or full tool-argument payloads (mirrors HITL's "Secrets in audit" rule) | — |
-| Concurrency | Claim uses `SELECT … FOR UPDATE SKIP LOCKED`, the same non-blocking concurrent-claim idiom used nowhere else yet in this codebase but standard Postgres practice; two workers racing for the same row never block each other or double-claim | — |
-| Job visibility | Jobs are system-level (not user-owned); `GET /api/jobs`/`GET /api/jobs/{id}` are authenticated (`get_current_caller`) but **not** owner-scoped in V2 — any authenticated user can see job type/status/timing/attempt metadata (never `payload`/`result` contents beyond the redaction allowlist in § Security Model) | RBAC-gated operator-only visibility → Epic 11 |
-| Decision Execution Stages (HITL) | Epic 09's decide-endpoint synchronous approve→execute→continue flow is **unchanged** in V2; this epic does not move Stages 2–4 off the request/response cycle for the primary approve path (only the *orphaned* crash-recovery case runs through the queue, via `hitl_orphaned_snapshot_sweep`) | An opt-in "enqueue instead of stream inline" approve mode → future |
+| Topic                                   | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Deferred to                                                                                                                                                                            |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Queue backend                           | PostgreSQL-backed (`background_jobs` table, `SELECT … FOR UPDATE SKIP LOCKED`); no Redis/Celery/RQ — matches the platform's "no new infrastructure" posture (`workflow_provider="postgres"` precedent)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | A pluggable non-Postgres `JobQueue` implementation (e.g. Redis-backed) → future, only if scale requires it                                                                             |
+| Scope of migration                      | Epic 06's `schedule_run_task`/`reconcile_orphaned_runs` (workflow run launch) and Epic 05's `schedule_extraction_task`/`schedule_lifecycle_task` (memory extraction) are **not** migrated onto the new queue in V2 — both are already tested, working, in-process `asyncio.create_task` patterns; this epic adds the generic primitive and wires only the five named first-class handlers onto it                                                                                                                                                                                                                                                                                                                                               | Generalizing all in-process background tasks onto one queue → future, only if a concrete need (e.g. multi-replica deployment) arises                                                   |
+| Claim mechanism                         | A single `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED)` claims both due `queued` jobs and lease-expired `running` jobs in one round trip; no separate "reconcile at startup" pass is needed — the next poll cycle naturally reclaims a crashed worker's job once its lease (`locked_at`) expires                                                                                                                                                                                                                                                                                                                                                                                                                                      | Distributed lease coordination beyond single-Postgres row locking → future                                                                                                             |
+| Recurring schedule granularity          | `background_job_schedules.interval_seconds` (fixed interval from `next_run_at`); no cron expression parser                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Cron-expression scheduling → future                                                                                                                                                    |
+| Retry policy                            | Exponential backoff: `retry_base_delay_seconds * 2 ** attempt_count`, capped at `retry_max_delay_seconds`; `status=dead_letter` once `attempt_count >= max_attempts` (default `3`, overridable per-enqueue)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Per-job-type custom backoff curves → future (today all handlers share one policy, configurable per enqueue call via `max_attempts` only)                                               |
+| Idempotency                             | `background_jobs.idempotency_key` is a nullable-but-unique column; `JobScheduler` always supplies `f"{schedule.name}:{scheduled_tick.isoformat()}"`; `enqueue()` treats a unique-violation on this key as "already enqueued" and returns the existing row rather than raising, so a scheduler double-tick or a reconciliation replay is a safe no-op                                                                                                                                                                                                                                                                                                                                                                                            | —                                                                                                                                                                                      |
+| HITL approval expiry (agent surface)    | `hitl_approval_expiry_sweep` finds `agent_tool_approvals` rows `status='pending'` with `requested_at + hitl_approval_timeout_hours < now()` (skipped entirely when `hitl_approval_timeout_hours=0`, the default); Compare-And-Swap (CAS) transitions `pending → expired`; the linked placeholder `ChatMessage.status` is set to the new additive `'expired'` value; no tool ever executes for an expired approval                                                                                                                                                                                                                                                                                                                               | Configurable per-tool timeout overrides → future                                                                                                                                       |
+| HITL approval expiry (workflow surface) | `hitl_approval_expiry_sweep` finds `workflow_node_executions` rows `node_type='approval'`, `status='waiting_approval'` with `requested_at`-equivalent (`started_at`) `+ workflow_approval_timeout_hours < now()` (skipped when `0`); Compare-And-Swap (CAS) transitions the node to `status='failed'`, `decision='expired'` (new additive CHECK value) — reusing Epic 06's existing "node failed → run follows failure/rejected edge or ends" continuation path verbatim, not a new run-state transition                                                                                                                                                                                                                                        | —                                                                                                                                                                                      |
+| HITL orphaned snapshot sweep            | `hitl_orphaned_snapshot_sweep` finds `agent_tool_approvals` rows `status='approved'` with a non-null `paused_scratchpad`/`paused_state` whose `decided_at` is older than `hitl_orphan_sweep_grace_seconds` (a crash between Decision Execution Stage 1 and Stage 4 per Epic 09 § Snapshot Cleanup Strategy); the handler re-runs Stage 2–4 (rehydrate → execute any not-yet-executed approved calls → `AgentExecutor.resume_from_approval()`) exactly as `AgentApprovalService.decide()` already does, just invoked from a job instead of a request; on repeated failure past `max_attempts`, the linked `ChatMessage.status` is set to `error` and the snapshot columns are nulled (fail-safe, matching Epic 09's documented cleanup contract) | Automatic re-planning around a failed orphan-resume → future                                                                                                                           |
+| Cancelled sweep                         | Not implemented — audited every V2 code path that removes a session/run/plugin: chat session deletion cascades `agent_tool_approvals` via `ON DELETE CASCADE` (hard delete, no `cancelled` transition needed); `WorkflowManager.cancel_run()` already transitions a `waiting_approval` node to `NodeStatus.CANCELLED` inline (no sweep needed — Epic 06 handles this synchronously today). `ApprovalStatus.CANCELLED` remains a reserved-but-unused enum value                                                                                                                                                                                                                                                                                  | A future resource type that soft-deletes without cascading (e.g. a shared/team-owned approval queue, Epic 11) may need this sweep                                                      |
+| Workflow run retention                  | `workflow_run_retention_cleanup` deletes `workflow_runs` (cascading `workflow_node_executions` via existing `ON DELETE CASCADE`) where `status IN ('completed','failed','cancelled')` and `updated_at < now() - workflow_run_retention_days`; runs on `background_job_schedules` (default daily); `workflow_run_retention_days=90` unchanged default                                                                                                                                                                                                                                                                                                                                                                                            | Configurable retention by workflow definition or a soft-delete/archive tier instead of hard delete → future                                                                            |
+| RAG queue-backed indexing               | New `rag_indexing_runner: Literal["sync", "queue"] = "sync"` config selects between the existing `SyncIndexingRunner` (unchanged default) and the new `QueueIndexingRunner`; `QueueIndexingRunner.submit()` enqueues a `rag_document_indexing` job (payload: `{"version": 1, "document_id", "user_id"}` — never raw file bytes, see § Security Model) instead of awaiting the processor inline, and `get_status()` maps `BackgroundJob.status`/`result`/`last_error` onto the existing `IndexingJobStatus` shape (`IndexingJob` protocol is unchanged — no caller-visible API break)                                                                                                                                                                                 | A durable object-storage handoff for large files (today the caller still holds bytes in memory until the worker consumes them via a re-fetch path — see Implementation Risks) → future |
+| Scheduled evaluation                    | `scheduled_evaluation_run` invokes the existing `app/ai/evaluation` CLI's underlying runner function in-process (no subprocess spawn) with a configured `--level`; the produced report path/summary is stored on `BackgroundJob.result`; disabled by default (`evaluation_schedule_enabled=false`) — enabling it does not change `make eval`'s manual invocation path                                                                                                                                                                                                                                                                                                                                                                           | Storing historical eval trend data / a dedicated eval-history table → future                                                                                                           |
+| Job payload/result content              | `payload`/`result` columns are `jsonb`; handlers must only place ids, small scalars, and short status strings there — never raw file bytes, provider credentials, or full tool-argument payloads (mirrors HITL's "Secrets in audit" rule)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | —                                                                                                                                                                                      |
+| Concurrency                             | Claim uses `SELECT … FOR UPDATE SKIP LOCKED`, the same non-blocking concurrent-claim idiom used nowhere else yet in this codebase but standard Postgres practice; two workers racing for the same row never block each other or double-claim                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | —                                                                                                                                                                                      |
+| Optimistic concurrency (`version`)      | Every `background_jobs` row has a monotonic `version` column; all mutating updates require `WHERE id = :id AND version = :expected_version` and increment `version` on success — additional safeguard against concurrent admin/retry/reclaim races                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | —                                                                                                                                                                                      |
+| Payload schema versioning               | Every job payload includes `"version": 1`; handlers reject unsupported versions with `NonRetryableJobError`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Payload v2+ migrations → future                                                                                                                                                        |
+| Schedule persistence separation         | `JobScheduleStore` owns schedule CRUD/persistence; `JobScheduler` only loads due schedules, enqueues, and advances — no direct schedule-row writes in the scheduler                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | —                                                                                                                                                                                      |
+| Handler execution timeout               | `asyncio.wait_for(handler, timeout=background_jobs_handler_timeout_seconds)`; timeout failures follow the normal retry/dead-letter path                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Per-job-type timeout overrides → future                                                                                                                                                |
+| Transaction boundaries                  | `claim()` commits before handler execution; handlers run outside any queue transaction/row lock; `complete()`/`fail()`/`cancel()` each use a new short transaction — prevents holding locks during long-running handlers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | —                                                                                                                                                                                      |
+| Handler idempotency                     | **Required** — at-least-once delivery (lease reclaim) means duplicate execution is possible; every handler must be safe to run twice (CAS, UPSERT, unique constraints, idempotency keys)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | —                                                                                                                                                                                      |
+| Job cancellation                        | `queued → cancelled` via `JobQueue.cancel()` (immediate, non-cooperative); **running jobs are not cancellable in V2**; no REST cancel endpoint; handlers do not receive cancellation signals                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Mid-flight cancel + REST `POST …/cancel` → future                                                                                                                                      |
+| Missed schedule ticks                   | Skipped, not replayed — one job enqueued on recovery; `next_run_at` advanced past all missed intervals to the next future boundary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | —                                                                                                                                                                                      |
+| Job visibility                          | Jobs are system-level (not user-owned); `GET /api/jobs`/`GET /api/jobs/{id}` are authenticated (`get_current_caller`) but **not** owner-scoped in V2 — any authenticated user can see job type/status/timing/attempt metadata (never `payload`/`result` contents beyond the redaction allowlist in § Security Model)                                                                                                                                                                                                                                                                                                                                                                                                                            | RBAC-gated operator-only visibility → Epic 11                                                                                                                                          |
+| Decision Execution Stages (HITL)        | Epic 09's decide-endpoint synchronous approve→execute→continue flow is **unchanged** in V2; this epic does not move Stages 2–4 off the request/response cycle for the primary approve path (only the _orphaned_ crash-recovery case runs through the queue, via `hitl_orphaned_snapshot_sweep`)                                                                                                                                                                                                                                                                                                                                                                                                                                                 | An opt-in "enqueue instead of stream inline" approve mode → future                                                                                                                     |
 
 ---
 
@@ -189,37 +204,52 @@ The Background Jobs capability is additive. When disabled, existing chat, RAG, M
 
 New table **`background_jobs`** (Postgres) and mirrored Pydantic model `BackgroundJob`:
 
-| Field | Type | Notes |
-| ----- | ---- | ----- |
-| `id` | `uuid` | Primary key |
-| `job_type` | `text` | Registered handler key, e.g. `hitl_approval_expiry_sweep` |
-| `status` | `text` CHECK | `queued` \| `running` \| `succeeded` \| `failed` \| `dead_letter` \| `cancelled` |
-| `payload` | `jsonb` | Handler input — ids/scalars only (see § Security Model) |
-| `result` | `jsonb` \| `null` | Handler output on success; small summary only |
-| `attempt_count` | `int` | Starts at `0`; incremented by the claim query on every claim |
-| `max_attempts` | `int` | Default `3` (config `background_jobs_default_max_attempts`); overridable per `enqueue()` call |
-| `run_at` | `timestamptz` | Earliest eligible claim time — supports both immediate (`now()`) and delayed/backoff scheduling |
-| `locked_by` | `text` \| `null` | Worker instance id holding the current claim lease |
-| `locked_at` | `timestamptz` \| `null` | Lease start; a lease older than `background_jobs_claim_lease_seconds` is reclaimable |
-| `last_error` | `text` \| `null` | Most recent handler exception summary (type name + truncated message, never a full stack trace with potential secrets) |
-| `idempotency_key` | `text` \| `null`, unique | Dedupe key; `null` means no dedupe (ordinary one-off enqueues) |
-| `schedule_id` | `uuid` \| `null` FK `background_job_schedules.id` | Set when this job was produced by a recurring schedule tick |
-| `created_at` / `updated_at` | `timestamptz` | Standard bookkeeping |
-| `started_at` | `timestamptz` \| `null` | First claim time |
-| `finished_at` | `timestamptz` \| `null` | Terminal transition time (`succeeded`/`failed`/`dead_letter`/`cancelled`) |
+### Handler Categories
+
+| Category | Purpose | V2 handlers |
+| -------- | ------- | ----------- |
+| **Sweep** | Periodic scan; transition stale/orphaned rows via CAS | `hitl_approval_expiry_sweep`, `hitl_orphaned_snapshot_sweep` |
+| **Cleanup** | Retention purge; batch-delete terminal records | `workflow_run_retention_cleanup` |
+| **Processing** | On-demand async work triggered by feature code | `rag_document_indexing` |
+| **Scheduled** | Recurring programmatic invocation on a fixed interval | `scheduled_evaluation_run` |
+
+New handlers should fit one of these categories (or justify a new category in a Part I update).
+
+### `background_jobs` Schema
+
+| Field                       | Type                                              | Notes                                                                                                                  |
+| --------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `id`                        | `uuid`                                            | Primary key                                                                                                            |
+| `job_type`                  | `text`                                            | Registered handler key, e.g. `hitl_approval_expiry_sweep`                                                              |
+| `status`                    | `text` CHECK                                      | `queued` \| `running` \| `succeeded` \| `failed` \| `dead_letter` \| `cancelled`                                       |
+| `payload`                   | `jsonb`                                           | Handler input — ids/scalars only (see § Security Model)                                                                |
+| `result`                    | `jsonb` \| `null`                                 | Handler output on success; small summary only                                                                          |
+| `attempt_count`             | `int`                                             | Starts at `0`; incremented by the claim query on every claim                                                           |
+| `max_attempts`              | `int`                                             | Default `3` (config `background_jobs_default_max_attempts`); overridable per `enqueue()` call                          |
+| `version`                   | `int`                                             | Optimistic-concurrency counter; starts at `1`; incremented on every successful row update (see § Optimistic Concurrency) |
+| `run_at`                    | `timestamptz`                                     | Earliest eligible claim time — supports both immediate (`now()`) and delayed/backoff scheduling                        |
+| `locked_by`                 | `text` \| `null`                                  | Worker instance id holding the current claim lease (format: `{hostname}:{pid}:{uuid}` — see § Worker Identity)         |
+| `locked_at`                 | `timestamptz` \| `null`                           | Lease start; a lease older than `background_jobs_claim_lease_seconds` is reclaimable                                   |
+| `last_error`                | `text` \| `null`                                  | Most recent handler exception summary (type name + truncated message, never a full stack trace with potential secrets) |
+| `idempotency_key`           | `text` \| `null`, unique                          | Dedupe key; `null` means no dedupe (ordinary one-off enqueues)                                                         |
+| `schedule_id`               | `uuid` \| `null` FK `background_job_schedules.id` | Set when this job was produced by a recurring schedule tick                                                            |
+| `created_at` / `updated_at` | `timestamptz`                                     | Standard bookkeeping                                                                                                   |
+| `started_at`                | `timestamptz` \| `null`                           | First claim time                                                                                                       |
+| `finished_at`               | `timestamptz` \| `null`                           | Terminal transition time (`succeeded`/`failed`/`dead_letter`/`cancelled`)                                              |
 
 New table **`background_job_schedules`** (Postgres) and mirrored Pydantic model `JobSchedule`:
 
-| Field | Type | Notes |
-| ----- | ---- | ----- |
-| `id` | `uuid` | Primary key |
-| `name` | `text`, unique | e.g. `hitl-approval-expiry-sweep` — human-readable, stable identifier used in the idempotency key |
-| `job_type` | `text` | The `job_type` enqueued on each due tick |
-| `payload` | `jsonb` | Static payload merged into every enqueued job (usually `{}`) |
-| `interval_seconds` | `int` | Fixed interval between ticks |
-| `next_run_at` | `timestamptz` | Next due time; advanced by `interval_seconds` after each tick, never drifts backward |
-| `status` | `text` CHECK (`ScheduleStatus`) | `enabled` \| `disabled` |
-| `created_at` / `updated_at` | `timestamptz` | Standard bookkeeping |
+| Field                       | Type                            | Notes                                                                                             |
+| --------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `id`                        | `uuid`                          | Primary key                                                                                       |
+| `name`                      | `text`, unique                  | e.g. `hitl-approval-expiry-sweep` — human-readable, stable identifier used in the idempotency key |
+| `job_type`                  | `text`                          | The `job_type` enqueued on each due tick                                                          |
+| `payload`                   | `jsonb`                         | Static payload merged into every enqueued job (must include `"version": 1` — see § Payload Schema Versioning)         |
+| `interval_seconds`          | `int`                           | Fixed interval between ticks                                                                      |
+| `next_run_at`               | `timestamptz`                   | Next due time; advanced by `interval_seconds` after each tick, never drifts backward              |
+| `version`                   | `int`                           | Optimistic-concurrency counter for `JobScheduleStore.advance()` (starts at `1`)                   |
+| `status`                    | `text` CHECK (`ScheduleStatus`) | `enabled` \| `disabled`                                                                           |
+| `created_at` / `updated_at` | `timestamptz`                   | Standard bookkeeping                                                                              |
 
 **`chat_messages` extension (additive):**
 
@@ -273,7 +303,29 @@ class JobResult(BaseModel):
             from the prior (crashed) attempt
 ```
 
-`QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED` (transient — the worker immediately re-queues or dead-letters, so `failed` is not a resting state; the CHECK constraint still names it for the brief in-transaction window and for `last_error` display purposes), `DEAD_LETTER`, and `CANCELLED` are all implemented in V2 (unlike Epic 09's reserved-but-unimplemented states, every Background Jobs status has a real transition path).
+`QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED` (transient — the worker immediately re-queues or dead-letters, so `failed` is not a resting state; the CHECK constraint still names it for the brief in-transaction window and for `last_error` display purposes), `DEAD_LETTER`, and `CANCELLED` are all implemented in V2 (unlike Epic 09's reserved-but-unimplemented states, every Background Jobs status has a real transition path). See § Cancellation Semantics for `CANCELLED` transition rules.
+
+---
+
+## Cancellation Semantics
+
+`CANCELLED` is a terminal status for jobs that should not run. V2 implements the status and `JobQueue.cancel()` on the queue protocol; there is **no public REST cancel endpoint** in V2 (operators use dead-letter + discard for failed jobs; a `POST /api/jobs/{id}/cancel` endpoint is a documented future extension).
+
+| From | To | Trigger | Allowed? |
+| ---- | -- | ------- | -------- |
+| `queued` | `cancelled` | `JobQueue.cancel()` (internal/future operator API) | **Yes** — immediate DB transition |
+| `running` | `cancelled` | Any caller | **No in V2** — running jobs are not cancellable; the worker runs to completion, failure, or timeout; lease expiry reclaims if the worker crashes |
+| `dead_letter` | `cancelled` | Operator acknowledge/discard | **Future** — V2 leaves dead-letter jobs visible; no cancel endpoint |
+| `running` | `succeeded` | Handler returns `JobResult` | Normal path |
+| `queued` | `running` | Worker claim | Normal path |
+
+**Cancellation model:** **Immediate, non-cooperative** — `cancel()` sets `status='cancelled'`, `finished_at=now()` in a single version-checked transaction. Handlers **do not** receive cancellation signals (`asyncio.CancelledError` is never injected into handler coroutines). A queued job cancelled before claim never executes.
+
+**Race with claim:** `cancel()` requires `status='queued'`; `claim_due()` requires `status='queued' AND run_at<=now()`. Both use row-level locking / version checks — whichever transaction commits first wins; the loser observes zero rows updated and no-ops (or raises `JobConcurrencyError` at the call site).
+
+**Race with completion:** Cannot occur in V2 for queued-only cancellation. A `running` job that completes after a hypothetical future mid-flight cancel would be resolved by the version-checked `complete()`/`cancel()` race (first commit wins).
+
+**Worker behaviour on cancelled rows:** Claim query excludes `cancelled` jobs. A worker that already claimed a job before cancel (future mid-flight cancel) would complete normally; V2 does not support mid-flight cancel.
 
 ---
 
@@ -288,7 +340,8 @@ SET status = 'running',
     locked_at = now(),
     attempt_count = attempt_count + 1,
     started_at = COALESCE(started_at, now()),
-    updated_at = now()
+    updated_at = now(),
+    version = version + 1
 WHERE id IN (
     SELECT id FROM background_jobs
     WHERE (status = 'queued' AND run_at <= now())
@@ -300,9 +353,47 @@ WHERE id IN (
 RETURNING *;
 ```
 
+All other mutating queue operations (`complete`, `fail`, manual retry, operator cancel) use the same optimistic-concurrency guard: `UPDATE … WHERE id = :id AND version = :expected_version`, incrementing `version` on success and raising `JobConcurrencyError` (or re-reading and retrying once at the call site) when zero rows are updated.
+
 - `FOR UPDATE SKIP LOCKED` means concurrent workers never block on each other — a row already locked by another in-flight claim transaction is simply skipped, not waited on.
-- The `OR (status='running' AND locked_at < …)` branch is what makes this **self-healing**: no separate "reconcile orphaned jobs at startup" pass is required (contrast with Epic 06's `reconcile_orphaned_runs`, which only fires once at process boot). A worker that crashes mid-job leaves its claim behind; the next poll cycle across *any* running worker instance reclaims it once the lease expires.
+- The `OR (status='running' AND locked_at < …)` branch is what makes this **self-healing**: no separate "reconcile orphaned jobs at startup" pass is required (contrast with Epic 06's `reconcile_orphaned_runs`, which only fires once at process boot). A worker that crashes mid-job leaves its claim behind; the next poll cycle across _any_ running worker instance reclaims it once the lease expires.
 - `attempt_count` is incremented **on claim**, not on failure — so a lease-expired reclaim correctly counts as a new attempt even though no explicit `fail()` was ever recorded for the crashed attempt.
+
+---
+
+## Transaction Boundaries
+
+Each queue operation uses its **own short database transaction**. Handlers execute **outside** any held row lock or open queue transaction. This is a deliberate design choice — holding a lock during handler execution would block concurrent workers, exhaust connection pools, and risk lock timeouts on long-running handlers (indexing, eval runs).
+
+```text
+Per-job transactional lifecycle:
+
+  enqueue()
+      │  BEGIN → INSERT (status=queued) → COMMIT
+      ▼
+  claim_due()                         ← separate transaction; commits BEFORE handler starts
+      │  BEGIN → UPDATE (status=running, locked_by, …) → COMMIT
+      ▼
+  handler(job)                        ← NO queue transaction open; NO row lock held
+      │  (may open its own independent DB sessions/transactions as needed)
+      ▼
+  complete() / fail()                 ← new transaction after handler returns
+      │  BEGIN → UPDATE (status=succeeded|queued|dead_letter, …) → COMMIT
+      ▼
+  done
+```
+
+| Operation | Transaction scope | Lock held during handler? |
+| --------- | ----------------- | ------------------------- |
+| `enqueue()` | Single INSERT; commits before return | N/A |
+| `claim_due()` | Batch UPDATE; **commits before** dispatching to handlers | **No** — lock released at COMMIT |
+| `handler()` | Handler-managed (independent sessions) | **No** |
+| `complete()` / `fail()` | Single UPDATE with version check; new transaction | N/A |
+| `cancel()` | Single UPDATE with version check; new transaction | N/A |
+
+**Why this design:** The claim-and-lease model provides **at-least-once delivery** without requiring the database to participate in handler execution. Ownership is recorded in a millisecond-scale claim transaction; execution happens unlocked; result persistence is another short transaction. If a worker crashes mid-handler, the row remains `running` with a stale lease until reclaim — no connection is held open.
+
+**Implementation guardrail:** `JobWorker` must never wrap `handler(job)` inside the same SQLAlchemy session/transaction used by `claim_due()`. Phase 1 tests must assert the claim session is closed/committed before dispatch begins.
 
 ---
 
@@ -318,26 +409,168 @@ def compute_backoff_seconds(attempt_count: int, *, base: float, cap: float) -> f
 - On handler failure with `attempt_count < max_attempts`: `JobQueue.fail(job_id, error=..., retry_at=now() + backoff)` — sets `status='queued'`, `run_at=retry_at`, records `last_error` (truncated exception summary).
 - On handler failure with `attempt_count >= max_attempts`: `status='dead_letter'`, `finished_at=now()`, `last_error` retained. A dead-lettered job is visible via the REST API and retriable via `POST /api/jobs/{id}/retry` (resets `attempt_count=0`, `status='queued'`, `run_at=now()`).
 - Defaults: `background_jobs_default_max_attempts=3`, `background_jobs_retry_base_delay_seconds=5.0`, `background_jobs_retry_max_delay_seconds=300.0` — e.g. attempt 0 fails → retry in 5s, attempt 1 fails → retry in 10s, attempt 2 fails → retry in 20s, attempt 3 fails (== `max_attempts`) → `dead_letter`.
-- A handler may itself decide a failure is non-retriable (e.g. a permanently malformed payload) by raising a dedicated `NonRetryableJobError` — the worker dead-letters immediately regardless of remaining attempts.
+- A handler may itself decide a failure is non-retriable (e.g. a permanently malformed payload) by raising a dedicated `NonRetryableJobError` — the worker dead-letters immediately regardless of remaining attempts (see § Poison Jobs & NonRetryableJobError).
+
+### Handler Execution Timeouts
+
+Every handler dispatch is wrapped in `asyncio.wait_for(handler(job), timeout=background_jobs_handler_timeout_seconds)` (default `600` — 10 minutes). A timeout is treated identically to an ordinary handler failure: the worker records `last_error` (e.g. `"TimeoutError: handler exceeded 600s"`), applies backoff/retry if attempts remain, or transitions to `dead_letter` once `max_attempts` is exhausted. Handlers that legitimately need longer execution should be split into smaller jobs in a future epic rather than raising the global timeout ad hoc.
+
+### Poison Jobs & NonRetryableJobError
+
+A **poison job** is one that will never succeed regardless of how many times it is retried. Handlers raise `NonRetryableJobError` to signal this; the worker bypasses backoff and dead-letters immediately.
+
+| Failure class | Example | Handler action |
+| ------------- | ------- | -------------- |
+| Malformed payload | Missing required field, wrong JSON shape | Raise `NonRetryableJobError("invalid payload: …")` |
+| Unknown/unsupported payload version | `"version": 99` with no migration path | Raise `NonRetryableJobError("unsupported payload version: 99")` |
+| Unknown handler at dispatch | Should not occur if registry is correct; caught by worker before dispatch | Worker dead-letters with `JobHandlerNotFoundError` summary (non-retriable) |
+| Permanently deleted resource | `document_id` no longer exists and cannot be re-fetched | Raise `NonRetryableJobError("document not found: …")` |
+| Invalid configuration | Required setting is `0`/disabled in a way that makes success impossible | Raise `NonRetryableJobError("…")` |
+
+Transient failures (DB deadlock, provider rate limit, network blip) must **not** raise `NonRetryableJobError` — let the normal retry/backoff path handle them.
+
+---
+
+## Optimistic Concurrency
+
+Every `background_jobs` row carries a monotonic `version` column (starts at `1`, default in migration). All mutating operations — claim, complete, fail, manual retry, operator cancel — require `WHERE id = :id AND version = :expected_version` and increment `version` on success. This provides an additional safeguard against unexpected concurrent modifications (e.g. an operator retry racing a lease-expired reclaim, or a future administrative tool editing a row while a worker holds a stale in-memory copy). A zero-row update raises `JobConcurrencyError`; callers may re-read the row and retry once (the worker does this for `complete`/`fail` after dispatch).
+
+This mirrors Epic 06's `checkpoint_version` pattern on `workflow_runs`, generalized to the job table.
+
+---
+
+## Payload Schema Versioning
+
+Job payloads are not arbitrary JSON bags — every payload **must** include a top-level `"version": <int>` field identifying the schema generation the handler expects. V2 ships payload version `1` for all five first-class handlers.
+
+```json
+{
+  "version": 1,
+  "document_id": "…",
+  "user_id": "…"
+}
+```
+
+Handlers validate `payload["version"]` at the start of execution; an unsupported version raises `NonRetryableJobError`. Future payload shape changes add a new version number and a handler branch (or a dedicated migration helper) rather than silently breaking in-flight jobs. Schedule seed payloads and `QueueIndexingRunner.enqueue()` both supply `"version": 1`.
+
+---
+
+## Handler Idempotency (Required)
+
+The queue provides **at-least-once delivery**, not exactly-once. A handler may execute more than once for the same logical job because:
+
+- A worker crashes after partial side effects but before `complete()` — lease expiry reclaims the job and runs the handler again.
+- A lease-expired reclaim increments `attempt_count` and re-dispatches even though the prior attempt may have partially succeeded.
+- Optimistic concurrency retries on `complete()`/`fail()` can re-dispatch after ambiguous failures.
+
+**Every `JobHandler` must therefore be idempotent** — the single most important implementation invariant for this subsystem. Running a handler twice for the same `job_id` must produce the same durable outcome as running it once (or safely no-op the second time).
+
+Recommended implementation patterns (already used elsewhere in this codebase):
+
+| Pattern | When to use | V2 example |
+| ------- | ----------- | ---------- |
+| Compare-and-swap (`UPDATE … WHERE status=expected`) | Transitioning a row to a terminal state | Expiry sweep: `WHERE status='pending'` |
+| UPSERT / `ON CONFLICT DO NOTHING` | Creating derived records that must exist at most once | Indexing: upsert vectors for `(document_id, chunk_id)` |
+| Unique constraints | Preventing duplicate side effects | `idempotency_key` on enqueue; eval report path keyed by run |
+| Idempotency keys | Caller-level dedupe before side effects | Scheduler `{name}:{tick}` keys |
+| Duplicate-safe external APIs | Provider calls that may be retried | Embedding calls with stable content hashes |
+
+Handlers that cannot be made idempotent must be split into smaller jobs or deferred to a future epic — do not ship a handler whose second execution causes double-charges, double-emails, or double-tool-execution.
+
+---
+
+## Worker Identity (`locked_by`)
+
+Each worker instance generates a stable identity at startup:
+
+```text
+{hostname}:{pid}:{uuid4}
+```
+
+Example: `api-pod-7f3a2b:48291:a1b2c3d4-e5f6-7890-abcd-ef1234567890`
+
+This format makes it easy to correlate a claimed job with the process/pod that holds the lease during operational debugging. In containerized deployments where hostname is ephemeral, the UUID suffix remains unique per process lifetime; a future epic may substitute an instance-id from the orchestrator without changing the column semantics.
+
+---
+
+## Graceful Worker Shutdown
+
+Rolling deployments (Kubernetes, ECS, etc.) require a defined shutdown sequence so in-flight jobs are not orphaned prematurely:
+
+```text
+1. Stop polling      — worker loop sets a shutdown flag; no new claim_due() calls
+2. Finish current job — await all in-flight handler dispatches (asyncio.gather)
+3. Persist final state — complete() or fail() each finished job with version check
+4. Release resources — close DB sessions, flush spans/metrics
+5. Terminate         — cancel the asyncio task; lifespan handler returns
+```
+
+The claim lease (`background_jobs_claim_lease_seconds`, default 300s) is the safety net: if shutdown is forced before step 3 completes (SIGKILL, hard timeout), the job is reclaimed once the lease expires rather than lost. Operators should set pod termination grace ≥ `background_jobs_handler_timeout_seconds + 30s` so step 2 can finish under normal conditions.
+
+`JobScheduler` follows the same pattern: stop evaluating new ticks, finish any in-flight schedule-advancement transaction, then terminate.
+
+---
+
+## Handler Registration Lifecycle
+
+Startup order in `app/main.py` lifespan (when `BACKGROUND_JOBS_ENABLED=true`):
+
+```text
+1. Registry creation     — empty JobHandlerRegistry()
+2. Handler registration  — register_all_handlers(registry) wires all five first-class handlers
+3. Worker startup        — JobWorker.run_forever() begins polling (handlers must exist before first claim)
+4. Scheduler startup     — JobScheduler.run_forever() begins evaluating due schedules
+```
+
+Handlers are registered synchronously before either background loop starts. A job whose `job_type` has no registered handler is dead-lettered immediately with a `JobHandlerNotFoundError` summary (non-retriable). Registration is idempotent (re-registering the same `job_type` replaces the handler — useful in tests).
 
 ---
 
 ## Scheduler Design
 
-`JobScheduler` (`app/ai/jobs/scheduler.py`) runs its own polling loop (default every `background_jobs_scheduler_poll_interval_seconds=30`):
+`JobScheduler` (`app/ai/jobs/scheduler.py`) runs its own polling loop (default every `background_jobs_scheduler_poll_interval_seconds=30`). It is responsible **only** for loading due schedules, computing the next execution, and enqueueing jobs — schedule CRUD and persistence live in a dedicated `JobScheduleStore` (see below).
 
 ```text
-for each background_job_schedules row where status='enabled' and next_run_at <= now():
+for each due schedule from JobScheduleStore.list_due():
     idempotency_key = f"{schedule.name}:{schedule.next_run_at.isoformat()}"
-    queue.enqueue(job_type=schedule.job_type, payload=schedule.payload,
+    queue.enqueue(job_type=schedule.job_type, payload=merge_version(schedule.payload),
                   idempotency_key=idempotency_key, run_at=now())
-    schedule.next_run_at += interval_seconds   # advances from the *scheduled* tick, never drifts
-    persist schedule row
+    JobScheduleStore.advance(schedule.id, expected_version=schedule.version,
+                             next_run_at=schedule.next_run_at + interval_seconds)
 ```
 
 - Advancing from the previous `next_run_at` (not from `now()`) keeps ticks aligned to the original cadence even if the scheduler itself is briefly delayed.
-- The idempotency key means a scheduler running in two app instances simultaneously (a documented, safe consequence of the single-worker-posture *not* extending to a single-scheduler guarantee) enqueues the same tick's job at most once — the second `enqueue()` call observes the unique-constraint conflict and returns the existing row instead of erroring.
+- The idempotency key means a scheduler running in two app instances simultaneously (a documented, safe consequence of the single-worker-posture _not_ extending to a single-scheduler guarantee) enqueues the same tick's job at most once — the second `enqueue()` call observes the unique-constraint conflict and returns the existing row instead of erroring.
 - Default seeded schedules (via the Phase 2/3/4/5/6 migrations or an idempotent startup seed helper — see Phase 2 Steps): `hitl-approval-expiry-sweep` (every 5 min), `hitl-orphaned-snapshot-sweep` (every 15 min), `workflow-run-retention-cleanup` (daily), `scheduled-evaluation-run` (disabled by default — `evaluation_schedule_enabled=false`).
+
+### Missed Ticks
+
+If the scheduler is down or delayed long enough to miss one or more intervals, **missed ticks are skipped, not replayed**. On recovery the scheduler:
+
+1. Enqueues **one** job for the oldest due `next_run_at` (preserving the idempotency key for that tick).
+2. Advances `next_run_at` forward past all missed intervals to the **next future-aligned boundary** (`next_run_at + n * interval_seconds` where `n` is the smallest integer such that the result is `> now()`).
+
+Example: a 5-minute schedule with `next_run_at=09:00` that doesn't run until 09:17 enqueues one job (idempotency key `…:09:00`) and sets `next_run_at=09:20` (skipping the 09:05/09:10/09:15 ticks). The next enqueue happens at 09:20. This is intentional: sweeps and cleanups are idempotent periodic work, not calendar-critical cron events — one execution on recovery is sufficient.
+
+### Clock Assumptions
+
+- **Postgres `now()` is authoritative** for claim eligibility (`run_at <= now()`), lease expiry (`locked_at < now() - lease`), and schedule due evaluation (`next_run_at <= now()`). Application-server clocks are not consulted for queue semantics.
+- **Acceptable clock skew:** all app instances and Postgres should agree within ±2 seconds (standard NTP expectation). Larger skew can cause premature lease expiry or delayed claims but does not cause double-execution thanks to row-level locking.
+- **Multiple scheduler instances:** safe — idempotency keys prevent duplicate enqueues; `JobScheduleStore.advance()` uses optimistic versioning so concurrent advances on the same schedule row produce at most one successful advance per tick.
+- **Daylight saving:** not applicable — all timestamps are `timestamptz`; interval-based schedules use fixed second counts, not wall-clock calendar expressions.
+
+### Schedule Persistence — `JobScheduleStore`
+
+Schedule CRUD and persistence are extracted from `JobScheduler` into a dedicated store, mirroring how other subsystems separate storage from orchestration:
+
+```python
+class JobScheduleStore(Protocol):
+    async def list_due(self, *, now: datetime) -> list[JobSchedule]: ...
+    async def advance(self, schedule_id: UUID, *, expected_version: int, next_run_at: datetime) -> JobSchedule: ...
+    async def list_all(self) -> list[JobSchedule]: ...  # REST API
+```
+
+`PostgresJobScheduleStore` is the V2 implementation (may live in `app/ai/jobs/schedule_store.py`). `JobScheduler` depends on `JobScheduleStore` + `JobQueue` only — it never writes schedule rows directly.
 
 ---
 
@@ -355,6 +588,104 @@ class JobHandlerRegistry:
 ```
 
 Handlers are plain async callables taking the claimed `BackgroundJob` (for `payload`/`schedule_id` access) and returning a `JobResult`; they raise on failure (caught by `JobWorker`, see § Retry & Backoff Policy) rather than encoding failure in a return value.
+
+### Job Type Naming Conventions
+
+All `job_type` strings use **`snake_case`** with a `{domain}_{action}` or `{domain}_{noun}_{action}` pattern. V2 first-class handlers:
+
+| `job_type` | Pattern |
+| ---------- | ------- |
+| `hitl_approval_expiry_sweep` | `{domain}_{noun}_{action}` |
+| `hitl_orphaned_snapshot_sweep` | `{domain}_{noun}_{action}` |
+| `workflow_run_retention_cleanup` | `{domain}_{noun}_{action}` |
+| `rag_document_indexing` | `{domain}_{noun}_{action}` |
+| `scheduled_evaluation_run` | `{modifier}_{domain}_{noun}` |
+
+New handlers must follow the same convention — avoid ad-hoc camelCase, abbreviations, or feature-specific one-offs that don't scan well in logs/metrics.
+
+### Per-Handler Lifecycle (First-Class Handlers)
+
+```text
+hitl_approval_expiry_sweep:
+  scan pending approvals → CAS transition to expired → return counts
+
+hitl_orphaned_snapshot_sweep:
+  scan approved+snapshot past grace → resume or fail-safe → return counts
+
+workflow_run_retention_cleanup:
+  batch-delete terminal runs + terminal jobs past retention → return counts
+
+rag_document_indexing:
+  validate payload v1 → re-fetch document bytes → index → mark succeeded
+
+scheduled_evaluation_run:
+  validate payload v1 → invoke eval runner → store report summary on result
+```
+
+---
+
+## Sequence Diagrams
+
+### Enqueue → Worker → Handler → Completion
+
+```mermaid
+sequenceDiagram
+    participant Caller as Caller / Scheduler
+    participant Queue as PostgresJobQueue
+    participant Worker as JobWorker
+    participant Registry as JobHandlerRegistry
+    participant Handler as JobHandler
+
+    Caller->>Queue: enqueue(job_type, payload, idempotency_key)
+    Queue-->>Caller: BackgroundJob (status=queued)
+
+    loop poll interval
+        Worker->>Queue: claim_due(batch_size) — txn commits here
+        Queue-->>Worker: claimed jobs (status=running)
+        Worker->>Registry: resolve(job_type)
+        Registry-->>Worker: handler
+        Note over Worker,Handler: handler runs outside queue txn
+        Worker->>Handler: wait_for(handler(job), timeout)
+        Handler-->>Worker: JobResult
+        Worker->>Queue: complete(job_id, result, expected_version) — new txn
+    end
+```
+
+### Retry / Backoff Lifecycle
+
+```mermaid
+sequenceDiagram
+    participant Worker as JobWorker
+    participant Handler as JobHandler
+    participant Queue as PostgresJobQueue
+
+    Worker->>Handler: handler(job) — attempt N
+    Handler-->>Worker: raises Exception
+    alt attempt_count < max_attempts
+        Worker->>Queue: fail(job_id, error, retry_at=now+backoff)
+        Note over Queue: status=queued, run_at=future
+    else attempt_count >= max_attempts
+        Worker->>Queue: fail → dead_letter
+    else NonRetryableJobError
+        Worker->>Queue: fail → dead_letter (immediate)
+    end
+```
+
+### Lease Expiration & Recovery
+
+```mermaid
+sequenceDiagram
+    participant W1 as Worker A (crashed)
+    participant Queue as PostgresJobQueue
+    participant W2 as Worker B
+
+    W1->>Queue: claim_due() — job X (locked_by=W1, locked_at=T)
+    Note over W1: process crash — no complete/fail
+    Note over Queue: locked_at + lease_seconds < now()
+    W2->>Queue: claim_due()
+    Queue-->>W2: job X reclaimed (attempt_count+1)
+    W2->>Queue: complete(job X)
+```
 
 ---
 
@@ -378,14 +709,14 @@ No new vector/queue infrastructure. All new persistence is relational, following
 
 ### Migration Impact Summary
 
-| Aspect | Detail |
-| ------ | ------ |
-| New tables | `background_jobs`, `background_job_schedules` — both created in `0011_background_jobs.py` |
-| Modified tables | `chat_messages` — `status` CHECK constraint gains `expired`. `workflow_node_executions` — `decision` CHECK constraint gains `expired` |
-| Seed data | The same migration inserts the four default-enabled `background_job_schedules` rows named in § Scheduler Design (idempotent — migration runs once) |
-| Backward compatibility | All modifications are additive (new tables, new CHECK values, seeded rows); existing rows are valid under the new constraints with no backfill required; no column is renamed, retyped, or dropped |
+| Aspect                 | Detail                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New tables             | `background_jobs`, `background_job_schedules` — both created in `0011_background_jobs.py`                                                                                                                                                                                                                                                                                                                                                         |
+| Modified tables        | `chat_messages` — `status` CHECK constraint gains `expired`. `workflow_node_executions` — `decision` CHECK constraint gains `expired`                                                                                                                                                                                                                                                                                                             |
+| Seed data              | The same migration inserts the four default-enabled `background_job_schedules` rows named in § Scheduler Design (idempotent — migration runs once)                                                                                                                                                                                                                                                                                                |
+| Backward compatibility | All modifications are additive (new tables, new CHECK values, seeded rows); existing rows are valid under the new constraints with no backfill required; no column is renamed, retyped, or dropped                                                                                                                                                                                                                                                |
 | Rollout considerations | `BACKGROUND_JOBS_ENABLED=false` means the new tables/columns exist but are unused post-migration — no behavioural change until the flag flips; downgrade drops both new tables, reverts the two extended CHECK constraints, and deletes the seeded schedule rows — safe as long as no job has transitioned a `chat_messages`/`workflow_node_executions` row to `expired` (documented operator caveat, same posture as Epic 09's `0010` downgrade) |
-| Data volume | `background_jobs` grows with sweep/schedule activity — a daily retention-cleanup schedule for `background_jobs` itself (terminal rows older than `background_jobs_retention_days`) is included in Phase 4 to prevent unbounded growth, the same pattern this epic ships for `workflow_runs` |
+| Data volume            | `background_jobs` grows with sweep/schedule activity — a daily retention-cleanup schedule for `background_jobs` itself (terminal rows older than `background_jobs_retention_days`) is included in Phase 4 to prevent unbounded growth, the same pattern this epic ships for `workflow_runs`                                                                                                                                                       |
 
 ---
 
@@ -400,8 +731,9 @@ app/
         ├── queue.py             # JobQueue protocol + PostgresJobQueue (claim/enqueue/complete/fail/get/list)
         ├── registry.py          # JobHandler protocol, JobHandlerRegistry
         ├── worker.py            # JobWorker — poll/claim/dispatch/retry loop
-        ├── scheduler.py         # JobScheduler — recurring-tick enqueue loop
-        ├── retry.py             # compute_backoff_seconds(), NonRetryableJobError
+        ├── scheduler.py         # JobScheduler — recurring-tick enqueue loop (no persistence)
+        ├── schedule_store.py    # JobScheduleStore protocol + PostgresJobScheduleStore
+        ├── retry.py             # compute_backoff_seconds(), NonRetryableJobError, JobConcurrencyError
         ├── exceptions.py        # JobsError, JobNotFoundError, JobHandlerNotFoundError, ScheduleNotFoundError
         └── handlers/
             ├── __init__.py      # registers all first-class handlers with JobHandlerRegistry
@@ -447,6 +779,7 @@ tests/test_jobs_router.py               # NEW
 - `JobHandlerRegistry`
 - `JobWorker`
 - `JobScheduler`
+- `JobScheduleStore`
 - `QueueIndexingRunner`
 - `BACKGROUND_JOBS_ENABLED`
 
@@ -454,36 +787,37 @@ tests/test_jobs_router.py               # NEW
 
 ## Component Responsibilities
 
-| Component | Responsibility | Inputs | Outputs | Dependencies |
-| --------- | --------------- | ------ | ------- | ------------- |
-| `JobQueue` (protocol) | Durable enqueue/claim/complete/fail/get/list contract | — | — | — |
-| `PostgresJobQueue` | Postgres-backed implementation; claim-and-lease query; idempotency-key conflict handling | SQL session | `BackgroundJob` rows | PostgreSQL |
-| `JobHandlerRegistry` | Map `job_type` → `JobHandler`; resolve at dispatch time | Handler registrations at startup | Resolved handler or `JobHandlerNotFoundError` | — |
-| `JobWorker` | Poll → claim batch → dispatch to registry → complete/fail with backoff | `JobQueue`, `JobHandlerRegistry` | Job state transitions, spans/metrics | `JobQueue`, `JobHandlerRegistry`, Observability (optional) |
-| `JobScheduler` | Evaluate due `background_job_schedules`; enqueue idempotent ticks | `JobQueue`, schedule rows | New `queued` jobs | `JobQueue` |
-| `hitl_approval_expiry_sweep` handler | Enforce approval timeouts on both HITL surfaces | `hitl_approval_timeout_hours`, `workflow_approval_timeout_hours` | `expired` transitions | `AgentToolApprovalStore`, `WorkflowStore` |
-| `hitl_orphaned_snapshot_sweep` handler | Resume or fail-safe crash-orphaned approved approvals | `hitl_orphan_sweep_grace_seconds` | Resumed turn or `ChatMessage.status=error` | `AgentApprovalService`, `AgentExecutor` |
-| `workflow_run_retention_cleanup` handler | Purge old terminal workflow runs (+ its own job table) | `workflow_run_retention_days`, `background_jobs_retention_days` | Deleted rows count | `WorkflowStore`, `PostgresJobQueue` |
-| `QueueIndexingRunner` | `IndexingJob` protocol implementation backed by the queue | Pending upload bytes (staged), document/user ids | `job_id` (mapped to `IndexingJobStatus`) | `JobQueue`, existing RAG ingest pipeline |
-| `scheduled_evaluation_run` handler | Invoke the eval runner on a schedule | `evaluation_schedule_level` | `JobResult` with report summary | `app/ai/evaluation` runner |
+| Component                                | Responsibility                                                                           | Inputs                                                           | Outputs                                       | Dependencies                                               |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------- | ---------------------------------------------------------- |
+| `JobQueue` (protocol)                    | Durable enqueue/claim/complete/fail/cancel/get/list contract                               | —                                                                | —                                             | —                                                          |
+| `PostgresJobQueue`                       | Postgres-backed implementation; claim-and-lease query; idempotency-key conflict handling | SQL session                                                      | `BackgroundJob` rows                          | PostgreSQL                                                 |
+| `JobHandlerRegistry`                     | Map `job_type` → `JobHandler`; resolve at dispatch time                                  | Handler registrations at startup                                 | Resolved handler or `JobHandlerNotFoundError` | —                                                          |
+| `JobWorker`                              | Poll → claim batch → dispatch to registry → complete/fail with backoff                   | `JobQueue`, `JobHandlerRegistry`                                 | Job state transitions, spans/metrics          | `JobQueue`, `JobHandlerRegistry`, Observability (optional) |
+| `JobScheduler`                           | Evaluate due schedules via `JobScheduleStore`; enqueue idempotent ticks; advance schedules | `JobQueue`, `JobScheduleStore`                                   | New `queued` jobs                             | `JobQueue`, `JobScheduleStore`                             |
+| `JobScheduleStore` / `PostgresJobScheduleStore` | Schedule CRUD persistence: list due, advance with optimistic versioning, list all | SQL session                                                      | `JobSchedule` rows                            | PostgreSQL                                                 |
+| `hitl_approval_expiry_sweep` handler     | Enforce approval timeouts on both HITL surfaces                                          | `hitl_approval_timeout_hours`, `workflow_approval_timeout_hours` | `expired` transitions                         | `AgentToolApprovalStore`, `WorkflowStore`                  |
+| `hitl_orphaned_snapshot_sweep` handler   | Resume or fail-safe crash-orphaned approved approvals                                    | `hitl_orphan_sweep_grace_seconds`                                | Resumed turn or `ChatMessage.status=error`    | `AgentApprovalService`, `AgentExecutor`                    |
+| `workflow_run_retention_cleanup` handler | Purge old terminal workflow runs (+ its own job table)                                   | `workflow_run_retention_days`, `background_jobs_retention_days`  | Deleted rows count                            | `WorkflowStore`, `PostgresJobQueue`                        |
+| `QueueIndexingRunner`                    | `IndexingJob` protocol implementation backed by the queue                                | Pending upload bytes (staged), document/user ids                 | `job_id` (mapped to `IndexingJobStatus`)      | `JobQueue`, existing RAG ingest pipeline                   |
+| `scheduled_evaluation_run` handler       | Invoke the eval runner on a schedule                                                     | `evaluation_schedule_level`                                      | `JobResult` with report summary               | `app/ai/evaluation` runner                                 |
 
 ---
 
 ## Existing V1/V2 Assets (reuse, do not duplicate)
 
-| Asset | Location | Epic 10 role |
-| ----- | -------- | ------------ |
-| `schedule_run_task`, `_ACTIVE_RUN_IDS`, `reconcile_orphaned_runs` | `app/ai/workflow/engine/background.py` | Conceptual precedent for retained-task/crash-recovery design; **not modified** (see Locked Decisions "Scope of migration") |
-| `schedule_extraction_task`, `schedule_lifecycle_task` | `app/ai/memory/background_tasks.py` | Same in-process pattern; **not modified** |
-| `IndexingJob` protocol, `SyncIndexingRunner`, `PendingIndexingWork` | `app/ai/interfaces/indexing_job.py`, `app/ai/rag/indexing/sync_runner.py` | `QueueIndexingRunner` implements the same protocol; `SyncIndexingRunner` remains the unchanged default |
-| `AgentApprovalService`, `AgentExecutor.resume_from_approval`, `AgentToolApprovalStore` (CAS decision pattern) | `app/ai/hitl/` (Epic 09) | `hitl_orphaned_snapshot_sweep` re-invokes the existing resume path; `hitl_approval_expiry_sweep` reuses the existing CAS (`WHERE status='pending'`) pattern |
-| `WorkflowManager.apply_decision`, `ApprovalNodeExecutor`, Compare-And-Swap decision pattern | `app/ai/workflow/manager.py`, `app/ai/workflow/nodes/approval_node.py` (Epic 06/09) | `hitl_approval_expiry_sweep` reuses the same CAS idiom for the workflow-node surface |
-| `record_workflow_approval_pending_delta`, `record_agent_tool_approval_pending_delta` metric pattern | `app/ai/observability/metrics/` | Pattern reused for `jobs_pending_count`/`jobs_dead_letter_count` |
-| `approval_span`, `workflow_span` helper style | `app/ai/observability/tracing/spans.py` | Pattern reused for `job_span` |
-| `app/ai/evaluation/` runner internals | `app/ai/evaluation/runners.py`, `cli.py` | `scheduled_evaluation_run` calls the same runner function the CLI already calls — no duplicate eval logic |
-| Feature flag infrastructure | `app/core/config.py` | `BACKGROUND_JOBS_ENABLED` |
-| DI factories, `get_sessionmaker` background-session pattern | `app/ai/deps.py`, `app/db/engine.py` | `JobWorker`/`JobScheduler` construction mirrors `build_workflow_manager_for_session`'s standalone-session style |
-| `get_current_caller` | `app/core/caller.py` | Authenticated Jobs REST API |
+| Asset                                                                                                         | Location                                                                            | Epic 10 role                                                                                                                                                |
+| ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schedule_run_task`, `_ACTIVE_RUN_IDS`, `reconcile_orphaned_runs`                                             | `app/ai/workflow/engine/background.py`                                              | Conceptual precedent for retained-task/crash-recovery design; **not modified** (see Locked Decisions "Scope of migration")                                  |
+| `schedule_extraction_task`, `schedule_lifecycle_task`                                                         | `app/ai/memory/background_tasks.py`                                                 | Same in-process pattern; **not modified**                                                                                                                   |
+| `IndexingJob` protocol, `SyncIndexingRunner`, `PendingIndexingWork`                                           | `app/ai/interfaces/indexing_job.py`, `app/ai/rag/indexing/sync_runner.py`           | `QueueIndexingRunner` implements the same protocol; `SyncIndexingRunner` remains the unchanged default                                                      |
+| `AgentApprovalService`, `AgentExecutor.resume_from_approval`, `AgentToolApprovalStore` (CAS decision pattern) | `app/ai/hitl/` (Epic 09)                                                            | `hitl_orphaned_snapshot_sweep` re-invokes the existing resume path; `hitl_approval_expiry_sweep` reuses the existing CAS (`WHERE status='pending'`) pattern |
+| `WorkflowManager.apply_decision`, `ApprovalNodeExecutor`, Compare-And-Swap decision pattern                   | `app/ai/workflow/manager.py`, `app/ai/workflow/nodes/approval_node.py` (Epic 06/09) | `hitl_approval_expiry_sweep` reuses the same CAS idiom for the workflow-node surface                                                                        |
+| `record_workflow_approval_pending_delta`, `record_agent_tool_approval_pending_delta` metric pattern           | `app/ai/observability/metrics/`                                                     | Pattern reused for `jobs_pending_count`/`jobs_dead_letter_count`                                                                                            |
+| `approval_span`, `workflow_span` helper style                                                                 | `app/ai/observability/tracing/spans.py`                                             | Pattern reused for `job_span`                                                                                                                               |
+| `app/ai/evaluation/` runner internals                                                                         | `app/ai/evaluation/runners.py`, `cli.py`                                            | `scheduled_evaluation_run` calls the same runner function the CLI already calls — no duplicate eval logic                                                   |
+| Feature flag infrastructure                                                                                   | `app/core/config.py`                                                                | `BACKGROUND_JOBS_ENABLED`                                                                                                                                   |
+| DI factories, `get_sessionmaker` background-session pattern                                                   | `app/ai/deps.py`, `app/db/engine.py`                                                | `JobWorker`/`JobScheduler` construction mirrors `build_workflow_manager_for_session`'s standalone-session style                                             |
+| `get_current_caller`                                                                                          | `app/core/caller.py`                                                                | Authenticated Jobs REST API                                                                                                                                 |
 
 When `BACKGROUND_JOBS_ENABLED=false`, none of the above behaviours change.
 
@@ -508,14 +842,14 @@ Background Jobs **adds a new subsystem** rather than inserting a decision point 
 
 Background Jobs introduces a new, system-level (not per-user) execution surface; it does not change the trust model of the pipelines whose deferred work it now runs.
 
-| Control | v1 behaviour |
-| ------- | ------------- |
-| Who may view jobs | Any authenticated caller (`get_current_caller`) — jobs are not user-owned records; no cross-user leakage concern in the same sense as HITL, but see payload redaction below |
-| Who may retry | Any authenticated caller may retry a `dead_letter` job in V2 (no RBAC yet — same deferral posture as HITL's "Caller scope") |
-| Payload/result content | Handlers place only ids, small scalars, and short status strings on `payload`/`result` — never raw file bytes, provider credentials, MCP secrets, or full tool-argument payloads; the REST layer additionally redacts any accidental large/binary-looking field defensively |
-| RAG indexing payload | `QueueIndexingRunner` enqueues `{document_id, user_id}` only — the actual file bytes are re-fetched by the handler from the document's already-persisted storage location, never carried through the job payload (avoids bloating `background_jobs.payload` and avoids holding sensitive bytes in a broadly-readable table) |
-| Orphan-sweep resume | Reuses `AgentApprovalService`'s existing, already-validated resume path — no new execution surface, no new argument-validation bypass |
-| Flag off | No worker/scheduler tasks running, no policy consulted, no new tables read; byte-for-byte Epic 09 behaviour |
+| Control                | v1 behaviour                                                                                                                                                                                                                                                                                                                |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Who may view jobs      | Any authenticated caller (`get_current_caller`) — jobs are not user-owned records; no cross-user leakage concern in the same sense as HITL, but see payload redaction below                                                                                                                                                 |
+| Who may retry          | Any authenticated caller may retry a `dead_letter` job in V2 (no RBAC yet — same deferral posture as HITL's "Caller scope")                                                                                                                                                                                                 |
+| Payload/result content | Handlers place only ids, small scalars, and short status strings on `payload`/`result` — never raw file bytes, provider credentials, MCP secrets, or full tool-argument payloads; the REST layer additionally redacts any accidental large/binary-looking field defensively                                                 |
+| RAG indexing payload   | `QueueIndexingRunner` enqueues `{"version": 1, "document_id": "…", "user_id": "…"}` only — the actual file bytes are re-fetched by the handler from the document's already-persisted storage location, never carried through the job payload (avoids bloating `background_jobs.payload` and avoids holding sensitive bytes in a broadly-readable table) |
+| Orphan-sweep resume    | Reuses `AgentApprovalService`'s existing, already-validated resume path — no new execution surface, no new argument-validation bypass                                                                                                                                                                                       |
+| Flag off               | No worker/scheduler tasks running, no policy consulted, no new tables read; byte-for-byte Epic 09 behaviour                                                                                                                                                                                                                 |
 
 ---
 
@@ -533,7 +867,7 @@ class QueueIndexingRunner:
     async def submit(self, *, document_id: uuid.UUID, user_id: uuid.UUID) -> str:
         job = await self._queue.enqueue(
             job_type="rag_document_indexing",
-            payload={"document_id": str(document_id), "user_id": str(user_id)},
+            payload={"version": 1, "document_id": str(document_id), "user_id": str(user_id)},
         )
         return str(job.id)
 
@@ -547,38 +881,84 @@ class QueueIndexingRunner:
 - `register_pending_work()` (the in-memory staged-bytes map on `SyncIndexingRunner`) has no equivalent here: the queue-backed handler re-reads already-persisted document bytes rather than relying on process-local staged state, because a different worker instance than the one that received the upload request may claim the job.
 - `KnowledgeService.ingest_document` is modified only at the single call site that constructs/selects the runner (`rag_indexing_runner` config switch) — the rest of the ingest pipeline (chunking, embedding, storage) is untouched and reused by the `rag_document_indexing` handler exactly as `SyncIndexingRunner`'s processor callback already reuses it today.
 
+### Eventual Consistency
+
+Queue-backed indexing is **eventually consistent** — callers must not assume a document is searchable immediately after upload:
+
+```text
+Upload (HTTP 201)
+    ↓
+Queued (job enqueued, ingest returns quickly)
+    ↓
+Running (worker claimed, indexing in progress)
+    ↓
+Indexed (job succeeded, vectors stored)
+    ↓
+Searchable (visible to RAG retrieval on next query)
+```
+
+Clients should poll `IndexingJob.get_status()` (or the jobs REST API) until `state=succeeded` before treating the document as searchable. The synchronous `SyncIndexingRunner` path remains the default and preserves immediate consistency.
+
 ---
 
 ## Background Jobs REST API
 
 Authenticated-only (`Depends(get_current_caller)`). Router: `app/routers/jobs.py`. Mounted in `app/main.py`; returns `503 feature_disabled` when `BACKGROUND_JOBS_ENABLED=false`.
 
-| Method | Path | Purpose |
-| ------ | ---- | ------- |
-| `GET` | `/api/jobs` | List jobs. Query params: `status` (`queued`\|`running`\|`succeeded`\|`failed`\|`dead_letter`\|`cancelled`), `job_type`, pagination (`limit`/`offset`). Returns `BackgroundJob[]` |
-| `GET` | `/api/jobs/{id}` | Detail for one job; `404` if not found |
-| `POST` | `/api/jobs/{id}/retry` | Retriable only when `status='dead_letter'`; resets `attempt_count=0`, `status='queued'`, `run_at=now()`; `409` if the job is not currently `dead_letter` |
-| `GET` | `/api/jobs/schedules` | List `background_job_schedules` (read-only in V2 — no create/update/delete endpoint; schedules are seeded via migration/config) |
+| Method | Path                   | Purpose                                                                                                                                                                          |
+| ------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/jobs`            | List jobs. Query params: `status` (`queued`\|`running`\|`succeeded`\|`failed`\|`dead_letter`\|`cancelled`), `job_type`, pagination (`limit`/`offset`). Returns `BackgroundJob[]` |
+| `GET`  | `/api/jobs/{id}`       | Detail for one job; `404` if not found                                                                                                                                           |
+| `POST` | `/api/jobs/{id}/retry` | Retriable only when `status='dead_letter'`; resets `attempt_count=0`, `status='queued'`, `run_at=now()`; `409` if the job is not currently `dead_letter`                         |
+| `GET`  | `/api/jobs/schedules`  | List `background_job_schedules` (read-only in V2 — no create/update/delete endpoint; schedules are seeded via migration/config)                                                  |
 
 **Health:** extend `GET /api/health` with `background_jobs_enabled: bool`, `background_jobs_pending_count: int` (sum of `queued`+`running`), `background_jobs_dead_letter_count: int` (all `0` when flag off).
 
 **Response rules:** never include provider credentials, MCP server secrets, plugin `metadata` bags, filesystem paths, raw document/file bytes, or full tool-argument payloads in `payload`/`result` fields (see § Security Model).
 
+### Asynchronous API Semantics (Eventual Consistency)
+
+Queue-backed operations are **asynchronous** — clients must not assume immediate completion. The platform follows a request-acceptance pattern:
+
+```text
+Client Request (e.g. document upload with rag_indexing_runner="queue")
+    ↓
+202 Accepted / 201 Created  (resource persisted; job enqueued)
+    ↓
+Job Queued                  (BackgroundJob.status=queued)
+    ↓
+Processing                  (status=running — worker claimed)
+    ↓
+Resource Updated            (status=succeeded — side effects durable)
+    ↓
+Searchable / Visible        (downstream consumers see result on next read)
+```
+
+| Surface | Sync behaviour (default) | Async behaviour (`queue` runner / background handlers) |
+| ------- | ------------------------ | ------------------------------------------------------ |
+| RAG ingest | Blocks until indexed; immediately searchable | Returns after enqueue; poll `IndexingJob.get_status()` until `succeeded` |
+| HITL expiry | N/A (background sweep) | Approval transitions to `expired` within one scheduler cycle (~5 min) |
+| Workflow retention | N/A (background cleanup) | Old runs deleted on next daily cleanup tick |
+| Scheduled eval | N/A (background) | Report available after job completes; poll jobs REST API |
+
+**Expected latency:** enqueue-to-start ≤ worker poll interval (default 5s) + claim batch wait; handler duration varies by type (sweeps: seconds; indexing: minutes). Clients should use polling or future webhook/notification support (out of V2 scope), not blocking HTTP waits.
+
 ---
 
 ## Public APIs (stable after Phase 1)
 
-| API | Kind |
-| --- | ---- |
-| `BACKGROUND_JOBS_ENABLED` | Constant/setting |
-| `JobStatus`, `ScheduleStatus` | Enum |
-| `BackgroundJob`, `JobResult`, `JobSchedule` | Model |
-| `JobQueue`, `PostgresJobQueue` | Class |
-| `JobHandler`, `JobHandlerRegistry` | Protocol / Class |
-| `JobWorker`, `JobScheduler` | Class |
-| `JobsError`, `JobNotFoundError`, `JobHandlerNotFoundError`, `ScheduleNotFoundError`, `NonRetryableJobError` | Exception |
-| `QueueIndexingRunner` | Class (implements `IndexingJob`) |
-| Jobs REST router export | FastAPI router |
+| API                                                                                                         | Kind                             |
+| ----------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `BACKGROUND_JOBS_ENABLED`                                                                                   | Constant/setting                 |
+| `JobStatus`, `ScheduleStatus`                                                                               | Enum                             |
+| `BackgroundJob`, `JobResult`, `JobSchedule`                                                                 | Model                            |
+| `JobQueue`, `PostgresJobQueue`                                                                              | Class                            |
+| `JobHandler`, `JobHandlerRegistry`                                                                          | Protocol / Class                 |
+| `JobWorker`, `JobScheduler`                                                                                 | Class                            |
+| `JobScheduleStore`, `PostgresJobScheduleStore`                                                              | Protocol / Class                 |
+| `JobsError`, `JobNotFoundError`, `JobHandlerNotFoundError`, `ScheduleNotFoundError`, `NonRetryableJobError`, `JobConcurrencyError` | Exception                        |
+| `QueueIndexingRunner`                                                                                       | Class (implements `IndexingJob`) |
+| Jobs REST router export                                                                                     | FastAPI router                   |
 
 Internal (may evolve): `background_jobs`/`background_job_schedules` internal column set beyond the documented model fields, claim-query SQL text, handler-internal retry/skip heuristics, test fixture helpers.
 
@@ -586,36 +966,136 @@ Internal (may evolve): `background_jobs`/`background_job_schedules` internal col
 
 ## Configuration defaults
 
-| Setting | Default |
-| ------- | ------- |
-| `BACKGROUND_JOBS_ENABLED` | **`false`** |
-| `background_jobs_worker_poll_interval_seconds` | `5` |
-| `background_jobs_worker_batch_size` | `10` |
-| `background_jobs_claim_lease_seconds` | `300` |
-| `background_jobs_default_max_attempts` | `3` |
-| `background_jobs_retry_base_delay_seconds` | `5.0` |
-| `background_jobs_retry_max_delay_seconds` | `300.0` |
-| `background_jobs_scheduler_poll_interval_seconds` | `30` |
-| `background_jobs_retention_days` | `30` (terminal `background_jobs` rows older than this are purged by `workflow_run_retention_cleanup`'s handler, which also self-cleans its own job table) |
-| `hitl_orphan_sweep_grace_seconds` | `120` (minimum time an `approved`-with-snapshot row must age before being considered orphaned, avoiding a race with a still-in-flight normal resume) |
-| `rag_indexing_runner` | `"sync"` (unchanged default; `"queue"` opts into `QueueIndexingRunner`) |
-| `evaluation_schedule_enabled` | `false` |
-| `evaluation_schedule_level` | `"all"` |
+| Setting                                           | Default                                                                                                                                                   |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BACKGROUND_JOBS_ENABLED`                         | **`false`**                                                                                                                                               |
+| `background_jobs_worker_poll_interval_seconds`    | `5`                                                                                                                                                       |
+| `background_jobs_worker_batch_size`               | `10`                                                                                                                                                      |
+| `background_jobs_claim_lease_seconds`             | `300`                                                                                                                                                     |
+| `background_jobs_handler_timeout_seconds`         | `600` (10 min — per-handler dispatch ceiling via `asyncio.wait_for`)                                                                                    |
+| `background_jobs_default_max_attempts`            | `3`                                                                                                                                                       |
+| `background_jobs_retry_base_delay_seconds`        | `5.0`                                                                                                                                                     |
+| `background_jobs_retry_max_delay_seconds`         | `300.0`                                                                                                                                                   |
+| `background_jobs_scheduler_poll_interval_seconds` | `30`                                                                                                                                                      |
+| `background_jobs_retention_days`                  | `30` (terminal `background_jobs` rows older than this are purged by `workflow_run_retention_cleanup`'s handler, which also self-cleans its own job table) |
+| `hitl_orphan_sweep_grace_seconds`                 | `120` (minimum time an `approved`-with-snapshot row must age before being considered orphaned, avoiding a race with a still-in-flight normal resume)      |
+| `rag_indexing_runner`                             | `"sync"` (unchanged default; `"queue"` opts into `QueueIndexingRunner`)                                                                                   |
+| `evaluation_schedule_enabled`                     | `false`                                                                                                                                                   |
+| `evaluation_schedule_level`                       | `"all"`                                                                                                                                                   |
 
-Existing flags/settings honoured, unchanged behaviour when consulted (`hitl_approval_timeout_hours`, `workflow_approval_timeout_hours`, `workflow_run_retention_days` now finally *enforced* rather than config-only; `WORKFLOW_ENGINE_ENABLED`, `PLUGINS_ENABLED`, `MCP_ENABLED`, `OBSERVABILITY_ENABLED`, `HITL_ENABLED`, `agent_runtime_enabled`, …).
+Existing flags/settings honoured, unchanged behaviour when consulted (`hitl_approval_timeout_hours`, `workflow_approval_timeout_hours`, `workflow_run_retention_days` now finally _enforced_ rather than config-only; `WORKFLOW_ENGINE_ENABLED`, `PLUGINS_ENABLED`, `MCP_ENABLED`, `OBSERVABILITY_ENABLED`, `HITL_ENABLED`, `agent_runtime_enabled`, …).
 
 ---
 
 ## Dependencies
 
-| Requires | Provides to downstream |
-| -------- | ----------------------- |
+| Requires                                                                                                                                        | Provides to downstream                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Epic 09 Human-in-the-Loop (`agent_tool_approvals`, `hitl_approval_timeout_hours`, reserved `ApprovalStatus.EXPIRED`, Snapshot Cleanup Strategy) | Enforcement of the approval-timeout and orphaned-snapshot gaps Epic 09 explicitly deferred |
-| Epic 06 Workflow Engine (`workflow_approval_timeout_hours`, `workflow_run_retention_days`, `WorkflowStore`) | Enforcement of the workflow-side timeout and retention gaps Epic 06 explicitly deferred |
-| Epic 07 Observability (span/metric helpers, evaluation runner internals) | `job_span`, Background Jobs metrics, `scheduled_evaluation_run`'s reuse of the eval runner |
-| Epic 02 Advanced RAG (`IndexingJob` protocol, `SyncIndexingRunner`, ingest pipeline) | `QueueIndexingRunner` as a drop-in alternative runner |
+| Epic 06 Workflow Engine (`workflow_approval_timeout_hours`, `workflow_run_retention_days`, `WorkflowStore`)                                     | Enforcement of the workflow-side timeout and retention gaps Epic 06 explicitly deferred    |
+| Epic 07 Observability (span/metric helpers, evaluation runner internals)                                                                        | `job_span`, Background Jobs metrics, `scheduled_evaluation_run`'s reuse of the eval runner |
+| Epic 02 Advanced RAG (`IndexingJob` protocol, `SyncIndexingRunner`, ingest pipeline)                                                            | `QueueIndexingRunner` as a drop-in alternative runner                                      |
 
 **Future consumers:** Epic 11 Security & Governance (RBAC-scoped job visibility, per-tenant job isolation, rate limits on enqueue); a future epic that needs a non-Postgres `JobQueue` implementation at scale; a future epic that migrates Epic 06/05's in-process scheduling onto this queue if multi-replica deployment becomes a real requirement.
+
+---
+
+## Operational Runbook — Dead-Letter Jobs
+
+### Expected Operator Workflow
+
+1. **Detect** — monitor `background_jobs_dead_letter_count` (health endpoint or observability dashboard); investigate when count rises or a specific handler's dead-letter rate spikes.
+2. **Inspect** — `GET /api/jobs?status=dead_letter` (or frontend Jobs dashboard); read `job_type`, `attempt_count`, `last_error`, timestamps. Payload/result fields are redacted per § Security Model — use `job_type` + `last_error` for triage.
+3. **Investigate** — determine root cause category (see § Poison Jobs & NonRetryableJobError): transient infra issue vs permanent data/config problem.
+4. **Remediate** — fix underlying cause if applicable (restore deleted resource, fix config, deploy handler fix).
+5. **Retry or discard** — `POST /api/jobs/{id}/retry` resets to `queued` with `attempt_count=0` if the root cause is resolved; leave in `dead_letter` or cancel if permanently unrecoverable.
+
+### Retry Procedure
+
+- **When to retry:** transient failures (DB outage, provider rate limit) where the root cause is resolved; operator-fixed configuration; handler bug fixed in a new deployment.
+- **When NOT to retry:** poison jobs (`NonRetryableJobError` cases — malformed payload, unsupported version, permanently deleted resource). Retrying will dead-letter again immediately.
+- **Payload editing:** **not supported in V2** — the REST API has no `PATCH /api/jobs/{id}` endpoint. Operators cannot edit a job's payload before retry. If the payload is wrong, the job is permanently failed; enqueue a new job manually (future epic) or fix the upstream enqueue path.
+
+### Permanent Failure Criteria
+
+A job should be treated as permanently failed (do not retry) when:
+
+- `last_error` indicates `NonRetryableJobError` or `unsupported payload version`
+- The referenced resource is confirmed deleted with no recovery path
+- The same job has been retried manually ≥2 times and dead-lettered again each time with the same error class
+
+Document permanent failures in operator notes; consider a future `cancelled` transition for acknowledged poison jobs (not implemented in V2).
+
+### Recommended Health Thresholds
+
+Suggested monitoring thresholds for operational readiness (tune per deployment):
+
+| Signal | Warning | Critical | Action |
+| ------ | ------- | -------- | ------ |
+| `background_jobs_dead_letter_count` | > 5 | > 20 | Investigate `last_error` by `job_type`; see dead-letter workflow above |
+| `background_jobs_pending_count` (`queued`+`running`) | > 50 sustained 15 min | > 200 sustained 15 min | Check worker health, handler timeouts, DB connectivity |
+| Retry rate (`job_retries_total` / `jobs_completed_total`) | > 10% over 1 h | > 25% over 1 h | Identify failing handler; check upstream dependencies |
+| Oldest queued job age | > 10 min | > 30 min | Worker may be stuck, crashed, or under-provisioned |
+| Worker poll cycle duration | > 2× poll interval | > 5× poll interval | Claim query slow — check indexes, table bloat, concurrent load |
+| Handler p95 duration (`job_duration_ms`) | > 50% of timeout | > 80% of timeout | Handler approaching timeout; consider splitting job or raising timeout (future) |
+
+These are guidelines, not hardcoded alerts — configure in your observability stack when `OBSERVABILITY_ENABLED=true`.
+
+---
+
+## Throughput & Scalability Assumptions
+
+V2 is sized for a **single-tenant, single-replica** deployment posture (same as Epic 06):
+
+| Assumption | V2 target |
+| ---------- | --------- |
+| Expected jobs/hour | ~100–500 (dominated by 5-min/15-min sweeps + occasional RAG indexing) |
+| Expected jobs/day | ~2,000–12,000 (well within Postgres row-lock throughput) |
+| Worker count | 1 asyncio worker task per app instance |
+| Worker batch size | 10 jobs per poll cycle |
+| Worker poll interval | 5 seconds |
+| Peak concurrent handlers | ≤10 (batch size) |
+| `background_jobs` table growth | Bounded by `background_jobs_retention_days` self-cleanup (default 30 days) |
+
+These assumptions are sufficient for the platform's current scale. If sustained throughput exceeds ~1,000 jobs/hour or p95 claim latency exceeds 500ms, revisit queue backend options (see § Polling vs Alternatives).
+
+### Operating Ranges & Tuning (Architectural)
+
+| Scale | Jobs/day | Posture | Tuning guidance |
+| ----- | -------- | ------- | --------------- |
+| **V2 default** | ~2k–12k | Single worker, Postgres queue | Defaults (`batch=10`, `poll=5s`) — no tuning needed |
+| **Moderate** | ~12k–50k | Single worker, Postgres queue | Consider `batch_size=20`, `poll_interval=3s`; monitor claim latency |
+| **High** | ~50k–100k | Multi-worker (N replicas), Postgres queue | Increase workers; watch `background_jobs` index bloat; batch deletes in cleanup handlers |
+| **Beyond Postgres** | >100k sustained | External broker | Migrate to Redis/Celery/SQS via `JobQueue` protocol swap |
+
+**Batch size tuning:** larger batches improve throughput but increase worst-case handler concurrency (`asyncio.gather` over batch) and memory use. Keep `batch_size × handler_timeout` within pod memory/CPU budget.
+
+**Poll interval tuning:** shorter intervals reduce enqueue-to-start latency but increase idle DB load. Halving poll interval doubles claim-query frequency — only reduce below 5s if sub-5s latency is a measured requirement.
+
+---
+
+## Polling vs Alternatives
+
+**Why polling (chosen for V2):**
+
+- **Simplicity** — no long-lived `LISTEN` connections to manage, no notification-loss edge cases on connection drop/reconnect.
+- **Uniform pattern** — worker and scheduler share the same poll-loop idiom already used elsewhere in the codebase (Epic 06 background tasks).
+- **Sufficient at V2 scale** — 5-second worker poll with batch-10 handles the expected ~100–500 jobs/hour comfortably; claim query is indexed.
+- **Operational predictability** — load is steady and bounded; no thundering-herd on `NOTIFY` fan-out.
+
+**Why not PostgreSQL `LISTEN/NOTIFY`:**
+
+- Notifications are not durable — a worker disconnected during `NOTIFY` misses the signal and must poll anyway as a fallback, duplicating complexity.
+- Adds connection-pool coupling (dedicated listener connection per worker).
+- Marginal latency improvement (~seconds) is not worth the operational cost at V2 throughput.
+
+**When to migrate to Redis/Celery/SQS:**
+
+- Sustained >5,000 jobs/hour or claim-query contention on `background_jobs`
+- Sub-second enqueue-to-start latency requirements
+- Multi-region worker fleets needing a geographically distributed queue
+
+The `JobQueue` protocol is the swap point — `JobWorker`, `JobScheduler`, and all handlers depend on the protocol, not Postgres specifics. A future `RedisJobQueue` or `SqsJobQueue` implementation replaces only `PostgresJobQueue` without redesigning handlers.
 
 ---
 
@@ -623,16 +1103,18 @@ Existing flags/settings honoured, unchanged behaviour when consulted (`hitl_appr
 
 Documented extension points reserved by this epic's model and API design — **not implemented in V2**:
 
-| Enhancement | Motivation | V2 foundation |
-| ----------- | ---------- | -------------- |
-| **Non-Postgres `JobQueue` backend** | Horizontal scale beyond a single Postgres instance's row-lock throughput | `JobQueue` protocol is the only contract `JobWorker`/`JobScheduler`/handlers depend on |
-| **Cron-expression scheduling** | Precise calendar-based schedules (e.g. "every Monday at 9am") | `background_job_schedules` schema is additive-extensible with a future `cron_expression` column |
-| **Per-job-type retry curves** | Some handlers may need faster/slower backoff than the shared default | `max_attempts` is already per-enqueue; a per-`job_type` base-delay override is additive |
-| **Multi-replica worker deployment** | Higher throughput / high availability | Claim-and-lease mechanism is already safe under concurrent pollers; only deployment tooling is missing |
-| **Migrating Epic 06/05's in-process schedulers onto this queue** | One less bespoke pattern to maintain | `JobQueue`/`JobHandlerRegistry` shapes are general enough to host workflow-run-launch or memory-extraction handlers without redesign |
-| **`ApprovalStatus.CANCELLED` sweep for a future soft-deletable resource** | Team/shared approval queues (Epic 11) may introduce a resource that can be archived without cascading delete | `CANCELLED` remains reserved in the enum; a sweep handler would follow the same shape as the two shipped sweeps |
-| **RBAC-scoped job visibility** | Multi-tenant operator boundaries | Jobs REST API query params are additive-extensible with a future `visible_to`/tenant filter |
-| **Durable eval history / trend dashboards** | Track eval pass-rate over time from scheduled runs | `JobResult.counts`/`summary` already capture a per-run snapshot; a history table is additive |
+| Enhancement                                                               | Motivation                                                                                                   | V2 foundation                                                                                                                        |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **Non-Postgres `JobQueue` backend**                                       | Horizontal scale beyond a single Postgres instance's row-lock throughput                                     | `JobQueue` protocol is the only contract `JobWorker`/`JobScheduler`/handlers depend on                                               |
+| **Cron-expression scheduling**                                            | Precise calendar-based schedules (e.g. "every Monday at 9am")                                                | `background_job_schedules` schema is additive-extensible with a future `cron_expression` column                                      |
+| **Per-job-type retry curves**                                             | Some handlers may need faster/slower backoff than the shared default                                         | `max_attempts` is already per-enqueue; a per-`job_type` base-delay override is additive                                              |
+| **Multi-replica worker deployment**                                       | Higher throughput / high availability                                                                        | Claim-and-lease mechanism is already safe under concurrent pollers; only deployment tooling is missing                               |
+| **Migrating Epic 06/05's in-process schedulers onto this queue**          | One less bespoke pattern to maintain                                                                         | `JobQueue`/`JobHandlerRegistry` shapes are general enough to host workflow-run-launch or memory-extraction handlers without redesign |
+| **`ApprovalStatus.CANCELLED` sweep for a future soft-deletable resource** | Team/shared approval queues (Epic 11) may introduce a resource that can be archived without cascading delete | `CANCELLED` remains reserved in the enum; a sweep handler would follow the same shape as the two shipped sweeps                      |
+| **RBAC-scoped job visibility**                                            | Multi-tenant operator boundaries                                                                             | Jobs REST API query params are additive-extensible with a future `visible_to`/tenant filter                                          |
+| **Durable eval history / trend dashboards**                               | Track eval pass-rate over time from scheduled runs                                                           | `JobResult.counts`/`summary` already capture a per-run snapshot; a history table is additive                                         |
+| **Queue partitioning**                                                  | Isolate noisy handlers, enforce tenant boundaries, or shard throughput at scale                              | `JobQueue` protocol + handler-based routing is additive; partition key column on `background_jobs` is a future schema extension       |
+| **Dead-letter payload editing / manual re-enqueue API**                 | Operators need to fix and retry jobs with corrected payloads                                                 | `POST …/retry` resets attempts only; a `PATCH` or manual-enqueue endpoint is additive                                               |
 
 These items require explicit Part I updates and should remain `TODO(future):` during V2 implementation.
 
@@ -640,28 +1122,48 @@ These items require explicit Part I updates and should remain `TODO(future):` du
 
 ## Glossary
 
-| Term | Definition |
-| ---- | ---------- |
-| `BackgroundJob` | The persisted record of one unit of asynchronous work — type, payload, status, attempt/retry bookkeeping, result |
-| `JobSchedule` | A recurring-tick definition (`interval_seconds`, `next_run_at`) that `JobScheduler` uses to enqueue jobs on a fixed cadence |
-| `JobQueue` | The stateless enqueue/claim/complete/fail/get/list contract; `PostgresJobQueue` is the only V2 implementation |
-| `JobHandler` | A registered async callable that performs one `job_type`'s actual work and returns a `JobResult` or raises |
-| Claim-and-lease | The `SELECT … FOR UPDATE SKIP LOCKED` pattern that atomically assigns a job to one worker for a bounded lease duration, after which an incomplete claim is automatically reclaimable |
-| Dead letter | The terminal `dead_letter` status reached when a job's `attempt_count` exhausts `max_attempts` — visible and manually retriable, never silently dropped |
-| Idempotency key | A caller-supplied unique string that makes a duplicate `enqueue()` call (e.g. a scheduler double-tick) a safe no-op instead of a duplicate job |
+| Term              | Definition                                                                                                                                                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BackgroundJob`   | The persisted record of one unit of asynchronous work — type, payload, status, attempt/retry bookkeeping, result                                                                                                 |
+| `JobSchedule`     | A recurring-tick definition (`interval_seconds`, `next_run_at`) that `JobScheduler` uses to enqueue jobs on a fixed cadence                                                                                      |
+| `JobQueue`        | The stateless enqueue/claim/complete/fail/get/list contract; `PostgresJobQueue` is the only V2 implementation                                                                                                    |
+| `JobHandler`      | A registered async callable that performs one `job_type`'s actual work and returns a `JobResult` or raises                                                                                                       |
+| Claim-and-lease   | The `SELECT … FOR UPDATE SKIP LOCKED` pattern that atomically assigns a job to one worker for a bounded lease duration, after which an incomplete claim is automatically reclaimable                             |
+| Dead letter       | The terminal `dead_letter` status reached when a job's `attempt_count` exhausts `max_attempts` — visible and manually retriable, never silently dropped                                                          |
+| Idempotency key   | A caller-supplied unique string that makes a duplicate `enqueue()` call (e.g. a scheduler double-tick) a safe no-op instead of a duplicate job                                                                   |
+| Payload version   | Top-level `"version"` field in every job payload identifying the schema generation; unsupported versions are poison jobs (`NonRetryableJobError`)                                                               |
+| Poison job        | A job that will never succeed on retry (malformed payload, deleted resource, unsupported version) — dead-lettered immediately via `NonRetryableJobError`                                                          |
+| At-least-once delivery | The queue guarantee that a job executes one or more times; handlers must be idempotent because duplicate execution is possible after lease reclaim |
 | Orphaned snapshot | An `agent_tool_approvals` row stuck `status='approved'` with its pause snapshot still populated because the process crashed between Decision Execution Stage 1 and Stage 4 (Epic 09 § Snapshot Cleanup Strategy) |
+
+---
+
+## Appendix — Handler Implementation Checklist
+
+Use this checklist when adding a new `JobHandler` (first-class or future):
+
+- [ ] **Payload version validated** — reject unsupported `payload["version"]` with `NonRetryableJobError`
+- [ ] **Handler registered** — added to `register_all_handlers()` before worker startup
+- [ ] **Idempotent implementation** — safe to run twice (CAS / UPSERT / unique constraint / idempotency key)
+- [ ] **Timeout respected** — completes within `background_jobs_handler_timeout_seconds` or split into smaller jobs
+- [ ] **Transaction boundaries** — handler uses its own DB sessions; never holds queue row locks
+- [ ] **Metrics emitted** — contributes to `job_duration_ms` and appropriate queue counters
+- [ ] **Tracing emitted** — runs inside `job_span` wrapper when observability enabled
+- [ ] **Category assigned** — sweep / cleanup / processing / scheduled (or new category documented)
+- [ ] **Tests implemented** — happy path, idempotent re-run, poison payload, timeout (if applicable)
+- [ ] **Documentation updated** — Part I handler table, config fields, operational notes
 
 ---
 
 ## Implementation Risks
 
-Risks specific to *how* this epic must be built (see § Risks in Part II for delivery/mitigation tracking):
+Risks specific to _how_ this epic must be built (see § Risks in Part II for delivery/mitigation tracking):
 
 - **Claim-query correctness under concurrency** — the combined "fresh OR lease-expired" `WHERE` clause must be verified under genuinely concurrent workers (not just sequential test calls) to confirm `FOR UPDATE SKIP LOCKED` prevents double-claims; a subtle bug here silently double-executes side-effecting handlers (e.g. running `hitl_orphaned_snapshot_sweep`'s resume twice).
 - **QueueIndexingRunner byte re-fetch** — unlike `SyncIndexingRunner` (bytes held in-process until consumed), the queue-backed path must re-fetch document bytes from wherever the ingest endpoint already persisted them before a background worker can process them; if that persisted-bytes location doesn't already exist independent of the in-request flow, this handler cannot be built without first ensuring upload bytes survive past the request (verify in Phase 5 before assuming feasibility — if not yet true, document the gap and keep `rag_indexing_runner="sync"` as the only supported value until a future epic adds durable upload storage).
 - **Expiry sweep interacting with an in-flight decide/approve call** — the same `WHERE status='pending'` Compare-And-Swap (CAS) guard Epic 09 already uses for decide/revise prevents the expiry sweep from racing a concurrent human decision (whichever transaction commits first wins; the other observes a non-`pending` row and no-ops) — must be verified with a concurrency test, not just documented.
 - **Orphan-sweep resume re-entering `AgentExecutor`** — resuming from a background job (no active request/response cycle) means the resumed turn's SSE continuation has nowhere to stream to; the handler must finalize the `ChatMessage` directly (as if the client had disconnected right after `decide()` started) rather than attempting to produce a stream, and must not assume a live HTTP response object exists.
-- **Scheduler double-instance risk** — if `BACKGROUND_JOBS_ENABLED=true` on more than one app instance, more than one `JobScheduler` loop runs; the idempotency-key design makes duplicate *enqueues* safe, but the design must be verified to also make duplicate `next_run_at` *advancement* safe (last-write-wins on the schedule row's `updated_at` is acceptable; must not double-advance and skip a tick).
+- **Scheduler double-instance risk** — if `BACKGROUND_JOBS_ENABLED=true` on more than one app instance, more than one `JobScheduler` loop runs; the idempotency-key design makes duplicate _enqueues_ safe, but the design must be verified to also make duplicate `next_run_at` _advancement_ safe (last-write-wins on the schedule row's `updated_at` is acceptable; must not double-advance and skip a tick).
 - **Retention cleanup performance** — deleting many old `workflow_runs`/`background_jobs` rows in one handler invocation must be batched (not one unbounded `DELETE`) to avoid long lock hold times on tables other requests are actively reading/writing.
 
 ---
@@ -687,6 +1189,10 @@ These rules must remain true throughout this epic. Violations require explicit u
 - **One queue, uniform contract** — every first-class handler and every future consumer goes through the same `JobQueue.enqueue/claim/complete/fail` contract; no handler gets a bespoke persistence path.
 - **No new infrastructure** — the queue is Postgres-backed; introducing Redis/Celery/RQ requires an explicit Part I update, not a "just this once" exception.
 - **Self-healing claims, no silent loss** — a worker crash never permanently loses a job; the lease-expiry reclaim path must always be exercised by tests, not just documented.
+- **Optimistic concurrency on every mutation** — all `background_jobs` updates use `version` checks; no blind overwrites.
+- **Handler idempotency is mandatory** — at-least-once delivery (lease reclaim) means every handler must be safe to execute twice; use CAS, UPSERT, unique constraints, or idempotency keys.
+- **Short transaction boundaries** — `claim()` commits before handler execution; handlers never run inside a queue transaction or while holding a row lock.
+- **Versioned payloads** — every enqueue supplies `"version": 1`; handlers reject unknown versions with `NonRetryableJobError`.
 - **Existing schedulers untouched** — `schedule_run_task`/`reconcile_orphaned_runs` (Epic 06) and `schedule_extraction_task`/`schedule_lifecycle_task` (Epic 05) are not modified by this epic.
 - **Decision status immutability preserved** — the expiry sweep transitions a `pending` approval to `expired` via the same Compare-And-Swap guard Epic 09 uses; it must never touch an already-terminal (`approved`/`rejected`) row, preserving Epic 09's "decision status is immutable once terminal" invariant.
 - **No content leakage in job payloads** — `payload`/`result` carry ids, small scalars, and short status strings only — never file bytes, credentials, secrets, or full tool arguments.
@@ -718,37 +1224,37 @@ These rules must remain true throughout this epic. Violations require explicit u
 
 Early phases build **the generic queue/worker/scheduler primitives in isolation** (unit tests with fixture handlers). Each first-class handler integrates in its own phase, closing one prior epic's named gap at a time. REST API, observability, eval, and frontend follow once all handlers work.
 
-| Phase | Builds | Wiring |
-| ----- | ------ | ------ |
-| 1 | Job queue & worker foundations (models, migration, flag, `PostgresJobQueue`, `JobWorker`, retry/backoff) | None |
-| 2 | Job scheduler & recurring jobs | `JobScheduler`, seeded schedules |
-| 3 | HITL approval expiry & orphaned-snapshot sweep | `AgentToolApprovalStore`, `WorkflowStore`, `AgentApprovalService` |
-| 4 | Workflow run retention cleanup (+ jobs self-retention) | `WorkflowStore` |
-| 5 | RAG queue-backed indexing | `KnowledgeService`, `IndexingJob` |
-| 6 | Scheduled evaluation runs | `app/ai/evaluation` runner |
-| 7 | Jobs REST API & health | REST only |
-| 8 | Background Jobs observability | Internal |
-| 9 | Reference scenarios + eval cases | CLI |
-| 10 | Frontend jobs & schedules dashboard | Frontend |
-| 11 | Validation & release | — |
+| Phase | Builds                                                                                                   | Wiring                                                            |
+| ----- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| 1     | Job queue & worker foundations (models, migration, flag, `PostgresJobQueue`, `JobWorker`, retry/backoff) | None                                                              |
+| 2     | Job scheduler & recurring jobs                                                                           | `JobScheduler`, seeded schedules                                  |
+| 3     | HITL approval expiry & orphaned-snapshot sweep                                                           | `AgentToolApprovalStore`, `WorkflowStore`, `AgentApprovalService` |
+| 4     | Workflow run retention cleanup (+ jobs self-retention)                                                   | `WorkflowStore`                                                   |
+| 5     | RAG queue-backed indexing                                                                                | `KnowledgeService`, `IndexingJob`                                 |
+| 6     | Scheduled evaluation runs                                                                                | `app/ai/evaluation` runner                                        |
+| 7     | Jobs REST API & health                                                                                   | REST only                                                         |
+| 8     | Background Jobs observability                                                                            | Internal                                                          |
+| 9     | Reference scenarios + eval cases                                                                         | CLI                                                               |
+| 10    | Frontend jobs & schedules dashboard                                                                      | Frontend                                                          |
+| 11    | Validation & release                                                                                     | —                                                                 |
 
 ## Reuse Existing Components
 
 **DO NOT REIMPLEMENT**
 
-| Component | Location |
-| --------- | -------- |
-| `schedule_run_task`, `_ACTIVE_RUN_IDS`, `reconcile_orphaned_runs` | `app/ai/workflow/engine/background.py` |
-| `schedule_extraction_task`, `schedule_lifecycle_task` | `app/ai/memory/background_tasks.py` |
-| `IndexingJob` protocol, `SyncIndexingRunner`, `PendingIndexingWork` | `app/ai/interfaces/indexing_job.py`, `app/ai/rag/indexing/` |
-| `AgentApprovalService`, `AgentExecutor.resume_from_approval`, `AgentToolApprovalStore` CAS pattern | `app/ai/hitl/` |
-| `WorkflowManager.apply_decision`, `ApprovalNodeExecutor`, CAS decision pattern | `app/ai/workflow/` |
-| `app/ai/evaluation/` runner internals (`runners.py`, `cli.py`) | `app/ai/evaluation/` |
-| `record_workflow_approval_pending_delta`, `record_agent_tool_approval_pending_delta` metric pattern | `app/ai/observability/metrics/` |
-| `approval_span`, `workflow_span` helper style | `app/ai/observability/tracing/spans.py` |
-| `get_current_caller`, `CallerContext` | `app/core/caller.py` |
-| Feature flag infrastructure | `app/core/config.py` |
-| `get_sessionmaker`, `build_workflow_manager_for_session` standalone-session pattern | `app/db/engine.py`, `app/ai/deps.py` |
+| Component                                                                                           | Location                                                    |
+| --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `schedule_run_task`, `_ACTIVE_RUN_IDS`, `reconcile_orphaned_runs`                                   | `app/ai/workflow/engine/background.py`                      |
+| `schedule_extraction_task`, `schedule_lifecycle_task`                                               | `app/ai/memory/background_tasks.py`                         |
+| `IndexingJob` protocol, `SyncIndexingRunner`, `PendingIndexingWork`                                 | `app/ai/interfaces/indexing_job.py`, `app/ai/rag/indexing/` |
+| `AgentApprovalService`, `AgentExecutor.resume_from_approval`, `AgentToolApprovalStore` CAS pattern  | `app/ai/hitl/`                                              |
+| `WorkflowManager.apply_decision`, `ApprovalNodeExecutor`, CAS decision pattern                      | `app/ai/workflow/`                                          |
+| `app/ai/evaluation/` runner internals (`runners.py`, `cli.py`)                                      | `app/ai/evaluation/`                                        |
+| `record_workflow_approval_pending_delta`, `record_agent_tool_approval_pending_delta` metric pattern | `app/ai/observability/metrics/`                             |
+| `approval_span`, `workflow_span` helper style                                                       | `app/ai/observability/tracing/spans.py`                     |
+| `get_current_caller`, `CallerContext`                                                               | `app/core/caller.py`                                        |
+| Feature flag infrastructure                                                                         | `app/core/config.py`                                        |
+| `get_sessionmaker`, `build_workflow_manager_for_session` standalone-session pattern                 | `app/db/engine.py`, `app/ai/deps.py`                        |
 
 When `BACKGROUND_JOBS_ENABLED=false`, existing platform behaviour must remain unchanged.
 
@@ -771,34 +1277,34 @@ When `BACKGROUND_JOBS_ENABLED=false`, existing platform behaviour must remain un
 
 _To be re-verified in Epic 10 Phase 0; Epic 09 Phase 10 completion record used as the starting template only (see [post-mvp-v2-epic-09-human-in-the-loop.md](./post-mvp-v2-epic-09-human-in-the-loop.md) § Phase 10 Completion Record)._
 
-| Area | State (as of Epic 09 Phase 10) |
-| ---- | -------------------------------- |
-| Backend tests / coverage | 1912 passed, 88.95% `app/` coverage (flag-on) |
-| HITL package coverage | 84% on `app/ai/hitl/` |
-| Frontend tests | 300 passed (50 files); lint + build pass |
-| Integration tests | 157 passed (Epic 09 test paths) |
-| Eval CLI | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
-| Feature Flag Regression | 1912 passed with `HITL_ENABLED=false` (88.99% coverage) |
-| Human-in-the-Loop | Epic 09 Phases 0–10 **Completed** — release summary published |
+| Area                     | State (as of Epic 09 Phase 10)                                                  |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| Backend tests / coverage | 1912 passed, 88.95% `app/` coverage (flag-on)                                   |
+| HITL package coverage    | 84% on `app/ai/hitl/`                                                           |
+| Frontend tests           | 300 passed (50 files); lint + build pass                                        |
+| Integration tests        | 157 passed (Epic 09 test paths)                                                 |
+| Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
+| Feature Flag Regression  | 1912 passed with `HITL_ENABLED=false` (88.99% coverage)                         |
+| Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |
 
 ---
 
 ## Phase Status
 
-| Phase | Name | Effort | Status |
-| ----- | ---- | ------ | ------ |
-| 0 | Baseline Audit | XS | Not Started |
-| 1 | Job Queue & Worker Foundations | L | Not Started |
-| 2 | Job Scheduler & Recurring Jobs | M | Not Started |
-| 3 | HITL Approval Expiry & Orphaned-Snapshot Sweep | L | Not Started |
-| 4 | Workflow Run Retention Cleanup | M | Not Started |
-| 5 | RAG Queue-Backed Indexing | M | Not Started |
-| 6 | Scheduled Evaluation Runs | S | Not Started |
-| 7 | Jobs REST API & Health | S | Not Started |
-| 8 | Background Jobs Observability | S | Not Started |
-| 9 | Reference Scenarios & Eval Cases | M | Not Started |
-| 10 | Frontend Jobs & Schedules Dashboard | S | Not Started |
-| 11 | Validation & Release | M | Not Started |
+| Phase | Name                                           | Effort | Status      |
+| ----- | ---------------------------------------------- | ------ | ----------- |
+| 0     | Baseline Audit                                 | XS     | Not Started |
+| 1     | Job Queue & Worker Foundations                 | L      | Not Started |
+| 2     | Job Scheduler & Recurring Jobs                 | M      | Not Started |
+| 3     | HITL Approval Expiry & Orphaned-Snapshot Sweep | L      | Not Started |
+| 4     | Workflow Run Retention Cleanup                 | M      | Not Started |
+| 5     | RAG Queue-Backed Indexing                      | M      | Not Started |
+| 6     | Scheduled Evaluation Runs                      | S      | Not Started |
+| 7     | Jobs REST API & Health                         | S      | Not Started |
+| 8     | Background Jobs Observability                  | S      | Not Started |
+| 9     | Reference Scenarios & Eval Cases               | M      | Not Started |
+| 10    | Frontend Jobs & Schedules Dashboard            | S      | Not Started |
+| 11    | Validation & Release                           | M      | Not Started |
 
 **Epic 10 overall:** Not started. Next gate: user authorization to begin Phase 0.
 
@@ -834,7 +1340,7 @@ Establish a verified implementation baseline before introducing Background Jobs.
 
 ## Architecture Review
 
-- [ ] Review frozen Part I architecture.
+- [ ] Review frozen Part I architecture (v3 — incorporates final review: transaction boundaries, cancellation semantics, handler idempotency requirement, observability correlation, health thresholds, handler checklist).
 - [ ] Confirm `agent_tool_approvals.status` CHECK already includes `expired`/`cancelled` (Epic 09) and `chat_messages.status`/`workflow_node_executions.decision` do not yet.
 - [ ] Confirm no `app/ai/jobs/` package exists.
 
@@ -906,30 +1412,34 @@ Introduce the core `app/ai/jobs/` package, domain models, database migration, an
 ## Models
 
 - [ ] Implement `JobStatus` enum (`queued`, `running`, `succeeded`, `failed`, `dead_letter`, `cancelled`).
-- [ ] Implement `BackgroundJob`, `JobResult` Pydantic models matching Part I schema.
+- [ ] Implement `BackgroundJob`, `JobResult` Pydantic models matching Part I schema (including `version` field).
 - [ ] Implement `JobHandler` protocol and `JobHandlerRegistry.register()`/`resolve()`.
+- [ ] Add `JobConcurrencyError` to `exceptions.py`.
 
 ## Migration
 
-- [ ] Create `background_jobs` table (all columns per Part I § Job Handlers — Domain Model).
+- [ ] Create `background_jobs` table (all columns per Part I § Job Handlers — Domain Model, including `version INT NOT NULL DEFAULT 1`).
 - [ ] Add indexes supporting the claim query (`status`, `run_at`) and a unique index on `idempotency_key` (partial, `WHERE idempotency_key IS NOT NULL`).
 - [ ] Verify migration upgrade/downgrade round-trip.
 
 ## Queue Implementation
 
 - [ ] Implement `PostgresJobQueue.enqueue()` — insert; on `idempotency_key` unique-violation, fetch and return the existing row instead of raising.
-- [ ] Implement `PostgresJobQueue.claim_due()` — the combined fresh-or-lease-expired `SELECT … FOR UPDATE SKIP LOCKED` query per Part I § Claim-and-Lease Mechanism.
-- [ ] Implement `PostgresJobQueue.complete()`/`fail()`/`get()`/`list()`.
+- [ ] Implement `PostgresJobQueue.claim_due()` — the combined fresh-or-lease-expired `SELECT … FOR UPDATE SKIP LOCKED` query per Part I § Claim-and-Lease Mechanism (increment `version` on claim).
+- [ ] Implement `PostgresJobQueue.complete()`/`fail()`/`cancel()`/`get()`/`list()` — all mutating ops use `WHERE id = :id AND version = :expected_version`; raise `JobConcurrencyError` on zero-row update.
+- [ ] Implement worker identity generation (`{hostname}:{pid}:{uuid4}`) for `locked_by`.
+- [ ] Enforce transaction boundaries per Part I § Transaction Boundaries — claim transaction commits before handler dispatch; handler never runs inside claim session.
 
 ## Worker Implementation
 
 - [ ] Implement `JobWorker.run_forever()` — poll loop: claim batch, dispatch each claimed job to `JobHandlerRegistry.resolve(job.job_type)`, run concurrently (`asyncio.gather`), complete/fail each.
+- [ ] Wrap handler dispatch in `asyncio.wait_for(..., timeout=background_jobs_handler_timeout_seconds)`.
 - [ ] Implement backoff computation and dead-letter transition per Part I § Retry & Backoff Policy.
-- [ ] Implement graceful shutdown (stop accepting new claims; let in-flight dispatches finish).
+- [ ] Implement graceful shutdown per Part I § Graceful Worker Shutdown (stop polling → finish in-flight → persist → release → terminate).
 
 ## Configuration
 
-- [ ] Add `BACKGROUND_JOBS_ENABLED` (default `false`) and worker/retry settings to `app/core/config.py`.
+- [ ] Add `BACKGROUND_JOBS_ENABLED` (default `false`), worker/retry settings, and `background_jobs_handler_timeout_seconds` to `app/core/config.py`.
 - [ ] Document settings in `backend-python/.env.example`.
 
 ## Testing
@@ -937,7 +1447,10 @@ Introduce the core `app/ai/jobs/` package, domain models, database migration, an
 - [ ] `PostgresJobQueue` tests: enqueue, idempotent duplicate enqueue, claim, complete, fail-with-backoff, dead-letter after `max_attempts`.
 - [ ] **Genuine concurrency test**: two simulated workers calling `claim_due()` against the same pool of jobs concurrently — assert no job is claimed by both.
 - [ ] Lease-expiry reclaim test: a `running` job with a stale `locked_at` is reclaimed by a subsequent `claim_due()` call.
-- [ ] `JobWorker` end-to-end test against a fixture handler (success, transient failure retried, permanent failure dead-lettered, `NonRetryableJobError` dead-letters immediately).
+- [ ] `JobWorker` end-to-end test against a fixture handler (success, transient failure retried, permanent failure dead-lettered, `NonRetryableJobError` dead-letters immediately, handler timeout dead-letters/retries).
+- [ ] Optimistic concurrency test: concurrent `complete()` on same job with stale version raises `JobConcurrencyError`.
+- [ ] Transaction boundary test: assert claim session is committed/closed before handler coroutine starts (no lock held during handler).
+- [ ] Cancellation test: `cancel()` on `queued` job prevents subsequent claim; `cancel()` on `running` job is rejected/no-op.
 - [ ] Migration upgrade/downgrade test.
 
 **Verify**
@@ -976,7 +1489,8 @@ Implement `JobScheduler`'s recurring-tick evaluation loop, the `background_job_s
 **Deliverables**
 
 - `JobSchedule`, `ScheduleStatus` models
-- `JobScheduler` (poll → evaluate due schedules → idempotent enqueue → advance `next_run_at`)
+- `JobScheduleStore` protocol + `PostgresJobScheduleStore` (schedule CRUD/persistence — separate from scheduler)
+- `JobScheduler` (poll → evaluate due schedules via store → idempotent enqueue → advance via store)
 - Migration extension: `background_job_schedules` table + seeded rows (`hitl-approval-expiry-sweep`, `hitl-orphaned-snapshot-sweep`, `workflow-run-retention-cleanup`, `scheduled-evaluation-run` [seeded `disabled` — see `evaluation_schedule_enabled`])
 - `app/main.py` lifespan wiring to start/stop `JobWorker` and `JobScheduler` (gated on `BACKGROUND_JOBS_ENABLED`)
 - Unit + integration tests, including a scheduler double-tick idempotency test
@@ -985,28 +1499,30 @@ Implement `JobScheduler`'s recurring-tick evaluation loop, the `background_job_s
 
 ## Models & Store
 
-- [ ] Implement `ScheduleStatus` enum (`enabled`, `disabled`) and `JobSchedule` model.
-- [ ] Extend `PostgresJobQueue` (or a sibling `PostgresScheduleStore`) with `list_due_schedules()`, `advance_schedule()`.
+- [ ] Implement `ScheduleStatus` enum (`enabled`, `disabled`) and `JobSchedule` model (including `version`).
+- [ ] Implement `JobScheduleStore` protocol and `PostgresJobScheduleStore` in `schedule_store.py` — `list_due()`, `advance(expected_version)`, `list_all()` with optimistic versioning per Part I § Schedule Persistence.
 
 ## Migration
 
-- [ ] Create `background_job_schedules` table.
-- [ ] Seed the four default schedule rows (idempotent — guarded by `name` uniqueness so re-running the migration is a no-op).
+- [ ] Create `background_job_schedules` table (including `version INT NOT NULL DEFAULT 1`).
+- [ ] Seed the four default schedule rows with `"version": 1` in payload (idempotent — guarded by `name` uniqueness so re-running the migration is a no-op).
 - [ ] Verify migration upgrade/downgrade round-trip (downgrade removes seeded rows).
 
 ## Scheduler Implementation
 
-- [ ] Implement `JobScheduler.run_forever()` per Part I § Scheduler Design — evaluate due schedules, enqueue with `idempotency_key=f"{name}:{next_run_at.isoformat()}"`, advance `next_run_at` from the *scheduled* tick (not `now()`).
-- [ ] Ensure a schedule advancement and its corresponding enqueue happen in the same transaction (no gap where a crash duplicates or skips a tick).
+- [ ] Implement `JobScheduler.run_forever()` per Part I § Scheduler Design — load due schedules from `JobScheduleStore`, enqueue with `idempotency_key=f"{name}:{next_run_at.isoformat()}"`, advance via store with missed-tick skip semantics.
+- [ ] Ensure schedule advancement and its corresponding enqueue happen in the same transaction (no gap where a crash duplicates or skips a tick).
+- [ ] Register handlers before worker/scheduler startup per Part I § Handler Registration Lifecycle.
 
 ## Lifespan Wiring
 
 - [ ] Start `JobWorker.run_forever()` and `JobScheduler.run_forever()` as retained background tasks in `app/main.py`'s lifespan when `BACKGROUND_JOBS_ENABLED=true` (mirror `app/ai/workflow/engine/background.py`'s task-retention pattern so neither is garbage-collected).
-- [ ] Implement graceful shutdown on app teardown (cancel both loops, await their cancellation).
+- [ ] Implement graceful shutdown on app teardown per Part I § Graceful Worker Shutdown (stop polling → finish in-flight → persist → release → terminate; cancel loops only after step 3).
 
 ## Testing
 
 - [ ] Scheduler tick test: a due schedule enqueues exactly one job and advances `next_run_at` by `interval_seconds`.
+- [ ] Missed-tick test: scheduler delayed past multiple intervals enqueues one job and skips intermediate ticks per Part I § Missed Ticks.
 - [ ] Double-tick idempotency test: two concurrent scheduler evaluations of the same due schedule enqueue exactly one job (simulating two app instances).
 - [ ] Test: a `disabled` schedule never enqueues.
 - [ ] Test: flag off — no worker/scheduler task starts; verify via absence of any claim activity.
@@ -1349,11 +1865,12 @@ Add job span/metric instrumentation, mirroring Epic 07/09's helper style.
 ## Span Helper
 
 - [ ] Implement `job_span` with fixed name `job.dispatch` and attributes `job_id`, `job_type`, `job_status`, `attempt_count`, `duration_ms` (ids are span attributes only — never metric labels).
-- [ ] Wrap `JobWorker`'s dispatch call when `OBSERVABILITY_ENABLED=true`.
+- [ ] Wrap `JobWorker`'s dispatch call when `OBSERVABILITY_ENABLED=true`; propagate `job_id`/`job_type`/`attempt_count` to structured log context per Part I § Observability Correlation.
 
 ## Metrics
 
-- [ ] Add all instruments listed above, extending `ALLOWED_LABEL_KEYS` as needed; only `job_type`/`outcome` labels (small closed sets) — never `job_id`.
+- [ ] Add all instruments listed in Part I § Observability (queue metrics and handler metrics), extending `ALLOWED_LABEL_KEYS` as needed; only `job_type`/`outcome` labels (small closed sets) — never `job_id`.
+- [ ] Document queue vs handler metric responsibilities in instrument docstrings (queue depth/throughput vs per-handler execution duration).
 - [ ] Increment/decrement `jobs_pending_count` on enqueue/claim-completion; `jobs_dead_letter_count` on dead-letter transition (and decrement on manual retry).
 
 ## Testing
@@ -1412,9 +1929,21 @@ Ship reference scenarios and adversarial/edge-case coverage across all five hand
 - [ ] **Expiry sweep vs. live decision race** — a decide call and the expiry sweep both attempt to transition the same `pending` approval at nearly the same time; assert exactly one wins (CAS) and the other observes a no-op, never a `409` surfaced to the sweep.
 - [ ] **Orphan sweep grace period** — an `approved` row within `hitl_orphan_sweep_grace_seconds` is untouched even though it matches every other orphan criterion.
 
+## Failure-Injection Scenarios
+
+Complement unit tests with fault-injection coverage where practical (Phase 9):
+
+- [ ] **Database restart / connection drop** — handler mid-execution loses DB connection; assert retry/backoff or lease reclaim produces correct final state.
+- [ ] **Worker crash** — claimed job with no `complete()`/`fail()`; assert lease-expired reclaim and idempotent re-execution.
+- [ ] **Scheduler crash** — mid-tick between enqueue and schedule advance; assert idempotency key prevents duplicate job on recovery.
+- [ ] **Lease expiration** — artificially expire lease while handler still running (simulated); assert reclaim increments `attempt_count` and handler idempotency prevents double side effects.
+- [ ] **Optimistic concurrency conflict** — concurrent `complete()` and manual retry with stale version; assert exactly one succeeds.
+- [ ] **Duplicate retry execution** — manual `POST …/retry` on a job whose handler succeeds twice; assert idempotent outcome.
+
 ## Documentation
 
 - [ ] Document operator steps: enable flag, inspect seeded schedules, observe an expiry/cleanup/indexing job, retry a dead-lettered job.
+- [ ] Document dead-letter operational runbook per Part I § Operational Runbook — Dead-Letter Jobs (detect, inspect, investigate, retry criteria, permanent failure criteria, payload editing not supported).
 - [ ] Cross-reference which Epic 06/07/09 `TODO(epic-10):`/`TODO(epic-9):` markers this epic closes, and where in code they were removed.
 
 ## Testing
@@ -1576,43 +2105,76 @@ One PR per phase.
 
 # Risks
 
-| Risk | Mitigation |
-| ---- | ---------- |
-| Double-claim under concurrency | `FOR UPDATE SKIP LOCKED` is a well-established Postgres idiom; covered by a genuine-concurrency test in Phase 1 and again in Phase 9's adversarial suite, not just sequential-call tests |
-| Worker crash silently losing a job | Claim-and-lease reclaim path (Part I § Claim-and-Lease Mechanism); covered by an explicit crash-simulation test in Phase 9 |
-| Scheduler double-instance duplicate enqueue | Idempotency-key uniqueness on `background_jobs`; covered by a double-tick concurrency test in Phase 2 and Phase 9 |
-| Expiry sweep racing a live human decision | Reuses Epic 09's existing Compare-And-Swap `WHERE status='pending'` guard; covered by a race-condition test in Phase 3 |
-| Orphan sweep double-executing a tool call | The sweep only acts on `status='approved'` rows past a grace period, and reuses the same execute-once contract `AgentApprovalService.decide()` already has; covered by a dedicated test in Phase 3 |
-| RAG queue indexing requires bytes to survive past the request | Explicit feasibility-verification step is first in Phase 5's Steps, before any handler code is written; if infeasible, the phase stops and documents the gap rather than shipping a broken runner |
-| Retention cleanup locking tables under heavy delete volume | Batched deletes (bounded `LIMIT` per statement, looped); covered by a batching test in Phase 4 |
-| Metric cardinality from job ids | Never label metrics with `job_id` — job ids are span attributes only, never metric labels (same invariant as HITL/workflow) |
-| Job payload/result leaking sensitive content | Handlers place only ids/scalars/short strings; RAG indexing re-fetches bytes rather than carrying them in the payload; covered by a redaction test in Phase 7 |
-| Feature regression | `BACKGROUND_JOBS_ENABLED` flag-off parity tests in Phase 11 |
+| Risk                                                          | Mitigation                                                                                                                                                                                         |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Double-claim under concurrency                                | `FOR UPDATE SKIP LOCKED` is a well-established Postgres idiom; covered by a genuine-concurrency test in Phase 1 and again in Phase 9's adversarial suite, not just sequential-call tests           |
+| Worker crash silently losing a job                            | Claim-and-lease reclaim path (Part I § Claim-and-Lease Mechanism); covered by an explicit crash-simulation test in Phase 9                                                                         |
+| Scheduler double-instance duplicate enqueue                   | Idempotency-key uniqueness on `background_jobs`; covered by a double-tick concurrency test in Phase 2 and Phase 9                                                                                  |
+| Expiry sweep racing a live human decision                     | Reuses Epic 09's existing Compare-And-Swap `WHERE status='pending'` guard; covered by a race-condition test in Phase 3                                                                             |
+| Orphan sweep double-executing a tool call                     | The sweep only acts on `status='approved'` rows past a grace period, and reuses the same execute-once contract `AgentApprovalService.decide()` already has; covered by a dedicated test in Phase 3 |
+| RAG queue indexing requires bytes to survive past the request | Explicit feasibility-verification step is first in Phase 5's Steps, before any handler code is written; if infeasible, the phase stops and documents the gap rather than shipping a broken runner  |
+| Retention cleanup locking tables under heavy delete volume    | Batched deletes (bounded `LIMIT` per statement, looped); covered by a batching test in Phase 4                                                                                                     |
+| Metric cardinality from job ids                               | Never label metrics with `job_id` — job ids are span attributes only, never metric labels (same invariant as HITL/workflow)                                                                        |
+| Job payload/result leaking sensitive content                  | Handlers place only ids/scalars/short strings; RAG indexing re-fetches bytes rather than carrying them in the payload; covered by a redaction test in Phase 7                                      |
+| Optimistic concurrency race on job row                        | `version` column on all mutating updates; `JobConcurrencyError` on stale write; covered by concurrency test in Phase 1                                                                               |
+| Non-idempotent handler double-executes side effects           | Handler idempotency is a required invariant (Part I § Handler Idempotency); idempotent re-run + failure-injection tests in Phases 3–9                                                                |
+| Row lock held during long handler                             | Transaction boundaries (Part I § Transaction Boundaries); claim commits before dispatch; covered by transaction boundary test in Phase 1                                                             |
+| Feature regression                                            | `BACKGROUND_JOBS_ENABLED` flag-off parity tests in Phase 11                                                                                                                                        |
 
 ---
 
 # Observability
 
-Metrics/spans this epic adds (when respective flags enabled):
+Metrics/spans this epic adds (when respective flags enabled). **Queue metrics** (infrastructure-level — how the queue is performing) are separate from **handler metrics** (domain-level — what each handler did), though both share the `job_type` label where applicable.
 
-| Field | Purpose |
-| ----- | ------- |
-| `job.dispatch` span | Per-dispatch; attributes: `job_id`, `job_type`, `job_status`, `attempt_count`, `duration_ms` |
-| `jobs_enqueued_total` | Counter of enqueues — label `job_type` |
-| `jobs_completed_total` | Counter of terminal outcomes — labels `job_type`, `outcome` ∈ `{succeeded, dead_letter}` |
-| `job_duration_ms` | Histogram of per-attempt handler execution time — label `job_type` |
-| `job_retries_total` | Counter of retry (re-queue) transitions — label `job_type` |
-| `jobs_pending_count` | Gauge-like `UpDownCounter` of `queued`+`running` jobs |
-| `jobs_dead_letter_count` | Gauge-like `UpDownCounter` of `dead_letter` jobs |
-| `background_jobs_enabled` | Health field |
-| `background_jobs_pending_count` | Health field |
-| `background_jobs_dead_letter_count` | Health field |
+### Queue Metrics (infrastructure)
+
+| Field                               | Purpose                                                                                      |
+| ----------------------------------- | -------------------------------------------------------------------------------------------- |
+| `jobs_enqueued_total`               | Counter of enqueues — label `job_type`                                                       |
+| `jobs_completed_total`              | Counter of terminal outcomes — labels `job_type`, `outcome` ∈ `{succeeded, dead_letter}`     |
+| `job_retries_total`                 | Counter of retry (re-queue) transitions — label `job_type`                                   |
+| `jobs_pending_count`                | Gauge-like `UpDownCounter` of `queued`+`running` jobs (queue depth)                          |
+| `jobs_dead_letter_count`            | Gauge-like `UpDownCounter` of `dead_letter` jobs                                             |
+| `background_jobs_enabled`           | Health field                                                                                 |
+| `background_jobs_pending_count`     | Health field                                                                                 |
+| `background_jobs_dead_letter_count` | Health field                                                                                 |
+
+### Handler Metrics (domain — per handler execution)
+
+| Field                               | Purpose                                                                                      |
+| ----------------------------------- | -------------------------------------------------------------------------------------------- |
+| `job.dispatch` span                 | Per-dispatch; attributes: `job_id`, `job_type`, `job_status`, `attempt_count`, `duration_ms` |
+| `job_duration_ms`                   | Histogram of per-attempt handler execution time — label `job_type` (e.g. indexing duration, cleanup duration, approval sweep duration, eval execution duration) |
+
+### Observability Correlation
+
+Production debugging follows a fixed correlation chain — every layer references the same identifiers:
+
+```text
+job_id  (BackgroundJob.id — primary key for queue operations)
+    ↓
+trace_id  (OpenTelemetry trace from job_span; propagated if handler opens child spans)
+    ↓
+structured logs  (log context: job_id, job_type, attempt_count — never secrets/payload content)
+    ↓
+metrics  (aggregated by job_type / outcome — never by job_id)
+```
+
+| Layer | Identifier | Cardinality | Use |
+| ----- | ---------- | ----------- | --- |
+| Queue row | `job_id` | Unbounded | Detail lookup (`GET /api/jobs/{id}`), span attribute |
+| Trace | `trace_id` | Unbounded | End-to-end latency, handler sub-spans |
+| Logs | `job_id` + `job_type` | Unbounded id / bounded type | Error triage, audit trail |
+| Metrics | `job_type`, `outcome` | Bounded | Dashboards, alerts (see § Recommended Health Thresholds) |
+
+**Implementation:** `JobWorker` sets `job_id`, `job_type`, `attempt_count` on the active span and in structured log context at claim time. Handlers inherit the trace context automatically when they run inside `job_span`. Never use `job_id` as a metric label.
 
 ---
 
 # Definition of Done
 
-- [ ] All Part I architectural invariants preserved.
+- [ ] All Part I architectural invariants preserved (including handler idempotency and transaction boundaries).
 - [ ] Public APIs frozen after Phase 1.
 - [ ] Claim-and-lease queue, worker, and scheduler operational under genuine concurrency (verified, not assumed).
 - [ ] HITL approval-timeout enforcement operational on both surfaces; orphaned-snapshot sweep resumes or fail-safes crash-orphaned approvals.
@@ -1631,37 +2193,40 @@ Metrics/spans this epic adds (when respective flags enabled):
 
 ## Files index
 
-| Path | Action | Owner | Phase |
-| ---- | ------ | ----- | ----- |
-| `docs/audits/post-mvp-v2-epic10-phase-0-baseline-audit.md` | create | Docs | 0 |
-| `app/ai/jobs/**` | create | Core | 1–6 |
-| `alembic/versions/0011_background_jobs.py` | create | Core | 1, 2, 3 |
-| `app/core/config.py` | modify | Core | 1, 2, 3, 4, 5, 6 |
-| `backend-python/.env.example` | modify | Docs | 1, 11 |
-| `app/main.py` | modify | Adapter | 2, 7 |
-| `app/ai/deps.py` | modify | Core | 1, 2 |
-| `app/ai/workflow/nodes/approval_node.py` | modify | Core | 3 |
-| `app/ai/rag/indexing/__init__.py` | modify | Core | 5 |
-| `app/services/knowledge_service.py` | modify | Adapter | 5 |
-| `app/routers/jobs.py` | create | Adapter | 7 |
-| `app/schemas/jobs.py` | create | Core | 7 |
-| `app/routers/health.py` | modify | Adapter | 7 |
-| `app/ai/observability/tracing/spans.py` | modify | Core | 8 |
-| `app/ai/observability/metrics/instruments.py` | modify | Core | 8 |
-| `tests/ai/jobs/**` | create | Tests | 1–9 |
-| `tests/ai/rag/test_queue_indexing_runner.py` | create | Tests | 5 |
-| `tests/ai/workflow/test_crash_recovery.py` | modify | Tests | 4 |
-| `tests/ai/hitl/test_adversarial_scenarios.py` | modify | Tests | 3 |
-| `tests/test_jobs_router.py` | create | Tests | 7 |
-| `frontend/src/api/jobsClient.ts` | create | Frontend | 10 |
-| `frontend/src/types/jobs.ts` | create | Frontend | 10 |
-| `frontend/src/pages/JobsPage.tsx` | create | Frontend | 10 |
-| `docs/releases/post-mvp-v2-epic10-release-summary.md` | create | Docs | 11 |
+| Path                                                       | Action | Owner    | Phase            |
+| ---------------------------------------------------------- | ------ | -------- | ---------------- |
+| `docs/audits/post-mvp-v2-epic10-phase-0-baseline-audit.md` | create | Docs     | 0                |
+| `app/ai/jobs/**`                                           | create | Core     | 1–6              |
+| `app/ai/jobs/schedule_store.py`                            | create | Core     | 2                |
+| `alembic/versions/0011_background_jobs.py`                 | create | Core     | 1, 2, 3          |
+| `app/core/config.py`                                       | modify | Core     | 1, 2, 3, 4, 5, 6 |
+| `backend-python/.env.example`                              | modify | Docs     | 1, 11            |
+| `app/main.py`                                              | modify | Adapter  | 2, 7             |
+| `app/ai/deps.py`                                           | modify | Core     | 1, 2             |
+| `app/ai/workflow/nodes/approval_node.py`                   | modify | Core     | 3                |
+| `app/ai/rag/indexing/__init__.py`                          | modify | Core     | 5                |
+| `app/services/knowledge_service.py`                        | modify | Adapter  | 5                |
+| `app/routers/jobs.py`                                      | create | Adapter  | 7                |
+| `app/schemas/jobs.py`                                      | create | Core     | 7                |
+| `app/routers/health.py`                                    | modify | Adapter  | 7                |
+| `app/ai/observability/tracing/spans.py`                    | modify | Core     | 8                |
+| `app/ai/observability/metrics/instruments.py`              | modify | Core     | 8                |
+| `tests/ai/jobs/**`                                         | create | Tests    | 1–9              |
+| `tests/ai/rag/test_queue_indexing_runner.py`               | create | Tests    | 5                |
+| `tests/ai/workflow/test_crash_recovery.py`                 | modify | Tests    | 4                |
+| `tests/ai/hitl/test_adversarial_scenarios.py`              | modify | Tests    | 3                |
+| `tests/test_jobs_router.py`                                | create | Tests    | 7                |
+| `frontend/src/api/jobsClient.ts`                           | create | Frontend | 10               |
+| `frontend/src/types/jobs.ts`                               | create | Frontend | 10               |
+| `frontend/src/pages/JobsPage.tsx`                          | create | Frontend | 10               |
+| `docs/releases/post-mvp-v2-epic10-release-summary.md`      | create | Docs     | 11               |
 
 ---
 
 ## Changelog
 
-| Version | Date | Changes |
-| ------- | ---- | ------- |
-| 1 | 2026-08-12 | Initial epic draft — Part I design + Part II 12-phase execution plan (Phases 0–11). Not started. |
+| Version | Date       | Changes                                                                                          |
+| ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3       | 2026-08-12 | Final review integration — transaction boundaries (claim commits before handler), cancellation semantics + state table, handler idempotency as required invariant, handler categories (sweep/cleanup/processing/scheduled), observability correlation chain (`job_id`→trace→logs→metrics), recommended health thresholds, expanded scalability operating ranges, handler implementation checklist appendix, failure-injection test scenarios, async API eventual consistency documentation. |
+| 2       | 2026-08-12 | Architecture review integration — optimistic concurrency (`version` column), `JobScheduleStore` separation, payload schema versioning, handler execution timeouts, poison-job/`NonRetryableJobError` guidance, dead-letter operational runbook, scheduler clock/missed-tick semantics, graceful shutdown sequence, worker identity format, queue vs handler metrics split, throughput/scalability assumptions, sequence diagrams, handler registration lifecycle, job type naming conventions, per-handler lifecycle summaries, RAG eventual consistency, polling rationale, future queue partitioning. |
+| 1       | 2026-08-12 | Initial epic draft — Part I design + Part II 12-phase execution plan (Phases 0–11). Not started. |
