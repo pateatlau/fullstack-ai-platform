@@ -26,8 +26,13 @@ from app.ai.workflow.models import (
 )
 from app.ai.workflow.providers.postgres import PostgresWorkflowStore
 from app.core.config import Settings
+from app.db.documents import SqlDocumentStore
 from app.db.identity import SqlUserStore
-from app.db.models import WorkflowNodeExecutionRecord, WorkflowRunRecord
+from app.db.models import (
+    DocumentUploadStaging,
+    WorkflowNodeExecutionRecord,
+    WorkflowRunRecord,
+)
 from tests.ai.jobs.conftest import (
     background_jobs_table_available,
     make_queue_session_factory,
@@ -41,9 +46,20 @@ async def _workflow_tables_available(session) -> bool:
     return bool(result)
 
 
+async def _upload_staging_table_available(session) -> bool:
+    result = await session.scalar(
+        text("SELECT to_regclass('public.document_upload_staging') IS NOT NULL")
+    )
+    return bool(result)
+
+
 @pytest.fixture(autouse=True)
 async def _truncate_workflow_runs_for_retention_tests(db_session):
     async def _cleanup() -> None:
+        if await _upload_staging_table_available(db_session):
+            await db_session.execute(
+                text("TRUNCATE document_upload_staging RESTART IDENTITY CASCADE")
+            )
         if await _workflow_tables_available(db_session):
             await db_session.execute(
                 text("TRUNCATE workflow_runs RESTART IDENTITY CASCADE")
@@ -215,6 +231,7 @@ async def test_retention_disabled_when_background_jobs_flag_off() -> None:
     )
     assert result.counts["workflow_runs_deleted"] == 0
     assert result.counts["background_jobs_deleted"] == 0
+    assert result.counts["upload_staging_deleted"] == 0
 
 
 @pytest.mark.anyio
@@ -392,3 +409,56 @@ async def test_purges_old_terminal_background_jobs_but_not_running_self(
     assert current_job.id in remaining_ids
     assert recent_job_id in remaining_ids
     assert not any(job_id in remaining_ids for job_id in old_job_ids)
+
+
+@pytest.mark.anyio
+async def test_deletes_stale_upload_staging_rows(db_session) -> None:
+    if not await _upload_staging_table_available(db_session):
+        pytest.skip("document_upload_staging not available — run alembic upgrade head")
+
+    owner_id = await _create_owner(db_session)
+    store = SqlDocumentStore(db_session)
+    stale_document = await store.create_document(
+        user_id=owner_id,
+        filename="stale.txt",
+        mime_type="text/plain",
+        status="pending",
+    )
+    recent_document = await store.create_document(
+        user_id=owner_id,
+        filename="recent.txt",
+        mime_type="text/plain",
+        status="pending",
+    )
+    await store.store_upload_staging(
+        document_id=stale_document.id,
+        user_id=owner_id,
+        file_bytes=b"stale",
+        filename="stale.txt",
+        mime_type="text/plain",
+    )
+    await store.store_upload_staging(
+        document_id=recent_document.id,
+        user_id=owner_id,
+        file_bytes=b"recent",
+        filename="recent.txt",
+        mime_type="text/plain",
+    )
+    stale_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=45)
+    await db_session.execute(
+        update(DocumentUploadStaging)
+        .where(DocumentUploadStaging.document_id == stale_document.id)
+        .values(created_at=stale_at)
+    )
+    await db_session.commit()
+
+    factory = make_queue_session_factory(db_session.bind)
+    result = await workflow_run_retention_cleanup(
+        _sample_job(),
+        settings=_retention_settings(),
+        session_factory=factory,
+    )
+
+    assert result.counts["upload_staging_deleted"] == 1
+    assert await store.fetch_upload_staging(stale_document.id) is None
+    assert await store.fetch_upload_staging(recent_document.id) is not None

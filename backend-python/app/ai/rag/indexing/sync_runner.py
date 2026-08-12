@@ -3,8 +3,6 @@
 Implements :class:`~app.ai.interfaces.indexing_job.IndexingJob` without an
 external broker. Callers register pending work (bytes + metadata) keyed by
 ``document_id``, then ``submit`` runs that work synchronously in-process.
-
-TODO(epic-9): QueueIndexingRunner / workers / retries / durable job store.
 """
 
 from __future__ import annotations

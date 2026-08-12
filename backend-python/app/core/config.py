@@ -272,6 +272,9 @@ class Settings(BaseSettings):
     background_jobs_retry_max_delay_seconds: float = Field(default=300.0, ge=0.0)
     background_jobs_scheduler_poll_interval_seconds: int = Field(default=30, ge=1)
     background_jobs_retention_days: int = Field(default=30, ge=1)
+    # Epic 10 Phase 5: queue-backed RAG indexing runner (honoured only when
+    # BACKGROUND_JOBS_ENABLED=true; otherwise SyncIndexingRunner is always used).
+    rag_indexing_runner: Literal["sync", "queue"] = "sync"
 
     # Rule-based approval policy (recommendation #1): an ordered list of rule
     # dicts evaluated against tool name/category/risk/caller/environment/

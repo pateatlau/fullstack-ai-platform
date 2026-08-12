@@ -27,6 +27,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     UniqueConstraint,
     func,
@@ -365,6 +366,32 @@ class Document(Base):
             name="status_valid",
         ),
         Index("ix_documents_user_created", "user_id", "created_at"),
+    )
+
+
+class DocumentUploadStaging(Base):
+    """Durable upload bytes for queue-backed RAG indexing (Epic 10 Phase 5).
+
+    Rows are deleted on successful indexing and purged by
+    ``workflow_run_retention_cleanup`` once ``created_at`` exceeds
+    ``background_jobs_retention_days``.
+    """
+
+    __tablename__ = "document_upload_staging"
+
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    file_bytes: Mapped[bytes] = mapped_column(LargeBinary(), nullable=False)
+    filename: Mapped[str] = mapped_column(nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW
     )
 
 

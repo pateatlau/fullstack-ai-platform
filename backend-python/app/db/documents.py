@@ -6,9 +6,11 @@ import uuid
 from collections.abc import Sequence
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Document, DocumentChunk
+from app.ai.rag.indexing.sync_runner import PendingIndexingWork
+from app.db.models import Document, DocumentChunk, DocumentUploadStaging
 
 
 class SqlDocumentStore:
@@ -105,3 +107,57 @@ class SqlDocumentStore:
     async def delete_document(self, document_id: uuid.UUID) -> None:
         await self._session.execute(delete(Document).where(Document.id == document_id))
         await self._session.flush()
+
+    async def store_upload_staging(
+        self,
+        *,
+        document_id: uuid.UUID,
+        user_id: uuid.UUID,
+        file_bytes: bytes,
+        filename: str,
+        mime_type: str | None,
+    ) -> None:
+        stmt = pg_insert(DocumentUploadStaging).values(
+            document_id=document_id,
+            user_id=user_id,
+            file_bytes=file_bytes,
+            filename=filename,
+            mime_type=mime_type,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["document_id"],
+            set_={
+                "user_id": user_id,
+                "file_bytes": file_bytes,
+                "filename": filename,
+                "mime_type": mime_type,
+            },
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def fetch_upload_staging(
+        self,
+        document_id: uuid.UUID,
+    ) -> PendingIndexingWork | None:
+        row = await self._session.scalar(
+            select(DocumentUploadStaging).where(
+                DocumentUploadStaging.document_id == document_id
+            )
+        )
+        if row is None:
+            return None
+        return PendingIndexingWork(
+            document_id=row.document_id,
+            user_id=row.user_id,
+            file_bytes=bytes(row.file_bytes),
+            filename=row.filename,
+            mime_type=row.mime_type,
+        )
+
+    async def delete_upload_staging(self, document_id: uuid.UUID) -> None:
+        await self._session.execute(
+            delete(DocumentUploadStaging).where(
+                DocumentUploadStaging.document_id == document_id
+            )
+        )
