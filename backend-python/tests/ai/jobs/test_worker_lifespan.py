@@ -7,12 +7,12 @@ import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import text
 
 from app.ai.jobs.background import start_background_jobs, stop_background_jobs
 from app.ai.jobs.models import JobStatus
 from app.ai.jobs.queue import PostgresJobQueue
 from app.ai.jobs.schedule_store import PostgresJobScheduleStore
+from app.ai.jobs.worker import JobWorker
 from app.core.config import Settings
 from tests.ai.jobs.conftest import (
     background_job_schedules_table_available,
@@ -94,18 +94,22 @@ async def test_background_jobs_shutdown_stops_claim_activity(
         background_jobs_claim_lease_seconds=300,
     )
     factory = make_queue_session_factory(db_session.bind)
+    poll_mock = AsyncMock(return_value=None)
 
-    claim_mock = AsyncMock(return_value=[])
     with patch("app.ai.jobs.background.get_sessionmaker", return_value=factory):
-        runtime = await start_background_jobs(settings)
-    assert runtime is not None
+        with patch.object(JobWorker, "poll_once", poll_mock):
+            runtime = await start_background_jobs(settings)
+            assert runtime is not None
 
-    with patch.object(runtime.worker, "poll_once", claim_mock):
-        await asyncio.sleep(0.05)
-        await stop_background_jobs(runtime)
-        await asyncio.sleep(0.05)
+            for _ in range(50):
+                if poll_mock.call_count >= 1:
+                    break
+                await asyncio.sleep(0.02)
+            else:
+                pytest.fail("worker poll_once was never invoked")
 
-    result = await db_session.execute(
-        text("SELECT COUNT(*) FROM background_jobs WHERE status = 'running'")
-    )
-    assert result.scalar_one() == 0
+            calls_at_stop = poll_mock.call_count
+            await stop_background_jobs(runtime)
+
+            await asyncio.sleep(0.1)
+            assert poll_mock.call_count == calls_at_stop

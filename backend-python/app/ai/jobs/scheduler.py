@@ -7,6 +7,7 @@ import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.ai.jobs.exceptions import JobConcurrencyError
 from app.ai.jobs.models import JobSchedule
 from app.ai.jobs.queue import JobQueue, PostgresJobQueue
 from app.ai.jobs.schedule_store import JobScheduleStore, PostgresJobScheduleStore
@@ -23,10 +24,11 @@ def compute_advanced_next_run_at(
     now: datetime.datetime,
 ) -> datetime.datetime:
     """Advance past missed ticks to the next future-aligned boundary."""
-    candidate = current_next_run_at + datetime.timedelta(seconds=interval_seconds)
-    while candidate <= now:
-        candidate += datetime.timedelta(seconds=interval_seconds)
-    return candidate
+    elapsed_seconds = (now - current_next_run_at).total_seconds()
+    intervals_to_skip = max(1, int(elapsed_seconds // interval_seconds) + 1)
+    return current_next_run_at + datetime.timedelta(
+        seconds=interval_seconds * intervals_to_skip
+    )
 
 
 class JobScheduler:
@@ -123,25 +125,35 @@ class JobScheduler:
                 "Atomic schedule ticks require PostgresJobScheduleStore in Phase 2."
             )
 
-        async with self._session_factory() as session:
-            async with session.begin():
-                await self._queue.enqueue_in_transaction(
-                    session,
-                    job_type=schedule.job_type,
-                    payload=payload,
-                    run_at=now,
-                    idempotency_key=idempotency_key,
-                    schedule_id=schedule.id,
-                )
-                advanced = await self._store.advance_in_transaction(
-                    session,
-                    schedule.id,
-                    expected_version=schedule.version,
-                    next_run_at=next_run_at,
-                )
-                if advanced is None:
-                    _logger.debug(
-                        "Schedule advance lost concurrent race",
-                        schedule_name=schedule.name,
-                        schedule_id=str(schedule.id),
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    # Enqueue before advance so a crash after insert but before
+                    # advance can retry idempotently; roll back both when the
+                    # schedule row changed underneath us (stale version).
+                    await self._queue.enqueue_in_transaction(
+                        session,
+                        job_type=schedule.job_type,
+                        payload=payload,
+                        run_at=now,
+                        idempotency_key=idempotency_key,
+                        schedule_id=schedule.id,
                     )
+                    advanced = await self._store.advance_in_transaction(
+                        session,
+                        schedule.id,
+                        expected_version=schedule.version,
+                        next_run_at=next_run_at,
+                    )
+                    if advanced is None:
+                        raise JobConcurrencyError(
+                            "Concurrent schedule update lost for "
+                            f"{schedule.name} (expected version "
+                            f"{schedule.version})."
+                        )
+        except JobConcurrencyError:
+            _logger.debug(
+                "Schedule tick lost concurrent race; enqueue rolled back",
+                schedule_name=schedule.name,
+                schedule_id=str(schedule.id),
+            )

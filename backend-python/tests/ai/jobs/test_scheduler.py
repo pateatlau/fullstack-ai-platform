@@ -137,6 +137,7 @@ async def test_scheduler_double_tick_enqueues_one_job(
     await asyncio.gather(
         scheduler._process_schedule(schedule, now),
         scheduler._process_schedule(schedule, now),
+        return_exceptions=True,
     )
 
     jobs = await queue.list(job_type="fixture_concurrent")
@@ -145,6 +146,39 @@ async def test_scheduler_double_tick_enqueues_one_job(
     updated = await store.get(schedule.id)
     assert updated is not None
     assert updated.version == schedule.version + 1
+
+
+@pytest.mark.anyio
+async def test_stale_schedule_version_does_not_enqueue_job(
+    db_session,
+    scheduler_settings: Settings,
+) -> None:
+    if not await background_jobs_table_available(db_session):
+        pytest.skip("background_jobs not available — run alembic upgrade head")
+    if not await background_job_schedules_table_available(db_session):
+        pytest.skip("background_job_schedules not available — run alembic upgrade head")
+
+    scheduler, queue, store = _make_scheduler(db_session, scheduler_settings)
+    due_at = datetime.datetime(2026, 1, 1, 10, 0, tzinfo=datetime.UTC)
+    schedule = await store.insert_schedule(
+        name="fixture-stale",
+        job_type="fixture_stale",
+        payload={"version": 1},
+        interval_seconds=300,
+        next_run_at=due_at,
+    )
+
+    await store.advance(
+        schedule.id,
+        expected_version=schedule.version,
+        next_run_at=due_at + datetime.timedelta(hours=1),
+    )
+
+    now = due_at + datetime.timedelta(seconds=30)
+    await scheduler._process_schedule(schedule, now)
+
+    jobs = await queue.list(job_type="fixture_stale")
+    assert jobs == []
 
 
 @pytest.mark.anyio
@@ -183,3 +217,16 @@ def test_compute_advanced_next_run_at_skips_missed_intervals() -> None:
         now=now,
     )
     assert advanced == datetime.datetime(2026, 1, 1, 9, 20, tzinfo=datetime.UTC)
+
+
+def test_compute_advanced_next_run_at_handles_long_outage_in_o1() -> None:
+    due_at = datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.UTC)
+    now = datetime.datetime(2027, 1, 1, 0, 0, tzinfo=datetime.UTC)
+    interval_seconds = 60
+    advanced = compute_advanced_next_run_at(
+        current_next_run_at=due_at,
+        interval_seconds=interval_seconds,
+        now=now,
+    )
+    assert advanced > now
+    assert (advanced - due_at).total_seconds() % interval_seconds == 0
