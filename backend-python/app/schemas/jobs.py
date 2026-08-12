@@ -79,7 +79,7 @@ def _redact_allowlisted_object(
                 redacted[key] = {
                     str(item_key): item_value
                     for item_key, item_value in value.items()
-                    if isinstance(item_value, int)
+                    if type(item_value) is int
                     and not _SENSITIVE_KEY_PATTERN.search(str(item_key))
                 }
             continue
