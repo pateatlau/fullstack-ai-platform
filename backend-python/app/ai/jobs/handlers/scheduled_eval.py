@@ -15,14 +15,18 @@ from app.ai.jobs.models import BackgroundJob, JobResult, ScheduleStatus
 from app.ai.jobs.retry import NonRetryableJobError
 from app.ai.jobs.schedule_store import PostgresJobScheduleStore
 from app.core.config import Settings
+from app.core.logging import get_logger
 
 _PAYLOAD_VERSION = 1
 SCHEDULED_EVALUATION_SCHEDULE_NAME = "scheduled-evaluation-run"
 DEFAULT_SCHEDULED_EVAL_OUTPUT_DIR = Path(".eval")
+_RECONCILE_MAX_ATTEMPTS = 5
+
+_logger = get_logger(__name__)
 
 
-class EvaluationRunFailedError(Exception):
-    """Raised when scheduled evaluation completes but cases failed."""
+class EvaluationRunFailedError(NonRetryableJobError):
+    """Raised when scheduled evaluation completes but cases failed (poison — no retry)."""
 
 
 def _job_result_from_report(
@@ -108,20 +112,30 @@ async def reconcile_evaluation_schedule_status(
     settings: Settings,
 ) -> None:
     """Align the seeded evaluation schedule row with ``evaluation_schedule_enabled``."""
-    schedule = await store.get_by_name(SCHEDULED_EVALUATION_SCHEDULE_NAME)
-    if schedule is None:
-        return
-
     desired = (
         ScheduleStatus.ENABLED
         if settings.evaluation_schedule_enabled
         else ScheduleStatus.DISABLED
     )
-    if schedule.status == desired:
-        return
 
-    await store.set_status(
-        schedule.id,
-        expected_version=schedule.version,
-        status=desired,
+    for _ in range(_RECONCILE_MAX_ATTEMPTS):
+        schedule = await store.get_by_name(SCHEDULED_EVALUATION_SCHEDULE_NAME)
+        if schedule is None:
+            return
+        if schedule.status == desired:
+            return
+
+        updated = await store.set_status(
+            schedule.id,
+            expected_version=schedule.version,
+            status=desired,
+        )
+        if updated is not None:
+            return
+
+    _logger.warning(
+        "Failed to reconcile evaluation schedule status after optimistic retries",
+        schedule_name=SCHEDULED_EVALUATION_SCHEDULE_NAME,
+        desired_status=desired.value,
+        max_attempts=_RECONCILE_MAX_ATTEMPTS,
     )

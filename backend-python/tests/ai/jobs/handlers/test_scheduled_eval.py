@@ -6,7 +6,7 @@ import datetime
 import json
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -19,7 +19,7 @@ from app.ai.jobs.handlers.scheduled_eval import (
     reconcile_evaluation_schedule_status,
     scheduled_evaluation_run,
 )
-from app.ai.jobs.models import BackgroundJob, JobStatus, ScheduleStatus
+from app.ai.jobs.models import BackgroundJob, JobSchedule, JobStatus, ScheduleStatus
 from app.ai.jobs.queue import PostgresJobQueue
 from app.ai.jobs.registry import JobHandlerRegistry
 from app.ai.jobs.schedule_store import PostgresJobScheduleStore
@@ -175,6 +175,50 @@ async def test_evaluation_schedule_enabled_when_flag_on(
 
 
 @pytest.mark.anyio
+async def test_reconcile_retries_on_optimistic_version_mismatch() -> None:
+    now = datetime.datetime.now(datetime.UTC)
+    schedule_id = uuid.uuid4()
+    stale = JobSchedule(
+        id=schedule_id,
+        name=SCHEDULED_EVALUATION_SCHEDULE_NAME,
+        job_type="scheduled_evaluation_run",
+        payload={"version": 1},
+        interval_seconds=86400,
+        next_run_at=now,
+        version=1,
+        status=ScheduleStatus.DISABLED,
+        created_at=now,
+        updated_at=now,
+    )
+    current = stale.model_copy(update={"version": 2})
+    enabled = current.model_copy(
+        update={"status": ScheduleStatus.ENABLED, "version": 3}
+    )
+
+    store = AsyncMock(spec=PostgresJobScheduleStore)
+    store.get_by_name = AsyncMock(side_effect=[stale, current])
+    store.set_status = AsyncMock(side_effect=[None, enabled])
+
+    await reconcile_evaluation_schedule_status(
+        store,
+        _eval_settings(evaluation_schedule_enabled=True),
+    )
+
+    assert store.get_by_name.call_count == 2
+    assert store.set_status.call_count == 2
+    store.set_status.assert_any_call(
+        schedule_id,
+        expected_version=1,
+        status=ScheduleStatus.ENABLED,
+    )
+    store.set_status.assert_any_call(
+        schedule_id,
+        expected_version=2,
+        status=ScheduleStatus.ENABLED,
+    )
+
+
+@pytest.mark.anyio
 async def test_disabled_evaluation_schedule_is_not_due(
     db_session,
 ) -> None:
@@ -221,7 +265,8 @@ async def test_failing_eval_surfaces_handler_failure_with_last_error(
 
     settings = Settings(
         openai_api_key="test-key",
-        background_jobs_default_max_attempts=1,
+        background_jobs_enabled=True,
+        background_jobs_default_max_attempts=3,
         background_jobs_worker_batch_size=10,
         background_jobs_claim_lease_seconds=300,
         background_jobs_handler_timeout_seconds=30,
@@ -251,13 +296,14 @@ async def test_failing_eval_surfaces_handler_failure_with_last_error(
         job = await queue.enqueue(
             job_type="scheduled_evaluation_run",
             payload={"version": 1},
-            max_attempts=1,
+            max_attempts=3,
         )
         await worker.poll_once()
 
     updated = await queue.get(job.id)
     assert updated is not None
     assert updated.status is JobStatus.DEAD_LETTER
+    assert updated.attempt_count == 1
     assert updated.last_error is not None
     assert "evaluation failed at level prompt" in updated.last_error
     assert updated.result is None
