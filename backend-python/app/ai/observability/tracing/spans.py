@@ -340,19 +340,24 @@ def record_job_dispatch_outcome(
     span: Span | None,
     *,
     job_status: str,
-    duration_ms: int,
+    handler_duration_ms: int,
     job_type: str,
+    dispatch_duration_ms: int | None = None,
     failed: bool = False,
 ) -> None:
     """Attach terminal dispatch attributes and record handler execution duration."""
-    record_job_duration_ms(job_type=job_type, duration_ms=duration_ms)
+    record_job_duration_ms(job_type=job_type, duration_ms=handler_duration_ms)
     if span is None:
         return
     _set_span_attributes(
         span,
         {
             "job_status": job_status,
-            "duration_ms": duration_ms,
+            "duration_ms": (
+                dispatch_duration_ms
+                if dispatch_duration_ms is not None
+                else handler_duration_ms
+            ),
         },
     )
     if failed:

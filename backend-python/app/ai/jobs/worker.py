@@ -127,7 +127,8 @@ class JobWorker:
             job_type=job.job_type,
             attempt_count=job.attempt_count,
         )
-        start = time.perf_counter()
+        dispatch_start = time.perf_counter()
+        handler_duration_ms = 0
         terminal_status = job.status.value
         failed = False
 
@@ -146,36 +147,43 @@ class JobWorker:
                     terminal_status = JobStatus.DEAD_LETTER.value
                 else:
                     timeout = self._settings.background_jobs_handler_timeout_seconds
+                    handler_start = time.perf_counter()
                     try:
-                        result = await asyncio.wait_for(handler(job), timeout=timeout)
-                    except NonRetryableJobError as exc:
-                        failed = True
-                        await self._dead_letter(job, error=str(exc))
-                        terminal_status = JobStatus.DEAD_LETTER.value
-                    except TimeoutError:
-                        failed = True
-                        terminal_status = await self._handle_failure_with_status(
-                            job,
-                            error=f"TimeoutError: handler exceeded {timeout}s",
-                        )
-                    except Exception as exc:
-                        failed = True
-                        terminal_status = await self._handle_failure_with_status(
-                            job,
-                            error=_format_handler_error(exc),
-                        )
-                    else:
-                        await self._queue.complete(
-                            job.id,
-                            result=result,
-                            expected_version=job.version,
-                        )
-                        terminal_status = JobStatus.SUCCEEDED.value
+                        try:
+                            result = await asyncio.wait_for(
+                                handler(job), timeout=timeout
+                            )
+                        except NonRetryableJobError as exc:
+                            failed = True
+                            await self._dead_letter(job, error=str(exc))
+                            terminal_status = JobStatus.DEAD_LETTER.value
+                        except TimeoutError:
+                            failed = True
+                            terminal_status = await self._handle_failure_with_status(
+                                job,
+                                error=f"TimeoutError: handler exceeded {timeout}s",
+                            )
+                        except Exception as exc:
+                            failed = True
+                            terminal_status = await self._handle_failure_with_status(
+                                job,
+                                error=_format_handler_error(exc),
+                            )
+                        else:
+                            await self._queue.complete(
+                                job.id,
+                                result=result,
+                                expected_version=job.version,
+                            )
+                            terminal_status = JobStatus.SUCCEEDED.value
+                    finally:
+                        handler_duration_ms = elapsed_ms_since(handler_start)
             finally:
                 record_job_dispatch_outcome(
                     span,
                     job_status=terminal_status,
-                    duration_ms=elapsed_ms_since(start),
+                    handler_duration_ms=handler_duration_ms,
+                    dispatch_duration_ms=elapsed_ms_since(dispatch_start),
                     job_type=job.job_type,
                     failed=failed,
                 )

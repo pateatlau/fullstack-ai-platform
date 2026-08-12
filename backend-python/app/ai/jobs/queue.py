@@ -179,7 +179,7 @@ class PostgresJobQueue:
         try:
             async with self._session_factory() as session:
                 async with session.begin():
-                    return await self.enqueue_in_transaction(
+                    job, newly_enqueued = await self.enqueue_in_transaction(
                         session,
                         job_type=job_type,
                         payload=payload,
@@ -188,6 +188,9 @@ class PostgresJobQueue:
                         idempotency_key=idempotency_key,
                         schedule_id=schedule_id,
                     )
+            if newly_enqueued:
+                record_job_enqueued(job_type=job.job_type)
+            return job
         except IntegrityError as exc:
             if idempotency_key is None or not _is_idempotency_key_violation(exc):
                 raise
@@ -209,8 +212,12 @@ class PostgresJobQueue:
         max_attempts: int | None = None,
         idempotency_key: str | None = None,
         schedule_id: uuid.UUID | None = None,
-    ) -> BackgroundJob:
-        """Insert a queued job within an existing transaction."""
+    ) -> tuple[BackgroundJob, bool]:
+        """Insert a queued job within an existing transaction.
+
+        Returns ``(job, newly_enqueued)`` where ``newly_enqueued`` is ``False``
+        when an idempotency-key duplicate was returned instead of inserting.
+        """
         effective_max_attempts = (
             max_attempts
             if max_attempts is not None
@@ -252,10 +259,9 @@ class PostgresJobQueue:
             existing = await self._fetch_by_idempotency_key(session, idempotency_key)
             if existing is None:
                 raise
-            return existing
+            return existing, False
 
-        record_job_enqueued(job_type=job_type)
-        return _row_to_job(row)
+        return _row_to_job(row), True
 
     async def claim_due(
         self,
@@ -264,6 +270,7 @@ class PostgresJobQueue:
         batch_size: int,
         lease_seconds: int,
     ) -> list[BackgroundJob]:
+        dead_lettered_job_types: list[str] = []
         async with self._session_factory() as session:
             async with session.begin():
                 expired_result = await session.execute(
@@ -288,8 +295,10 @@ class PostgresJobQueue:
                     ),
                     {"lease_seconds": lease_seconds},
                 )
-                for expired_row in expired_result.fetchall():
-                    record_job_dead_lettered(job_type=expired_row._mapping["job_type"])
+                dead_lettered_job_types = [
+                    expired_row._mapping["job_type"]
+                    for expired_row in expired_result.fetchall()
+                ]
                 result = await session.execute(
                     text(
                         """
@@ -325,6 +334,8 @@ class PostgresJobQueue:
                 )
                 rows = result.fetchall()
 
+        for job_type in dead_lettered_job_types:
+            record_job_dead_lettered(job_type=job_type)
         return [_row_to_job(row) for row in rows]
 
     async def complete(

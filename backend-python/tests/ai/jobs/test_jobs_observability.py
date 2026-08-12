@@ -122,7 +122,8 @@ def test_job_span_success_attributes(
         record_job_dispatch_outcome(
             span,
             job_status="succeeded",
-            duration_ms=42,
+            handler_duration_ms=42,
+            dispatch_duration_ms=42,
             job_type="rag_document_indexing",
         )
 
@@ -173,7 +174,7 @@ def test_job_span_failed_outcome_marks_error(
         record_job_dispatch_outcome(
             span,
             job_status="dead_letter",
-            duration_ms=5,
+            handler_duration_ms=5,
             job_type="fixture_fail",
             failed=True,
         )
@@ -235,7 +236,7 @@ def test_observability_disabled_emits_no_job_telemetry() -> None:
         record_job_dispatch_outcome(
             span,
             job_status="succeeded",
-            duration_ms=10,
+            handler_duration_ms=10,
             job_type="rag_document_indexing",
         )
 
