@@ -11,6 +11,7 @@ from app.ai.deps import (
 )
 from app.ai.jobs.handlers.hitl_expiry import hitl_approval_expiry_sweep
 from app.ai.jobs.handlers.hitl_orphan_sweep import hitl_orphaned_snapshot_sweep
+from app.ai.jobs.handlers.rag_indexing import rag_document_indexing
 from app.ai.jobs.handlers.workflow_retention import workflow_run_retention_cleanup
 from app.ai.jobs.models import BackgroundJob, JobResult
 from app.ai.jobs.registry import JobHandlerRegistry
@@ -68,15 +69,24 @@ def register_all_handlers(
             session_factory=session_factory,
         )
 
+    async def _rag_indexing(job: BackgroundJob) -> JobResult:
+        return await rag_document_indexing(
+            job,
+            settings=settings,
+            session_factory=session_factory,
+        )
+
     registry.register("hitl_approval_expiry_sweep", _hitl_expiry)
     registry.register("hitl_orphaned_snapshot_sweep", _hitl_orphan)
     registry.register("workflow_run_retention_cleanup", _workflow_retention)
+    registry.register("rag_document_indexing", _rag_indexing)
 
     for job_type in _FIRST_CLASS_JOB_TYPES:
         if job_type in {
             "hitl_approval_expiry_sweep",
             "hitl_orphaned_snapshot_sweep",
             "workflow_run_retention_cleanup",
+            "rag_document_indexing",
         }:
             continue
         registry.register(job_type, _stub_handler)

@@ -379,7 +379,13 @@ def get_knowledge_service(
     quota_service=Depends(get_upload_quota_service),
 ):
     """Return a request-scoped service for full vector ingest lifecycle."""
+    from app.ai.jobs.queue import PostgresJobQueue
+    from app.db.engine import get_sessionmaker
     from app.services.knowledge_service import KnowledgeService
+
+    job_queue = None
+    if settings.background_jobs_enabled:
+        job_queue = PostgresJobQueue(get_sessionmaker(), settings)
 
     return KnowledgeService(
         session=session,
@@ -387,6 +393,7 @@ def get_knowledge_service(
         pipeline=pipeline,
         vector_store=vector_store,
         quota_service=quota_service,
+        job_queue=job_queue,
     )
 
 

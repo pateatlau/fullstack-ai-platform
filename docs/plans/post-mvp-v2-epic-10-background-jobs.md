@@ -2,7 +2,7 @@
 epic: v2-10
 title: Background Jobs
 status: in_progress
-version: 3.5
+version: 3.6
 depends_on: [v2-02, v2-06, v2-07, v2-09]
 provides:
   [
@@ -1286,7 +1286,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
 | Feature Flag Regression  | Not re-run in Phase 0 (Epic 09 Phase 10: 1912 passed with `HITL_ENABLED=false`)   |
 | Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |
-| Background Jobs          | Phase 4 **Completed** (2026-08-12) — HITL expiry/orphan sweeps (Phase 3), `workflow_run_retention_cleanup` + `background_jobs` self-retention (Phase 4); RAG/eval handlers remain stubbed (Phases 5–6) |
+| Background Jobs          | Phase 5 **Completed** (2026-08-12) — `QueueIndexingRunner` + `rag_document_indexing` handler, `document_upload_staging` migration `0015`, `rag_indexing_runner` config; scheduled eval handler remains stubbed (Phase 6) |
 
 ---
 
@@ -1299,7 +1299,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 2     | Job Scheduler & Recurring Jobs                 | M      | ✅ Completed (2026-08-12) |
 | 3     | HITL Approval Expiry & Orphaned-Snapshot Sweep | L      | ✅ Completed (2026-08-12) |
 | 4     | Workflow Run Retention Cleanup                 | M      | ✅ Completed (2026-08-12) |
-| 5     | RAG Queue-Backed Indexing                      | M      | Not Started |
+| 5     | RAG Queue-Backed Indexing                      | M      | ✅ Completed (2026-08-12) |
 | 6     | Scheduled Evaluation Runs                      | S      | Not Started |
 | 7     | Jobs REST API & Health                         | S      | Not Started |
 | 8     | Background Jobs Observability                  | S      | Not Started |
@@ -1307,7 +1307,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 10    | Frontend Jobs & Schedules Dashboard            | S      | Not Started |
 | 11    | Validation & Release                           | M      | Not Started |
 
-**Epic 10 overall:** Phase 4 complete. Next gate: user authorization to begin Phase 5.
+**Epic 10 overall:** Phase 5 complete. Next gate: user authorization to begin Phase 6.
 
 ---
 
@@ -1676,7 +1676,7 @@ Ship `workflow_run_retention_cleanup`, enforcing the previously config-only `wor
 **Exit criteria**
 
 - [x] Retention handler tests pass.
-- [ ] User confirmation to proceed to Phase 5.
+- [x] User confirmation to proceed to Phase 5.
 
 **Rollback**
 
@@ -1688,6 +1688,7 @@ Ship `workflow_run_retention_cleanup`, enforcing the previously config-only `wor
 # Phase 5 — RAG Queue-Backed Indexing
 
 **Effort:** M
+**Status:** Completed (2026-08-12)
 
 **Objective**
 
@@ -1695,7 +1696,10 @@ Ship `QueueIndexingRunner` implementing the existing `IndexingJob` protocol on t
 
 **Deliverables**
 
-- `app/ai/jobs/handlers/rag_indexing.py` — `QueueIndexingRunner` + `rag_document_indexing` handler
+- `app/ai/rag/indexing/queue_runner.py` — `QueueIndexingRunner`
+- `app/ai/jobs/handlers/rag_indexing.py` — `rag_document_indexing` handler
+- `app/ai/rag/indexing/work.py` — shared `run_indexing_work` (sync + queue paths)
+- `alembic/versions/0015_document_upload_staging.py` — durable upload byte staging
 - `rag_indexing_runner` config field (`"sync" | "queue"`, default `"sync"`)
 - `KnowledgeService.ingest_document` call-site update (runner selection only)
 - Integration tests proving byte-for-byte identical indexing results between the two runners
@@ -1704,20 +1708,20 @@ Ship `QueueIndexingRunner` implementing the existing `IndexingJob` protocol on t
 
 ## Feasibility Verification (do first)
 
-- [ ] Confirm uploaded document bytes are retrievable by a background handler independent of the original request (i.e. already persisted somewhere durable before `ingest_document` returns, not only held in `SyncIndexingRunner`'s in-memory `_pending` map). If not yet true, stop and document the gap per Part I § Implementation Risks — do not proceed with a runner that cannot actually fetch bytes.
+- [x] Confirm uploaded document bytes are retrievable by a background handler independent of the original request (i.e. already persisted somewhere durable before `ingest_document` returns, not only held in `SyncIndexingRunner`'s in-memory `_pending` map). If not yet true, stop and document the gap per Part I § Implementation Risks — do not proceed with a runner that cannot actually fetch bytes. **Resolution:** bytes were not previously durable — added `document_upload_staging` table (migration `0015`); queue ingest persists bytes before enqueue; handler re-fetches and deletes staging on success.
 
 ## Handler Implementation
 
-- [ ] Implement `QueueIndexingRunner.submit()`/`get_status()` per Part I § RAG Queue-Backed Indexing.
-- [ ] Implement the `rag_document_indexing` handler: re-fetch persisted bytes for `document_id`, run the same processor callback `SyncIndexingRunner` already uses (chunk → embed → store), return `JobResult(ref_id=str(document_id))`.
-- [ ] Wire `rag_indexing_runner` config into `KnowledgeService`'s runner selection (single call site).
+- [x] Implement `QueueIndexingRunner.submit()`/`get_status()` per Part I § RAG Queue-Backed Indexing.
+- [x] Implement the `rag_document_indexing` handler: re-fetch persisted bytes for `document_id`, run the same processor callback `SyncIndexingRunner` already uses (chunk → embed → store), return `JobResult(ref_id=str(document_id))`.
+- [x] Wire `rag_indexing_runner` config into `KnowledgeService`'s runner selection (single call site).
 
 ## Testing
 
-- [ ] Test: `QueueIndexingRunner.submit()` enqueues a `rag_document_indexing` job; `get_status()` reflects `queued` → `running` → `succeeded`.
-- [ ] Test: a document indexed via `QueueIndexingRunner` produces the same chunks/embeddings as the same document indexed via `SyncIndexingRunner` (parity test).
-- [ ] Test: indexing failure surfaces via `get_status()` as `failed`, matching `IndexingJobStatus`'s existing failure shape.
-- [ ] Test: flag off, or `rag_indexing_runner="sync"` (default) — `KnowledgeService` always uses `SyncIndexingRunner`, byte-for-byte Epic 02 behaviour.
+- [x] Test: `QueueIndexingRunner.submit()` enqueues a `rag_document_indexing` job; `get_status()` reflects `queued` → `running` → `succeeded`.
+- [x] Test: a document indexed via `QueueIndexingRunner` produces the same chunks/embeddings as the same document indexed via `SyncIndexingRunner` (parity test).
+- [x] Test: indexing failure surfaces via `get_status()` as `failed`, matching `IndexingJobStatus`'s existing failure shape.
+- [x] Test: flag off, or `rag_indexing_runner="sync"` (default) — `KnowledgeService` always uses `SyncIndexingRunner`, byte-for-byte Epic 02 behaviour.
 
 **Verify**
 
@@ -1730,7 +1734,7 @@ Ship `QueueIndexingRunner` implementing the existing `IndexingJob` protocol on t
 
 **Exit criteria**
 
-- [ ] RAG queue-indexing tests pass.
+- [x] RAG queue-indexing tests pass.
 - [ ] User confirmation to proceed to Phase 6.
 
 **Rollback**
@@ -2185,7 +2189,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 - [ ] Claim-and-lease queue, worker, and scheduler operational under genuine concurrency (verified, not assumed).
 - [ ] HITL approval-timeout enforcement operational on both surfaces; orphaned-snapshot sweep resumes or fail-safes crash-orphaned approvals.
 - [x] Workflow run retention cleanup enforces `workflow_run_retention_days`.
-- [ ] RAG queue-backed indexing available as an opt-in alternative to the unchanged synchronous default.
+- [x] RAG queue-backed indexing available as an opt-in alternative to the unchanged synchronous default.
 - [ ] Scheduled evaluation runs available, disabled by default.
 - [ ] Jobs REST API and frontend dashboard operational, including manual dead-letter retry.
 - [ ] Reference scenarios and adversarial/concurrency eval coverage shipped.
@@ -2233,6 +2237,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.6     | 2026-08-12 | Part II Phase 5 complete — migration `0015_document_upload_staging`, `QueueIndexingRunner` (`queue_runner.py`), `rag_document_indexing` handler, shared `run_indexing_work`, `rag_indexing_runner` config, `KnowledgeService` runner selection, `tests/ai/rag/test_queue_indexing_runner.py` (5/5). |
 | 3.5     | 2026-08-12 | Part II Phase 4 complete — `workflow_retention.py` handler (`workflow_run_retention_cleanup`), batched terminal `workflow_runs` + `background_jobs` self-retention purge, `workflow_run_retention_days` now enforced, `tests/ai/jobs/handlers/test_workflow_retention.py`. |
 | 3.4     | 2026-08-12 | Part II Phase 3 complete — migration `0014_hitl_expired_status_checks`, `hitl_expiry.py` + `hitl_orphan_sweep.py` handlers, `hitl_orphan_sweep_grace_seconds`, Epic 09/10 HITL closure, `tests/ai/jobs/handlers/test_hitl_*.py` + adversarial race coverage. |
 | 3.3     | 2026-08-12 | Part II Phase 2 complete — `JobScheduler`, `PostgresJobScheduleStore`, migration `0013_background_job_schedules` (seeded schedules), lifespan wiring, `tests/ai/jobs/test_scheduler.py` + `test_worker_lifespan.py`. |

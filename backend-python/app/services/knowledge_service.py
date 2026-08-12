@@ -8,12 +8,16 @@ from typing import Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.documents.pipeline import IngestionPipeline
+from app.ai.interfaces.indexing_job import IndexingJob
 from app.ai.interfaces.vector_store import VectorStore
+from app.ai.jobs.queue import JobQueue
 from app.ai.rag.indexing import (
     IndexingJobFailedError,
     PendingIndexingWork,
+    QueueIndexingRunner,
     SyncIndexingRunner,
 )
+from app.ai.rag.indexing.work import cleanup_failed_indexing, run_indexing_work
 from app.ai.rag.schemas import IndexingJobState
 from app.core.config import Settings
 from app.core.logging import get_logger
@@ -50,7 +54,8 @@ class KnowledgeService:
         pipeline: IngestionPipeline,
         vector_store: VectorStore,
         quota_service: UploadQuotaChecker | None = None,
-        indexing_runner: SyncIndexingRunner | None = None,
+        indexing_runner: IndexingJob | None = None,
+        job_queue: JobQueue | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
@@ -58,10 +63,16 @@ class KnowledgeService:
         self._pipeline = pipeline
         self._vector_store = vector_store
         self._quota_service = quota_service
-        # Thin IndexingJob hook: sync in-process runner (Epic 9 queue later).
-        self._indexing = indexing_runner or SyncIndexingRunner(
-            processor=self._run_indexing_work
+        self._uses_queue_indexing = _should_use_queue_indexing(
+            settings, job_queue=job_queue
         )
+        if indexing_runner is not None:
+            self._indexing = indexing_runner
+        elif self._uses_queue_indexing:
+            assert job_queue is not None
+            self._indexing = QueueIndexingRunner(queue=job_queue)
+        else:
+            self._indexing = SyncIndexingRunner(processor=self._run_indexing_work)
 
     async def ingest_document(
         self,
@@ -90,15 +101,24 @@ class KnowledgeService:
         )
         document_id = document.id
 
-        self._indexing.register_pending_work(
-            PendingIndexingWork(
+        if self._uses_queue_indexing:
+            await self._store.store_upload_staging(
                 document_id=document_id,
                 user_id=user_id,
                 file_bytes=file_bytes,
                 filename=filename,
                 mime_type=mime_type,
             )
-        )
+        elif isinstance(self._indexing, SyncIndexingRunner):
+            self._indexing.register_pending_work(
+                PendingIndexingWork(
+                    document_id=document_id,
+                    user_id=user_id,
+                    file_bytes=file_bytes,
+                    filename=filename,
+                    mime_type=mime_type,
+                )
+            )
 
         try:
             job_id = await self._indexing.submit(
@@ -107,8 +127,12 @@ class KnowledgeService:
             )
             status = await self._indexing.get_status(job_id)
             _logger.info(
-                "Document ingested with embeddings",
-                documents_ingested_total=1,
+                "Document ingested with embeddings"
+                if status.state is IndexingJobState.SUCCEEDED
+                else "Document ingest job enqueued",
+                documents_ingested_total=1
+                if status.state is IndexingJobState.SUCCEEDED
+                else 0,
                 document_id=str(document_id),
                 indexing_job_id=job_id,
                 indexing_job_status=status.state.value,
@@ -132,32 +156,12 @@ class KnowledgeService:
             raise
 
     async def _run_indexing_work(self, work: PendingIndexingWork) -> None:
-        """Parse → chunk → embed → persist for a registered sync indexing job."""
-        await self._store.set_status(work.document_id, "processing")
-        parsed = await self._pipeline.parse(
-            work.file_bytes,
-            work.filename,
-            work.mime_type,
-        )
-        chunks = self._pipeline.chunk(parsed)
-        chunk_rows = [
-            (chunk.chunk_index, chunk.content, chunk.metadata, chunk.id)
-            for chunk in chunks
-        ]
-        await self._store.add_chunks(work.document_id, chunk_rows)
-        # Parents are stored for expansion but not embedded by default.
-        to_embed = [
-            chunk for chunk in chunks if chunk.metadata.get("chunk_kind") != "parent"
-        ]
-        embedded = await self._pipeline.embed(to_embed)
-        await self._pipeline.persist(
-            document_id=work.document_id,
-            user_id=work.user_id,
-            chunks=embedded,
+        await run_indexing_work(
+            session=self._session,
+            pipeline=self._pipeline,
             vector_store=self._vector_store,
+            work=work,
         )
-        await self._store.set_status(work.document_id, "ready")
-        await self._session.flush()
 
     async def list_documents(self, user_id: uuid.UUID) -> list[Document]:
         return await self._store.list_documents_for_user(user_id)
@@ -197,6 +201,17 @@ class KnowledgeService:
         await self._session.flush()
 
     async def _cleanup_failed_ingest(self, document_id: uuid.UUID) -> None:
-        await self._store.delete_chunks(document_id)
-        await self._store.set_status(document_id, "failed")
-        await self._session.flush()
+        await self._store.delete_upload_staging(document_id)
+        await cleanup_failed_indexing(self._session, document_id)
+
+
+def _should_use_queue_indexing(
+    settings: Settings,
+    *,
+    job_queue: JobQueue | None,
+) -> bool:
+    if not settings.background_jobs_enabled:
+        return False
+    if settings.rag_indexing_runner != "queue":
+        return False
+    return job_queue is not None

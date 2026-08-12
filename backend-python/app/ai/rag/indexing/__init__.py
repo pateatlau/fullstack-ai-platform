@@ -1,10 +1,6 @@
-"""Indexing job runners.
+"""Indexing job runners."""
 
-Queue-backed runners are deferred:
-
-TODO(epic-9): QueueIndexingRunner / workers / retries / durable job store.
-"""
-
+from app.ai.rag.indexing.queue_runner import QueueIndexingRunner
 from app.ai.rag.indexing.sync_runner import (
     IndexingJobFailedError,
     IndexingJobNotFoundError,
@@ -16,5 +12,6 @@ __all__ = [
     "IndexingJobFailedError",
     "IndexingJobNotFoundError",
     "PendingIndexingWork",
+    "QueueIndexingRunner",
     "SyncIndexingRunner",
 ]
