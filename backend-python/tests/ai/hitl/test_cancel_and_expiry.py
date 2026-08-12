@@ -72,6 +72,7 @@ async def _seed_pending(
     chat_store: FakeChatStore,
     owner_id: uuid.UUID,
     expires_at: datetime.datetime | None = None,
+    required_stages: list[str] | None = None,
 ) -> uuid.UUID:
     session = await chat_store.create_session(user_id=owner_id)
     approval = await store.create(
@@ -85,6 +86,7 @@ async def _seed_pending(
         paused_scratchpad=[],
         paused_state={"execution_id": "exec-cancel", "status": "waiting_approval"},
         expires_at=expires_at,
+        required_stages=required_stages,
     )
     placeholder = await chat_store.add_message(
         session_id=session.id,
@@ -120,7 +122,9 @@ class TestCancel:
         assert approval.reason == "no longer needed"
 
     @pytest.mark.anyio
-    async def test_cancel_captures_request_metadata(self) -> None:
+    async def test_cancel_redacts_client_metadata_after_terminal_transition(
+        self,
+    ) -> None:
         owner_id = uuid.uuid4()
         store = InMemoryApprovalStore()
         chat_store = FakeChatStore()
@@ -140,8 +144,8 @@ class TestCancel:
         approval = await store.get(approval_id)
         assert approval is not None
         assert approval.request_id == "req-1"
-        assert approval.source_ip == "10.0.0.1"
-        assert approval.client_metadata == {"ua": "test"}
+        assert approval.source_ip is None
+        assert approval.client_metadata == {}
 
     @pytest.mark.anyio
     async def test_cancel_already_decided_raises_conflict(self) -> None:
@@ -236,6 +240,29 @@ class TestLazyExpiration:
 
         with pytest.raises(ApprovalExpiredError):
             await service.cancel(approval_id, owner_id=owner_id)
+
+    @pytest.mark.anyio
+    async def test_expired_approval_raises_on_record_stage_approval(self) -> None:
+        owner_id = uuid.uuid4()
+        store = InMemoryApprovalStore()
+        chat_store = FakeChatStore()
+        service = _service(store, chat_store)
+        past = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1)
+        approval_id = await _seed_pending(
+            store=store,
+            chat_store=chat_store,
+            owner_id=owner_id,
+            expires_at=past,
+            required_stages=["manager", "security"],
+        )
+
+        with pytest.raises(ApprovalExpiredError):
+            await service.record_stage_approval(approval_id, owner_id=owner_id)
+
+        approval = await store.get(approval_id)
+        assert approval is not None
+        assert approval.status == ApprovalStatus.EXPIRED
+        assert approval.stage_decisions == []
 
     @pytest.mark.anyio
     async def test_future_expiry_does_not_expire(self) -> None:

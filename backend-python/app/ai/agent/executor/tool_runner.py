@@ -109,6 +109,7 @@ class ToolRunner:
         await self._preflight_approval_for_steps(
             steps,
             execution_id=execution_id,
+            tool_context=tool_context,
             scratchpad=scratchpad,
             state=state,
             session_id=session_id,
@@ -230,6 +231,7 @@ class ToolRunner:
         step: PlannedStep,
         *,
         execution_id: str,
+        tool_context: ToolExecutionContext,
         scratchpad: Scratchpad | None,
         state: AgentExecutionState | None,
         session_id: uuid.UUID | None,
@@ -243,7 +245,12 @@ class ToolRunner:
             raise HitlError(
                 "HITL is enabled but ToolRunner is missing ToolRegistry or ApprovalPolicy."
             )
-        outcome = _evaluate_step_policy(step, self._registry, self._approval_policy)
+        outcome = _evaluate_step_policy(
+            step,
+            self._registry,
+            self._approval_policy,
+            tool_context,
+        )
         if outcome is None or outcome.outcome is RuleOutcome.AUTO_APPROVE:
             return
         if outcome.outcome is RuleOutcome.REJECT:
@@ -283,6 +290,7 @@ class ToolRunner:
         steps: list[PlannedStep],
         *,
         execution_id: str,
+        tool_context: ToolExecutionContext,
         scratchpad: Scratchpad | None,
         state: AgentExecutionState | None,
         session_id: uuid.UUID | None,
@@ -297,6 +305,7 @@ class ToolRunner:
             await self._maybe_pause_for_approval(
                 step,
                 execution_id=execution_id,
+                tool_context=tool_context,
                 scratchpad=scratchpad,
                 state=state,
                 session_id=session_id,
@@ -406,19 +415,28 @@ def _evaluate_step_policy(
     step: PlannedStep,
     registry: ToolRegistry,
     policy: ApprovalPolicy,
+    tool_context: ToolExecutionContext,
 ) -> _StepPolicyOutcome | None:
     """Evaluate the rule-based policy for every call in a step.
 
     A ``reject`` outcome takes priority over ``require_approval`` so a single
     blocked call halts the step even when a sibling call would otherwise
     pause for review.
+
+    ``caller_role``, ``workspace``, ``tenant``, and ``estimated_cost`` are
+    sourced from :meth:`ToolExecutionContext.trusted_policy_kwargs` (server
+    metadata) — never from LLM tool arguments.
     """
     pending: _StepPolicyOutcome | None = None
     for call in step.tool_calls:
         tool = registry.get(call.name)
         if tool is None:
             continue
-        decision = policy.evaluate(tool, arguments=call.arguments)
+        decision = policy.evaluate(
+            tool,
+            arguments=call.arguments,
+            **tool_context.trusted_policy_kwargs(),
+        )
         if decision.outcome is RuleOutcome.AUTO_APPROVE:
             continue
         found = _StepPolicyOutcome(

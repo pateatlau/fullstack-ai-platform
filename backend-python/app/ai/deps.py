@@ -202,7 +202,6 @@ def get_hitl_notification_dispatcher() -> "NotificationDispatcher | None":
         return None
     from app.ai.hitl.notifications import (
         DiscordNotificationProvider,
-        EmailNotificationProvider,
         InAppNotificationProvider,
         NotificationDispatcher,
         NotificationProvider,
@@ -236,7 +235,6 @@ def get_hitl_notification_dispatcher() -> "NotificationDispatcher | None":
         "discord": lambda: _webhook_provider(
             DiscordNotificationProvider, settings.hitl_notification_discord_webhook_url
         ),
-        "email": EmailNotificationProvider,
         "in_app": InAppNotificationProvider,
     }
     providers = [
@@ -259,7 +257,10 @@ def get_agent_approval_service(
     from app.db.chat import SqlChatStore
 
     return AgentApprovalService(
-        approval_store=AgentToolApprovalStore(session),
+        approval_store=AgentToolApprovalStore(
+            session,
+            client_audit_retention_days=settings.hitl_client_audit_retention_days,
+        ),
         chat_store=SqlChatStore(session),
         tool_registry=tool_registry,
         tool_executor=tool_executor,
@@ -270,11 +271,15 @@ def get_agent_approval_service(
 
 def get_approvals_store(
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_ai_settings),
 ) -> "ApprovalsStore":
     """Return a request-scoped unified approvals read store."""
     from app.ai.hitl.store import ApprovalsStore
 
-    return ApprovalsStore(session)
+    return ApprovalsStore(
+        session,
+        client_audit_retention_days=settings.hitl_client_audit_retention_days,
+    )
 
 
 def get_agent_runtime(

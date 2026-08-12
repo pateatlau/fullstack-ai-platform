@@ -33,6 +33,28 @@ class ApprovalDecideRequest(BaseModel):
     comments: str | None = None
 
 
+class StageDecisionResponse(BaseModel):
+    """One recorded multi-stage checklist step returned by the approvals API."""
+
+    stage: str
+    decision: Literal["approved", "rejected"]
+    decided_by: uuid.UUID
+    decided_at: datetime.datetime
+    reason: str | None = None
+    comments: str | None = None
+
+    @classmethod
+    def from_domain(cls, entry: StageDecision) -> StageDecisionResponse:
+        return cls(
+            stage=entry.stage,
+            decision=entry.decision,
+            decided_by=entry.decided_by,
+            decided_at=entry.decided_at,
+            reason=entry.reason,
+            comments=entry.comments,
+        )
+
+
 class ApprovalCancelRequest(BaseModel):
     """Body for requester-initiated withdrawal (recommendation #2)."""
 
@@ -91,7 +113,7 @@ class ApprovalAuditEntryResponse(BaseModel):
     decide_url: str
     expires_at: datetime.datetime | None = None
     required_stages: list[str] = Field(default_factory=list)
-    stage_decisions: list[StageDecision] = Field(default_factory=list)
+    stage_decisions: list[StageDecisionResponse] = Field(default_factory=list)
 
     @classmethod
     def from_domain(cls, entry: ApprovalAuditEntry) -> ApprovalAuditEntryResponse:
@@ -115,7 +137,10 @@ class ApprovalAuditEntryResponse(BaseModel):
             decide_url=entry.decide_url,
             expires_at=entry.expires_at,
             required_stages=entry.required_stages,
-            stage_decisions=entry.stage_decisions,
+            stage_decisions=[
+                StageDecisionResponse.from_domain(stage)
+                for stage in entry.stage_decisions
+            ],
         )
 
 

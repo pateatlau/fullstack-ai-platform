@@ -30,6 +30,7 @@ from app.ai.agent.state.manager import AgentStateManager
 from app.ai.hitl.exceptions import (
     AgentApprovalPauseError,
     ApprovalValidationError,
+    HitlError,
 )
 from app.ai.hitl.models import (
     AgentToolApproval,
@@ -186,7 +187,17 @@ class AgentApprovalStore(Protocol):
         decision: Literal["approved", "rejected"],
         decided_by: uuid.UUID,
         reason: str | None = None,
+        comments: str | None = None,
     ) -> AgentToolApproval: ...
+
+    async def rollback_last_stage_decision(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        stage: str,
+        decision: Literal["approved", "rejected"],
+    ) -> None: ...
 
     async def list_revisions(
         self,
@@ -423,23 +434,26 @@ class AgentApprovalService:
                 approval_correlation_id=str(approval.approval_correlation_id),
             ) as span:
                 if _has_outstanding_stages(approval):
-                    await self._approval_store.append_stage_decision(
+                    decided = await self._cas_decide_with_stage_append(
                         approval_id,
                         owner_id=owner_id,
-                        stage=_current_stage(approval),
-                        decision="rejected",
+                        approval=approval,
+                        stage_decision="rejected",
+                        status=ApprovalStatus.REJECTED,
+                        reason=reason,
+                        comments=comments,
+                        request_metadata=request_metadata,
+                    )
+                else:
+                    decided = await self._approval_store.cas_decide(
+                        approval_id,
+                        owner_id=owner_id,
+                        status=ApprovalStatus.REJECTED,
                         decided_by=owner_id,
                         reason=reason,
+                        comments=comments,
+                        request_metadata=request_metadata,
                     )
-                decided = await self._approval_store.cas_decide(
-                    approval_id,
-                    owner_id=owner_id,
-                    status=ApprovalStatus.REJECTED,
-                    decided_by=owner_id,
-                    reason=reason,
-                    comments=comments,
-                    request_metadata=request_metadata,
-                )
                 _emit_agent_decision_metrics(
                     span,
                     decided=decided,
@@ -461,30 +475,35 @@ class AgentApprovalService:
             )
 
         # Approved: validate first, CAS, then append inline revision on success.
+        _assert_terminal_approve_allowed(approval, approval_id)
         with approval_span(
             approval_id=str(approval_id),
             approval_kind=ApprovalKind.AGENT_TOOL.value,
             approval_correlation_id=str(approval.approval_correlation_id),
         ) as span:
             if _has_outstanding_stages(approval):
-                await self._approval_store.append_stage_decision(
+                decided = await self._cas_decide_with_stage_append(
                     approval_id,
                     owner_id=owner_id,
-                    stage=_current_stage(approval),
-                    decision="approved",
+                    approval=approval,
+                    stage_decision="approved",
+                    status=ApprovalStatus.APPROVED,
+                    reason=reason,
+                    comments=comments,
+                    edited_calls=edited_calls,
+                    request_metadata=request_metadata,
+                )
+            else:
+                decided = await self._approval_store.cas_decide(
+                    approval_id,
+                    owner_id=owner_id,
+                    status=ApprovalStatus.APPROVED,
                     decided_by=owner_id,
                     reason=reason,
+                    comments=comments,
+                    edited_calls=edited_calls,
+                    request_metadata=request_metadata,
                 )
-            decided = await self._approval_store.cas_decide(
-                approval_id,
-                owner_id=owner_id,
-                status=ApprovalStatus.APPROVED,
-                decided_by=owner_id,
-                reason=reason,
-                comments=comments,
-                edited_calls=edited_calls,
-                request_metadata=request_metadata,
-            )
             if edited_calls is not None:
                 await self._approval_store.append_revision(
                     approval_id=approval_id,
@@ -512,6 +531,7 @@ class AgentApprovalService:
         *,
         owner_id: uuid.UUID,
         reason: str | None = None,
+        comments: str | None = None,
     ) -> ApprovalResult:
         """Record one intermediate multi-stage checklist approval (recommendation #5).
 
@@ -536,6 +556,7 @@ class AgentApprovalService:
             decision="approved",
             decided_by=owner_id,
             reason=reason,
+            comments=comments,
         )
         return ApprovalResult(
             approval_id=updated.id,
@@ -547,6 +568,7 @@ class AgentApprovalService:
             approver=owner_id,
             decided_at=datetime.datetime.now(datetime.UTC),
             approval_correlation_id=updated.approval_correlation_id,
+            comments=comments,
             outstanding_stages=_remaining_stages(updated),
         )
 
@@ -649,6 +671,8 @@ class AgentApprovalService:
                 self._tool_validator,
             )
 
+        _assert_terminal_approve_allowed(approval, approval_id)
+
         resume_start = time.perf_counter()
         with approval_span(
             approval_id=str(approval_id),
@@ -656,24 +680,28 @@ class AgentApprovalService:
             approval_correlation_id=str(approval.approval_correlation_id),
         ) as span:
             if _has_outstanding_stages(approval):
-                await self._approval_store.append_stage_decision(
+                decided = await self._cas_decide_with_stage_append(
                     approval_id,
                     owner_id=owner_id,
-                    stage=_current_stage(approval),
-                    decision="approved",
+                    approval=approval,
+                    stage_decision="approved",
+                    status=ApprovalStatus.APPROVED,
+                    reason=reason,
+                    comments=comments,
+                    edited_calls=edited_calls,
+                    request_metadata=request_metadata,
+                )
+            else:
+                decided = await self._approval_store.cas_decide(
+                    approval_id,
+                    owner_id=owner_id,
+                    status=ApprovalStatus.APPROVED,
                     decided_by=owner_id,
                     reason=reason,
+                    comments=comments,
+                    edited_calls=edited_calls,
+                    request_metadata=request_metadata,
                 )
-            decided = await self._approval_store.cas_decide(
-                approval_id,
-                owner_id=owner_id,
-                status=ApprovalStatus.APPROVED,
-                decided_by=owner_id,
-                reason=reason,
-                comments=comments,
-                edited_calls=edited_calls,
-                request_metadata=request_metadata,
-            )
             if edited_calls is not None:
                 await self._approval_store.append_revision(
                     approval_id=approval_id,
@@ -826,6 +854,50 @@ class AgentApprovalService:
         if approval.pending_message_id is None:
             return None
         return await self._chat_store.get_message(approval.pending_message_id)
+
+    async def _cas_decide_with_stage_append(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        approval: AgentToolApproval,
+        stage_decision: Literal["approved", "rejected"],
+        status: ApprovalStatus,
+        reason: str | None = None,
+        comments: str | None = None,
+        edited_calls: list[ProposedToolCall] | None = None,
+        request_metadata: RequestMetadata | None = None,
+    ) -> AgentToolApproval:
+        """Append the current stage, then CAS — rolling back the append on failure."""
+        stage = _current_stage(approval)
+        await self._approval_store.append_stage_decision(
+            approval_id,
+            owner_id=owner_id,
+            stage=stage,
+            decision=stage_decision,
+            decided_by=owner_id,
+            reason=reason,
+            comments=comments,
+        )
+        try:
+            return await self._approval_store.cas_decide(
+                approval_id,
+                owner_id=owner_id,
+                status=status,
+                decided_by=owner_id,
+                reason=reason,
+                comments=comments,
+                edited_calls=edited_calls,
+                request_metadata=request_metadata,
+            )
+        except HitlError:
+            await self._approval_store.rollback_last_stage_decision(
+                approval_id,
+                owner_id=owner_id,
+                stage=stage,
+                decision=stage_decision,
+            )
+            raise
 
     async def _execute_approved_calls(
         self,
@@ -1004,14 +1076,21 @@ def _remaining_stages(approval: AgentToolApproval) -> list[str]:
 
 
 def _has_outstanding_stages(approval: AgentToolApproval) -> bool:
-    """True while at least one required checklist stage has no decision yet.
-
-    ``decide``/``approve_and_resume`` use this to record the *current* stage's
-    decision (including the final one) inline, immediately before the
-    terminal CAS write, so the checklist is complete by the time an approval
-    reaches ``approved``/``rejected``.
-    """
+    """True while at least one required checklist stage has no decision yet."""
     return bool(_remaining_stages(approval))
+
+
+def _assert_terminal_approve_allowed(
+    approval: AgentToolApproval,
+    approval_id: uuid.UUID,
+) -> None:
+    """Reject decide/approve_and_resume when intermediate checklist stages remain."""
+    if _has_outstanding_stages(approval) and not _is_final_stage(approval):
+        raise ApprovalValidationError(
+            f"Approval {approval_id} has intermediate checklist stages remaining; "
+            "use record_stage_approval() before finalizing via decide()/"
+            "approve_and_resume()."
+        )
 
 
 def _is_final_stage(approval: AgentToolApproval) -> bool:

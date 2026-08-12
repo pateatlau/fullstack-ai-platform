@@ -181,3 +181,158 @@ async def test_required_stages_from_matched_rule_are_persisted_on_pause() -> Non
     assert approval.stage_decisions == []
     assert approval.status == ApprovalStatus.PENDING
     assert _Handler.call_count == 0
+
+
+@pytest.mark.anyio
+async def test_caller_role_from_tool_context_is_passed_to_policy() -> None:
+    registry = _registry()
+    engine = RulePolicyEngine(
+        [
+            ApprovalRule(
+                name="reject-guest-destructive",
+                outcome=RuleOutcome.REJECT,
+                condition=RuleCondition(
+                    all_of=[
+                        RuleCondition(
+                            field="caller_role",
+                            operator=RuleOperator.EQ,
+                            value="guest",
+                        ),
+                        RuleCondition(
+                            field="tool_category",
+                            operator=RuleOperator.EQ,
+                            value="destructive",
+                        ),
+                    ]
+                ),
+            )
+        ]
+    )
+    policy = ApprovalPolicy(required_tool_names=frozenset(), rule_engine=engine)
+    chat_store = FakeChatStore()
+    runner = ToolRunner(
+        tool_executor=ToolExecutor(registry=registry, settings=Settings()),
+        tool_registry=registry,
+        hitl_enabled=True,
+        approval_policy=policy,
+        approval_service=AgentApprovalService(
+            approval_store=InMemoryApprovalStore(), chat_store=chat_store
+        ),
+    )
+    step = PlannedStep(
+        step_id="s1",
+        action=StepAction.TOOL_CALL,
+        tool_calls=[ToolCall(name="delete_file", arguments={"path": "/prod/x"})],
+    )
+
+    with pytest.raises(ToolCallRejectedByPolicyError) as exc_info:
+        await runner.run_tool_steps(
+            [step],
+            execution_id="exec-guest-reject",
+            tool_context=ToolExecutionContext(
+                caller=CallerContext.anonymous(guest_id=uuid.uuid4())
+            ),
+        )
+
+    assert exc_info.value.matched_rule == "reject-guest-destructive"
+    assert _Handler.call_count == 0
+
+    await runner.run_tool_steps(
+        [step],
+        execution_id="exec-user-ok",
+        tool_context=_tool_context(),
+    )
+    assert _Handler.call_count == 1
+
+
+@pytest.mark.anyio
+async def test_trusted_policy_context_reaches_rule_engine() -> None:
+    registry = _registry()
+    engine = RulePolicyEngine(
+        [
+            ApprovalRule(
+                name="reject-prod-high-cost",
+                outcome=RuleOutcome.REJECT,
+                condition=RuleCondition(
+                    all_of=[
+                        RuleCondition(
+                            field="workspace",
+                            operator=RuleOperator.EQ,
+                            value="production",
+                        ),
+                        RuleCondition(
+                            field="tenant",
+                            operator=RuleOperator.EQ,
+                            value="acme",
+                        ),
+                        RuleCondition(
+                            field="estimated_cost",
+                            operator=RuleOperator.GT,
+                            value=100,
+                        ),
+                    ]
+                ),
+            )
+        ]
+    )
+    policy = ApprovalPolicy(required_tool_names=frozenset(), rule_engine=engine)
+    chat_store = FakeChatStore()
+    runner = ToolRunner(
+        tool_executor=ToolExecutor(registry=registry, settings=Settings()),
+        tool_registry=registry,
+        hitl_enabled=True,
+        approval_policy=policy,
+        approval_service=AgentApprovalService(
+            approval_store=InMemoryApprovalStore(), chat_store=chat_store
+        ),
+    )
+    step_with_untrusted_args = PlannedStep(
+        step_id="s1",
+        action=StepAction.TOOL_CALL,
+        tool_calls=[
+            ToolCall(
+                name="delete_file",
+                # Untrusted LLM-supplied values must not satisfy policy rules.
+                arguments={
+                    "path": "/x",
+                    "workspace": "staging",
+                    "tenant": "other",
+                    "estimated_cost": 1,
+                },
+            )
+        ],
+    )
+    trusted_context = ToolExecutionContext(
+        caller=CallerContext.for_user(uuid.uuid4()),
+        workspace="production",
+        tenant="acme",
+        estimated_cost=250.0,
+    )
+
+    with pytest.raises(ToolCallRejectedByPolicyError) as exc_info:
+        await runner.run_tool_steps(
+            [step_with_untrusted_args],
+            execution_id="exec-trusted-context",
+            tool_context=trusted_context,
+        )
+
+    assert exc_info.value.matched_rule == "reject-prod-high-cost"
+    assert _Handler.call_count == 0
+
+    await runner.run_tool_steps(
+        [
+            PlannedStep(
+                step_id="s2",
+                action=StepAction.TOOL_CALL,
+                tool_calls=[ToolCall(name="delete_file", arguments={"path": "/x"})],
+            )
+        ],
+        execution_id="exec-trusted-context-ok",
+        tool_context=ToolExecutionContext(
+            caller=CallerContext.for_user(uuid.uuid4()),
+            workspace="staging",
+            tenant="acme",
+            estimated_cost=250.0,
+        ),
+    )
+    assert _Handler.call_count == 1

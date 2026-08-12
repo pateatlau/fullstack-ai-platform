@@ -41,6 +41,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+_REGEX_MAX_PATTERN_LEN = 256
+_REGEX_MAX_INPUT_LEN = 4096
+
 
 class RuleOperator(str, enum.Enum):
     """Comparison applied between a resolved context field and a rule value."""
@@ -100,6 +103,9 @@ class RuleCondition(BaseModel):
     field: str | None = None
     operator: RuleOperator | None = None
     value: Any = None
+    compiled_regex: re.Pattern[str] | None = Field(
+        default=None, exclude=True, repr=False
+    )
 
     model_config = {"populate_by_name": True}
 
@@ -119,6 +125,22 @@ class RuleCondition(BaseModel):
             )
         if is_leaf and self.operator is None:
             raise ValueError("Leaf RuleCondition requires an operator.")
+        return self
+
+    @model_validator(mode="after")
+    def _compile_regex_pattern(self) -> "RuleCondition":
+        if self.field is None or self.operator is not RuleOperator.REGEX:
+            return self
+        if not isinstance(self.value, str):
+            raise ValueError("REGEX rule value must be a string pattern.")
+        if len(self.value) > _REGEX_MAX_PATTERN_LEN:
+            raise ValueError(
+                f"REGEX pattern exceeds maximum length of {_REGEX_MAX_PATTERN_LEN}."
+            )
+        try:
+            self.compiled_regex = re.compile(self.value)
+        except re.error as exc:
+            raise ValueError(f"Invalid REGEX pattern {self.value!r}: {exc}") from exc
         return self
 
 
@@ -143,9 +165,17 @@ def _compare(operator: RuleOperator, actual: Any, expected: Any) -> bool:
         return actual <= expected
     if operator is RuleOperator.CONTAINS:
         return expected in actual
-    if operator is RuleOperator.REGEX:
-        return bool(re.search(str(expected), str(actual)))
     raise ValueError(f"Unsupported rule operator: {operator}")  # pragma: no cover
+
+
+def _regex_matches(actual: Any, pattern: re.Pattern[str]) -> bool:
+    """Return whether ``actual`` matches a precompiled, bounded regex pattern."""
+    if actual is None:
+        return False
+    text = str(actual)
+    if len(text) > _REGEX_MAX_INPUT_LEN:
+        return False
+    return bool(pattern.search(text))
 
 
 class RuleEvaluator:
@@ -161,6 +191,10 @@ class RuleEvaluator:
 
         assert condition.field is not None and condition.operator is not None
         actual = context.resolve_field(condition.field)
+        if condition.operator is RuleOperator.REGEX:
+            if condition.compiled_regex is None:
+                return False
+            return _regex_matches(actual, condition.compiled_regex)
         try:
             return _compare(condition.operator, actual, condition.value)
         except TypeError:

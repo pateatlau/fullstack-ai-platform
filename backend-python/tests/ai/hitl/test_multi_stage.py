@@ -14,7 +14,7 @@ from app.ai.agent.models.request import AgentRequest
 from app.ai.agent.planner import ReActPlanner
 from app.ai.agent.scratchpad import ScratchpadStore
 from app.ai.agent.streaming import InMemoryStreamPublisher, NoOpStreamPublisher
-from app.ai.hitl.exceptions import ApprovalValidationError
+from app.ai.hitl.exceptions import ApprovalValidationError, HitlError
 from app.ai.hitl.models import ApprovalStatus, ProposedToolCall
 from app.ai.hitl.service import AgentApprovalService
 from app.ai.tools.executor import ToolExecutor
@@ -163,6 +163,33 @@ class TestRecordStageApproval:
         assert _Handler.call_count == 0
 
     @pytest.mark.anyio
+    async def test_intermediate_stage_persists_comments(self) -> None:
+        owner_id = uuid.uuid4()
+        store = InMemoryApprovalStore()
+        chat_store = FakeChatStore()
+        service = _service(store, chat_store)
+        approval_id, _ = await _seed_pending(
+            store=store,
+            chat_store=chat_store,
+            owner_id=owner_id,
+            required_stages=["manager", "security"],
+        )
+
+        result = await service.record_stage_approval(
+            approval_id,
+            owner_id=owner_id,
+            reason="manager ok",
+            comments="please review carefully",
+        )
+
+        assert result.status == ApprovalStatus.PENDING
+        assert result.comments == "please review carefully"
+        approval = await store.get(approval_id)
+        assert approval is not None
+        assert len(approval.stage_decisions) == 1
+        assert approval.stage_decisions[0].comments == "please review carefully"
+
+    @pytest.mark.anyio
     async def test_second_of_three_stages_leaves_one_outstanding(self) -> None:
         owner_id = uuid.uuid4()
         store = InMemoryApprovalStore()
@@ -283,6 +310,7 @@ class TestFinalStageDecide:
             "security",
         ]
         assert response.finish_reason == "stop"
+        assert _Handler.call_count == 1
 
     @pytest.mark.anyio
     async def test_single_stage_approval_records_and_executes_in_one_call(self) -> None:
@@ -325,3 +353,111 @@ class TestFinalStageDecide:
         assert approval.status == ApprovalStatus.APPROVED
         assert len(approval.stage_decisions) == 1
         assert _Handler.call_count == 1
+
+
+class TestIntermediateStageGuard:
+    @pytest.mark.anyio
+    async def test_decide_approved_rejects_when_intermediate_stages_remain(
+        self,
+    ) -> None:
+        owner_id = uuid.uuid4()
+        store = InMemoryApprovalStore()
+        chat_store = FakeChatStore()
+        service = _service(store, chat_store)
+        approval_id, _ = await _seed_pending(
+            store=store,
+            chat_store=chat_store,
+            owner_id=owner_id,
+            required_stages=["manager", "security", "compliance"],
+        )
+
+        with pytest.raises(ApprovalValidationError):
+            await service.decide(approval_id, owner_id=owner_id, decision="approved")
+
+        approval = await store.get(approval_id)
+        assert approval is not None
+        assert approval.status == ApprovalStatus.PENDING
+        assert approval.stage_decisions == []
+        assert _Handler.call_count == 0
+
+    @pytest.mark.anyio
+    async def test_approve_and_resume_rejects_when_intermediate_stages_remain(
+        self,
+    ) -> None:
+        owner_id = uuid.uuid4()
+        store = InMemoryApprovalStore()
+        chat_store = FakeChatStore()
+        service = _service(store, chat_store)
+        scratchpad_store = ScratchpadStore()
+        approval_id, session_id = await _seed_pending(
+            store=store,
+            chat_store=chat_store,
+            owner_id=owner_id,
+            required_stages=["manager", "security"],
+        )
+        registry = _registry()
+        caller = CallerContext.for_user(owner_id)
+
+        with pytest.raises(ApprovalValidationError):
+            await service.approve_and_resume(
+                approval_id,
+                owner_id=owner_id,
+                executor=_resume_executor(
+                    registry=registry, scratchpad_store=scratchpad_store
+                ),
+                request=AgentRequest(
+                    messages=[AgentMessage(role="user", content="delete")],
+                    model="gpt-4o-mini",
+                    config=AgentConfig(max_iterations=2),
+                ),
+                context=AgentContext(
+                    execution_id="exec-stage",
+                    caller=caller,
+                    session_id=session_id,
+                ),
+                tool_context=ToolExecutionContext(caller=caller),
+                stream_publisher=InMemoryStreamPublisher(),
+            )
+
+        approval = await store.get(approval_id)
+        assert approval is not None
+        assert approval.status == ApprovalStatus.PENDING
+        assert approval.stage_decisions == []
+        assert _Handler.call_count == 0
+
+
+class _FailCasDecideStore(InMemoryApprovalStore):
+    """Fails cas_decide once to exercise stage-append rollback."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._fail_cas = True
+
+    async def cas_decide(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if self._fail_cas:
+            self._fail_cas = False
+            raise HitlError("simulated CAS failure")
+        return await super().cas_decide(*args, **kwargs)
+
+
+class TestStageAppendRollback:
+    @pytest.mark.anyio
+    async def test_cas_failure_rolls_back_appended_stage_decision(self) -> None:
+        owner_id = uuid.uuid4()
+        store = _FailCasDecideStore()
+        chat_store = FakeChatStore()
+        service = _service(store, chat_store)
+        approval_id, _ = await _seed_pending(
+            store=store,
+            chat_store=chat_store,
+            owner_id=owner_id,
+            required_stages=["manager"],
+        )
+
+        with pytest.raises(HitlError, match="simulated CAS failure"):
+            await service.decide(approval_id, owner_id=owner_id, decision="rejected")
+
+        approval = await store.get(approval_id)
+        assert approval is not None
+        assert approval.status == ApprovalStatus.PENDING
+        assert approval.stage_decisions == []

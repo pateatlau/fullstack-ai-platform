@@ -503,10 +503,14 @@ def _hitl_validator(
     *,
     hitl_enabled: bool = True,
     required_tool_names: frozenset[str] = frozenset(),
+    rule_engine=None,
 ) -> GraphValidator:
     from app.ai.hitl.policy import ApprovalPolicy
 
-    policy = ApprovalPolicy(required_tool_names=required_tool_names)
+    policy = ApprovalPolicy(
+        required_tool_names=required_tool_names,
+        rule_engine=rule_engine,
+    )
     return GraphValidator(
         max_nodes_per_definition=20,
         max_parallel_branches=8,
@@ -578,6 +582,48 @@ class TestGraphValidatorApprovalRequiredToolReachability:
             WorkflowValidationError, match="approval-required tool 'delete_file'"
         ):
             validator.validate(definition)
+
+    def test_policy_reject_outcome_does_not_require_approval_node(self) -> None:
+        from app.ai.hitl.rules import (
+            ApprovalRule,
+            RuleCondition,
+            RuleOperator,
+            RuleOutcome,
+            RulePolicyEngine,
+        )
+
+        registry = _sensitive_tool_registry()
+        engine = RulePolicyEngine(
+            [
+                ApprovalRule(
+                    name="reject-delete-file",
+                    outcome=RuleOutcome.REJECT,
+                    condition=RuleCondition(
+                        field="tool_name",
+                        operator=RuleOperator.EQ,
+                        value="delete_file",
+                    ),
+                )
+            ]
+        )
+        validator = _hitl_validator(registry, rule_engine=engine)
+        definition = _definition(
+            nodes=[
+                _node("start", NodeType.TASK),
+                _node(
+                    "risky",
+                    NodeType.TASK,
+                    config={"tool_name": "delete_file", "arguments_template": {}},
+                ),
+                _node("end", NodeType.TERMINAL),
+            ],
+            edges=[
+                _edge("e1", "start", "risky"),
+                _edge("e2", "risky", "end"),
+            ],
+        )
+
+        validator.validate(definition)
 
     def test_sensitive_task_preceded_by_approval_passes(self) -> None:
         registry = _sensitive_tool_registry()

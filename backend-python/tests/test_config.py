@@ -344,3 +344,22 @@ def test_workflow_validation_skipped_when_disabled() -> None:
         workflow_engine_enabled=False,
         workflow_provider="redis",
     ).validate_startup()
+
+
+def test_hitl_email_notification_provider_rejected_until_implemented() -> None:
+    with pytest.raises(
+        ValueError, match="Unsupported HITL_NOTIFICATION_PROVIDERS entry 'email'"
+    ):
+        Settings(
+            openai_api_key="test-key",
+            hitl_notification_providers=["email"],
+        ).validate_hitl_requirements()
+
+
+def test_hitl_duplicate_notification_providers_rejected() -> None:
+    with pytest.raises(ValueError, match="duplicate entry 'slack'"):
+        Settings(
+            openai_api_key="test-key",
+            hitl_notification_providers=["slack", "slack"],
+            hitl_notification_slack_webhook_url="https://hooks.slack.example/abc",
+        ).validate_hitl_requirements()

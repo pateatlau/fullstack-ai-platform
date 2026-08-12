@@ -20,6 +20,7 @@ from app.ai.hitl.models import (
     ProposedToolCall,
     RequestMetadata,
     StageDecision,
+    redact_terminal_client_audit_fields,
 )
 from app.db.models import ChatMessage, ChatSession
 
@@ -108,16 +109,20 @@ class EvalHitlApprovalStore:
             and row.expires_at <= datetime.datetime.now(datetime.UTC)
         ):
             now = datetime.datetime.now(datetime.UTC)
-            expired = row.model_copy(
-                update={
-                    "status": ApprovalStatus.EXPIRED,
-                    "version": row.version + 1,
-                    "updated_at": now,
-                }
+            expired = redact_terminal_client_audit_fields(
+                row.model_copy(
+                    update={
+                        "status": ApprovalStatus.EXPIRED,
+                        "source_ip": None,
+                        "client_metadata": {},
+                        "version": row.version + 1,
+                        "updated_at": now,
+                    }
+                )
             )
             self._replace(expired)
             return expired
-        return row
+        return redact_terminal_client_audit_fields(row)
 
     async def require_for_owner(
         self,
@@ -191,11 +196,11 @@ class EvalHitlApprovalStore:
         }
         if edited_calls is not None:
             updates["edited_calls"] = _serialize_tool_calls(edited_calls)
+        updates["source_ip"] = None
+        updates["client_metadata"] = {}
         if request_metadata is not None:
             updates["request_id"] = request_metadata.request_id
-            updates["source_ip"] = request_metadata.source_ip
-            updates["client_metadata"] = request_metadata.client_metadata
-        updated = row.model_copy(update=updates)
+        updated = redact_terminal_client_audit_fields(row.model_copy(update=updates))
         self._replace(updated)
         return updated
 
@@ -229,12 +234,12 @@ class EvalHitlApprovalStore:
             "reason": reason,
             "version": row.version + 1,
             "updated_at": now,
+            "source_ip": None,
+            "client_metadata": {},
         }
         if request_metadata is not None:
             updates["request_id"] = request_metadata.request_id
-            updates["source_ip"] = request_metadata.source_ip
-            updates["client_metadata"] = request_metadata.client_metadata
-        updated = row.model_copy(update=updates)
+        updated = redact_terminal_client_audit_fields(row.model_copy(update=updates))
         self._replace(updated)
         return updated
 
@@ -278,11 +283,17 @@ class EvalHitlApprovalStore:
         decision: Literal["approved", "rejected"],
         decided_by: uuid.UUID,
         reason: str | None = None,
+        comments: str | None = None,
     ) -> AgentToolApproval:
         row = await self.get_for_owner(approval_id, owner_id=owner_id)
         if row is None:
             raise ApprovalNotFoundError(
                 f"Approval {approval_id} not found or not owned by caller."
+            )
+        if row.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at "
+                f"{row.expires_at.isoformat() if row.expires_at else 'unknown'}."
             )
         if row.status != ApprovalStatus.PENDING:
             raise ApprovalDecisionConflictError(
@@ -294,6 +305,7 @@ class EvalHitlApprovalStore:
             decided_by=decided_by,
             decided_at=datetime.datetime.now(datetime.UTC),
             reason=reason,
+            comments=comments,
         )
         updated = row.model_copy(
             update={
@@ -304,6 +316,31 @@ class EvalHitlApprovalStore:
         )
         self._replace(updated)
         return updated
+
+    async def rollback_last_stage_decision(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+        stage: str,
+        decision: Literal["approved", "rejected"],
+    ) -> None:
+        row = await self.get_for_owner(approval_id, owner_id=owner_id)
+        if row is None or row.status != ApprovalStatus.PENDING:
+            return
+        if not row.stage_decisions:
+            return
+        last = row.stage_decisions[-1]
+        if last.stage != stage or last.decision != decision:
+            return
+        updated = row.model_copy(
+            update={
+                "stage_decisions": row.stage_decisions[:-1],
+                "version": row.version + 1,
+                "updated_at": datetime.datetime.now(datetime.UTC),
+            }
+        )
+        self._replace(updated)
 
     async def append_revision(
         self,

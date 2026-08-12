@@ -141,6 +141,30 @@ class TestRuleEvaluator:
         )
         assert self.evaluator.evaluate(condition, context) is True
 
+    def test_invalid_regex_pattern_rejected_at_load(self) -> None:
+        with pytest.raises(ValidationError, match="Invalid REGEX pattern"):
+            RuleCondition(field="tool_name", operator=RuleOperator.REGEX, value="(")
+
+    def test_regex_pattern_length_limit_enforced(self) -> None:
+        with pytest.raises(
+            ValidationError, match="REGEX pattern exceeds maximum length"
+        ):
+            RuleCondition(
+                field="tool_name",
+                operator=RuleOperator.REGEX,
+                value="a" * 257,
+            )
+
+    def test_regex_input_length_limit_returns_false(self) -> None:
+        context = PolicyContext(
+            tool_name="delete_file",
+            tool_arguments={"path": "a" * 5000},
+        )
+        condition = RuleCondition(
+            field="tool_arguments.path", operator=RuleOperator.REGEX, value="a+"
+        )
+        assert self.evaluator.evaluate(condition, context) is False
+
     def test_all_of_requires_every_child(self) -> None:
         context = PolicyContext(
             tool_name="delete_file", environment="production", risk_level="low"

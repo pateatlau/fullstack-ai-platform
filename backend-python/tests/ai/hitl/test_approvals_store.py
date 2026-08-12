@@ -99,6 +99,43 @@ def test_workflow_requested_at_prefers_started_and_completed_then_run_created() 
     assert _workflow_requested_at(row, run_created_at=run_created_at) == started_at
 
 
+def test_workflow_requested_at_prefers_waiting_approval_pause_timestamp() -> None:
+    from app.ai.workflow.models.run import (
+        APPROVAL_REQUESTED_AT_OUTPUT_KEY,
+        workflow_approval_requested_at,
+    )
+
+    run_created_at = _NOW - datetime.timedelta(hours=2)
+    started_at = _NOW - datetime.timedelta(hours=1)
+    pause_at = _NOW - datetime.timedelta(minutes=5)
+    row = WorkflowNodeExecutionRecord(
+        id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        node_id="approve",
+        node_type="approval",
+        status="waiting_approval",
+        input={},
+    )
+    row.started_at = started_at
+    row.output = {APPROVAL_REQUESTED_AT_OUTPUT_KEY: pause_at.isoformat()}
+
+    assert _workflow_requested_at(row, run_created_at=run_created_at) == pause_at
+
+    execution = WorkflowNodeExecution(
+        id=row.id,
+        run_id=row.run_id,
+        node_id=row.node_id,
+        node_type=NodeType.APPROVAL,
+        status=NodeStatus.WAITING_APPROVAL,
+        output=row.output,
+        started_at=started_at,
+    )
+    assert (
+        workflow_approval_requested_at(execution, run_created_at=run_created_at)
+        == pause_at
+    )
+
+
 def test_workflow_audit_status_maps_public_states_from_decision_and_pause() -> None:
     assert (
         _workflow_audit_status(

@@ -18,6 +18,7 @@ from app.ai.workflow.nodes.approval_node import (
     APPROVED_EDGE_ID_KEY,
     REJECTED_EDGE_ID_KEY,
 )
+from app.ai.hitl.rules import RuleOutcome
 
 if TYPE_CHECKING:
     from app.ai.hitl.policy import ApprovalPolicy
@@ -377,7 +378,10 @@ class GraphValidator:
                 continue
             for tool_name in self._referenced_tool_names(node):
                 tool = self._tool_registry.get(tool_name)
-                if tool is None or not self._approval_policy.requires_approval(tool):
+                if tool is None:
+                    continue
+                decision = self._approval_policy.evaluate(tool)
+                if decision.outcome is not RuleOutcome.REQUIRE_APPROVAL:
                     continue
                 if protected.get(node.id, False):
                     continue

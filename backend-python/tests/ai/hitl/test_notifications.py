@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
+import time
 import uuid
 
 import httpx
@@ -39,6 +41,10 @@ def _event(
     )
 
 
+async def _drain_background_notifications() -> None:
+    await asyncio.sleep(0.01)
+
+
 class _RecordingProvider:
     def __init__(self) -> None:
         self.events: list[ApprovalNotificationEvent] = []
@@ -53,6 +59,16 @@ class _RaisingProvider:
         raise RuntimeError("boom")
 
 
+class _SlowProvider:
+    def __init__(self, delay_seconds: float) -> None:
+        self.delay_seconds = delay_seconds
+        self.events: list[ApprovalNotificationEvent] = []
+
+    async def notify(self, event: ApprovalNotificationEvent) -> None:
+        await asyncio.sleep(self.delay_seconds)
+        self.events.append(event)
+
+
 class TestNotificationDispatcher:
     @pytest.mark.anyio
     async def test_fans_out_to_every_provider(self) -> None:
@@ -61,6 +77,7 @@ class TestNotificationDispatcher:
         event = _event()
 
         await dispatcher.dispatch(event)
+        await _drain_background_notifications()
 
         assert first.events == [event]
         assert second.events == [event]
@@ -72,8 +89,25 @@ class TestNotificationDispatcher:
         event = _event()
 
         await dispatcher.dispatch(event)
+        await _drain_background_notifications()
 
         assert recording.events == [event]
+
+    @pytest.mark.anyio
+    async def test_dispatch_returns_without_waiting_for_slow_providers(self) -> None:
+        slow_a = _SlowProvider(delay_seconds=0.1)
+        slow_b = _SlowProvider(delay_seconds=0.1)
+        dispatcher = NotificationDispatcher([slow_a, slow_b])
+        event = _event()
+
+        started = time.monotonic()
+        await dispatcher.dispatch(event)
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.05
+        await asyncio.sleep(0.15)
+        assert slow_a.events == [event]
+        assert slow_b.events == [event]
 
     @pytest.mark.anyio
     async def test_no_providers_is_a_no_op(self) -> None:
@@ -168,9 +202,25 @@ class TestHttpWebhookProviders:
 
 
 class TestPlaceholderProviders:
+    def test_hitl_email_provider_rejected_in_settings(self) -> None:
+        from app.core.config import Settings
+
+        with pytest.raises(
+            ValueError, match="Unsupported HITL_NOTIFICATION_PROVIDERS entry 'email'"
+        ):
+            Settings(
+                openai_api_key="test-key",
+                hitl_notification_providers=["email"],
+            ).validate_hitl_requirements()
+
     @pytest.mark.anyio
-    async def test_email_provider_never_raises(self) -> None:
-        await EmailNotificationProvider(recipient="ops@example.com").notify(_event())
+    async def test_email_provider_raises_until_delivery_implemented(self) -> None:
+        with pytest.raises(
+            NotImplementedError, match="email delivery is not implemented"
+        ):
+            await EmailNotificationProvider(recipient="ops@example.com").notify(
+                _event()
+            )
 
     @pytest.mark.anyio
     async def test_in_app_provider_never_raises(self) -> None:
@@ -214,6 +264,7 @@ class TestServiceDispatchesNotifications:
             execution_id="exec-1",
             stream_publisher=NoOpStreamPublisher(),
         )
+        await _drain_background_notifications()
 
         assert len(recording.events) == 1
         assert recording.events[0].event_type == ApprovalNotificationEventType.REQUESTED
@@ -245,6 +296,7 @@ class TestServiceDispatchesNotifications:
         )
 
         await service.decide(approval.id, owner_id=owner_id, decision="rejected")
+        await _drain_background_notifications()
 
         assert len(recording.events) == 1
         assert recording.events[0].event_type == ApprovalNotificationEventType.DECIDED
@@ -279,6 +331,7 @@ class TestServiceDispatchesNotifications:
         )
 
         await service.cancel(approval.id, owner_id=owner_id)
+        await _drain_background_notifications()
 
         assert len(recording.events) == 1
         assert recording.events[0].event_type == ApprovalNotificationEventType.CANCELLED

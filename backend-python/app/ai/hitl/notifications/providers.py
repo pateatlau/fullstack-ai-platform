@@ -118,24 +118,23 @@ class DiscordNotificationProvider(_HttpWebhookProvider):
 
 
 class EmailNotificationProvider:
-    """Placeholder email adapter.
+    """Unimplemented email adapter.
 
-    No SMTP/transactional-email infrastructure exists in this project yet;
-    this logs a structured "would send" record so the provider interface
-    and dispatcher wiring are exercised end-to-end. Swap the body of
-    :meth:`notify` for a real provider (SES, SendGrid, ...) when available.
+    Outbound email is not wired in DI or ``Settings.validate_hitl_requirements``
+    until a real SMTP/transactional backend exists. Direct instantiation is
+    reserved for future implementation work — :meth:`notify` fails fast rather
+    than logging a misleading "sent" record.
     """
 
     def __init__(self, *, recipient: str | None = None) -> None:
         self._recipient = recipient
 
     async def notify(self, event: ApprovalNotificationEvent) -> None:
-        _logger.info(
-            "HITL email notification (not sent — no email provider configured)",
-            recipient=self._recipient,
-            approval_id=str(event.approval_id),
-            event_type=event.event_type.value,
-            summary=event.summary,
+        del event
+        raise NotImplementedError(
+            "HITL email delivery is not implemented. Remove 'email' from "
+            "HITL_NOTIFICATION_PROVIDERS or use webhook, slack, teams, "
+            "discord, or in_app instead."
         )
 
 

@@ -49,14 +49,42 @@ class StageDecision(BaseModel):
     decided_by: uuid.UUID
     decided_at: datetime.datetime
     reason: str | None = None
+    comments: str | None = None
 
 
 class RequestMetadata(BaseModel):
-    """Optional caller/request context captured for audit purposes."""
+    """Optional caller/request context captured for audit purposes.
+
+    ``source_ip`` and ``client_metadata`` are retained only while an approval
+    remains ``pending`` and are redacted on every terminal transition. They are
+    intentionally omitted from :class:`ApprovalAuditEntry` and must not be
+    included in logs or REST response serialization.
+    """
 
     request_id: str | None = None
     source_ip: str | None = None
     client_metadata: dict[str, object] = Field(default_factory=dict)
+
+
+_TERMINAL_APPROVAL_STATUSES = frozenset(
+    {
+        ApprovalStatus.APPROVED,
+        ApprovalStatus.REJECTED,
+        ApprovalStatus.EXPIRED,
+        ApprovalStatus.CANCELLED,
+    }
+)
+
+
+def redact_terminal_client_audit_fields(
+    approval: AgentToolApproval,
+) -> AgentToolApproval:
+    """Strip client PII once an approval leaves the pending window."""
+    if approval.status not in _TERMINAL_APPROVAL_STATUSES:
+        return approval
+    if approval.source_ip is None and not approval.client_metadata:
+        return approval
+    return approval.model_copy(update={"source_ip": None, "client_metadata": {}})
 
 
 class AgentToolApproval(BaseModel):
@@ -84,7 +112,11 @@ class AgentToolApproval(BaseModel):
     # expires. Enforcement is lazy (checked on next touch) — see
     # ``AgentToolApprovalStore``; a proactive background sweep is Epic 10.
     expires_at: datetime.datetime | None = None
-    # Audit metadata (recommendation #4).
+    # Audit metadata (recommendation #4). ``request_id`` survives terminal
+    # transitions for correlation; ``source_ip`` and ``client_metadata`` are
+    # pending-only (redacted on terminal transition — see
+    # ``redact_terminal_client_audit_fields``) and excluded from
+    # :class:`ApprovalAuditEntry`/REST responses.
     request_id: str | None = None
     source_ip: str | None = None
     client_metadata: dict[str, object] = Field(default_factory=dict)
@@ -149,3 +181,43 @@ class ApprovalAuditEntry(BaseModel):
     expires_at: datetime.datetime | None = None
     required_stages: list[str] = Field(default_factory=list)
     stage_decisions: list[StageDecision] = Field(default_factory=list)
+
+
+def redact_client_audit_fields(approval: AgentToolApproval) -> AgentToolApproval:
+    """Remove pending client audit fields without changing approval status."""
+    if approval.source_ip is None and not approval.client_metadata:
+        return approval
+    return approval.model_copy(update={"source_ip": None, "client_metadata": {}})
+
+
+def client_audit_retention_expired(
+    approval: AgentToolApproval,
+    *,
+    retention_days: int,
+    now: datetime.datetime | None = None,
+) -> bool:
+    """True when persisted client audit fields exceed the configured retention window."""
+    if retention_days <= 0:
+        return False
+    if approval.source_ip is None and not approval.client_metadata:
+        return False
+    observed_at = now or datetime.datetime.now(datetime.UTC)
+    deadline = approval.requested_at + datetime.timedelta(days=retention_days)
+    return deadline <= observed_at
+
+
+def apply_client_audit_retention_policy(
+    approval: AgentToolApproval,
+    *,
+    retention_days: int,
+    now: datetime.datetime | None = None,
+) -> AgentToolApproval:
+    """Redact client audit fields on terminal transition or retention expiry."""
+    approval = redact_terminal_client_audit_fields(approval)
+    if approval.status is ApprovalStatus.PENDING and client_audit_retention_expired(
+        approval,
+        retention_days=retention_days,
+        now=now,
+    ):
+        return redact_client_audit_fields(approval)
+    return approval

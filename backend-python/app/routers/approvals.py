@@ -38,6 +38,7 @@ from app.ai.hitl.models import (
     ApprovalStatus,
     RequestMetadata,
 )
+from app.ai.hitl.request_metadata import build_request_metadata
 from app.ai.hitl.service import AgentApprovalService, normalize_hitl_reason
 from app.ai.hitl.store import ApprovalsStore
 from app.ai.tools.schemas import ToolExecutionContext
@@ -73,15 +74,10 @@ def _require_hitl_enabled(settings: Settings) -> None:
         )
 
 
-def _request_metadata_from_request(request: Request) -> RequestMetadata:
-    """Capture requester context for audit metadata (recommendation #4)."""
-    source_ip = request.client.host if request.client is not None else None
-    user_agent = request.headers.get("user-agent")
-    return RequestMetadata(
-        request_id=get_request_id(),
-        source_ip=source_ip,
-        client_metadata={"user_agent": user_agent} if user_agent else {},
-    )
+def _request_metadata_from_request(
+    request: Request, settings: Settings
+) -> RequestMetadata:
+    return build_request_metadata(request, settings)
 
 
 def _raise_hitl_error(exc: HitlError) -> NoReturn:
@@ -281,7 +277,7 @@ async def decide_agent_approval(
     comments = normalize_hitl_reason(
         body.comments, max_length=settings.hitl_max_comment_length
     )
-    request_metadata = _request_metadata_from_request(http_request)
+    request_metadata = _request_metadata_from_request(http_request, settings)
 
     if body.decision == "rejected":
         try:
@@ -324,6 +320,7 @@ async def decide_agent_approval(
                 approval_id,
                 owner_id=caller.user_id,
                 reason=reason,
+                comments=comments,
             )
         except HitlError as exc:
             _raise_hitl_error(exc)
@@ -378,7 +375,7 @@ async def cancel_agent_approval(
             approval_id,
             owner_id=caller.user_id,
             reason=reason,
-            request_metadata=_request_metadata_from_request(http_request),
+            request_metadata=_request_metadata_from_request(http_request, settings),
         )
     except HitlError as exc:
         _raise_hitl_error(exc)

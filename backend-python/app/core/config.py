@@ -246,6 +246,14 @@ class Settings(BaseSettings):
     hitl_approval_timeout_hours: int = Field(default=0, ge=0)
     hitl_max_reason_length: int = Field(default=2000, ge=1)
     hitl_max_comment_length: int = Field(default=2000, ge=1)
+    # Pending-only client audit fields (``source_ip``, ``client_metadata``) are
+    # redacted on terminal transitions and purged after this many days even if
+    # the approval is still pending. ``0`` disables time-based purge.
+    hitl_client_audit_retention_days: int = Field(default=90, ge=0)
+    # When true, resolve ``source_ip`` from the leftmost ``X-Forwarded-For``
+    # hop; otherwise use the direct ASGI client address.
+    hitl_trust_forwarded_client_ip: bool = False
+    hitl_max_user_agent_length: int = Field(default=512, ge=1)
 
     # Rule-based approval policy (recommendation #1): an ordered list of rule
     # dicts evaluated against tool name/category/risk/caller/environment/
@@ -543,9 +551,17 @@ class Settings(BaseSettings):
             "slack",
             "teams",
             "discord",
-            "email",
             "in_app",
         }
+        seen: set[str] = set()
+        for provider in self.hitl_notification_providers:
+            if provider in seen:
+                raise ValueError(
+                    f"HITL_NOTIFICATION_PROVIDERS contains duplicate entry "
+                    f"'{provider}'."
+                )
+            seen.add(provider)
+
         provider_url_settings = {
             "webhook": self.hitl_notification_webhook_url,
             "slack": self.hitl_notification_slack_webhook_url,

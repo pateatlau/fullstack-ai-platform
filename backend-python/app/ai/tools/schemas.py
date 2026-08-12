@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -52,6 +52,15 @@ class ToolResult(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
+class TrustedPolicyKwargs(TypedDict):
+    """Server-trusted fields forwarded to :class:`~app.ai.hitl.policy.ApprovalPolicy`."""
+
+    caller_role: str
+    workspace: str | None
+    tenant: str | None
+    estimated_cost: float | None
+
+
 class ToolExecutionContext(BaseModel):
     """Portable execution context for authorization and structured logging."""
 
@@ -64,5 +73,19 @@ class ToolExecutionContext(BaseModel):
     # ToolExecutor itself and ``None`` outside workflow node execution.
     execution_receipt_id: str | None = None
     approval_correlation_id: uuid.UUID | None = None
+    # Trusted HITL rule-engine inputs (recommendation #1). Populated by the
+    # server from request/agent metadata — never from LLM tool arguments.
+    workspace: str | None = None
+    tenant: str | None = None
+    estimated_cost: float | None = None
 
     model_config = {"arbitrary_types_allowed": True}
+
+    def trusted_policy_kwargs(self) -> TrustedPolicyKwargs:
+        """Return server-trusted fields forwarded to :class:`ApprovalPolicy`."""
+        return {
+            "caller_role": self.caller.kind,
+            "workspace": self.workspace,
+            "tenant": self.tenant,
+            "estimated_cost": self.estimated_cost,
+        }
