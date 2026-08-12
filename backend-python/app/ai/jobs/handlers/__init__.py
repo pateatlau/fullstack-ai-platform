@@ -11,6 +11,7 @@ from app.ai.deps import (
 )
 from app.ai.jobs.handlers.hitl_expiry import hitl_approval_expiry_sweep
 from app.ai.jobs.handlers.hitl_orphan_sweep import hitl_orphaned_snapshot_sweep
+from app.ai.jobs.handlers.workflow_retention import workflow_run_retention_cleanup
 from app.ai.jobs.models import BackgroundJob, JobResult
 from app.ai.jobs.registry import JobHandlerRegistry
 from app.core.config import Settings
@@ -60,13 +61,22 @@ def register_all_handlers(
             ),
         )
 
+    async def _workflow_retention(job: BackgroundJob) -> JobResult:
+        return await workflow_run_retention_cleanup(
+            job,
+            settings=settings,
+            session_factory=session_factory,
+        )
+
     registry.register("hitl_approval_expiry_sweep", _hitl_expiry)
     registry.register("hitl_orphaned_snapshot_sweep", _hitl_orphan)
+    registry.register("workflow_run_retention_cleanup", _workflow_retention)
 
     for job_type in _FIRST_CLASS_JOB_TYPES:
         if job_type in {
             "hitl_approval_expiry_sweep",
             "hitl_orphaned_snapshot_sweep",
+            "workflow_run_retention_cleanup",
         }:
             continue
         registry.register(job_type, _stub_handler)

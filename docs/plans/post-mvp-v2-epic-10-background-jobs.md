@@ -2,7 +2,7 @@
 epic: v2-10
 title: Background Jobs
 status: in_progress
-version: 3
+version: 3.5
 depends_on: [v2-02, v2-06, v2-07, v2-09]
 provides:
   [
@@ -1286,7 +1286,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
 | Feature Flag Regression  | Not re-run in Phase 0 (Epic 09 Phase 10: 1912 passed with `HITL_ENABLED=false`)   |
 | Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |
-| Background Jobs          | Phase 2 **Completed** (2026-08-12) — scheduler, `background_job_schedules` migration `0013`, lifespan wiring; stub handlers only (real handlers Phases 3–6) |
+| Background Jobs          | Phase 4 **Completed** (2026-08-12) — HITL expiry/orphan sweeps (Phase 3), `workflow_run_retention_cleanup` + `background_jobs` self-retention (Phase 4); RAG/eval handlers remain stubbed (Phases 5–6) |
 
 ---
 
@@ -1298,7 +1298,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 1     | Job Queue & Worker Foundations                 | L      | ✅ Completed (2026-08-12) |
 | 2     | Job Scheduler & Recurring Jobs                 | M      | ✅ Completed (2026-08-12) |
 | 3     | HITL Approval Expiry & Orphaned-Snapshot Sweep | L      | ✅ Completed (2026-08-12) |
-| 4     | Workflow Run Retention Cleanup                 | M      | Not Started |
+| 4     | Workflow Run Retention Cleanup                 | M      | ✅ Completed (2026-08-12) |
 | 5     | RAG Queue-Backed Indexing                      | M      | Not Started |
 | 6     | Scheduled Evaluation Runs                      | S      | Not Started |
 | 7     | Jobs REST API & Health                         | S      | Not Started |
@@ -1307,7 +1307,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 10    | Frontend Jobs & Schedules Dashboard            | S      | Not Started |
 | 11    | Validation & Release                           | M      | Not Started |
 
-**Epic 10 overall:** Phase 3 complete. Next gate: user authorization to begin Phase 4.
+**Epic 10 overall:** Phase 4 complete. Next gate: user authorization to begin Phase 5.
 
 ---
 
@@ -1623,7 +1623,7 @@ Ship the two HITL-closing handlers: `hitl_approval_expiry_sweep` (enforces `hitl
 **Exit criteria**
 
 - [x] HITL handler tests pass.
-- [ ] User confirmation to proceed to Phase 4.
+- [x] User confirmation to proceed to Phase 4.
 
 **Rollback**
 
@@ -1635,6 +1635,7 @@ Ship the two HITL-closing handlers: `hitl_approval_expiry_sweep` (enforces `hitl
 # Phase 4 — Workflow Run Retention Cleanup
 
 **Effort:** M
+**Status:** Completed (2026-08-12)
 
 **Objective**
 
@@ -1651,17 +1652,17 @@ Ship `workflow_run_retention_cleanup`, enforcing the previously config-only `wor
 
 ## Handler Implementation
 
-- [ ] Implement `workflow_run_retention_cleanup`: delete `workflow_runs` where `status IN ('completed','failed','cancelled')` and `updated_at < now() - workflow_run_retention_days`, batched (e.g. `LIMIT 500` per delete statement, looped until no more match) to bound lock hold time; rely on existing `ON DELETE CASCADE` for `workflow_node_executions`.
-- [ ] Extend the same handler (or a second registered `job_type`, `background_jobs_retention_cleanup`, invoked by the same schedule) to delete terminal `background_jobs` rows older than `background_jobs_retention_days`.
-- [ ] Return a `JobResult` with `counts={"workflow_runs_deleted": N, "background_jobs_deleted": M}`.
+- [x] Implement `workflow_run_retention_cleanup`: delete `workflow_runs` where `status IN ('completed','failed','cancelled')` and `updated_at < now() - workflow_run_retention_days`, batched (e.g. `LIMIT 500` per delete statement, looped until no more match) to bound lock hold time; rely on existing `ON DELETE CASCADE` for `workflow_node_executions`.
+- [x] Extend the same handler (or a second registered `job_type`, `background_jobs_retention_cleanup`, invoked by the same schedule) to delete terminal `background_jobs` rows older than `background_jobs_retention_days`.
+- [x] Return a `JobResult` with `counts={"workflow_runs_deleted": N, "background_jobs_deleted": M}`.
 
 ## Testing
 
-- [ ] Test: a terminal workflow run older than `workflow_run_retention_days` is deleted; its node executions are gone too (cascade verified).
-- [ ] Test: a terminal workflow run within the retention window is untouched.
-- [ ] Test: a `running`/`waiting_approval` run, regardless of age, is never deleted.
-- [ ] Test: batching correctly deletes more than one batch's worth of eligible rows across repeated handler invocations (or a single invocation looping internally).
-- [ ] Test: old terminal `background_jobs` rows are self-purged without deleting rows still needed for the currently-running handler's own audit trail (a job cannot delete itself while `status='running'`).
+- [x] Test: a terminal workflow run older than `workflow_run_retention_days` is deleted; its node executions are gone too (cascade verified).
+- [x] Test: a terminal workflow run within the retention window is untouched.
+- [x] Test: a `running`/`waiting_approval` run, regardless of age, is never deleted.
+- [x] Test: batching correctly deletes more than one batch's worth of eligible rows across repeated handler invocations (or a single invocation looping internally).
+- [x] Test: old terminal `background_jobs` rows are self-purged without deleting rows still needed for the currently-running handler's own audit trail (a job cannot delete itself while `status='running'`).
 
 **Verify**
 
@@ -1674,7 +1675,7 @@ Ship `workflow_run_retention_cleanup`, enforcing the previously config-only `wor
 
 **Exit criteria**
 
-- [ ] Retention handler tests pass.
+- [x] Retention handler tests pass.
 - [ ] User confirmation to proceed to Phase 5.
 
 **Rollback**
@@ -2183,7 +2184,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 - [x] Public APIs frozen after Phase 1.
 - [ ] Claim-and-lease queue, worker, and scheduler operational under genuine concurrency (verified, not assumed).
 - [ ] HITL approval-timeout enforcement operational on both surfaces; orphaned-snapshot sweep resumes or fail-safes crash-orphaned approvals.
-- [ ] Workflow run retention cleanup enforces `workflow_run_retention_days`.
+- [x] Workflow run retention cleanup enforces `workflow_run_retention_days`.
 - [ ] RAG queue-backed indexing available as an opt-in alternative to the unchanged synchronous default.
 - [ ] Scheduled evaluation runs available, disabled by default.
 - [ ] Jobs REST API and frontend dashboard operational, including manual dead-letter retry.
@@ -2232,6 +2233,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.5     | 2026-08-12 | Part II Phase 4 complete — `workflow_retention.py` handler (`workflow_run_retention_cleanup`), batched terminal `workflow_runs` + `background_jobs` self-retention purge, `workflow_run_retention_days` now enforced, `tests/ai/jobs/handlers/test_workflow_retention.py`. |
 | 3.4     | 2026-08-12 | Part II Phase 3 complete — migration `0014_hitl_expired_status_checks`, `hitl_expiry.py` + `hitl_orphan_sweep.py` handlers, `hitl_orphan_sweep_grace_seconds`, Epic 09/10 HITL closure, `tests/ai/jobs/handlers/test_hitl_*.py` + adversarial race coverage. |
 | 3.3     | 2026-08-12 | Part II Phase 2 complete — `JobScheduler`, `PostgresJobScheduleStore`, migration `0013_background_job_schedules` (seeded schedules), lifespan wiring, `tests/ai/jobs/test_scheduler.py` + `test_worker_lifespan.py`. |
 | 3.2     | 2026-08-12 | Part II Phase 1 complete — `app/ai/jobs/` queue/worker foundations, migration `0012_background_jobs`, PR review hardening, `tests/ai/jobs/test_jobs_*` suite. |
