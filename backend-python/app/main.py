@@ -36,6 +36,7 @@ from app.routers import (
     chat,
     documents,
     health,
+    jobs,
     memory,
     observability,
     plugins,
@@ -139,6 +140,7 @@ app.include_router(memory.router)
 app.include_router(workflows.router)
 app.include_router(observability.router)
 app.include_router(plugins.router)
+app.include_router(jobs.router)
 
 if settings.voice_enabled:
     from app.routers.voice import create_voice_router

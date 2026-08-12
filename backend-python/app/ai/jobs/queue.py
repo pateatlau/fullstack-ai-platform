@@ -131,6 +131,12 @@ class JobQueue(Protocol):
         offset: int = 0,
     ) -> list[BackgroundJob]: ...
 
+    async def retry_dead_letter(self, job_id: uuid.UUID) -> BackgroundJob | None: ...
+
+    async def count_pending(self) -> int: ...
+
+    async def count_dead_letter(self) -> int: ...
+
 
 class PostgresJobQueue:
     """Postgres implementation using claim-and-lease row locking."""
@@ -446,6 +452,62 @@ class PostgresJobQueue:
             result = await session.execute(text(query), params)
             rows = result.fetchall()
         return [_row_to_job(row) for row in rows]
+
+    async def retry_dead_letter(self, job_id: uuid.UUID) -> BackgroundJob | None:
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        """
+                        UPDATE background_jobs
+                        SET status = 'queued',
+                            attempt_count = 0,
+                            run_at = now(),
+                            last_error = NULL,
+                            result = NULL,
+                            finished_at = NULL,
+                            locked_by = NULL,
+                            locked_at = NULL,
+                            started_at = NULL,
+                            updated_at = now(),
+                            version = version + 1
+                        WHERE id = :job_id
+                          AND status = 'dead_letter'
+                        RETURNING *
+                        """
+                    ),
+                    {"job_id": job_id},
+                )
+                row = result.one_or_none()
+        if row is None:
+            return None
+        return _row_to_job(row)
+
+    async def count_pending(self) -> int:
+        async with self._session_factory() as session:
+            count = await session.scalar(
+                text(
+                    """
+                    SELECT COUNT(*)::int
+                    FROM background_jobs
+                    WHERE status IN ('queued', 'running')
+                    """
+                )
+            )
+        return int(count or 0)
+
+    async def count_dead_letter(self) -> int:
+        async with self._session_factory() as session:
+            count = await session.scalar(
+                text(
+                    """
+                    SELECT COUNT(*)::int
+                    FROM background_jobs
+                    WHERE status = 'dead_letter'
+                    """
+                )
+            )
+        return int(count or 0)
 
     async def _update_with_version(
         self,

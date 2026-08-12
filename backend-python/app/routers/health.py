@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.ai.deps import get_approvals_store, get_plugin_registry
+from app.ai.deps import get_approvals_store, get_job_queue, get_plugin_registry
 from app.ai.hitl.store import ApprovalsStore
+from app.ai.jobs.queue import JobQueue
 from app.ai.plugins.registry import PluginRegistry
 from app.core.config import APP_VERSION, Settings, get_settings
 from app.core.errors import DATABASE_ERROR_MESSAGE, error_response
@@ -27,17 +28,42 @@ async def _hitl_pending_approvals_count(
         return 0
 
 
+async def _background_jobs_counts(
+    *,
+    background_jobs_enabled: bool,
+    job_queue: JobQueue,
+) -> tuple[int, int]:
+    """Best-effort queue depth counts; never fail ``/api/health`` on DB errors."""
+    if not background_jobs_enabled:
+        return 0, 0
+    try:
+        pending = await job_queue.count_pending()
+        dead_letter = await job_queue.count_dead_letter()
+        return pending, dead_letter
+    except Exception:
+        return 0, 0
+
+
 @router.get("/api/health")
 async def health(
     settings: Settings = Depends(get_settings),
     plugin_registry: PluginRegistry = Depends(get_plugin_registry),
     approvals_store: ApprovalsStore = Depends(get_approvals_store),
+    job_queue: JobQueue = Depends(get_job_queue),
 ) -> dict[str, object]:
     plugins_enabled = settings.plugins_enabled
     hitl_enabled = settings.hitl_enabled
+    background_jobs_enabled = settings.background_jobs_enabled
     hitl_pending_approvals_count = await _hitl_pending_approvals_count(
         hitl_enabled=hitl_enabled,
         approvals_store=approvals_store,
+    )
+    (
+        background_jobs_pending_count,
+        background_jobs_dead_letter_count,
+    ) = await _background_jobs_counts(
+        background_jobs_enabled=background_jobs_enabled,
+        job_queue=job_queue,
     )
     return {
         "status": "ok",
@@ -52,6 +78,9 @@ async def health(
         "observability_enabled": settings.observability_enabled,
         "hitl_enabled": hitl_enabled,
         "hitl_pending_approvals_count": hitl_pending_approvals_count,
+        "background_jobs_enabled": background_jobs_enabled,
+        "background_jobs_pending_count": background_jobs_pending_count,
+        "background_jobs_dead_letter_count": background_jobs_dead_letter_count,
         "plugins_enabled": plugins_enabled,
         "plugins_loaded_count": (
             plugin_registry.loaded_count if plugins_enabled else 0

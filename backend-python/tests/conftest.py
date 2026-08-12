@@ -70,6 +70,7 @@ def _isolate_rate_limit_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]
     monkeypatch.setenv("OBSERVABILITY_ENABLED", "false")
     monkeypatch.setenv("PLUGINS_ENABLED", "false")
     monkeypatch.setenv("HITL_ENABLED", "false")
+    monkeypatch.setenv("BACKGROUND_JOBS_ENABLED", "false")
     reset_rate_limiter()
     get_settings.cache_clear()
     yield

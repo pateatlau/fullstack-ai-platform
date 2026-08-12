@@ -2,7 +2,7 @@
 epic: v2-10
 title: Background Jobs
 status: in_progress
-version: 3.7
+version: 3.8
 depends_on: [v2-02, v2-06, v2-07, v2-09]
 provides:
   [
@@ -1286,7 +1286,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
 | Feature Flag Regression  | Not re-run in Phase 0 (Epic 09 Phase 10: 1912 passed with `HITL_ENABLED=false`)   |
 | Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |
-| Background Jobs          | Phase 6 **Completed** (2026-08-12) — `scheduled_eval.py` handler (`scheduled_evaluation_run`), `evaluation_schedule_enabled`/`evaluation_schedule_level` config, startup schedule reconciliation, `tests/ai/jobs/handlers/test_scheduled_eval.py` (7/7); all five first-class handlers shipped |
+| Background Jobs          | Phase 7 **Completed** (2026-08-12) — `app/schemas/jobs.py`, `app/routers/jobs.py` (list/detail/retry/schedules), health extension (`background_jobs_*` fields), `PostgresJobQueue.retry_dead_letter`/`count_pending`/`count_dead_letter`, `get_job_queue`/`get_job_schedule_store` deps, `tests/test_jobs_router.py` (13/13); all five first-class handlers shipped |
 
 ---
 
@@ -1301,13 +1301,13 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 4     | Workflow Run Retention Cleanup                 | M      | ✅ Completed (2026-08-12) |
 | 5     | RAG Queue-Backed Indexing                      | M      | ✅ Completed (2026-08-12) |
 | 6     | Scheduled Evaluation Runs                      | S      | ✅ Completed (2026-08-12) |
-| 7     | Jobs REST API & Health                         | S      | Not Started |
+| 7     | Jobs REST API & Health                         | S      | ✅ Completed (2026-08-12) |
 | 8     | Background Jobs Observability                  | S      | Not Started |
 | 9     | Reference Scenarios & Eval Cases               | M      | Not Started |
 | 10    | Frontend Jobs & Schedules Dashboard            | S      | Not Started |
 | 11    | Validation & Release                           | M      | Not Started |
 
-**Epic 10 overall:** Phase 6 complete. Next gate: user authorization to begin Phase 7.
+**Epic 10 overall:** Phase 7 complete. Next gate: user authorization to begin Phase 8.
 
 ---
 
@@ -1785,7 +1785,7 @@ Ship `scheduled_evaluation_run`, invoking the existing evaluation runner on a co
 **Exit criteria**
 
 - [x] Scheduled eval tests pass.
-- [ ] User confirmation to proceed to Phase 7.
+- [x] User confirmation to proceed to Phase 7.
 
 **Rollback**
 
@@ -1796,6 +1796,7 @@ Ship `scheduled_evaluation_run`, invoking the existing evaluation runner on a co
 # Phase 7 — Jobs REST API & Health
 
 **Effort:** S
+**Status:** Completed (2026-08-12)
 
 **Objective**
 
@@ -1811,26 +1812,26 @@ Expose the read-only Jobs/Schedules inbox and a manual dead-letter retry action;
 
 ## API Implementation
 
-- [ ] `GET /api/jobs` — list with `status`/`job_type` filters and pagination.
-- [ ] `GET /api/jobs/{id}` — detail; `404` if not found.
-- [ ] `POST /api/jobs/{id}/retry` — `409` if not currently `dead_letter`; otherwise reset `attempt_count=0`, `status='queued'`, `run_at=now()`.
-- [ ] `GET /api/jobs/schedules` — list `background_job_schedules` (read-only).
-- [ ] Return `503 feature_disabled` when `BACKGROUND_JOBS_ENABLED=false`.
+- [x] `GET /api/jobs` — list with `status`/`job_type` filters and pagination.
+- [x] `GET /api/jobs/{id}` — detail; `404` if not found.
+- [x] `POST /api/jobs/{id}/retry` — `409` if not currently `dead_letter`; otherwise reset `attempt_count=0`, `status='queued'`, `run_at=now()`.
+- [x] `GET /api/jobs/schedules` — list `background_job_schedules` (read-only).
+- [x] Return `503 feature_disabled` when `BACKGROUND_JOBS_ENABLED=false`.
 
 ## Health Extension
 
-- [ ] Add `background_jobs_enabled`, `background_jobs_pending_count`, `background_jobs_dead_letter_count` to health payload.
+- [x] Add `background_jobs_enabled`, `background_jobs_pending_count`, `background_jobs_dead_letter_count` to health payload.
 
 ## Mount Router
 
-- [ ] Include router in `app/main.py`.
+- [x] Include router in `app/main.py`.
 
 ## Testing
 
-- [ ] Router tests with flag on/off.
-- [ ] Assert `payload`/`result` responses never include file bytes, credentials, or full tool arguments (redaction allowlist test).
-- [ ] Assert retry only succeeds from `dead_letter`; `409` otherwise.
-- [ ] Assert pagination/filter params behave correctly.
+- [x] Router tests with flag on/off.
+- [x] Assert `payload`/`result` responses never include file bytes, credentials, or full tool arguments (redaction allowlist test).
+- [x] Assert retry only succeeds from `dead_letter`; `409` otherwise.
+- [x] Assert pagination/filter params behave correctly.
 
 **Verify**
 
@@ -1843,7 +1844,7 @@ Expose the read-only Jobs/Schedules inbox and a manual dead-letter retry action;
 
 **Exit criteria**
 
-- [ ] Router tests pass.
+- [x] Router tests pass.
 - [ ] User confirmation to proceed to Phase 8.
 
 **Rollback**
@@ -2213,7 +2214,8 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 | `app/core/config.py`                                       | modify | Core     | 1, 2, 3, 4, 5, 6 |
 | `backend-python/.env.example`                              | modify | Docs     | 1, 11            |
 | `app/main.py`                                              | modify | Adapter  | 2, 7             |
-| `app/ai/deps.py`                                           | modify | Core     | 1, 2             |
+| `app/ai/deps.py`                                           | modify | Core     | 1, 2, 7          |
+| `app/ai/jobs/queue.py`                                     | modify | Core     | 7                |
 | `app/ai/workflow/nodes/approval_node.py`                   | modify | Core     | 3                |
 | `app/ai/rag/indexing/__init__.py`                          | modify | Core     | 5                |
 | `app/services/knowledge_service.py`                        | modify | Adapter  | 5                |
@@ -2238,6 +2240,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.8     | 2026-08-12 | Part II Phase 7 complete — `app/schemas/jobs.py`, `app/routers/jobs.py` (list/detail/retry/schedules + payload/result redaction), health extension (`background_jobs_enabled`, `background_jobs_pending_count`, `background_jobs_dead_letter_count`), `PostgresJobQueue.retry_dead_letter`/`count_pending`/`count_dead_letter`, `get_job_queue`/`get_job_schedule_store`, `tests/test_jobs_router.py` (13/13). |
 | 3.7     | 2026-08-12 | Part II Phase 6 complete — `scheduled_eval.py` handler (`scheduled_evaluation_run`), `evaluation_schedule_enabled`/`evaluation_schedule_level` config, startup schedule reconciliation (`reconcile_evaluation_schedule_status`), `PostgresJobScheduleStore.get_by_name`/`set_status`, `tests/ai/jobs/handlers/test_scheduled_eval.py` (7/7). |
 | 3.6     | 2026-08-12 | Part II Phase 5 complete — migration `0015_document_upload_staging`, `QueueIndexingRunner` (`queue_runner.py`), `rag_document_indexing` handler, shared `run_indexing_work`, `rag_indexing_runner` config, `KnowledgeService` runner selection, `tests/ai/rag/test_queue_indexing_runner.py` (5/5). |
 | 3.5     | 2026-08-12 | Part II Phase 4 complete — `workflow_retention.py` handler (`workflow_run_retention_cleanup`), batched terminal `workflow_runs` + `background_jobs` self-retention purge, `workflow_run_retention_days` now enforced, `tests/ai/jobs/handlers/test_workflow_retention.py`. |

@@ -58,6 +58,9 @@ async def test_health_returns_expected_shape() -> None:
         "observability_enabled": settings.observability_enabled,
         "hitl_enabled": settings.hitl_enabled,
         "hitl_pending_approvals_count": 0,
+        "background_jobs_enabled": settings.background_jobs_enabled,
+        "background_jobs_pending_count": 0,
+        "background_jobs_dead_letter_count": 0,
         "plugins_enabled": plugins_enabled,
         "plugins_loaded_count": (
             plugin_registry.loaded_count if plugins_enabled else 0
