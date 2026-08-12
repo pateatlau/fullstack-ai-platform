@@ -1,7 +1,7 @@
 ---
 epic: v2-10
 title: Background Jobs
-status: not_started
+status: in_progress
 version: 3
 depends_on: [v2-02, v2-06, v2-07, v2-09]
 provides:
@@ -1275,17 +1275,18 @@ When `BACKGROUND_JOBS_ENABLED=false`, existing platform behaviour must remain un
 
 ## Baseline
 
-_To be re-verified in Epic 10 Phase 0; Epic 09 Phase 10 completion record used as the starting template only (see [post-mvp-v2-epic-09-human-in-the-loop.md](./post-mvp-v2-epic-09-human-in-the-loop.md) § Phase 10 Completion Record)._
+_Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic10-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic10-phase-0-baseline-audit.md). Epic 09 Phase 10 completion record used as the starting template only._
 
-| Area                     | State (as of Epic 09 Phase 10)                                                  |
+| Area                     | State (as of Epic 10 Phase 0)                                                   |
 | ------------------------ | ------------------------------------------------------------------------------- |
-| Backend tests / coverage | 1912 passed, 88.95% `app/` coverage (flag-on)                                   |
-| HITL package coverage    | 84% on `app/ai/hitl/`                                                           |
-| Frontend tests           | 300 passed (50 files); lint + build pass                                        |
-| Integration tests        | 157 passed (Epic 09 test paths)                                                 |
+| Backend tests / coverage | 2004 passed, 88.73% `app/` coverage (`make test-cov`)                           |
+| HITL package coverage    | 83.8% on `app/ai/hitl/`                                                         |
+| Frontend tests           | 303 passed (50 files); lint + build pass                                        |
+| Integration tests        | 172 passed (Epic 09 HITL + approvals router paths)                              |
 | Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
-| Feature Flag Regression  | 1912 passed with `HITL_ENABLED=false` (88.99% coverage)                         |
+| Feature Flag Regression  | Not re-run in Phase 0 (Epic 09 Phase 10: 1912 passed with `HITL_ENABLED=false`)   |
 | Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |
+| Background Jobs          | Not started — `app/ai/jobs/` absent; `BACKGROUND_JOBS_ENABLED` absent           |
 
 ---
 
@@ -1293,7 +1294,7 @@ _To be re-verified in Epic 10 Phase 0; Epic 09 Phase 10 completion record used a
 
 | Phase | Name                                           | Effort | Status      |
 | ----- | ---------------------------------------------- | ------ | ----------- |
-| 0     | Baseline Audit                                 | XS     | Not Started |
+| 0     | Baseline Audit                                 | XS     | ✅ Completed (2026-08-12) |
 | 1     | Job Queue & Worker Foundations                 | L      | Not Started |
 | 2     | Job Scheduler & Recurring Jobs                 | M      | Not Started |
 | 3     | HITL Approval Expiry & Orphaned-Snapshot Sweep | L      | Not Started |
@@ -1306,13 +1307,14 @@ _To be re-verified in Epic 10 Phase 0; Epic 09 Phase 10 completion record used a
 | 10    | Frontend Jobs & Schedules Dashboard            | S      | Not Started |
 | 11    | Validation & Release                           | M      | Not Started |
 
-**Epic 10 overall:** Not started. Next gate: user authorization to begin Phase 0.
+**Epic 10 overall:** Phase 0 complete. Next gate: user authorization to begin Phase 1.
 
 ---
 
 # Phase 0 — Baseline Audit
 
 **Effort:** XS
+**Status:** Completed (2026-08-12 — see [post-mvp-v2-epic10-phase-0-baseline-audit.md](../audits/post-mvp-v2-epic10-phase-0-baseline-audit.md))
 
 **Objective**
 
@@ -1330,30 +1332,30 @@ Establish a verified implementation baseline before introducing Background Jobs.
 
 ## Platform Verification
 
-- [ ] Confirm Epic 09 Phase 10 complete / authorized for Epic 10.
-- [ ] Inventory `schedule_run_task`/`reconcile_orphaned_runs` (`app/ai/workflow/engine/background.py`) and confirm they will not be modified.
-- [ ] Inventory `schedule_extraction_task`/`schedule_lifecycle_task` (`app/ai/memory/background_tasks.py`) and confirm they will not be modified.
-- [ ] Inventory `IndexingJob` protocol, `SyncIndexingRunner` (`app/ai/interfaces/indexing_job.py`, `app/ai/rag/indexing/`); confirm the exact `TODO(epic-9):` markers to close.
-- [ ] Inventory `hitl_approval_timeout_hours`, `workflow_approval_timeout_hours`, `workflow_run_retention_days` config fields (`app/core/config.py`) and confirm none are currently enforced.
-- [ ] Inventory the `TODO(epic-10):` marker in `app/ai/workflow/nodes/approval_node.py` and any `TODO(epic-9):` markers in `app/ai/rag/indexing/` to confirm this epic's exact closure targets.
-- [ ] Verify chat, RAG, MCP, memory, voice, agent, tool, workflow, plugin, HITL, and observability pipelines operational.
+- [x] Confirm Epic 09 Phase 10 complete / authorized for Epic 10.
+- [x] Inventory `schedule_run_task`/`reconcile_orphaned_runs` (`app/ai/workflow/engine/background.py`) and confirm they will not be modified.
+- [x] Inventory `schedule_extraction_task`/`schedule_lifecycle_task` (`app/ai/memory/background_tasks.py`) and confirm they will not be modified.
+- [x] Inventory `IndexingJob` protocol, `SyncIndexingRunner` (`app/ai/interfaces/indexing_job.py`, `app/ai/rag/indexing/`); confirm the exact `TODO(epic-9):` markers to close.
+- [x] Inventory `hitl_approval_timeout_hours`, `workflow_approval_timeout_hours`, `workflow_run_retention_days` config fields (`app/core/config.py`) and confirm none are currently enforced.
+- [x] Inventory the `TODO(epic-10):` marker in `app/ai/workflow/nodes/approval_node.py` and any `TODO(epic-9):` markers in `app/ai/rag/indexing/` to confirm this epic's exact closure targets.
+- [x] Verify chat, RAG, MCP, memory, voice, agent, tool, workflow, plugin, HITL, and observability pipelines operational.
 
 ## Architecture Review
 
-- [ ] Review frozen Part I architecture (v3 — incorporates final review: transaction boundaries, cancellation semantics, handler idempotency requirement, observability correlation, health thresholds, handler checklist).
-- [ ] Confirm `agent_tool_approvals.status` CHECK already includes `expired`/`cancelled` (Epic 09) and `chat_messages.status`/`workflow_node_executions.decision` do not yet.
-- [ ] Confirm no `app/ai/jobs/` package exists.
+- [x] Review frozen Part I architecture (v3 — incorporates final review: transaction boundaries, cancellation semantics, handler idempotency requirement, observability correlation, health thresholds, handler checklist).
+- [x] Confirm `agent_tool_approvals.status` CHECK already includes `expired`/`cancelled` (Epic 09) and `chat_messages.status`/`workflow_node_executions.decision` do not yet.
+- [x] Confirm no `app/ai/jobs/` package exists.
 
 ## Dependency Verification
 
-- [ ] Verify DI and feature flag patterns in `app/ai/deps.py` / `app/core/config.py`.
-- [ ] Verify Alembic migration numbering (next available revision: **0011**).
-- [ ] Confirm no Redis/Celery/RQ/APScheduler dependency exists in `pyproject.toml`/`uv.lock` (this epic must not add one).
+- [x] Verify DI and feature flag patterns in `app/ai/deps.py` / `app/core/config.py`.
+- [x] Verify Alembic migration numbering (head: `0011_hitl_lifecycle_audit`; next available revision: **0012** — epic Files index `0011_background_jobs.py` superseded by Epic 09).
+- [x] Confirm no Redis/Celery/RQ/APScheduler dependency exists in `pyproject.toml`/`uv.lock` (this epic must not add one).
 
 ## Baseline Quality Validation
 
-- [ ] Execute lint, typecheck, unit tests, integration tests, eval suite.
-- [ ] Record baseline metrics in audit doc.
+- [x] Execute lint, typecheck, unit tests, integration tests, eval suite.
+- [x] Record baseline metrics in audit doc.
 
 **Verify**
 
@@ -1371,12 +1373,12 @@ Establish a verified implementation baseline before introducing Background Jobs.
 
 **Exit criteria**
 
-- [ ] Baseline audit published.
+- [x] Baseline audit published.
 - [ ] User confirmation to proceed to Phase 1.
 
 **Rollback**
 
-- [ ] No rollback required (no code changes).
+- [x] No rollback required (no code changes).
 
 ---
 
@@ -1397,7 +1399,7 @@ Introduce the core `app/ai/jobs/` package, domain models, database migration, an
 - `JobWorker` (poll → claim → dispatch → complete/fail with backoff)
 - `retry.py` (`compute_backoff_seconds`, `NonRetryableJobError`)
 - `JobsError`, `JobNotFoundError`, `JobHandlerNotFoundError`
-- `alembic/versions/0011_background_jobs.py` — `background_jobs` table (no `background_job_schedules`/seeded rows yet — added in Phase 2)
+- `alembic/versions/0012_background_jobs.py` — `background_jobs` table (no `background_job_schedules`/seeded rows yet — added in Phase 2)
 - `BACKGROUND_JOBS_ENABLED` and worker/retry config fields
 - Unit tests for queue/worker/registry/retry, including a genuine-concurrency double-claim test
 
@@ -2198,7 +2200,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 | `docs/audits/post-mvp-v2-epic10-phase-0-baseline-audit.md` | create | Docs     | 0                |
 | `app/ai/jobs/**`                                           | create | Core     | 1–6              |
 | `app/ai/jobs/schedule_store.py`                            | create | Core     | 2                |
-| `alembic/versions/0011_background_jobs.py`                 | create | Core     | 1, 2, 3          |
+| `alembic/versions/0012_background_jobs.py`                 | create | Core     | 1, 2, 3          |
 | `app/core/config.py`                                       | modify | Core     | 1, 2, 3, 4, 5, 6 |
 | `backend-python/.env.example`                              | modify | Docs     | 1, 11            |
 | `app/main.py`                                              | modify | Adapter  | 2, 7             |
@@ -2227,6 +2229,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.1     | 2026-08-12 | Part II Phase 0 complete — baseline audit published; Phase status updated; Alembic next revision corrected to **0012** (Epic 09 `0011_hitl_lifecycle_audit` consumed `0011`). |
 | 3       | 2026-08-12 | Final review integration — transaction boundaries (claim commits before handler), cancellation semantics + state table, handler idempotency as required invariant, handler categories (sweep/cleanup/processing/scheduled), observability correlation chain (`job_id`→trace→logs→metrics), recommended health thresholds, expanded scalability operating ranges, handler implementation checklist appendix, failure-injection test scenarios, async API eventual consistency documentation. |
 | 2       | 2026-08-12 | Architecture review integration — optimistic concurrency (`version` column), `JobScheduleStore` separation, payload schema versioning, handler execution timeouts, poison-job/`NonRetryableJobError` guidance, dead-letter operational runbook, scheduler clock/missed-tick semantics, graceful shutdown sequence, worker identity format, queue vs handler metrics split, throughput/scalability assumptions, sequence diagrams, handler registration lifecycle, job type naming conventions, per-handler lifecycle summaries, RAG eventual consistency, polling rationale, future queue partitioning. |
 | 1       | 2026-08-12 | Initial epic draft — Part I design + Part II 12-phase execution plan (Phases 0–11). Not started. |
