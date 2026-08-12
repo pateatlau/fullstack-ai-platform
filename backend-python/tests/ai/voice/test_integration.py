@@ -288,6 +288,10 @@ async def test_voice_chat_bridge_surfaces_approval_required_error() -> None:
                     ],
                 ),
             )
+            yield format_sse(
+                "end",
+                EndFrame(id=response_id, finish_reason="waiting_approval"),
+            )
 
     bridge = VoiceStreamBridge(VoiceConfig())
     interrupt = InterruptController()
