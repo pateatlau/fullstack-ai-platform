@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.ai.jobs.handlers import register_all_handlers
+from app.ai.jobs.handlers.scheduled_eval import reconcile_evaluation_schedule_status
 from app.ai.jobs.queue import PostgresJobQueue
 from app.ai.jobs.registry import JobHandlerRegistry
 from app.ai.jobs.schedule_store import PostgresJobScheduleStore
@@ -49,6 +50,7 @@ async def start_background_jobs(settings: Settings) -> BackgroundJobsRuntime | N
     session_factory = get_sessionmaker()
     queue = PostgresJobQueue(session_factory, settings)
     store = PostgresJobScheduleStore(session_factory)
+    await reconcile_evaluation_schedule_status(store, settings)
     registry = JobHandlerRegistry()
     register_all_handlers(registry, settings=settings, session_factory=session_factory)
 

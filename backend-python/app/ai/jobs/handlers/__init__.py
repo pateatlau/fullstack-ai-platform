@@ -12,22 +12,11 @@ from app.ai.deps import (
 from app.ai.jobs.handlers.hitl_expiry import hitl_approval_expiry_sweep
 from app.ai.jobs.handlers.hitl_orphan_sweep import hitl_orphaned_snapshot_sweep
 from app.ai.jobs.handlers.rag_indexing import rag_document_indexing
+from app.ai.jobs.handlers.scheduled_eval import scheduled_evaluation_run
 from app.ai.jobs.handlers.workflow_retention import workflow_run_retention_cleanup
 from app.ai.jobs.models import BackgroundJob, JobResult
 from app.ai.jobs.registry import JobHandlerRegistry
 from app.core.config import Settings
-
-_FIRST_CLASS_JOB_TYPES: tuple[str, ...] = (
-    "hitl_approval_expiry_sweep",
-    "hitl_orphaned_snapshot_sweep",
-    "workflow_run_retention_cleanup",
-    "rag_document_indexing",
-    "scheduled_evaluation_run",
-)
-
-
-async def _stub_handler(job: BackgroundJob) -> JobResult:
-    return JobResult(summary=f"stub handler for {job.job_type}")
 
 
 def register_all_handlers(
@@ -76,17 +65,11 @@ def register_all_handlers(
             session_factory=session_factory,
         )
 
+    async def _scheduled_eval(job: BackgroundJob) -> JobResult:
+        return await scheduled_evaluation_run(job, settings=settings)
+
     registry.register("hitl_approval_expiry_sweep", _hitl_expiry)
     registry.register("hitl_orphaned_snapshot_sweep", _hitl_orphan)
     registry.register("workflow_run_retention_cleanup", _workflow_retention)
     registry.register("rag_document_indexing", _rag_indexing)
-
-    for job_type in _FIRST_CLASS_JOB_TYPES:
-        if job_type in {
-            "hitl_approval_expiry_sweep",
-            "hitl_orphaned_snapshot_sweep",
-            "workflow_run_retention_cleanup",
-            "rag_document_indexing",
-        }:
-            continue
-        registry.register(job_type, _stub_handler)
+    registry.register("scheduled_evaluation_run", _scheduled_eval)

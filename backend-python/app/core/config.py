@@ -275,6 +275,19 @@ class Settings(BaseSettings):
     # Epic 10 Phase 5: queue-backed RAG indexing runner (honoured only when
     # BACKGROUND_JOBS_ENABLED=true; otherwise SyncIndexingRunner is always used).
     rag_indexing_runner: Literal["sync", "queue"] = "sync"
+    # Epic 10 Phase 6: scheduled evaluation run (disabled by default; the seeded
+    # ``scheduled-evaluation-run`` schedule stays disabled unless this is true).
+    evaluation_schedule_enabled: bool = False
+    evaluation_schedule_level: Literal[
+        "prompt",
+        "retrieval",
+        "e2e",
+        "agent",
+        "workflow",
+        "plugin",
+        "hitl",
+        "all",
+    ] = "all"
 
     # Rule-based approval policy (recommendation #1): an ordered list of rule
     # dicts evaluated against tool name/category/risk/caller/environment/
