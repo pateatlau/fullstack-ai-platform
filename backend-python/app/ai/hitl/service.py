@@ -212,6 +212,10 @@ class AgentApprovalStore(Protocol):
 
     async def get(self, approval_id: uuid.UUID) -> AgentToolApproval | None: ...
 
+    async def claim_pause_snapshot(
+        self, approval_id: uuid.UUID
+    ) -> AgentToolApproval | None: ...
+
     async def clear_pause_snapshot(self, approval_id: uuid.UUID) -> None: ...
 
 
@@ -264,6 +268,7 @@ class AgentApprovalService:
         tool_validator: ToolValidator | None = None,
         scratchpad_store: ScratchpadStore | None = None,
         approval_timeout_hours: int = 0,
+        default_model: str = "gpt-4o-mini",
         notification_dispatcher: NotificationDispatcher | None = None,
     ) -> None:
         self._approval_store = approval_store
@@ -273,6 +278,7 @@ class AgentApprovalService:
         self._tool_validator = tool_validator or ToolValidator()
         self._scratchpad_store = scratchpad_store or get_scratchpad_store()
         self._approval_timeout_hours = approval_timeout_hours
+        self._default_model = default_model
         self._notification_dispatcher = notification_dispatcher
 
     async def _notify(self, event: ApprovalNotificationEvent) -> None:
@@ -749,10 +755,8 @@ class AgentApprovalService:
         fail_safe: bool = False,
     ) -> bool:
         """Re-run Stages 2–4 for a crash-orphaned approved approval row."""
-        approval = await self._approval_store.get(approval_id)
-        if approval is None or approval.status is not ApprovalStatus.APPROVED:
-            return False
-        if not _has_pause_snapshot(approval):
+        approval = await self._approval_store.claim_pause_snapshot(approval_id)
+        if approval is None:
             return False
 
         request, context, tool_context = await self._build_orphan_resume_context(
@@ -767,6 +771,8 @@ class AgentApprovalService:
                 tool_context=tool_context,
                 stream_publisher=NoOpStreamPublisher(),
             )
+        except AgentApprovalPauseError:
+            raise
         except Exception:
             if fail_safe:
                 await self._update_placeholder_message(
@@ -776,10 +782,8 @@ class AgentApprovalService:
                     finish_reason="error",
                     clear_pending=True,
                 )
-                await self._approval_store.clear_pause_snapshot(approval_id)
                 return False
             raise
-        await self._approval_store.clear_pause_snapshot(approval_id)
         return True
 
     async def _resume_after_approval_decision(
@@ -916,10 +920,15 @@ class AgentApprovalService:
             agent_messages = [AgentMessage(role="user", content="continue")]
         state = AgentExecutionState.model_validate(approval.paused_state)
         caller = CallerContext.for_user(approval.owner_id)
+        resume_model = _resolve_orphan_resume_model(
+            messages,
+            pending_message_id=approval.pending_message_id,
+            default_model=self._default_model,
+        )
         return (
             AgentRequest(
                 messages=agent_messages,
-                model="gpt-4o-mini",
+                model=resume_model,
                 config=AgentConfig(max_iterations=max(2, state.current_iteration + 2)),
             ),
             AgentContext(
@@ -1172,6 +1181,23 @@ def _build_approval_result(
 
 def _has_pause_snapshot(approval: AgentToolApproval) -> bool:
     return bool(approval.paused_scratchpad) or bool(approval.paused_state)
+
+
+def _resolve_orphan_resume_model(
+    messages: list[ChatMessage],
+    *,
+    pending_message_id: uuid.UUID | None,
+    default_model: str,
+) -> str:
+    """Pick the session model for orphan resume from persisted chat rows."""
+    if pending_message_id is not None:
+        for message in messages:
+            if message.id == pending_message_id and message.model:
+                return message.model
+    for message in reversed(messages):
+        if message.model:
+            return message.model
+    return default_model
 
 
 def _compute_expires_at(

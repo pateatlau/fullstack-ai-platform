@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
     from app.ai.agent.executor.agent_executor import AgentExecutor
+    from app.ai.agent.scratchpad.store import ScratchpadStore
     from app.ai.hitl.notifications import NotificationDispatcher
     from app.ai.hitl.policy import ApprovalPolicy
     from app.ai.hitl.rules import RulePolicyEngine
@@ -266,6 +267,7 @@ def get_agent_approval_service(
         tool_registry=tool_registry,
         tool_executor=tool_executor,
         approval_timeout_hours=settings.hitl_approval_timeout_hours,
+        default_model=settings.openai_model,
         notification_dispatcher=get_hitl_notification_dispatcher(),
     )
 
@@ -825,8 +827,11 @@ def build_workflow_manager_for_session(
 def build_agent_approval_service_for_session(
     session: AsyncSession,
     settings: Settings,
+    *,
+    scratchpad_store: "ScratchpadStore | None" = None,
 ) -> "AgentApprovalService":
     """Build an approval orchestrator for a standalone DB session."""
+    from app.ai.agent.scratchpad.store import ScratchpadStore
     from app.ai.hitl.service import AgentApprovalService
     from app.ai.hitl.store import AgentToolApprovalStore
     from app.db.chat import SqlChatStore
@@ -840,7 +845,9 @@ def build_agent_approval_service_for_session(
         chat_store=SqlChatStore(session),
         tool_registry=registry,
         tool_executor=_create_tool_executor(registry=registry, settings=settings),
+        scratchpad_store=scratchpad_store or ScratchpadStore(),
         approval_timeout_hours=settings.hitl_approval_timeout_hours,
+        default_model=settings.openai_model,
         notification_dispatcher=get_hitl_notification_dispatcher(),
     )
 
@@ -849,6 +856,7 @@ def build_hitl_resume_executor(
     settings: Settings,
     *,
     approval_service: "AgentApprovalService | None" = None,
+    scratchpad_store: "ScratchpadStore | None" = None,
 ) -> "AgentExecutor":
     """Build an ``AgentExecutor`` for background orphan-resume jobs."""
     from app.ai.agent.executor.agent_executor import AgentExecutor
@@ -862,7 +870,9 @@ def build_hitl_resume_executor(
     registry = get_tool_registry()
     prompt_manager = get_prompt_manager()
     tool_executor = _create_tool_executor(registry=registry, settings=settings)
-    scratchpad_store = ScratchpadStore()
+    shared_scratchpad_store = scratchpad_store or ScratchpadStore()
+    if approval_service is not None:
+        approval_service._scratchpad_store = shared_scratchpad_store
     provider = ProviderFactory.get_provider(settings.llm_provider, settings)
     approval_policy = (
         ApprovalPolicy(required_tool_names=frozenset(settings.hitl_required_tool_names))
@@ -882,12 +892,12 @@ def build_hitl_resume_executor(
             provider=provider,
             tool_registry=registry,
             prompt_manager=prompt_manager,
-            scratchpad_store=scratchpad_store,
+            scratchpad_store=shared_scratchpad_store,
         ),
         provider=provider,
         tool_runner=runner,
         stream_publisher=NoOpStreamPublisher(),
-        scratchpad_store=scratchpad_store,
+        scratchpad_store=shared_scratchpad_store,
         prompt_manager=prompt_manager,
     )
 

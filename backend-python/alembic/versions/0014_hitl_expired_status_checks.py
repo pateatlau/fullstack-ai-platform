@@ -52,6 +52,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Narrower CHECK constraints cannot be restored while expired values remain.
+    op.execute(
+        "UPDATE workflow_node_executions "
+        "SET decision = 'rejected' "
+        "WHERE decision = 'expired'"
+    )
     op.drop_constraint(
         "workflow_node_execution_decision_valid",
         "workflow_node_executions",
@@ -63,6 +69,9 @@ def downgrade() -> None:
         _WORKFLOW_DECISION_CHECK,
     )
 
+    op.execute(
+        "UPDATE chat_messages SET status = 'error' WHERE status = 'expired'"
+    )
     op.drop_constraint("status_valid", "chat_messages", type_="check")
     op.create_check_constraint(
         "status_valid",

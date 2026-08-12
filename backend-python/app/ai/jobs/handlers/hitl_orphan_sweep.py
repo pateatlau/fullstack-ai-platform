@@ -19,7 +19,9 @@ async def hitl_orphaned_snapshot_sweep(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
     build_approval_service: Callable[[AsyncSession], AgentApprovalService],
-    build_resume_executor: Callable[[AsyncSession], AgentExecutor],
+    build_resume_executor: Callable[
+        [AsyncSession, AgentApprovalService], AgentExecutor
+    ],
 ) -> JobResult:
     """Resume or fail-safe crash-orphaned approved agent tool approvals."""
     if not settings.background_jobs_enabled:
@@ -39,31 +41,33 @@ async def hitl_orphaned_snapshot_sweep(
             grace_seconds=settings.hitl_orphan_sweep_grace_seconds
         )
         scanned = len(orphans)
-        if not orphans:
-            return JobResult(
-                summary="no orphaned snapshots",
-                counts={"scanned": 0, "resumed": 0, "fail_safe": 0},
-            )
 
-        service = build_approval_service(session)
-        executor = build_resume_executor(session)
-        for approval in orphans:
-            try:
+    if not orphans:
+        return JobResult(
+            summary="no orphaned snapshots",
+            counts={"scanned": 0, "resumed": 0, "fail_safe": 0},
+        )
+
+    for approval in orphans:
+        try:
+            async with session_factory() as session:
+                service = build_approval_service(session)
+                executor = build_resume_executor(session, service)
                 ok = await service.resume_orphaned_approval(
                     approval.id,
                     executor=executor,
                     fail_safe=fail_safe_on_error,
                 )
-            except Exception:
-                if fail_safe_on_error:
-                    fail_safe += 1
-                    continue
-                raise
-            if ok:
-                resumed += 1
-            elif fail_safe_on_error:
+                await session.commit()
+        except Exception:
+            if fail_safe_on_error:
                 fail_safe += 1
-        await session.commit()
+                continue
+            raise
+        if ok:
+            resumed += 1
+        elif fail_safe_on_error:
+            fail_safe += 1
 
     return JobResult(
         summary=f"resumed {resumed} orphaned approvals ({fail_safe} fail-safe)",

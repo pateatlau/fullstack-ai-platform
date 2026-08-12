@@ -6,7 +6,8 @@ import datetime
 import uuid
 from typing import Literal, NoReturn
 
-from sqlalchemy import and_, func, literal, or_, select, union_all, update
+from sqlalchemy import and_, cast, func, literal, or_, select, union_all, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.hitl.exceptions import (
@@ -568,6 +569,8 @@ class AgentToolApprovalStore:
         timeout_hours: int,
     ) -> list[AgentToolApproval]:
         """Return pending approvals older than ``timeout_hours`` since request."""
+        if timeout_hours <= 0:
+            return []
         cutoff = func.now() - datetime.timedelta(hours=timeout_hours)
         rows = await self._session.scalars(
             select(AgentToolApprovalRecord).where(
@@ -619,15 +622,56 @@ class AgentToolApprovalStore:
                 AgentToolApprovalRecord.status == ApprovalStatus.APPROVED.value,
                 AgentToolApprovalRecord.decided_at.is_not(None),
                 AgentToolApprovalRecord.decided_at < cutoff,
+                _has_pause_snapshot_clause(),
             )
         )
-        return [self._map_row(row) for row in rows if _has_pause_snapshot_row(row)]
+        return [self._map_row(row) for row in rows]
+
+    async def claim_pause_snapshot(
+        self, approval_id: uuid.UUID
+    ) -> AgentToolApproval | None:
+        """Atomically take an approved pause snapshot for orphan resume."""
+        row = await self._session.scalar(
+            select(AgentToolApprovalRecord)
+            .where(
+                AgentToolApprovalRecord.id == approval_id,
+                AgentToolApprovalRecord.status == ApprovalStatus.APPROVED.value,
+                _has_pause_snapshot_clause(),
+            )
+            .with_for_update()
+        )
+        if row is None:
+            return None
+        claimed = self._map_row(row)
+        stmt = (
+            update(AgentToolApprovalRecord)
+            .where(AgentToolApprovalRecord.id == approval_id)
+            .values(
+                paused_scratchpad=[],
+                paused_state={},
+                version=AgentToolApprovalRecord.version + 1,
+                updated_at=func.now(),
+            )
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+        return claimed
 
     async def clear_pause_snapshot(self, approval_id: uuid.UUID) -> None:
         """Drop persisted pause payload once resume or fail-safe completes."""
         stmt = (
             update(AgentToolApprovalRecord)
-            .where(AgentToolApprovalRecord.id == approval_id)
+            .where(
+                AgentToolApprovalRecord.id == approval_id,
+                AgentToolApprovalRecord.status.in_(
+                    (
+                        ApprovalStatus.APPROVED.value,
+                        ApprovalStatus.REJECTED.value,
+                        ApprovalStatus.EXPIRED.value,
+                        ApprovalStatus.CANCELLED.value,
+                    )
+                ),
+            )
             .values(
                 paused_scratchpad=[],
                 paused_state={},
@@ -1125,8 +1169,12 @@ def _audit_listing_subquery(
     ).subquery()
 
 
-def _has_pause_snapshot_row(row: AgentToolApprovalRecord) -> bool:
-    return bool(row.paused_scratchpad) or bool(row.paused_state)
+def _has_pause_snapshot_clause():
+    """SQL filter matching Python ``bool(scratchpad) or bool(state)``."""
+    return or_(
+        AgentToolApprovalRecord.paused_scratchpad != cast([], JSONB),
+        AgentToolApprovalRecord.paused_state != cast({}, JSONB),
+    )
 
 
 def _to_domain(

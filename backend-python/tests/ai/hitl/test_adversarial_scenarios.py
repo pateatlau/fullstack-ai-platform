@@ -16,6 +16,7 @@ from app.ai.agent.models.request import AgentRequest
 from app.ai.agent.streaming import InMemoryStreamPublisher
 from app.ai.hitl.exceptions import (
     ApprovalDecisionConflictError,
+    ApprovalExpiredError,
     ApprovalNotFoundError,
     ApprovalValidationError,
 )
@@ -566,14 +567,37 @@ async def test_workflow_concurrent_decisions_only_one_wins() -> None:
 
 
 @pytest.mark.anyio
-async def test_expiry_sweep_race_with_decide_only_one_wins() -> None:
-    owner_id = uuid.uuid4()
-    registry = reference_tool_registry()
-    service, approval_store, chat_store = build_approval_service(registry=registry)
-    session = await chat_store.create_session(user_id=owner_id)
-    approval = await approval_store.create(
-        session_id=session.id,
-        owner_id=owner_id,
+async def test_expiry_sweep_race_with_decide_only_one_wins(db_session) -> None:
+    import datetime
+
+    from sqlalchemy import text, update
+
+    from app.ai.deps import build_agent_approval_service_for_session
+    from app.ai.hitl.store import AgentToolApprovalStore
+    from app.core.config import Settings
+    from app.db.models import AgentToolApprovalRecord, ChatMessage, ChatSession, User
+    from tests.ai.jobs.conftest import make_queue_session_factory
+
+    if not await db_session.scalar(
+        text("SELECT to_regclass('public.agent_tool_approvals') IS NOT NULL")
+    ):
+        pytest.skip("agent_tool_approvals not available — run alembic upgrade head")
+
+    user = User(
+        auth_provider="google",
+        external_auth_id=f"expiry-race-{uuid.uuid4().hex}",
+        email=f"expiry-race-{uuid.uuid4().hex[:8]}@example.com",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    chat_session = ChatSession(user_id=user.id, next_seq=1)
+    db_session.add(chat_session)
+    await db_session.flush()
+
+    store = AgentToolApprovalStore(db_session)
+    approval = await store.create(
+        session_id=chat_session.id,
+        owner_id=user.id,
         execution_id="exec-expiry-race",
         approval_correlation_id=uuid.uuid4(),
         proposed_calls=[
@@ -586,16 +610,71 @@ async def test_expiry_sweep_race_with_decide_only_one_wins() -> None:
         paused_scratchpad=[],
         paused_state={"status": "waiting_approval"},
     )
+    placeholder = ChatMessage(
+        session_id=chat_session.id,
+        seq=1,
+        role="assistant",
+        content="",
+        status="waiting_approval",
+        pending_approval_id=approval.id,
+    )
+    db_session.add(placeholder)
+    await db_session.flush()
+    await store.link_pending_message(approval.id, pending_message_id=placeholder.id)
+    await db_session.execute(
+        update(AgentToolApprovalRecord)
+        .where(AgentToolApprovalRecord.id == approval.id)
+        .values(
+            requested_at=datetime.datetime.now(datetime.UTC)
+            - datetime.timedelta(hours=2)
+        )
+    )
+    await db_session.commit()
+
+    settings = Settings(
+        openai_api_key="test-key",
+        hitl_enabled=True,
+        hitl_client_audit_retention_days=90,
+    )
+    factory = make_queue_session_factory(db_session.bind)
+    barrier = asyncio.Barrier(2)
+
+    async def decide_task() -> ApprovalResult | ApprovalExpiredError:
+        async with factory() as session:
+            await barrier.wait()
+            service = build_agent_approval_service_for_session(session, settings)
+            try:
+                result = await service.decide(
+                    approval.id,
+                    owner_id=user.id,
+                    decision="rejected",
+                )
+            except ApprovalExpiredError:
+                await session.rollback()
+                raise
+            await session.commit()
+            return result
+
+    async def expire_task() -> AgentToolApproval | None:
+        async with factory() as session:
+            await barrier.wait()
+            approval_store = AgentToolApprovalStore(
+                session,
+                client_audit_retention_days=settings.hitl_client_audit_retention_days,
+            )
+            expired = await approval_store.cas_expire_pending_sweep(approval.id)
+            await session.commit()
+            return expired
 
     results = await asyncio.gather(
-        service.decide(approval.id, owner_id=owner_id, decision="rejected"),
-        approval_store.cas_expire_pending_sweep(approval.id),
+        decide_task(),
+        expire_task(),
         return_exceptions=True,
     )
-    assert not any(isinstance(item, Exception) for item in results)
-    final = await approval_store.get(approval.id)
-    assert final is not None
-    assert final.status in {ApprovalStatus.REJECTED, ApprovalStatus.EXPIRED}
+    for item in results:
+        if isinstance(item, Exception) and not isinstance(item, ApprovalExpiredError):
+            raise item
+
     transitioned = sum(
         1
         for item in results
@@ -606,3 +685,59 @@ async def test_expiry_sweep_race_with_decide_only_one_wins() -> None:
         )
     )
     assert transitioned == 1
+
+    async with factory() as session:
+        final = await AgentToolApprovalStore(session).get(approval.id)
+    assert final is not None
+    assert final.status in {ApprovalStatus.REJECTED, ApprovalStatus.EXPIRED}
+
+    decide_result, expire_result = results
+    if isinstance(decide_result, ApprovalExpiredError):
+        assert isinstance(expire_result, AgentToolApproval)
+        assert expire_result.status is ApprovalStatus.EXPIRED
+    else:
+        assert isinstance(decide_result, ApprovalResult)
+        assert expire_result is None
+
+    race_lost = await store.create(
+        session_id=chat_session.id,
+        owner_id=user.id,
+        execution_id="exec-expiry-race-lost",
+        approval_correlation_id=uuid.uuid4(),
+        proposed_calls=[
+            ProposedToolCall(
+                name="send_notification",
+                arguments={"message": "x"},
+                call_id="c2",
+            )
+        ],
+        paused_scratchpad=[],
+        paused_state={"status": "waiting_approval"},
+    )
+    await db_session.execute(
+        update(AgentToolApprovalRecord)
+        .where(AgentToolApprovalRecord.id == race_lost.id)
+        .values(
+            requested_at=datetime.datetime.now(datetime.UTC)
+            - datetime.timedelta(hours=2)
+        )
+    )
+    await db_session.commit()
+
+    async with factory() as session:
+        approval_store = AgentToolApprovalStore(
+            session,
+            client_audit_retention_days=settings.hitl_client_audit_retention_days,
+        )
+        expired = await approval_store.cas_expire_pending_sweep(race_lost.id)
+        assert expired is not None
+        await session.commit()
+
+    async with factory() as session:
+        service = build_agent_approval_service_for_session(session, settings)
+        with pytest.raises(ApprovalExpiredError):
+            await service.decide(
+                race_lost.id,
+                owner_id=user.id,
+                decision="rejected",
+            )

@@ -384,6 +384,8 @@ class InMemoryApprovalStore:
         self,
         timeout_hours: int,
     ) -> list[AgentToolApproval]:
+        if timeout_hours <= 0:
+            return []
         cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(
             hours=timeout_hours
         )
@@ -433,9 +435,30 @@ class InMemoryApprovalStore:
             and (bool(row.paused_scratchpad) or bool(row.paused_state))
         ]
 
+    async def claim_pause_snapshot(
+        self, approval_id: uuid.UUID
+    ) -> AgentToolApproval | None:
+        row = await self.get(approval_id)
+        if row is None or row.status is not ApprovalStatus.APPROVED:
+            return None
+        if not (bool(row.paused_scratchpad) or bool(row.paused_state)):
+            return None
+        claimed = row.model_copy(deep=True)
+        self._replace(
+            row.model_copy(
+                update={
+                    "paused_scratchpad": [],
+                    "paused_state": {},
+                    "version": row.version + 1,
+                    "updated_at": datetime.datetime.now(datetime.UTC),
+                }
+            )
+        )
+        return claimed
+
     async def clear_pause_snapshot(self, approval_id: uuid.UUID) -> None:
         row = await self.get(approval_id)
-        if row is None:
+        if row is None or row.status is ApprovalStatus.PENDING:
             return
         self._replace(
             row.model_copy(

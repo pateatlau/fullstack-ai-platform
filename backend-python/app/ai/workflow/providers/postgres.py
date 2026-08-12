@@ -508,6 +508,8 @@ class PostgresWorkflowStore:
         timeout_hours: int,
     ) -> list[tuple[WorkflowNodeExecution, uuid.UUID, uuid.UUID]]:
         """Approval nodes waiting longer than ``timeout_hours`` since ``started_at``."""
+        if timeout_hours <= 0:
+            return []
         cutoff = func.now() - datetime.timedelta(hours=timeout_hours)
         rows = await self._session.execute(
             select(
