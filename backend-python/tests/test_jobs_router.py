@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import datetime
 import uuid
 from collections.abc import Iterator
 
@@ -12,7 +13,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.ai.deps import get_job_queue, get_job_schedule_store
-from app.ai.jobs.models import BackgroundJob, JobResult
+from app.ai.jobs.models import BackgroundJob, JobResult, ScheduleStatus
 from app.ai.jobs.queue import PostgresJobQueue
 from app.ai.jobs.schedule_store import PostgresJobScheduleStore
 from app.core.config import Settings, get_settings
@@ -322,12 +323,21 @@ async def test_retry_non_dead_letter_returns_409(
 
 
 @pytest.mark.anyio
-async def test_list_schedules_returns_seeded_rows(
+async def test_list_schedules_returns_schedule_rows(
     db_session,
     jobs_api_app: FastAPI,
 ) -> None:
     user_id = await _make_user(db_session)
     headers = _auth_headers(user_id)
+    schedule_store = jobs_api_app.dependency_overrides[get_job_schedule_store]()
+    await schedule_store.insert_schedule(
+        name=f"router-test-{uuid.uuid4()}",
+        job_type="fixture_success",
+        payload={"version": 1},
+        interval_seconds=300,
+        next_run_at=datetime.datetime.now(datetime.UTC),
+        status=ScheduleStatus.ENABLED,
+    )
 
     async with AsyncClient(
         transport=ASGITransport(app=jobs_api_app),
