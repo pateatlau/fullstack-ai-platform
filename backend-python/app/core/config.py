@@ -255,6 +255,21 @@ class Settings(BaseSettings):
     hitl_trust_forwarded_client_ip: bool = False
     hitl_max_user_agent_length: int = Field(default=512, ge=1)
 
+    # V2 Epic 10 Phase 1: Background Jobs infrastructure flag (default false).
+    # When true: JobWorker and JobScheduler start in app lifespan; queue-backed
+    # handlers enforce deferred HITL/workflow/RAG/eval work. Flag-off keeps all
+    # Epic 09 pipeline paths unchanged.
+    background_jobs_enabled: bool = False
+    background_jobs_worker_poll_interval_seconds: int = Field(default=5, ge=1)
+    background_jobs_worker_batch_size: int = Field(default=10, ge=1)
+    background_jobs_claim_lease_seconds: int = Field(default=300, ge=1)
+    background_jobs_handler_timeout_seconds: int = Field(default=600, ge=1)
+    background_jobs_default_max_attempts: int = Field(default=3, ge=1)
+    background_jobs_retry_base_delay_seconds: float = Field(default=5.0, ge=0.0)
+    background_jobs_retry_max_delay_seconds: float = Field(default=300.0, ge=0.0)
+    background_jobs_scheduler_poll_interval_seconds: int = Field(default=30, ge=1)
+    background_jobs_retention_days: int = Field(default=30, ge=1)
+
     # Rule-based approval policy (recommendation #1): an ordered list of rule
     # dicts evaluated against tool name/category/risk/caller/environment/
     # arguments. Empty list preserves the legacy ``requires_approval`` /
