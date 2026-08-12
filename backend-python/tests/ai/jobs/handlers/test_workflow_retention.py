@@ -42,11 +42,19 @@ async def _workflow_tables_available(session) -> bool:
 
 
 @pytest.fixture(autouse=True)
-async def _truncate_workflow_runs_for_retention_tests(db_session) -> None:
-    if not await _workflow_tables_available(db_session):
-        return
-    await db_session.execute(text("TRUNCATE workflow_runs RESTART IDENTITY CASCADE"))
-    await db_session.commit()
+async def _truncate_workflow_runs_for_retention_tests(db_session):
+    async def _cleanup() -> None:
+        if await _workflow_tables_available(db_session):
+            await db_session.execute(
+                text("TRUNCATE workflow_runs RESTART IDENTITY CASCADE")
+            )
+        if await background_jobs_table_available(db_session):
+            await db_session.execute(text("TRUNCATE background_jobs"))
+        await db_session.commit()
+
+    await _cleanup()
+    yield
+    await _cleanup()
 
 
 def _sample_job(*, job_id: uuid.UUID | None = None) -> BackgroundJob:
@@ -356,10 +364,11 @@ async def test_purges_old_terminal_background_jobs_but_not_running_self(
         for _ in range(2)
     ]
     current_job = _sample_job()
+    # Stale terminal row matching the purge filter; only exclude_job_id keeps it.
     await _insert_terminal_background_job(
         db_session,
         updated_at=stale_at,
-        status="running",
+        status="succeeded",
         job_id=current_job.id,
     )
     recent_job_id = await _insert_terminal_background_job(
