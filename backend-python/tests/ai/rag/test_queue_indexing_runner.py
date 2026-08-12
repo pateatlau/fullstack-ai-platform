@@ -17,7 +17,7 @@ from app.ai.jobs.models import JobStatus
 from app.ai.jobs.queue import PostgresJobQueue
 from app.ai.jobs.registry import JobHandlerRegistry
 from app.ai.jobs.worker import JobWorker
-from app.ai.rag.indexing import SyncIndexingRunner
+from app.ai.rag.indexing import QueueIndexingRunner, SyncIndexingRunner
 from app.ai.rag.schemas import IndexingJobState
 from app.ai.vectorstores.pgvector import PgVectorStore
 from app.core.config import Settings
@@ -45,13 +45,10 @@ class _FakeEmbeddingProvider:
 
 
 async def _pgvector_available(session) -> bool:
-    try:
-        result = await session.scalar(
-            text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
-        )
-        return result == 1
-    except Exception:
-        return False
+    result = await session.scalar(
+        text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+    )
+    return result == 1
 
 
 async def _staging_table_available(session) -> bool:
@@ -270,6 +267,148 @@ async def test_indexing_failure_surfaces_failed_status(pgvector_session) -> None
     )
     assert document is not None
     assert document.status == "failed"
+    assert (
+        await SqlDocumentStore(pgvector_session).fetch_upload_staging(document_id)
+        is None
+    )
+
+
+@pytest.mark.anyio
+async def test_retryable_failure_preserves_upload_staging(pgvector_session) -> None:
+    user_id = await _make_user(pgvector_session)
+    settings = _settings(background_jobs_default_max_attempts=3)
+    call_count = 0
+
+    class _FlakyEmbeddingProvider:
+        dimensions = DIMENSIONS
+
+        async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("transient embed failure")
+            return [
+                [float(index % DIMENSIONS), 0.0] + [0.0] * (DIMENSIONS - 2)
+                for index, _ in enumerate(texts)
+            ]
+
+    def _build_flaky_pipeline(job_settings: Settings) -> IngestionPipeline:
+        return IngestionPipeline(
+            job_settings,
+            embedding_provider=_FlakyEmbeddingProvider(),
+        )
+
+    service, queue, _, worker = _queue_service(
+        pgvector_session,
+        settings,
+        build_pipeline=_build_flaky_pipeline,
+    )
+    document_id = await service.ingest_document(
+        user_id=user_id,
+        file_bytes=(FIXTURES / "sample.txt").read_bytes(),
+        filename="sample.txt",
+        mime_type="text/plain",
+    )
+    await pgvector_session.commit()
+
+    jobs = await queue.list(job_type="rag_document_indexing")
+    job_id = str(jobs[0].id)
+
+    await worker.poll_once()
+
+    updated_job = await queue.get(jobs[0].id)
+    assert updated_job is not None
+    assert updated_job.status is JobStatus.QUEUED
+    document = await pgvector_session.scalar(
+        select(Document).where(Document.id == document_id)
+    )
+    assert document is not None
+    assert document.status == "failed"
+    assert (
+        await SqlDocumentStore(pgvector_session).fetch_upload_staging(document_id)
+        is not None
+    )
+
+    await worker.poll_once()
+
+    status = await service._indexing.get_status(job_id)
+    assert status.state is IndexingJobState.SUCCEEDED
+    pgvector_session.expire_all()
+    document = await pgvector_session.scalar(
+        select(Document).where(Document.id == document_id)
+    )
+    assert document is not None
+    assert document.status == "ready"
+    assert (
+        await SqlDocumentStore(pgvector_session).fetch_upload_staging(document_id)
+        is None
+    )
+
+
+@pytest.mark.anyio
+async def test_injected_queue_runner_stages_upload_despite_sync_settings(
+    pgvector_session,
+) -> None:
+    user_id = await _make_user(pgvector_session)
+    settings = _settings(
+        background_jobs_enabled=False,
+        rag_indexing_runner="sync",
+    )
+    factory = make_queue_session_factory(pgvector_session.bind)
+    queue = PostgresJobQueue(factory, settings)
+    service = KnowledgeService(
+        session=pgvector_session,
+        settings=settings,
+        pipeline=_pipeline(settings),
+        vector_store=PgVectorStore(pgvector_session, settings),
+        indexing_runner=QueueIndexingRunner(queue=queue),
+    )
+
+    document_id = await service.ingest_document(
+        user_id=user_id,
+        file_bytes=(FIXTURES / "sample.txt").read_bytes(),
+        filename="sample.txt",
+        mime_type="text/plain",
+    )
+
+    staging = await SqlDocumentStore(pgvector_session).fetch_upload_staging(document_id)
+    assert staging is not None
+    assert staging.filename == "sample.txt"
+
+
+@pytest.mark.anyio
+async def test_injected_sync_runner_skips_staging_despite_queue_settings(
+    pgvector_session,
+) -> None:
+    user_id = await _make_user(pgvector_session)
+    settings = _settings()
+    processor = AsyncMock()
+    runner = SyncIndexingRunner(processor=processor)
+
+    service = KnowledgeService(
+        session=pgvector_session,
+        settings=settings,
+        pipeline=_pipeline(settings),
+        vector_store=PgVectorStore(pgvector_session, settings),
+        job_queue=PostgresJobQueue(
+            make_queue_session_factory(pgvector_session.bind),
+            settings,
+        ),
+        indexing_runner=runner,
+    )
+
+    document_id = await service.ingest_document(
+        user_id=user_id,
+        file_bytes=(FIXTURES / "sample.txt").read_bytes(),
+        filename="sample.txt",
+        mime_type="text/plain",
+    )
+
+    assert (
+        await SqlDocumentStore(pgvector_session).fetch_upload_staging(document_id)
+        is None
+    )
+    processor.assert_awaited_once()
 
 
 @pytest.mark.anyio

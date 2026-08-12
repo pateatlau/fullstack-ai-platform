@@ -49,8 +49,12 @@ async def run_indexing_work(
 async def cleanup_failed_indexing(
     session: AsyncSession,
     document_id: uuid.UUID,
+    *,
+    rollback_first: bool = True,
 ) -> None:
     """Remove partial chunks and mark the document failed."""
+    if rollback_first:
+        await session.rollback()
     store = SqlDocumentStore(session)
     await store.delete_chunks(document_id)
     await store.set_status(document_id, "failed")

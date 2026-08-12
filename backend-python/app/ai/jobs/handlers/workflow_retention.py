@@ -65,6 +65,28 @@ async def _delete_background_jobs_batch(
     return int(getattr(result, "rowcount", 0) or 0)
 
 
+async def _delete_upload_staging_batch(
+    session: AsyncSession,
+    *,
+    cutoff: datetime.datetime,
+    batch_size: int,
+) -> int:
+    result = await session.execute(
+        text(
+            """
+            DELETE FROM document_upload_staging
+            WHERE document_id IN (
+                SELECT document_id FROM document_upload_staging
+                WHERE created_at < :cutoff
+                LIMIT :batch_size
+            )
+            """
+        ),
+        {"cutoff": cutoff, "batch_size": batch_size},
+    )
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
 async def workflow_run_retention_cleanup(
     job: BackgroundJob,
     *,
@@ -75,7 +97,11 @@ async def workflow_run_retention_cleanup(
     if not settings.background_jobs_enabled:
         return JobResult(
             summary="background jobs disabled",
-            counts={"workflow_runs_deleted": 0, "background_jobs_deleted": 0},
+            counts={
+                "workflow_runs_deleted": 0,
+                "background_jobs_deleted": 0,
+                "upload_staging_deleted": 0,
+            },
         )
 
     now = datetime.datetime.now(datetime.UTC)
@@ -86,6 +112,7 @@ async def workflow_run_retention_cleanup(
 
     workflow_runs_deleted = 0
     background_jobs_deleted = 0
+    upload_staging_deleted = 0
 
     async with session_factory() as session:
         while True:
@@ -111,13 +138,26 @@ async def workflow_run_retention_cleanup(
             if deleted == 0:
                 break
 
+        while True:
+            deleted = await _delete_upload_staging_batch(
+                session,
+                cutoff=jobs_cutoff,
+                batch_size=_DELETE_BATCH_SIZE,
+            )
+            upload_staging_deleted += deleted
+            await session.commit()
+            if deleted == 0:
+                break
+
     return JobResult(
         summary=(
-            f"deleted {workflow_runs_deleted} workflow runs and "
-            f"{background_jobs_deleted} background jobs"
+            f"deleted {workflow_runs_deleted} workflow runs, "
+            f"{background_jobs_deleted} background jobs, and "
+            f"{upload_staging_deleted} upload staging rows"
         ),
         counts={
             "workflow_runs_deleted": workflow_runs_deleted,
             "background_jobs_deleted": background_jobs_deleted,
+            "upload_staging_deleted": upload_staging_deleted,
         },
     )

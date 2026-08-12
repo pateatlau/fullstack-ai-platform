@@ -63,12 +63,9 @@ class KnowledgeService:
         self._pipeline = pipeline
         self._vector_store = vector_store
         self._quota_service = quota_service
-        self._uses_queue_indexing = _should_use_queue_indexing(
-            settings, job_queue=job_queue
-        )
         if indexing_runner is not None:
             self._indexing = indexing_runner
-        elif self._uses_queue_indexing:
+        elif _should_use_queue_indexing(settings, job_queue=job_queue):
             assert job_queue is not None
             self._indexing = QueueIndexingRunner(queue=job_queue)
         else:
@@ -101,7 +98,7 @@ class KnowledgeService:
         )
         document_id = document.id
 
-        if self._uses_queue_indexing:
+        if isinstance(self._indexing, QueueIndexingRunner):
             await self._store.store_upload_staging(
                 document_id=document_id,
                 user_id=user_id,
@@ -202,7 +199,11 @@ class KnowledgeService:
 
     async def _cleanup_failed_ingest(self, document_id: uuid.UUID) -> None:
         await self._store.delete_upload_staging(document_id)
-        await cleanup_failed_indexing(self._session, document_id)
+        await cleanup_failed_indexing(
+            self._session,
+            document_id,
+            rollback_first=False,
+        )
 
 
 def _should_use_queue_indexing(

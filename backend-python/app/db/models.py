@@ -370,7 +370,12 @@ class Document(Base):
 
 
 class DocumentUploadStaging(Base):
-    """Durable upload bytes for queue-backed RAG indexing (Epic 10 Phase 5)."""
+    """Durable upload bytes for queue-backed RAG indexing (Epic 10 Phase 5).
+
+    Rows are deleted on successful indexing and purged by
+    ``workflow_run_retention_cleanup`` once ``created_at`` exceeds
+    ``background_jobs_retention_days``.
+    """
 
     __tablename__ = "document_upload_staging"
 

@@ -96,9 +96,12 @@ async def rag_document_indexing(
             )
             await store.delete_upload_staging(document_id)
             await session.commit()
-        except Exception:
+        except Exception as exc:
             await cleanup_failed_indexing(session, document_id)
-            await store.delete_upload_staging(document_id)
+            if isinstance(exc, NonRetryableJobError) or (
+                job.attempt_count >= job.max_attempts
+            ):
+                await store.delete_upload_staging(document_id)
             await session.commit()
             raise
 

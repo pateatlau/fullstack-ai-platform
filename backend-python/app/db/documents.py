@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Sequence
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.rag.indexing.sync_runner import PendingIndexingWork
@@ -116,14 +117,23 @@ class SqlDocumentStore:
         filename: str,
         mime_type: str | None,
     ) -> None:
-        row = DocumentUploadStaging(
+        stmt = pg_insert(DocumentUploadStaging).values(
             document_id=document_id,
             user_id=user_id,
             file_bytes=file_bytes,
             filename=filename,
             mime_type=mime_type,
         )
-        self._session.add(row)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["document_id"],
+            set_={
+                "user_id": user_id,
+                "file_bytes": file_bytes,
+                "filename": filename,
+                "mime_type": mime_type,
+            },
+        )
+        await self._session.execute(stmt)
         await self._session.flush()
 
     async def fetch_upload_staging(
