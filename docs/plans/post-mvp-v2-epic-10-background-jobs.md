@@ -1,8 +1,8 @@
 ---
 epic: v2-10
 title: Background Jobs
-status: in_progress
-version: 3.11
+status: completed
+version: 3.12
 depends_on: [v2-02, v2-06, v2-07, v2-09]
 provides:
   [
@@ -1286,7 +1286,17 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
 | Feature Flag Regression  | Not re-run in Phase 0 (Epic 09 Phase 10: 1912 passed with `HITL_ENABLED=false`)   |
 | Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |
-| Background Jobs          | Phase 10 **Completed** (2026-08-13) — `jobsClient.ts`, `JobsPage.tsx` (jobs/schedules tabs, filters, dead-letter retry), nav/route gated on `background_jobs_enabled`, `JobsPage.test.tsx` + `jobsClient.test.ts` (14/14); Phases 0–9 deliverables retained |
+| Background Jobs          | Not started — `app/ai/jobs/` absent; `BACKGROUND_JOBS_ENABLED` absent           |
+
+---
+
+## Current status
+
+_Updated at Epic 10 Phase 11 (2026-08-13); release summary: [post-mvp-v2-epic10-release-summary.md](../releases/post-mvp-v2-epic10-release-summary.md)._
+
+| Area            | State                                                                                                                                              |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Background Jobs | Phases 0–11 **Completed** (2026-08-13) — full-platform validation, flag-off regression, release summary published; Phases 0–10 deliverables retained |
 
 ---
 
@@ -1305,9 +1315,9 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 8     | Background Jobs Observability                  | S      | ✅ Completed (2026-08-12) |
 | 9     | Reference Scenarios & Eval Cases               | M      | ✅ Completed (2026-08-13) |
 | 10    | Frontend Jobs & Schedules Dashboard            | S      | ✅ Completed (2026-08-13) |
-| 11    | Validation & Release                           | M      | Not Started |
+| 11    | Validation & Release                           | M      | ✅ Completed (2026-08-13) |
 
-**Epic 10 overall:** Phase 10 complete. Next gate: user authorization to begin Phase 11.
+**Epic 10 overall:** Phase 11 complete. Next gate: user authorization to begin Epic 11.
 
 ---
 
@@ -2035,7 +2045,7 @@ Add a minimal read-only frontend view of job/schedule state with a manual retry 
 **Exit criteria**
 
 - [x] Frontend tests pass.
-- [ ] User confirmation to proceed to Phase 11.
+- [x] User confirmation to proceed to Phase 11.
 
 **Rollback**
 
@@ -2046,6 +2056,7 @@ Add a minimal read-only frontend view of job/schedule state with a manual retry 
 # Phase 11 — Validation & Release
 
 **Effort:** M
+**Status:** Completed (2026-08-13)
 
 **Objective**
 
@@ -2061,17 +2072,17 @@ Full-platform validation, flag-off regression, release summary, and epic complet
 
 ## Validation
 
-- [ ] Full backend test suite + coverage ≥80% on `app/ai/jobs/`.
-- [ ] Frontend tests + build.
-- [ ] Integration tests (queue/worker/scheduler, all five handlers, jobs router).
-- [ ] Eval suite + regression check.
-- [ ] Flag-off regression: entire suite with `BACKGROUND_JOBS_ENABLED=false`.
-- [ ] Confirm every `TODO(epic-10):`/`TODO(epic-9):` marker identified in Phase 0 has been removed and replaced with the shipped handler.
+- [x] Full backend test suite + coverage ≥80% on `app/ai/jobs/`.
+- [x] Frontend tests + build.
+- [x] Integration tests (queue/worker/scheduler, all five handlers, jobs router).
+- [x] Eval suite + regression check.
+- [x] Flag-off regression: entire suite with `BACKGROUND_JOBS_ENABLED=false`.
+- [x] Confirm every `TODO(epic-10):`/`TODO(epic-9):` marker identified in Phase 0 has been removed and replaced with the shipped handler.
 
 ## Documentation
 
-- [ ] Publish release summary.
-- [ ] Update `backend-python/.env.example` with Background Jobs settings (present since Phase 1/2).
+- [x] Publish release summary.
+- [x] Update `backend-python/.env.example` with Background Jobs settings (present since Phase 1/2).
 
 **Verify**
 
@@ -2089,7 +2100,7 @@ Full-platform validation, flag-off regression, release summary, and epic complet
 
 **Exit criteria**
 
-- [ ] Release summary published.
+- [x] Release summary published.
 - [ ] User authorizes Epic 11.
 
 **Rollback**
@@ -2189,7 +2200,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 # Definition of Done
 
-- [ ] All Part I architectural invariants preserved (including handler idempotency and transaction boundaries).
+- [x] All Part I architectural invariants preserved (including handler idempotency and transaction boundaries).
 - [x] Public APIs frozen after Phase 1.
 - [x] Claim-and-lease queue, worker, and scheduler operational under genuine concurrency (verified, not assumed).
 - [x] HITL approval-timeout enforcement operational on both surfaces; orphaned-snapshot sweep resumes or fail-safes crash-orphaned approvals.
@@ -2199,9 +2210,9 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 - [x] Jobs REST API and frontend dashboard operational, including manual dead-letter retry.
 - [x] Reference scenarios and adversarial/concurrency eval coverage shipped.
 - [x] Job-scoped tracing attributes present on every dispatch.
-- [ ] `BACKGROUND_JOBS_ENABLED=false` preserves Epic 09 behaviour.
-- [ ] Backend coverage ≥80% on `app/ai/jobs/`.
-- [ ] Release summary published.
+- [x] `BACKGROUND_JOBS_ENABLED=false` preserves Epic 09 behaviour.
+- [x] Backend coverage ≥80% on `app/ai/jobs/`.
+- [x] Release summary published.
 - [ ] User authorizes Epic 11.
 
 ---
@@ -2256,6 +2267,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.12    | 2026-08-13 | Part II Phase 11 complete — full-platform validation (2141 passed, 89.19% `app/` coverage, 91% `app/ai/jobs/`), flag-off regression, `--level jobs` 6/6, release summary published, test isolation hardening (`tests/conftest.py` queue truncate teardown, adversarial scenario fixes). |
 | 3.11    | 2026-08-13 | Part II Phase 10 complete — `jobsClient.ts`, `types/jobs.ts`, `JobsPage.tsx` (jobs/schedules tabs, status/type filters, dead-letter retry, `feature_disabled` empty state), route `/jobs` + nav gated on `background_jobs_enabled`, `JobsPage.test.tsx` + `jobsClient.test.ts` (14/14), verify frontend lint + build. |
 | 3.10    | 2026-08-13 | Part II Phase 9 complete — `--level jobs` eval (`JobsEvalRunner`, `jobs_scenarios.py`, six cases in `sample.yaml`), `tests/ai/jobs/test_reference_scenarios.py` (6/6), `tests/ai/jobs/test_adversarial_scenarios.py` (12/12), `tests/ai/evaluation/test_jobs_runner.py`, README operator steps + dead-letter runbook, verify `pytest tests/ai/jobs/test_reference_scenarios.py tests/ai/jobs/test_adversarial_scenarios.py` (25/25) + `--level jobs` (6/6 with `BACKGROUND_JOBS_ENABLED=true`). |
 | 3.9     | 2026-08-12 | Part II Phase 8 complete — `job_span`/`record_job_dispatch_outcome` in `spans.py`, six job metrics in `instruments.py` (`jobs_enqueued_total`, `jobs_completed_total`, `job_retries_total`, `jobs_pending_count`, `jobs_dead_letter_count`, `job_duration_ms`), `JobWorker` dispatch instrumentation + log context, `PostgresJobQueue` metric hooks, `tests/ai/jobs/test_jobs_observability.py` (8/8), combined verify `tests/ai/jobs/test_jobs_observability.py tests/ai/observability/` (87/87). |
