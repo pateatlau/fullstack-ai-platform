@@ -2,7 +2,7 @@
 epic: v2-10
 title: Background Jobs
 status: completed
-version: 3.12
+version: 3.13
 depends_on: [v2-02, v2-06, v2-07, v2-09]
 provides:
   [
@@ -1117,6 +1117,79 @@ Documented extension points reserved by this epic's model and API design — **n
 | **Dead-letter payload editing / manual re-enqueue API**                 | Operators need to fix and retry jobs with corrected payloads                                                 | `POST …/retry` resets attempts only; a `PATCH` or manual-enqueue endpoint is additive                                               |
 
 These items require explicit Part I updates and should remain `TODO(future):` during V2 implementation.
+
+---
+
+## Post-Epic 10 Refinements Backlog
+
+> **Status:** Documented backlog — **not scheduled**. Epic 11 (Security & Governance) takes precedence; return to this backlog after Epic 11 ships.
+>
+> **Assessment (2026-08-13):** Epic 10 is production-oriented and architecturally mature. The items below are operational scalability, observability, and long-term maintainability improvements — not corrections to core design. See also [release summary](../releases/post-mvp-v2-epic10-release-summary.md) § Post-Epic 10 Refinements Backlog.
+
+### Current baseline (what shipped)
+
+| Area | Shipped in Epic 10 |
+| ---- | ------------------ |
+| Queue | `PostgresJobQueue` with claim-and-lease (`ORDER BY run_at` FIFO) |
+| Lifecycle | `queued → running → succeeded\|failed\|dead_letter\|cancelled` |
+| Cancellation | `JobQueue.cancel()` — **queued jobs only**; no REST endpoint |
+| Schedules API | `GET /api/jobs/schedules` — name, type, interval, `next_run_at`, enabled/disabled |
+| Metrics | `jobs_enqueued_total`, `jobs_completed_total`, `job_retries_total`, `jobs_pending_count`, `jobs_dead_letter_count`, `job_duration_ms` |
+| Health | `background_jobs_pending_count`, `background_jobs_dead_letter_count` on `GET /api/health` |
+| UI | `/jobs` dashboard — list, detail, schedules tab, dead-letter retry |
+
+### High priority
+
+| # | Item | Motivation | Current gap | Suggested approach |
+| - | ---- | ---------- | ----------- | ------------------ |
+| H1 | **Job priority support** | Prevent long-running bulk jobs (RAG indexing, evaluations) from delaying latency-sensitive work | Strict FIFO by `run_at`; no priority column or enum | Add `JobPriority` enum (`HIGH`, `NORMAL`, `LOW`, `BULK`); add `priority` column on `background_jobs` (default `NORMAL`); update `claim_due` to `ORDER BY priority DESC, run_at ASC`; allow enqueue callers to set priority per job type |
+| H2 | **Queue partitioning prep** | Enable future workload separation without major schema changes | Single logical queue; partitioning listed in Future Enhancements only | Add `queue_name` (or `namespace`) column on `background_jobs` (default `'default'`); filter claims by queue when multiple workers exist; seed known names in docs: `rag`, `evaluation`, `workflow`, `notifications`, `maintenance` |
+| H3 | **Worker scaling metrics** | Support autoscaling decisions and operational monitoring | Queue depth and handler duration only | Add metrics: oldest queued job age, average wait time (enqueue → claim), average processing duration (already partially covered by `job_duration_ms`), worker utilization (in-flight / batch capacity); expose key fields on health or a dedicated stats endpoint |
+
+### Medium priority
+
+| # | Item | Motivation | Current gap | Suggested approach |
+| - | ---- | ---------- | ----------- | ------------------ |
+| M1 | **Scheduled job visibility APIs** | Improve operational visibility into recurring work | Schedules list lacks execution history | Extend schedule model or join latest job by `schedule_id`: `last_run_at`, `last_status`, `previous_run_at`; optional `GET /api/jobs/schedules/{id}` detail |
+| M2 | **Job cancellation (full lifecycle)** | Stop long-running jobs on operator request | `cancel()` is queued-only; no `cancelling` state; no REST API | Add `POST /api/jobs/{id}/cancel`; introduce `cancelling` state for in-flight jobs; handlers poll cooperative cancel flag or receive cancel token |
+| M3 | **Progress reporting** | UX for document ingestion, RAG indexing, eval batches, imports/exports | No progress fields | Add optional `progress_percent` and `progress_message` on job row; expose via `GET /api/jobs/{id}`; handler callback or context object for periodic updates |
+| M4 | **Workload-specific concurrency controls** | Cap noisy or resource-heavy handlers independently | Single worker batch size only | Configurable max concurrent jobs per `job_type` (e.g. embedding, evaluation); optional per-user and per-handler limits in worker dispatch loop |
+| M5 | **Poison-job analytics** | Faster triage of recurring failures | Dead-letter list + retry only | Aggregated reporting: top failure reasons, handler failure rates, retry exhaustion counts, recurring failure patterns (query or internal service) |
+
+### Low priority
+
+| # | Item | Notes |
+| - | ---- | ----- |
+| L1 | Queue pause/resume | Maintenance window support; worker/scheduler respect global pause flag |
+| L2 | Graceful queue draining | On shutdown, finish in-flight jobs without claiming new ones (partial — worker has shutdown hook; extend for drain mode) |
+| L3 | Bulk retry for failed jobs | Operator action on filtered dead-letter set |
+| L4 | Bulk cancellation for queued jobs | Operator action on filtered queued set |
+| L5 | Queue health endpoints | Dedicated `/api/jobs/health` or extend existing health with richer queue stats |
+| L6 | Worker heartbeat endpoints | Per-worker liveness, last claim time, in-flight count |
+| L7 | Queue statistics endpoints | Summaries: queued/running/completed/failed counts, retry totals, dead-letter totals |
+| L8 | Operational dashboard | Extend `/jobs` UI: queue health, worker status, scheduled jobs, retries, dead-letter, throughput, latency |
+
+### Recommended implementation order (when resumed)
+
+1. **Schema prep (H1 + H2)** — migration adding `priority` + `queue_name` with safe defaults; update claim query; no behaviour change until callers set non-default values.
+2. **Scaling metrics (H3)** — observability + health extensions; no API contract break.
+3. **Schedule visibility (M1)** — additive API fields.
+4. **Cancellation API (M2)** — REST + cooperative in-flight cancel.
+5. **Remaining medium/low items** — slice by operational need; dashboard (L8) last.
+
+### Overlap with § Future Enhancements
+
+| Refinement | Future Enhancements row |
+| ---------- | ----------------------- |
+| H2 Queue partitioning prep | Queue partitioning |
+| M1 Schedule visibility | (additive to schedules schema/API) |
+| M2 Cancellation | Dead-letter payload editing / manual re-enqueue API (related; cancel is separate) |
+| M4 Concurrency | Multi-replica worker deployment (complementary) |
+| L8 Dashboard | Durable eval history / trend dashboards (complementary) |
+
+### Tracking
+
+When work begins, create a dedicated branch (e.g. `feat/v2-epic-10-refinements`) or fold items into a post-Epic-11 patch epic. Each item requires a Part I addendum before implementation (priority semantics, cancel lifecycle, progress schema). Do not implement silently — update this section's status and bump epic version.
 
 ---
 
@@ -2267,6 +2340,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.13    | 2026-08-13 | Post-Epic 10 Refinements Backlog — prioritized backlog (H1–H3, M1–M5, L1–L8), current baseline, suggested approach, implementation order; deferred until after Epic 11. |
 | 3.12    | 2026-08-13 | Part II Phase 11 complete — full-platform validation (2141 passed, 89.19% `app/` coverage, 91% `app/ai/jobs/`), flag-off regression, `--level jobs` 6/6, release summary published, test isolation hardening (`tests/conftest.py` queue truncate teardown, adversarial scenario fixes). |
 | 3.11    | 2026-08-13 | Part II Phase 10 complete — `jobsClient.ts`, `types/jobs.ts`, `JobsPage.tsx` (jobs/schedules tabs, status/type filters, dead-letter retry, `feature_disabled` empty state), route `/jobs` + nav gated on `background_jobs_enabled`, `JobsPage.test.tsx` + `jobsClient.test.ts` (14/14), verify frontend lint + build. |
 | 3.10    | 2026-08-13 | Part II Phase 9 complete — `--level jobs` eval (`JobsEvalRunner`, `jobs_scenarios.py`, six cases in `sample.yaml`), `tests/ai/jobs/test_reference_scenarios.py` (6/6), `tests/ai/jobs/test_adversarial_scenarios.py` (12/12), `tests/ai/evaluation/test_jobs_runner.py`, README operator steps + dead-letter runbook, verify `pytest tests/ai/jobs/test_reference_scenarios.py tests/ai/jobs/test_adversarial_scenarios.py` (25/25) + `--level jobs` (6/6 with `BACKGROUND_JOBS_ENABLED=true`). |
