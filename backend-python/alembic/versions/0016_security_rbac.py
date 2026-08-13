@@ -25,6 +25,8 @@ _NOW = sa.text("now()")
 
 
 def upgrade() -> None:
+    op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+
     op.create_table(
         "roles",
         sa.Column("id", _UUID, server_default=sa.text("gen_random_uuid()"), nullable=False),
@@ -133,7 +135,7 @@ def upgrade() -> None:
 
     # Seed role-permission links for the four system roles.
     role_name_to_id = {
-        name: row[0]
+        name: row[1]
         for name, row in (
             op.get_bind()
             .execute(sa.text("SELECT name, id FROM roles"))
@@ -141,7 +143,7 @@ def upgrade() -> None:
         )
     }
     permission_key_to_id = {
-        key: row[0]
+        key: row[1]
         for key, row in (
             op.get_bind()
             .execute(sa.text("SELECT key, id FROM permissions"))
