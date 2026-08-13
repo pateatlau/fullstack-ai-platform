@@ -17,7 +17,7 @@ Key findings:
 
 - ✅ Background jobs and Epic 10 foundation are present and active.
 - ✅ The platform is operational and already contains the extension points that Epic 11 must wire into.
-- ✅ No `app/ai/security/` package exists yet.
+- ✅ No `backend-python/app/ai/security/` package exists yet.
 - ✅ No `SECURITY_GOVERNANCE_ENABLED` flag exists yet.
 - ✅ Alembic head is `0015_document_upload_staging`; Epic 11 will introduce the next numbered migration(s) after this baseline.
 - ✅ Lint and coverage gates are passing in the current workspace.
@@ -206,7 +206,7 @@ The current migration head and schema state are consistent with an Epic 10-compl
 
 The following product boundary is still absent and must be created during Epic 11 implementation:
 
-- `app/ai/security/`
+- `backend-python/app/ai/security/`
 - Security router and health integration
 - RBAC store/service implementation
 - Audit logger and retention cleanup
