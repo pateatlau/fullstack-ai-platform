@@ -46,6 +46,37 @@ def _dispose_engine_cache_sync_fallback() -> None:
         asyncio.run(dispose_engine_cache())
 
 
+async def _truncate_background_jobs_tables_if_present() -> None:
+    """Clear committed queue rows after tests that bypass ``db_session`` rollback."""
+    engine = create_async_engine(Settings().database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            jobs_table = await conn.scalar(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name = 'background_jobs'"
+                )
+            )
+            if jobs_table != 1:
+                return
+            schedules_table = await conn.scalar(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name = 'background_job_schedules'"
+                )
+            )
+            if schedules_table == 1:
+                await conn.execute(
+                    text("TRUNCATE background_jobs, background_job_schedules")
+                )
+            else:
+                await conn.execute(text("TRUNCATE background_jobs"))
+    except Exception:
+        pass
+    finally:
+        await engine.dispose()
+
+
 @pytest.fixture(autouse=True)
 async def _dispose_engine_cache_after_test(
     anyio_backend: object,
@@ -55,6 +86,7 @@ async def _dispose_engine_cache_after_test(
     from app.db.engine import dispose_engine_cache
 
     yield
+    await _truncate_background_jobs_tables_if_present()
     await dispose_engine_cache()
 
 

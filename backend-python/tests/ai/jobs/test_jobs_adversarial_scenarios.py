@@ -181,10 +181,12 @@ async def test_concurrent_claim_completes_each_job_once(
             settings=settings,
             worker_id=f"worker-{worker_suffix}",
         )
-        for _ in range(10):
+        for _ in range(20):
             await worker.poll_once()
             jobs = await queue.list(job_type="fixture_parallel")
-            if not any(job.status is JobStatus.QUEUED for job in jobs):
+            if len(jobs) == 8 and all(
+                job.status is JobStatus.SUCCEEDED for job in jobs
+            ):
                 break
 
     try:
@@ -577,7 +579,11 @@ async def test_complete_and_retry_stale_version_only_one_succeeds(
 @pytest.mark.anyio
 async def test_duplicate_retry_execution_is_idempotent(db_session) -> None:
     await require_background_jobs_tables(db_session)
-    settings = job_settings(background_jobs_default_max_attempts=1)
+    job_type = f"fixture_idempotent_{uuid.uuid4().hex[:8]}"
+    settings = job_settings(
+        background_jobs_default_max_attempts=1,
+        background_jobs_worker_batch_size=1,
+    )
     side_effects = {"count": 0}
     applied = {"done": False}
 
@@ -592,12 +598,12 @@ async def test_duplicate_retry_execution_is_idempotent(db_session) -> None:
         db_session,
         settings,
         register_handlers=lambda registry: registry.register(
-            "fixture_idempotent", idempotent_handler
+            job_type, idempotent_handler
         ),
     )
 
     job = await queue.enqueue(
-        job_type="fixture_idempotent",
+        job_type=job_type,
         payload={"version": 1},
         max_attempts=1,
     )
