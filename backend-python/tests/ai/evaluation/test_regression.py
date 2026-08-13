@@ -43,6 +43,7 @@ def _environment(
         workflow_engine_enabled=workflow_engine_enabled,
         plugins_enabled=plugins_enabled,
         hitl_enabled=False,
+        background_jobs_enabled=False,
         postgres_available=postgres_available,
         pgvector_available=pgvector_available,
     )
@@ -534,5 +535,11 @@ def test_dataset_loads_all_new_cases() -> None:
         "hitl_agent_reject",
         "hitl_workflow_approve_edits",
         "hitl_workflow_reject",
+        "jobs_hitl_expiry_agent",
+        "jobs_hitl_expiry_workflow",
+        "jobs_orphan_sweep_resume",
+        "jobs_workflow_retention",
+        "jobs_rag_indexing",
+        "jobs_scheduled_eval",
     }
     assert case_ids == expected

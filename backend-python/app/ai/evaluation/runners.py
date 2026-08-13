@@ -1869,3 +1869,60 @@ def _workflow_reproducibility_metadata(
             if isinstance(model_value, str):
                 model = model_value
     return model, prompt_version
+
+
+@dataclass(frozen=True)
+class JobsEvalRunner:
+    """Run Background Jobs reference scenarios for each first-class handler."""
+
+    settings: Settings
+    session: AsyncSession | None = None
+
+    async def run_case(self, case: EvalCase) -> EvalCaseResult:
+        from app.ai.evaluation.jobs_scenarios import run_jobs_reference_scenario
+
+        start = time.perf_counter()
+        if not self.settings.background_jobs_enabled:
+            return EvalCaseResult(
+                case_id=case.id,
+                level="jobs",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="BACKGROUND_JOBS_ENABLED=false",
+            )
+
+        if self.session is None:
+            return EvalCaseResult(
+                case_id=case.id,
+                level="jobs",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="Postgres not available (run from backend-python with DB up)",
+            )
+
+        try:
+            outcome = await run_jobs_reference_scenario(
+                case,
+                session=self.session,
+                settings=self.settings,
+            )
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="jobs",
+                passed=outcome.passed,
+                latency_ms=latency_ms,
+                error=outcome.error,
+            )
+        except Exception as exc:
+            await self.session.rollback()
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return EvalCaseResult(
+                case_id=case.id,
+                level="jobs",
+                passed=False,
+                latency_ms=latency_ms,
+                error=str(exc),
+            )
