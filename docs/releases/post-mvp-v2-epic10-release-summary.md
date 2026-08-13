@@ -111,6 +111,38 @@ All `TODO(epic-9)` / `TODO(epic-10)` markers identified in Phase 0 have been rem
 
 ---
 
+## Post-Epic 10 Refinements Backlog
+
+> **Deferred until after Epic 11 (Security & Governance).** Full detail: [Epic 10 plan § Post-Epic 10 Refinements Backlog](../plans/post-mvp-v2-epic-10-background-jobs.md#post-epic-10-refinements-backlog).
+
+Epic 10 shipped a production-oriented foundation. The following items were identified in post-release review as the next wave of operational maturity — not architectural fixes.
+
+### High priority (return here first)
+
+| ID | Item |
+| -- | ---- |
+| H1 | Job priority support (`HIGH` / `NORMAL` / `LOW` / `BULK`; prefer higher priority on dequeue) |
+| H2 | Queue partitioning prep (`queue_name` field for future `rag`, `evaluation`, `workflow`, etc.) |
+| H3 | Worker scaling metrics (oldest queued age, wait time, utilization — beyond current depth/duration metrics) |
+
+### Medium priority
+
+| ID | Item |
+| -- | ---- |
+| M1 | Scheduled job visibility APIs (`last_run_at`, last status, disabled schedules detail) |
+| M2 | Full job cancellation lifecycle (`cancelling` state, in-flight cancel, REST endpoint) |
+| M3 | Handler progress reporting (`progress_percent`, status messages) |
+| M4 | Per-job-type concurrency limits |
+| M5 | Poison-job / dead-letter analytics (aggregated failure insights) |
+
+### Low priority
+
+Queue pause/resume, graceful drain, bulk retry/cancel, dedicated queue/worker health endpoints, queue statistics API, extended operational dashboard.
+
+**Suggested order when resumed:** H1 + H2 (schema) → H3 (metrics) → M1 → M2 → remaining items by ops need.
+
+---
+
 ## Verification Metrics (Phase 11 — 2026-08-13)
 
 | Gate | Result |
