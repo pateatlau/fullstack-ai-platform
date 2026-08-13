@@ -1286,7 +1286,17 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
 | Feature Flag Regression  | Not re-run in Phase 0 (Epic 09 Phase 10: 1912 passed with `HITL_ENABLED=false`)   |
 | Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |
-| Background Jobs          | Phase 11 **Completed** (2026-08-13) — full-platform validation, flag-off regression, release summary published; Phases 0–10 deliverables retained |
+| Background Jobs          | Not started — `app/ai/jobs/` absent; `BACKGROUND_JOBS_ENABLED` absent           |
+
+---
+
+## Current status
+
+_Updated at Epic 10 Phase 11 (2026-08-13); release summary: [post-mvp-v2-epic10-release-summary.md](../releases/post-mvp-v2-epic10-release-summary.md)._
+
+| Area            | State                                                                                                                                              |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Background Jobs | Phases 0–11 **Completed** (2026-08-13) — full-platform validation, flag-off regression, release summary published; Phases 0–10 deliverables retained |
 
 ---
 

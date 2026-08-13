@@ -3,13 +3,13 @@
 **Release name:** Post-MVP V2 Epic 10 — Background Jobs (Phases 0–11)
 **Release date:** 2026-08-13
 **Validation:** Phase 11 final acceptance (see [post-mvp-v2-epic-10-background-jobs.md](../plans/post-mvp-v2-epic-10-background-jobs.md))
-**Git commit (validation base):** `f684892` — Epic 10 Phases 9–10 delivery; Phase 11 validation on current branch
+**Git commit (validation base):** `4d4ffd2` — Epic 10 Phase 11 validation & release (Phases 9–10 delivery base: `f684892`)
 
 ---
 
 ## Summary vs Epic 09
 
-Epic 09 shipped Human-in-the-Loop under `HITL_ENABLED`. **V2 Epic 10 adds a Postgres-backed background job platform** under `app/ai/jobs/` (queue, worker, scheduler, five first-class handlers, REST API, observability, eval scenarios, frontend dashboard) behind `BACKGROUND_JOBS_ENABLED` (default **off**), closing every named deferred-work gap from Epics 02/06/07/09.
+Epic 09 shipped Human-in-the-Loop under `HITL_ENABLED`. **V2 Epic 10 adds a Postgres-backed background job platform** under `app/ai/jobs/` (queue, worker, scheduler, five first-class handlers, REST API, observability, eval scenarios, frontend dashboard) behind `BACKGROUND_JOBS_ENABLED` (default **off**), closing five Phase 0–identified deferred-work gaps: Epic 02 queue-backed RAG indexing (opt-in), Epic 06 workflow approval timeout and run retention, Epic 07 scheduled evaluation runs, and Epic 09 HITL approval timeout plus orphaned-snapshot recovery — excluding Epic 05/06 in-process task migration (`schedule_extraction_task`, `schedule_run_task`, etc.), which remains out of scope.
 
 | Area | Epic 09 / pre-jobs platform | V2 Epic 10 |
 | ---- | --------------------------- | ---------- |
@@ -57,7 +57,7 @@ Epic 09 shipped Human-in-the-Loop under `HITL_ENABLED`. **V2 Epic 10 adds a Post
 
 | Variable | Default | Behaviour |
 | -------- | ------- | --------- |
-| `BACKGROUND_JOBS_ENABLED` | `false` | Off: no worker/scheduler tasks, Jobs REST returns `503 feature_disabled`, RAG stays sync regardless of `rag_indexing_runner`, HITL/workflow timeouts unenforced, frontend shows unavailable notice; Epic 09 hot paths unchanged. On: queue/worker/scheduler start, five handlers active, REST + health fields, observability hooks, `/jobs` UI. |
+| `BACKGROUND_JOBS_ENABLED` | `false` | Off: no worker/scheduler tasks, Jobs REST returns `503 feature_disabled`, RAG stays sync regardless of `rag_indexing_runner`, HITL/workflow timeouts unenforced, frontend shows unavailable notice; Epic 09 hot paths unchanged. On: queue/worker/scheduler start, sweep/retention handlers active (HITL expiry, orphan sweep, workflow retention), REST + health fields, observability hooks, `/jobs` UI — scheduled evaluation additionally requires `evaluation_schedule_enabled=true` (default off); queue-backed RAG additionally requires `rag_indexing_runner=queue` (default `sync`). |
 
 Additional settings (see `backend-python/.env.example`): worker/scheduler poll intervals, claim lease, handler timeout, retry policy, `rag_indexing_runner`, `evaluation_schedule_enabled`, `hitl_orphan_sweep_grace_seconds`, `background_jobs_retention_days`.
 

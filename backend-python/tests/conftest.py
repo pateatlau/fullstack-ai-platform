@@ -11,14 +11,19 @@ os.environ.setdefault("CHAT_PERSISTENCE_ENABLED", "false")
 # Streaming tests assume the default enabled path; local .env may set false for dev.
 os.environ.setdefault("CHAT_STREAMING_ENABLED", "true")
 
+import logging
+
 import pytest
 from collections.abc import AsyncIterator, Iterator
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings, get_settings
 from app.middleware.rate_limit import reset_rate_limiter
+
+logger = logging.getLogger(__name__)
 
 
 def _reset_observability_registries() -> None:
@@ -46,9 +51,34 @@ def _dispose_engine_cache_sync_fallback() -> None:
         asyncio.run(dispose_engine_cache())
 
 
+_background_jobs_teardown_db_unavailable = False
+_background_jobs_teardown_tables_absent = False
+
+
+def _is_database_unavailable(exc: BaseException) -> bool:
+    if isinstance(exc, (ConnectionError, OSError)):
+        return True
+    if isinstance(exc, OperationalError):
+        if exc.connection_invalidated:
+            return True
+        orig = exc.orig
+        return isinstance(orig, (ConnectionError, OSError))
+    return False
+
+
 async def _truncate_background_jobs_tables_if_present() -> None:
     """Clear committed queue rows after tests that bypass ``db_session`` rollback."""
+    global \
+        _background_jobs_teardown_db_unavailable, \
+        _background_jobs_teardown_tables_absent
+    if (
+        _background_jobs_teardown_db_unavailable
+        or _background_jobs_teardown_tables_absent
+    ):
+        return
+
     engine = create_async_engine(Settings().database_url, poolclass=NullPool)
+    tables_detected = False
     try:
         async with engine.begin() as conn:
             jobs_table = await conn.scalar(
@@ -58,7 +88,10 @@ async def _truncate_background_jobs_tables_if_present() -> None:
                 )
             )
             if jobs_table != 1:
+                _background_jobs_teardown_tables_absent = True
                 return
+
+            tables_detected = True
             schedules_table = await conn.scalar(
                 text(
                     "SELECT 1 FROM information_schema.tables "
@@ -71,8 +104,16 @@ async def _truncate_background_jobs_tables_if_present() -> None:
                 )
             else:
                 await conn.execute(text("TRUNCATE background_jobs"))
-    except Exception:
-        pass
+    except Exception as exc:
+        if tables_detected:
+            logger.exception(
+                "Failed to truncate background_jobs tables during test teardown"
+            )
+            raise
+        if _is_database_unavailable(exc):
+            _background_jobs_teardown_db_unavailable = True
+            return
+        raise
     finally:
         await engine.dispose()
 
