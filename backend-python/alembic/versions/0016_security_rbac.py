@@ -9,6 +9,7 @@ Epic 11 Phase 1: RBAC domain model, system role seeds, permissions, and role ass
 
 from __future__ import annotations
 
+import uuid
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -107,49 +108,49 @@ def upgrade() -> None:
         sa.column("permission_id", _UUID),
     )
 
+    role_ids = {
+        "member": uuid.uuid4(),
+        "operator": uuid.uuid4(),
+        "admin": uuid.uuid4(),
+        "owner": uuid.uuid4(),
+    }
     role_rows = [
-        {"id": sa.text("gen_random_uuid()"), "name": "member", "description": "Default authenticated user role", "is_system": True},
-        {"id": sa.text("gen_random_uuid()"), "name": "operator", "description": "Operational power user", "is_system": True},
-        {"id": sa.text("gen_random_uuid()"), "name": "admin", "description": "Administrative operator", "is_system": True},
-        {"id": sa.text("gen_random_uuid()"), "name": "owner", "description": "Platform owner", "is_system": True},
+        {"id": role_ids["member"], "name": "member", "description": "Default authenticated user role", "is_system": True},
+        {"id": role_ids["operator"], "name": "operator", "description": "Operational power user", "is_system": True},
+        {"id": role_ids["admin"], "name": "admin", "description": "Administrative operator", "is_system": True},
+        {"id": role_ids["owner"], "name": "owner", "description": "Platform owner", "is_system": True},
     ]
-    op.execute(
-        roles.insert().values(role_rows)
-    )
+    op.execute(roles.insert().values(role_rows))
 
+    permission_ids = {
+        "*": uuid.uuid4(),
+        "rbac:manage": uuid.uuid4(),
+        "audit:view": uuid.uuid4(),
+        "policy:view": uuid.uuid4(),
+        "jobs:view_all": uuid.uuid4(),
+        "jobs:retry": uuid.uuid4(),
+        "approvals:decide_all": uuid.uuid4(),
+        "tools:execute": uuid.uuid4(),
+        "tools:execute:destructive": uuid.uuid4(),
+        "plugins:manage": uuid.uuid4(),
+        "workflow:view_all": uuid.uuid4(),
+        "mcp:manage": uuid.uuid4(),
+    }
     permission_rows = [
-        {"key": "*", "display_name": "All Permissions", "description": "Wildcard permission for owners", "category": "rbac", "risk_level": "high", "reserved": False},
-        {"key": "rbac:manage", "display_name": "Manage Roles", "description": "Manage RBAC assignments", "category": "rbac", "risk_level": "high", "reserved": False},
-        {"key": "audit:view", "display_name": "View Audit Log", "description": "View audit events", "category": "audit", "risk_level": "medium", "reserved": False},
-        {"key": "policy:view", "display_name": "View Policy Summary", "description": "Read policy summary", "category": "policy", "risk_level": "low", "reserved": False},
-        {"key": "jobs:view_all", "display_name": "View Background Jobs", "description": "List and inspect all jobs", "category": "jobs", "risk_level": "medium", "reserved": False},
-        {"key": "jobs:retry", "display_name": "Retry Dead-Letter Jobs", "description": "Retry failed background jobs", "category": "jobs", "risk_level": "high", "reserved": False},
-        {"key": "approvals:decide_all", "display_name": "Decide Any Approval", "description": "Act on all approval stages", "category": "approvals", "risk_level": "high", "reserved": False},
-        {"key": "tools:execute", "display_name": "Execute Tools", "description": "Execute non-destructive tools", "category": "tools", "risk_level": "low", "reserved": False},
-        {"key": "tools:execute:destructive", "display_name": "Execute Destructive Tools", "description": "Execute high-risk destructive tool calls", "category": "tools", "risk_level": "high", "reserved": False},
-        {"key": "plugins:manage", "display_name": "Manage Plugins", "description": "Manage plugins", "category": "plugins", "risk_level": "high", "reserved": True},
-        {"key": "workflow:view_all", "display_name": "View All Workflows", "description": "Inspect all workflows", "category": "workflow", "risk_level": "medium", "reserved": True},
-        {"key": "mcp:manage", "display_name": "Manage MCP Servers", "description": "Configure MCP servers", "category": "mcp", "risk_level": "high", "reserved": True},
+        {"id": permission_ids["*"], "key": "*", "display_name": "All Permissions", "description": "Wildcard permission for owners", "category": "rbac", "risk_level": "high", "reserved": False},
+        {"id": permission_ids["rbac:manage"], "key": "rbac:manage", "display_name": "Manage Roles", "description": "Manage RBAC assignments", "category": "rbac", "risk_level": "high", "reserved": False},
+        {"id": permission_ids["audit:view"], "key": "audit:view", "display_name": "View Audit Log", "description": "View audit events", "category": "audit", "risk_level": "medium", "reserved": False},
+        {"id": permission_ids["policy:view"], "key": "policy:view", "display_name": "View Policy Summary", "description": "Read policy summary", "category": "policy", "risk_level": "low", "reserved": False},
+        {"id": permission_ids["jobs:view_all"], "key": "jobs:view_all", "display_name": "View Background Jobs", "description": "List and inspect all jobs", "category": "jobs", "risk_level": "medium", "reserved": False},
+        {"id": permission_ids["jobs:retry"], "key": "jobs:retry", "display_name": "Retry Dead-Letter Jobs", "description": "Retry failed background jobs", "category": "jobs", "risk_level": "high", "reserved": False},
+        {"id": permission_ids["approvals:decide_all"], "key": "approvals:decide_all", "display_name": "Decide Any Approval", "description": "Act on all approval stages", "category": "approvals", "risk_level": "high", "reserved": False},
+        {"id": permission_ids["tools:execute"], "key": "tools:execute", "display_name": "Execute Tools", "description": "Execute non-destructive tools", "category": "tools", "risk_level": "low", "reserved": False},
+        {"id": permission_ids["tools:execute:destructive"], "key": "tools:execute:destructive", "display_name": "Execute Destructive Tools", "description": "Execute high-risk destructive tool calls", "category": "tools", "risk_level": "high", "reserved": False},
+        {"id": permission_ids["plugins:manage"], "key": "plugins:manage", "display_name": "Manage Plugins", "description": "Manage plugins", "category": "plugins", "risk_level": "high", "reserved": True},
+        {"id": permission_ids["workflow:view_all"], "key": "workflow:view_all", "display_name": "View All Workflows", "description": "Inspect all workflows", "category": "workflow", "risk_level": "medium", "reserved": True},
+        {"id": permission_ids["mcp:manage"], "key": "mcp:manage", "display_name": "Manage MCP Servers", "description": "Configure MCP servers", "category": "mcp", "risk_level": "high", "reserved": True},
     ]
     op.execute(permissions.insert().values(permission_rows))
-
-    # Seed role-permission links for the four system roles.
-    role_name_to_id = {
-        name: row[1]
-        for name, row in (
-            op.get_bind()
-            .execute(sa.text("SELECT name, id FROM roles"))
-            .all()
-        )
-    }
-    permission_key_to_id = {
-        key: row[1]
-        for key, row in (
-            op.get_bind()
-            .execute(sa.text("SELECT key, id FROM permissions"))
-            .all()
-        )
-    }
 
     mapping = {
         "member": ["tools:execute"],
@@ -160,9 +161,9 @@ def upgrade() -> None:
 
     values = []
     for role_name, permission_keys in mapping.items():
-        role_id = role_name_to_id[role_name]
+        role_id = role_ids[role_name]
         for permission_key in permission_keys:
-            values.append({"role_id": role_id, "permission_id": permission_key_to_id[permission_key]})
+            values.append({"role_id": role_id, "permission_id": permission_ids[permission_key]})
 
     if values:
         op.execute(role_permissions.insert().values(values))
