@@ -85,6 +85,14 @@ class Settings(BaseSettings):
     rate_limit_anonymous_per_minute: int = Field(default=30, ge=1)
     rate_limit_authenticated_per_minute: int = Field(default=120, ge=1)
 
+    # Epic 11 Security & Governance (Phase 1). Master flag remains off unless
+    # explicitly enabled. When on, RBAC bootstrap and enforcement are gated by
+    # the sub-flags below.
+    security_governance_enabled: bool = False
+    security_rbac_enforcement_enabled: bool = True
+    security_bootstrap_admin_emails: list[str] = Field(default_factory=list)
+    security_rbac_cache_ttl_seconds: int = Field(default=60, ge=0)
+
     # AI / RAG configuration matrix (Phase 1). Feature flags default off so
     # MVP chat/auth/persistence behave identically until later phases enable
     # RAG and tool endpoints.
