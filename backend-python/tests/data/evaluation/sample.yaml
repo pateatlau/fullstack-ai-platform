@@ -355,3 +355,33 @@ cases:
         - id: e3
           from_node_id: after
           to_node_id: end
+
+  - id: jobs_hitl_expiry_agent
+    level: jobs
+    job_type: hitl_approval_expiry_sweep
+    job_scenario: hitl_expiry_agent
+
+  - id: jobs_hitl_expiry_workflow
+    level: jobs
+    job_type: hitl_approval_expiry_sweep
+    job_scenario: hitl_expiry_workflow
+
+  - id: jobs_orphan_sweep_resume
+    level: jobs
+    job_type: hitl_orphaned_snapshot_sweep
+    job_scenario: orphan_sweep_resume
+
+  - id: jobs_workflow_retention
+    level: jobs
+    job_type: workflow_run_retention_cleanup
+    job_scenario: workflow_retention
+
+  - id: jobs_rag_indexing
+    level: jobs
+    job_type: rag_document_indexing
+    job_scenario: rag_indexing
+
+  - id: jobs_scheduled_eval
+    level: jobs
+    job_type: scheduled_evaluation_run
+    job_scenario: scheduled_eval

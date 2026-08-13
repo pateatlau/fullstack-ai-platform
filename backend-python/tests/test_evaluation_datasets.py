@@ -350,3 +350,20 @@ cases:
 
     with pytest.raises(EvalDatasetError, match="requires an 'arguments' mapping"):
         load_dataset(path)
+
+
+def test_jobs_case_rejects_mismatched_job_type(tmp_path: Path) -> None:
+    path = tmp_path / "jobs_bad_type.yaml"
+    path.write_text(
+        """
+cases:
+  - id: bad_jobs
+    level: jobs
+    job_type: workflow_run_retention_cleanup
+    job_scenario: hitl_expiry_agent
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvalDatasetError, match="does not match job_scenario"):
+        load_dataset(path)

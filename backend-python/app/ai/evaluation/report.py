@@ -24,6 +24,7 @@ _ALL_LEVELS: tuple[EvalLevel, ...] = (
     "workflow",
     "plugin",
     "hitl",
+    "jobs",
 )
 
 
@@ -35,6 +36,7 @@ class EvalRunEnvironment:
     workflow_engine_enabled: bool
     plugins_enabled: bool
     hitl_enabled: bool
+    background_jobs_enabled: bool
     postgres_available: bool
     pgvector_available: bool
 
@@ -241,6 +243,7 @@ def load_json_report(path: Path) -> EvalRunReport:
             workflow_engine_enabled=bool(env_raw.get("workflow_engine_enabled")),
             plugins_enabled=bool(env_raw.get("plugins_enabled")),
             hitl_enabled=bool(env_raw.get("hitl_enabled")),
+            background_jobs_enabled=bool(env_raw.get("background_jobs_enabled")),
             postgres_available=bool(env_raw.get("postgres_available")),
             pgvector_available=bool(env_raw.get("pgvector_available")),
         )

@@ -32,6 +32,7 @@ from app.ai.evaluation.runners import (
     AgentEvalRunner,
     EndToEndEvalRunner,
     HitlEvalRunner,
+    JobsEvalRunner,
     PluginEvalRunner,
     PromptEvalRunner,
     RetrievalEvalRunner,
@@ -62,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
             "workflow",
             "plugin",
             "hitl",
+            "jobs",
             "all",
         ],
         default="all",
@@ -70,7 +72,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Use --level plugin for reference plugin smoke cases "
             "(skipped when PLUGINS_ENABLED=false). "
             "Use --level hitl for HITL reference scenarios "
-            "(skipped when HITL_ENABLED=false)."
+            "(skipped when HITL_ENABLED=false). "
+            "Use --level jobs for Background Jobs reference scenarios "
+            "(skipped when BACKGROUND_JOBS_ENABLED=false)."
         ),
     )
     parser.add_argument(
@@ -133,6 +137,7 @@ def _settings_snapshot(settings: Settings) -> dict[str, object]:
         "workflow_engine_enabled": settings.workflow_engine_enabled,
         "plugins_enabled": settings.plugins_enabled,
         "hitl_enabled": settings.hitl_enabled,
+        "background_jobs_enabled": settings.background_jobs_enabled,
     }
 
 
@@ -223,7 +228,8 @@ async def _run_with_session(
 
     db_levels = levels & {"retrieval", "e2e", "workflow"}
     hitl_needs_postgres = "hitl" in levels and settings.workflow_engine_enabled
-    if db_levels or "plugin" in levels or hitl_needs_postgres:
+    jobs_needs_postgres = "jobs" in levels
+    if db_levels or "plugin" in levels or hitl_needs_postgres or jobs_needs_postgres:
         postgres_ok, pgvector_ok, session, engine = await _probe_postgres(settings)
 
     report.run_environment = EvalRunEnvironment(
@@ -231,6 +237,7 @@ async def _run_with_session(
         workflow_engine_enabled=settings.workflow_engine_enabled,
         plugins_enabled=settings.plugins_enabled,
         hitl_enabled=settings.hitl_enabled,
+        background_jobs_enabled=settings.background_jobs_enabled,
         postgres_available=postgres_ok,
         pgvector_available=pgvector_ok,
     )
@@ -275,6 +282,14 @@ async def _run_with_session(
         )
         for case in filter_cases(dataset, "hitl"):
             report.results.append(await hitl_runner.run_case(case))
+
+    if "jobs" in levels:
+        jobs_runner = JobsEvalRunner(
+            settings=settings,
+            session=session,
+        )
+        for case in filter_cases(dataset, "jobs"):
+            report.results.append(await jobs_runner.run_case(case))
 
     if not db_levels:
         await _dispose_db_resources(session, engine, rollback=True)

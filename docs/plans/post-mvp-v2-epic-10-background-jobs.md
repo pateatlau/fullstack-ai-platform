@@ -2,7 +2,7 @@
 epic: v2-10
 title: Background Jobs
 status: in_progress
-version: 3.9
+version: 3.10
 depends_on: [v2-02, v2-06, v2-07, v2-09]
 provides:
   [
@@ -1286,7 +1286,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
 | Feature Flag Regression  | Not re-run in Phase 0 (Epic 09 Phase 10: 1912 passed with `HITL_ENABLED=false`)   |
 | Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |
-| Background Jobs          | Phase 7 **Completed** (2026-08-12) — `app/schemas/jobs.py`, `app/routers/jobs.py` (list/detail/retry/schedules), health extension (`background_jobs_*` fields), `PostgresJobQueue.retry_dead_letter`/`count_pending`/`count_dead_letter`, `get_job_queue`/`get_job_schedule_store` deps, `tests/test_jobs_router.py` (13/13); all five first-class handlers shipped |
+| Background Jobs          | Phase 9 **Completed** (2026-08-13) — `--level jobs` eval (`JobsEvalRunner`, six reference cases), `tests/ai/jobs/test_reference_scenarios.py` (6/6), `tests/ai/jobs/test_adversarial_scenarios.py` (12/12), README operator steps + dead-letter runbook; Phases 0–8 deliverables retained (queue/worker/scheduler, five handlers, REST API, observability) |
 
 ---
 
@@ -1303,11 +1303,11 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 6     | Scheduled Evaluation Runs                      | S      | ✅ Completed (2026-08-12) |
 | 7     | Jobs REST API & Health                         | S      | ✅ Completed (2026-08-12) |
 | 8     | Background Jobs Observability                  | S      | ✅ Completed (2026-08-12) |
-| 9     | Reference Scenarios & Eval Cases               | M      | Not Started |
+| 9     | Reference Scenarios & Eval Cases               | M      | ✅ Completed (2026-08-13) |
 | 10    | Frontend Jobs & Schedules Dashboard            | S      | Not Started |
 | 11    | Validation & Release                           | M      | Not Started |
 
-**Epic 10 overall:** Phase 8 complete. Next gate: user authorization to begin Phase 9.
+**Epic 10 overall:** Phase 9 complete. Next gate: user authorization to begin Phase 10.
 
 ---
 
@@ -1904,7 +1904,7 @@ Add job span/metric instrumentation, mirroring Epic 07/09's helper style.
 **Exit criteria**
 
 - [x] Observability tests pass.
-- [ ] User confirmation to proceed to Phase 9.
+- [x] User confirmation to proceed to Phase 9.
 
 **Rollback**
 
@@ -1915,6 +1915,7 @@ Add job span/metric instrumentation, mirroring Epic 07/09's helper style.
 # Phase 9 — Reference Scenarios & Eval Cases
 
 **Effort:** M
+**Status:** Completed (2026-08-13)
 
 **Objective**
 
@@ -1930,39 +1931,39 @@ Ship reference scenarios and adversarial/edge-case coverage across all five hand
 
 ## Reference Scenarios
 
-- [ ] Add `--level jobs` eval cases (or extend existing levels) gated on `BACKGROUND_JOBS_ENABLED`, following Epic 08/09's `--level plugin`/`--level hitl` precedent.
-- [ ] Document skip policy when Background Jobs is disabled.
+- [x] Add `--level jobs` eval cases (or extend existing levels) gated on `BACKGROUND_JOBS_ENABLED`, following Epic 08/09's `--level plugin`/`--level hitl` precedent.
+- [x] Document skip policy when Background Jobs is disabled.
 
 ## Adversarial & Concurrency Scenarios
 
-- [ ] **Retry exhaustion and manual recovery** — a handler that always fails reaches `dead_letter` after `max_attempts`; `POST …/retry` requeues it; a subsequently-succeeding handler completes it.
-- [ ] **Worker crash mid-job** — simulate a claimed job whose worker "disappears" (no `complete`/`fail` call); assert the next poll cycle, after the lease expires, reclaims and completes it exactly once (no double-execution side effects).
-- [ ] **Concurrent claim race** — N simulated workers polling the same job pool concurrently; assert the total successful-completion count equals the job count (no double-claims, no lost jobs).
-- [ ] **Scheduler double-tick** — two concurrent scheduler evaluations of the same due schedule; assert exactly one job is enqueued and `next_run_at` advances exactly once.
-- [ ] **Expiry sweep vs. live decision race** — a decide call and the expiry sweep both attempt to transition the same `pending` approval at nearly the same time; assert exactly one wins (CAS) and the other observes a no-op, never a `409` surfaced to the sweep.
-- [ ] **Orphan sweep grace period** — an `approved` row within `hitl_orphan_sweep_grace_seconds` is untouched even though it matches every other orphan criterion.
+- [x] **Retry exhaustion and manual recovery** — a handler that always fails reaches `dead_letter` after `max_attempts`; `POST …/retry` requeues it; a subsequently-succeeding handler completes it.
+- [x] **Worker crash mid-job** — simulate a claimed job whose worker "disappears" (no `complete`/`fail` call); assert the next poll cycle, after the lease expires, reclaims and completes it exactly once (no double-execution side effects).
+- [x] **Concurrent claim race** — N simulated workers polling the same job pool concurrently; assert the total successful-completion count equals the job count (no double-claims, no lost jobs).
+- [x] **Scheduler double-tick** — two concurrent scheduler evaluations of the same due schedule; assert exactly one job is enqueued and `next_run_at` advances exactly once.
+- [x] **Expiry sweep vs. live decision race** — a decide call and the expiry sweep both attempt to transition the same `pending` approval at nearly the same time; assert exactly one wins (CAS) and the other observes a no-op, never a `409` surfaced to the sweep.
+- [x] **Orphan sweep grace period** — an `approved` row within `hitl_orphan_sweep_grace_seconds` is untouched even though it matches every other orphan criterion.
 
 ## Failure-Injection Scenarios
 
 Complement unit tests with fault-injection coverage where practical (Phase 9):
 
-- [ ] **Database restart / connection drop** — handler mid-execution loses DB connection; assert retry/backoff or lease reclaim produces correct final state.
-- [ ] **Worker crash** — claimed job with no `complete()`/`fail()`; assert lease-expired reclaim and idempotent re-execution.
-- [ ] **Scheduler crash** — mid-tick between enqueue and schedule advance; assert idempotency key prevents duplicate job on recovery.
-- [ ] **Lease expiration** — artificially expire lease while handler still running (simulated); assert reclaim increments `attempt_count` and handler idempotency prevents double side effects.
-- [ ] **Optimistic concurrency conflict** — concurrent `complete()` and manual retry with stale version; assert exactly one succeeds.
-- [ ] **Duplicate retry execution** — manual `POST …/retry` on a job whose handler succeeds twice; assert idempotent outcome.
+- [x] **Database restart / connection drop** — handler mid-execution loses DB connection; assert retry/backoff or lease reclaim produces correct final state.
+- [x] **Worker crash** — claimed job with no `complete()`/`fail()`; assert lease-expired reclaim and idempotent re-execution.
+- [x] **Scheduler crash** — mid-tick between enqueue and schedule advance; assert idempotency key prevents duplicate job on recovery.
+- [x] **Lease expiration** — artificially expire lease while handler still running (simulated); assert reclaim increments `attempt_count` and handler idempotency prevents double side effects.
+- [x] **Optimistic concurrency conflict** — concurrent `complete()` and manual retry with stale version; assert exactly one succeeds.
+- [x] **Duplicate retry execution** — manual `POST …/retry` on a job whose handler succeeds twice; assert idempotent outcome.
 
 ## Documentation
 
-- [ ] Document operator steps: enable flag, inspect seeded schedules, observe an expiry/cleanup/indexing job, retry a dead-lettered job.
-- [ ] Document dead-letter operational runbook per Part I § Operational Runbook — Dead-Letter Jobs (detect, inspect, investigate, retry criteria, permanent failure criteria, payload editing not supported).
-- [ ] Cross-reference which Epic 06/07/09 `TODO(epic-10):`/`TODO(epic-9):` markers this epic closes, and where in code they were removed.
+- [x] Document operator steps: enable flag, inspect seeded schedules, observe an expiry/cleanup/indexing job, retry a dead-lettered job.
+- [x] Document dead-letter operational runbook per Part I § Operational Runbook — Dead-Letter Jobs (detect, inspect, investigate, retry criteria, permanent failure criteria, payload editing not supported).
+- [x] Cross-reference which Epic 06/07/09 `TODO(epic-10):`/`TODO(epic-9):` markers this epic closes, and where in code they were removed.
 
 ## Testing
 
-- [ ] Integration test exercising each handler end-to-end.
-- [ ] Eval cases pass in CI when the flag is enabled.
+- [x] Integration test exercising each handler end-to-end.
+- [x] Eval cases pass in CI when the flag is enabled.
 
 **Verify**
 
@@ -1976,8 +1977,8 @@ Complement unit tests with fault-injection coverage where practical (Phase 9):
 
 **Exit criteria**
 
-- [ ] Reference scenario tests pass.
-- [ ] Adversarial scenario tests pass.
+- [x] Reference scenario tests pass.
+- [x] Adversarial scenario tests pass.
 - [ ] User confirmation to proceed to Phase 10.
 
 **Rollback**
@@ -2189,13 +2190,13 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 - [ ] All Part I architectural invariants preserved (including handler idempotency and transaction boundaries).
 - [x] Public APIs frozen after Phase 1.
-- [ ] Claim-and-lease queue, worker, and scheduler operational under genuine concurrency (verified, not assumed).
-- [ ] HITL approval-timeout enforcement operational on both surfaces; orphaned-snapshot sweep resumes or fail-safes crash-orphaned approvals.
+- [x] Claim-and-lease queue, worker, and scheduler operational under genuine concurrency (verified, not assumed).
+- [x] HITL approval-timeout enforcement operational on both surfaces; orphaned-snapshot sweep resumes or fail-safes crash-orphaned approvals.
 - [x] Workflow run retention cleanup enforces `workflow_run_retention_days`.
 - [x] RAG queue-backed indexing available as an opt-in alternative to the unchanged synchronous default.
-- [ ] Scheduled evaluation runs available, disabled by default.
+- [x] Scheduled evaluation runs available, disabled by default.
 - [ ] Jobs REST API and frontend dashboard operational, including manual dead-letter retry.
-- [ ] Reference scenarios and adversarial/concurrency eval coverage shipped.
+- [x] Reference scenarios and adversarial/concurrency eval coverage shipped.
 - [x] Job-scoped tracing attributes present on every dispatch.
 - [ ] `BACKGROUND_JOBS_ENABLED=false` preserves Epic 09 behaviour.
 - [ ] Backend coverage ≥80% on `app/ai/jobs/`.
@@ -2225,6 +2226,17 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 | `app/routers/health.py`                                    | modify | Adapter  | 7                |
 | `app/ai/observability/tracing/spans.py`                    | modify | Core     | 8                |
 | `app/ai/observability/metrics/instruments.py`              | modify | Core     | 8                |
+| `app/ai/evaluation/jobs_scenarios.py`                      | create | Core     | 9                |
+| `app/ai/evaluation/datasets.py`                            | modify | Core     | 9                |
+| `app/ai/evaluation/runners.py`                             | modify | Core     | 9                |
+| `app/ai/evaluation/cli.py`                                 | modify | Core     | 9                |
+| `app/ai/evaluation/report.py`                              | modify | Core     | 9                |
+| `tests/data/evaluation/sample.yaml`                        | modify | Tests    | 9                |
+| `tests/ai/jobs/scenario_helpers.py`                        | create | Tests    | 9                |
+| `tests/ai/jobs/test_reference_scenarios.py`                | create | Tests    | 9                |
+| `tests/ai/jobs/test_adversarial_scenarios.py`              | create | Tests    | 9                |
+| `tests/ai/evaluation/test_jobs_runner.py`                  | create | Tests    | 9                |
+| `backend-python/README.md`                                 | modify | Docs     | 9                |
 | `tests/ai/jobs/**`                                         | create | Tests    | 1–9              |
 | `tests/ai/rag/test_queue_indexing_runner.py`               | create | Tests    | 5                |
 | `tests/ai/workflow/test_crash_recovery.py`                 | modify | Tests    | 4                |
@@ -2241,6 +2253,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.10    | 2026-08-13 | Part II Phase 9 complete — `--level jobs` eval (`JobsEvalRunner`, `jobs_scenarios.py`, six cases in `sample.yaml`), `tests/ai/jobs/test_reference_scenarios.py` (6/6), `tests/ai/jobs/test_adversarial_scenarios.py` (12/12), `tests/ai/evaluation/test_jobs_runner.py`, README operator steps + dead-letter runbook, verify `pytest tests/ai/jobs/test_reference_scenarios.py tests/ai/jobs/test_adversarial_scenarios.py` (25/25) + `--level jobs` (6/6 with `BACKGROUND_JOBS_ENABLED=true`). |
 | 3.9     | 2026-08-12 | Part II Phase 8 complete — `job_span`/`record_job_dispatch_outcome` in `spans.py`, six job metrics in `instruments.py` (`jobs_enqueued_total`, `jobs_completed_total`, `job_retries_total`, `jobs_pending_count`, `jobs_dead_letter_count`, `job_duration_ms`), `JobWorker` dispatch instrumentation + log context, `PostgresJobQueue` metric hooks, `tests/ai/jobs/test_jobs_observability.py` (8/8), combined verify `tests/ai/jobs/test_jobs_observability.py tests/ai/observability/` (87/87). |
 | 3.8     | 2026-08-12 | Part II Phase 7 complete — `app/schemas/jobs.py`, `app/routers/jobs.py` (list/detail/retry/schedules + payload/result redaction), health extension (`background_jobs_enabled`, `background_jobs_pending_count`, `background_jobs_dead_letter_count`), `PostgresJobQueue.retry_dead_letter`/`count_pending`/`count_dead_letter`, `get_job_queue`/`get_job_schedule_store`, `tests/test_jobs_router.py` (13/13). |
 | 3.7     | 2026-08-12 | Part II Phase 6 complete — `scheduled_eval.py` handler (`scheduled_evaluation_run`), `evaluation_schedule_enabled`/`evaluation_schedule_level` config, startup schedule reconciliation (`reconcile_evaluation_schedule_status`), `PostgresJobScheduleStore.get_by_name`/`set_status`, `tests/ai/jobs/handlers/test_scheduled_eval.py` (7/7). |

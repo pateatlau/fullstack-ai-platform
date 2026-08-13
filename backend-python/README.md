@@ -585,13 +585,65 @@ HITL cases in `tests/data/evaluation/sample.yaml` are **skipped** (not failed) w
 | Multiple approvals per conversation | same |
 | Nested parallel workflow approvals | same |
 | Streaming disconnect before decide | same |
-| Expired approvals (timeout enforcement) | **Deferred** — `hitl_approval_timeout_hours` has no enforcement until Epic 10 |
-| Server restart mid-resume | **Deferred** — resumable-but-stuck rows until Epic 10 background jobs |
+| Expired approvals (timeout enforcement) | `tests/ai/jobs/test_reference_scenarios.py`, `tests/ai/jobs/test_adversarial_scenarios.py` |
+| Server restart mid-resume | `tests/ai/jobs/handlers/test_hitl_orphan_sweep.py`, `tests/ai/jobs/test_reference_scenarios.py` |
 
 **Verify reference plugins:**
 
 ```bash
 pytest tests/ai/plugins/test_reference_plugins.py
+```
+
+### Background Jobs reference scenarios (V2 Epic 10)
+
+Background Jobs close deferred gaps from Epic 06 (workflow run retention), Epic 07 (scheduled evaluation), and Epic 09 (HITL approval timeout enforcement on both surfaces, orphaned approval snapshot sweep). Queue-backed RAG indexing is available as an opt-in alternative to synchronous indexing.
+
+**Enable Background Jobs (operator steps):**
+
+1. Set `BACKGROUND_JOBS_ENABLED=true` in `.env`.
+2. Run migrations (`alembic upgrade head`) so `background_jobs` and `background_job_schedules` exist.
+3. Restart the API process — the worker and scheduler loops start automatically when the flag is on.
+4. Inspect seeded schedules: `GET /api/jobs/schedules` (or wait for the frontend Jobs dashboard in Epic 10 Phase 10).
+5. Observe handler activity via `GET /api/jobs?status=succeeded` filtered by `job_type` (`hitl_approval_expiry_sweep`, `hitl_orphaned_snapshot_sweep`, `workflow_run_retention_cleanup`, `rag_document_indexing`, `scheduled_evaluation_run`).
+6. Retry a dead-lettered job after fixing the root cause: `POST /api/jobs/{id}/retry` (only when `status=dead_letter`).
+
+When `BACKGROUND_JOBS_ENABLED=false` (default), Epic 09 HITL/chat/workflow behaviour is unchanged and the Jobs REST API returns `503 feature_disabled`.
+
+**Jobs eval level** (requires `BACKGROUND_JOBS_ENABLED=true` and Postgres; `rag_indexing` also needs pgvector):
+
+```bash
+uv run python -m app.ai.evaluation.cli --level jobs
+```
+
+Jobs cases in `tests/data/evaluation/sample.yaml` are **skipped** (not failed) when `BACKGROUND_JOBS_ENABLED=false`. `--level all` does not include jobs cases — run `--level jobs` explicitly.
+
+**Adversarial coverage (Phase 9):**
+
+| Scenario | Covered by |
+| -------- | ---------- |
+| Retry exhaustion → dead-letter → manual retry succeeds | `tests/ai/jobs/test_adversarial_scenarios.py` |
+| Worker crash mid-job → lease reclaim → no double-execution | same |
+| Concurrent claim race (N workers) | same |
+| Scheduler double-tick idempotency | same |
+| Expiry sweep vs. live decide race (CAS) | same |
+| Orphan sweep grace period | same |
+
+**Dead-letter operational runbook:**
+
+1. **Detect** — monitor `background_jobs_dead_letter_count` on `GET /api/health` or observability dashboards.
+2. **Inspect** — `GET /api/jobs?status=dead_letter`; read `job_type`, `attempt_count`, `last_error` (payload/result are redacted).
+3. **Investigate** — classify transient infra failure vs. poison job (`NonRetryableJobError`, unsupported payload version, deleted resource).
+4. **Remediate** — fix config, restore dependencies, or deploy a handler fix.
+5. **Retry or discard** — `POST /api/jobs/{id}/retry` resets `attempt_count=0` when the root cause is resolved; leave in `dead_letter` if permanently failed.
+
+**When NOT to retry:** poison jobs and permanently deleted resources — retrying will dead-letter again immediately. **Payload editing is not supported in V2** (no `PATCH /api/jobs/{id}`); enqueue a new job manually in a future epic or fix the upstream enqueue path.
+
+**Prior-epic TODO closure:** Epic 10 removed the deferred markers for HITL approval timeout (Epic 09), workflow run retention (Epic 06), scheduled evaluation (Epic 07), HITL orphan sweep/resume (Epic 09), and queue-backed RAG indexing. Handlers live under `app/ai/jobs/handlers/`.
+
+**Verify reference scenarios:**
+
+```bash
+pytest tests/ai/jobs/test_reference_scenarios.py tests/ai/jobs/test_adversarial_scenarios.py
 ```
 
 ### Module boundaries

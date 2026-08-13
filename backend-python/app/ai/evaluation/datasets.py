@@ -10,7 +10,17 @@ from typing import Any, Literal
 
 import yaml
 
-EvalLevel = Literal["prompt", "retrieval", "e2e", "agent", "workflow", "plugin", "hitl"]
+EvalLevel = Literal[
+    "prompt", "retrieval", "e2e", "agent", "workflow", "plugin", "hitl", "jobs"
+]
+JobScenario = Literal[
+    "hitl_expiry_agent",
+    "hitl_expiry_workflow",
+    "orphan_sweep_resume",
+    "workflow_retention",
+    "rag_indexing",
+    "scheduled_eval",
+]
 HitlSurface = Literal["agent", "workflow"]
 HitlDecision = Literal["approve", "approve_with_edits", "reject"]
 AnswerMatchMode = Literal["exact", "contains", "fuzzy"]
@@ -61,6 +71,8 @@ class EvalCase:
     hitl_decision: HitlDecision | None = None
     hitl_edited_calls: tuple[dict[str, object], ...] = ()
     hitl_edited_arguments: dict[str, object] = field(default_factory=dict)
+    job_type: str | None = None
+    job_scenario: JobScenario | None = None
 
 
 @dataclass(frozen=True)
@@ -159,6 +171,8 @@ def _parse_case(raw: dict[str, Any], *, index: int) -> EvalCase:
         return _parse_plugin_case(raw, case_id=case_id)
     if level == "hitl":
         return _parse_hitl_case(raw, case_id=case_id)
+    if level == "jobs":
+        return _parse_jobs_case(raw, case_id=case_id)
     return _parse_workflow_case(raw, case_id=case_id)
 
 
@@ -369,6 +383,30 @@ def _parse_plugin_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
         workflow_fixture=workflow_case.workflow_fixture,
         trigger_input=workflow_case.trigger_input,
         expected_terminal_status=workflow_case.expected_terminal_status,
+    )
+
+
+def _parse_jobs_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
+    from app.ai.evaluation.jobs_scenarios import _JOBS_SCENARIOS
+
+    job_type = _require_str(raw, "job_type", case_id=case_id)
+    job_scenario = _require_str(raw, "job_scenario", case_id=case_id)
+    if job_scenario not in _JOBS_SCENARIOS:
+        allowed = ", ".join(sorted(_JOBS_SCENARIOS))
+        raise EvalDatasetError(
+            f"Case '{case_id}': job_scenario must be one of: {allowed}."
+        )
+    expected_type = _JOBS_SCENARIOS[job_scenario]
+    if job_type != expected_type:
+        raise EvalDatasetError(
+            f"Case '{case_id}': job_type {job_type!r} does not match "
+            f"job_scenario {job_scenario!r} (expected {expected_type!r})."
+        )
+    return EvalCase(
+        id=case_id,
+        level="jobs",
+        job_type=job_type,
+        job_scenario=job_scenario,  # type: ignore[arg-type]
     )
 
 
@@ -700,9 +738,10 @@ def _require_level(raw: dict[str, Any], *, index: int) -> EvalLevel:
         "workflow",
         "plugin",
         "hitl",
+        "jobs",
     }:
         raise EvalDatasetError(
             f"Case at index {index}: level must be prompt, retrieval, e2e, agent, "
-            "workflow, plugin, or hitl."
+            "workflow, plugin, hitl, or jobs."
         )
     return value  # type: ignore[return-value]
