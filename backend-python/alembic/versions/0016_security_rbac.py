@@ -108,13 +108,13 @@ def upgrade() -> None:
         sa.column("permission_id", _UUID),
     )
 
-    role_ids = {
+    role_ids: dict[str, uuid.UUID] = {
         "member": uuid.uuid4(),
         "operator": uuid.uuid4(),
         "admin": uuid.uuid4(),
         "owner": uuid.uuid4(),
     }
-    role_rows = [
+    role_rows: list[dict[str, object]] = [
         {"id": role_ids["member"], "name": "member", "description": "Default authenticated user role", "is_system": True},
         {"id": role_ids["operator"], "name": "operator", "description": "Operational power user", "is_system": True},
         {"id": role_ids["admin"], "name": "admin", "description": "Administrative operator", "is_system": True},
@@ -122,7 +122,7 @@ def upgrade() -> None:
     ]
     op.execute(roles.insert().values(role_rows))
 
-    permission_ids = {
+    permission_ids: dict[str, uuid.UUID] = {
         "*": uuid.uuid4(),
         "rbac:manage": uuid.uuid4(),
         "audit:view": uuid.uuid4(),
@@ -136,7 +136,7 @@ def upgrade() -> None:
         "workflow:view_all": uuid.uuid4(),
         "mcp:manage": uuid.uuid4(),
     }
-    permission_rows = [
+    permission_rows: list[dict[str, object]] = [
         {"id": permission_ids["*"], "key": "*", "display_name": "All Permissions", "description": "Wildcard permission for owners", "category": "rbac", "risk_level": "high", "reserved": False},
         {"id": permission_ids["rbac:manage"], "key": "rbac:manage", "display_name": "Manage Roles", "description": "Manage RBAC assignments", "category": "rbac", "risk_level": "high", "reserved": False},
         {"id": permission_ids["audit:view"], "key": "audit:view", "display_name": "View Audit Log", "description": "View audit events", "category": "audit", "risk_level": "medium", "reserved": False},
@@ -152,14 +152,14 @@ def upgrade() -> None:
     ]
     op.execute(permissions.insert().values(permission_rows))
 
-    mapping = {
+    mapping: dict[str, list[str]] = {
         "member": ["tools:execute"],
         "operator": ["tools:execute", "tools:execute:destructive", "jobs:view_all", "jobs:retry", "policy:view", "audit:view"],
         "admin": ["tools:execute", "tools:execute:destructive", "jobs:view_all", "jobs:retry", "policy:view", "audit:view", "rbac:manage", "approvals:decide_all"],
         "owner": ["*", "rbac:manage", "audit:view", "policy:view", "jobs:view_all", "jobs:retry", "approvals:decide_all", "tools:execute", "tools:execute:destructive", "plugins:manage", "workflow:view_all", "mcp:manage"],
     }
 
-    values = []
+    values: list[dict[str, object]] = []
     for role_name, permission_keys in mapping.items():
         role_id = role_ids[role_name]
         for permission_key in permission_keys:
