@@ -2,7 +2,7 @@
 epic: v2-10
 title: Background Jobs
 status: in_progress
-version: 3.10
+version: 3.11
 depends_on: [v2-02, v2-06, v2-07, v2-09]
 provides:
   [
@@ -1286,7 +1286,7 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | Eval CLI                 | 15/15 `--level all`; 5/5 `--level hitl`; 3/3 `--level plugin`; regression clean |
 | Feature Flag Regression  | Not re-run in Phase 0 (Epic 09 Phase 10: 1912 passed with `HITL_ENABLED=false`)   |
 | Human-in-the-Loop        | Epic 09 Phases 0–10 **Completed** — release summary published                   |
-| Background Jobs          | Phase 9 **Completed** (2026-08-13) — `--level jobs` eval (`JobsEvalRunner`, six reference cases), `tests/ai/jobs/test_reference_scenarios.py` (6/6), `tests/ai/jobs/test_adversarial_scenarios.py` (12/12), README operator steps + dead-letter runbook; Phases 0–8 deliverables retained (queue/worker/scheduler, five handlers, REST API, observability) |
+| Background Jobs          | Phase 10 **Completed** (2026-08-13) — `jobsClient.ts`, `JobsPage.tsx` (jobs/schedules tabs, filters, dead-letter retry), nav/route gated on `background_jobs_enabled`, `JobsPage.test.tsx` + `jobsClient.test.ts` (14/14); Phases 0–9 deliverables retained |
 
 ---
 
@@ -1304,10 +1304,10 @@ _Re-verified in Epic 10 Phase 0 (2026-08-12); source of truth: [post-mvp-v2-epic
 | 7     | Jobs REST API & Health                         | S      | ✅ Completed (2026-08-12) |
 | 8     | Background Jobs Observability                  | S      | ✅ Completed (2026-08-12) |
 | 9     | Reference Scenarios & Eval Cases               | M      | ✅ Completed (2026-08-13) |
-| 10    | Frontend Jobs & Schedules Dashboard            | S      | Not Started |
+| 10    | Frontend Jobs & Schedules Dashboard            | S      | ✅ Completed (2026-08-13) |
 | 11    | Validation & Release                           | M      | Not Started |
 
-**Epic 10 overall:** Phase 9 complete. Next gate: user authorization to begin Phase 10.
+**Epic 10 overall:** Phase 10 complete. Next gate: user authorization to begin Phase 11.
 
 ---
 
@@ -1979,7 +1979,7 @@ Complement unit tests with fault-injection coverage where practical (Phase 9):
 
 - [x] Reference scenario tests pass.
 - [x] Adversarial scenario tests pass.
-- [ ] User confirmation to proceed to Phase 10.
+- [x] User confirmation to proceed to Phase 10.
 
 **Rollback**
 
@@ -1990,6 +1990,7 @@ Complement unit tests with fault-injection coverage where practical (Phase 9):
 # Phase 10 — Frontend Jobs & Schedules Dashboard
 
 **Effort:** S
+**Status:** Completed (2026-08-13)
 
 **Objective**
 
@@ -2007,20 +2008,20 @@ Add a minimal read-only frontend view of job/schedule state with a manual retry 
 
 ## API Client
 
-- [ ] `GET /api/jobs` (list, filters) and `GET /api/jobs/{id}` (detail).
-- [ ] `GET /api/jobs/schedules`.
-- [ ] `POST /api/jobs/{id}/retry`.
-- [ ] Handle `503 feature_disabled` with a friendly empty state.
+- [x] `GET /api/jobs` (list, filters) and `GET /api/jobs/{id}` (detail).
+- [x] `GET /api/jobs/schedules`.
+- [x] `POST /api/jobs/{id}/retry`.
+- [x] Handle `503 feature_disabled` with a friendly empty state.
 
 ## Jobs & Schedules UI
 
-- [ ] Jobs tab: filterable list (`status`, `job_type`), showing attempt/max-attempts, timestamps, `last_error` (truncated), and a retry button visible only on `dead_letter` rows.
-- [ ] Schedules tab: read-only list of `background_job_schedules` (`name`, `job_type`, `interval_seconds`, `next_run_at`, `status`).
-- [ ] Route + nav entry gated on `background_jobs_enabled` (mirroring Epic 09's `hitl_enabled`-gated nav link).
+- [x] Jobs tab: filterable list (`status`, `job_type`), showing attempt/max-attempts, timestamps, `last_error` (truncated), and a retry button visible only on `dead_letter` rows.
+- [x] Schedules tab: read-only list of `background_job_schedules` (`name`, `job_type`, `interval_seconds`, `next_run_at`, `status`).
+- [x] Route + nav entry gated on `background_jobs_enabled` (mirroring Epic 09's `hitl_enabled`-gated nav link).
 
 ## Testing
 
-- [ ] MSW/mock tests for list, detail, retry, and disabled states.
+- [x] MSW/mock tests for list, detail, retry, and disabled states.
 
 **Verify**
 
@@ -2033,7 +2034,7 @@ Add a minimal read-only frontend view of job/schedule state with a manual retry 
 
 **Exit criteria**
 
-- [ ] Frontend tests pass.
+- [x] Frontend tests pass.
 - [ ] User confirmation to proceed to Phase 11.
 
 **Rollback**
@@ -2195,7 +2196,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 - [x] Workflow run retention cleanup enforces `workflow_run_retention_days`.
 - [x] RAG queue-backed indexing available as an opt-in alternative to the unchanged synchronous default.
 - [x] Scheduled evaluation runs available, disabled by default.
-- [ ] Jobs REST API and frontend dashboard operational, including manual dead-letter retry.
+- [x] Jobs REST API and frontend dashboard operational, including manual dead-letter retry.
 - [x] Reference scenarios and adversarial/concurrency eval coverage shipped.
 - [x] Job-scoped tracing attributes present on every dispatch.
 - [ ] `BACKGROUND_JOBS_ENABLED=false` preserves Epic 09 behaviour.
@@ -2245,6 +2246,8 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 | `frontend/src/api/jobsClient.ts`                           | create | Frontend | 10               |
 | `frontend/src/types/jobs.ts`                               | create | Frontend | 10               |
 | `frontend/src/pages/JobsPage.tsx`                          | create | Frontend | 10               |
+| `frontend/src/pages/JobsPage.test.tsx`                     | create | Frontend | 10               |
+| `frontend/src/api/jobsClient.test.ts`                      | create | Frontend | 10               |
 | `docs/releases/post-mvp-v2-epic10-release-summary.md`      | create | Docs     | 11               |
 
 ---
@@ -2253,6 +2256,7 @@ metrics  (aggregated by job_type / outcome — never by job_id)
 
 | Version | Date       | Changes                                                                                          |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.11    | 2026-08-13 | Part II Phase 10 complete — `jobsClient.ts`, `types/jobs.ts`, `JobsPage.tsx` (jobs/schedules tabs, status/type filters, dead-letter retry, `feature_disabled` empty state), route `/jobs` + nav gated on `background_jobs_enabled`, `JobsPage.test.tsx` + `jobsClient.test.ts` (14/14), verify frontend lint + build. |
 | 3.10    | 2026-08-13 | Part II Phase 9 complete — `--level jobs` eval (`JobsEvalRunner`, `jobs_scenarios.py`, six cases in `sample.yaml`), `tests/ai/jobs/test_reference_scenarios.py` (6/6), `tests/ai/jobs/test_adversarial_scenarios.py` (12/12), `tests/ai/evaluation/test_jobs_runner.py`, README operator steps + dead-letter runbook, verify `pytest tests/ai/jobs/test_reference_scenarios.py tests/ai/jobs/test_adversarial_scenarios.py` (25/25) + `--level jobs` (6/6 with `BACKGROUND_JOBS_ENABLED=true`). |
 | 3.9     | 2026-08-12 | Part II Phase 8 complete — `job_span`/`record_job_dispatch_outcome` in `spans.py`, six job metrics in `instruments.py` (`jobs_enqueued_total`, `jobs_completed_total`, `job_retries_total`, `jobs_pending_count`, `jobs_dead_letter_count`, `job_duration_ms`), `JobWorker` dispatch instrumentation + log context, `PostgresJobQueue` metric hooks, `tests/ai/jobs/test_jobs_observability.py` (8/8), combined verify `tests/ai/jobs/test_jobs_observability.py tests/ai/observability/` (87/87). |
 | 3.8     | 2026-08-12 | Part II Phase 7 complete — `app/schemas/jobs.py`, `app/routers/jobs.py` (list/detail/retry/schedules + payload/result redaction), health extension (`background_jobs_enabled`, `background_jobs_pending_count`, `background_jobs_dead_letter_count`), `PostgresJobQueue.retry_dead_letter`/`count_pending`/`count_dead_letter`, `get_job_queue`/`get_job_schedule_store`, `tests/test_jobs_router.py` (13/13). |
