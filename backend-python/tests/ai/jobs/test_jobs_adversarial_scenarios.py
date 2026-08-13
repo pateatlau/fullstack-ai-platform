@@ -15,7 +15,12 @@ from sqlalchemy.pool import NullPool
 
 from app.ai.deps import get_job_queue
 from app.ai.hitl.exceptions import ApprovalExpiredError
-from app.ai.hitl.models import ApprovalResult, ApprovalStatus, ProposedToolCall
+from app.ai.hitl.models import (
+    AgentToolApproval,
+    ApprovalResult,
+    ApprovalStatus,
+    ProposedToolCall,
+)
 from app.ai.hitl.store import AgentToolApprovalStore
 from app.ai.jobs.exceptions import JobConcurrencyError
 from app.ai.jobs.models import BackgroundJob, JobResult, JobStatus
@@ -47,8 +52,6 @@ async def test_retry_exhaustion_manual_retry_then_succeeds(
 ) -> None:
     await require_background_jobs_tables(db_session)
     settings = job_settings(background_jobs_default_max_attempts=2)
-    queue, worker, _factory = make_queue_worker(db_session, settings)
-    registry = worker._registry  # type: ignore[attr-defined]
     calls = {"count": 0}
 
     async def flaky_then_success(job: BackgroundJob) -> JobResult:
@@ -57,7 +60,13 @@ async def test_retry_exhaustion_manual_retry_then_succeeds(
             raise RuntimeError("transient")
         return JobResult(summary="recovered")
 
-    registry.register("fixture_flaky", flaky_then_success)
+    queue, worker, _factory = make_queue_worker(
+        db_session,
+        settings,
+        register_handlers=lambda registry: registry.register(
+            "fixture_flaky", flaky_then_success
+        ),
+    )
 
     job = await queue.enqueue(
         job_type="fixture_flaky",
@@ -315,13 +324,17 @@ async def test_expiry_sweep_race_with_decide_only_one_wins(db_session) -> None:
         expire_task(),
         return_exceptions=True,
     )
+    for item in results:
+        if isinstance(item, Exception) and not isinstance(item, ApprovalExpiredError):
+            raise item
+
     transitioned = sum(
         1
         for item in results
         if isinstance(item, ApprovalResult)
         or (
-            hasattr(item, "status")
-            and getattr(item, "status") is ApprovalStatus.EXPIRED
+            isinstance(item, AgentToolApproval)
+            and item.status is ApprovalStatus.EXPIRED
         )
     )
     assert transitioned == 1
@@ -398,8 +411,6 @@ async def test_orphan_sweep_grace_period_leaves_row_untouched(db_session) -> Non
 async def test_handler_db_failure_retries_then_succeeds(db_session) -> None:
     await require_background_jobs_tables(db_session)
     settings = job_settings(background_jobs_default_max_attempts=3)
-    queue, worker, _factory = make_queue_worker(db_session, settings)
-    registry = worker._registry  # type: ignore[attr-defined]
     calls = {"count": 0}
 
     async def flaky_db_handler(job: BackgroundJob) -> JobResult:
@@ -408,7 +419,13 @@ async def test_handler_db_failure_retries_then_succeeds(db_session) -> None:
             raise RuntimeError("connection dropped")
         return JobResult(summary="ok")
 
-    registry.register("fixture_db_flaky", flaky_db_handler)
+    queue, worker, _factory = make_queue_worker(
+        db_session,
+        settings,
+        register_handlers=lambda registry: registry.register(
+            "fixture_db_flaky", flaky_db_handler
+        ),
+    )
     job = await queue.enqueue(
         job_type="fixture_db_flaky",
         payload={"version": 1},
@@ -561,8 +578,6 @@ async def test_complete_and_retry_stale_version_only_one_succeeds(
 async def test_duplicate_retry_execution_is_idempotent(db_session) -> None:
     await require_background_jobs_tables(db_session)
     settings = job_settings(background_jobs_default_max_attempts=1)
-    queue, worker, _factory = make_queue_worker(db_session, settings)
-    registry = worker._registry  # type: ignore[attr-defined]
     side_effects = {"count": 0}
     applied = {"done": False}
 
@@ -573,7 +588,13 @@ async def test_duplicate_retry_execution_is_idempotent(db_session) -> None:
             side_effects["count"] += 1
         return JobResult(summary="already done")
 
-    registry.register("fixture_idempotent", idempotent_handler)
+    queue, worker, _factory = make_queue_worker(
+        db_session,
+        settings,
+        register_handlers=lambda registry: registry.register(
+            "fixture_idempotent", idempotent_handler
+        ),
+    )
 
     job = await queue.enqueue(
         job_type="fixture_idempotent",

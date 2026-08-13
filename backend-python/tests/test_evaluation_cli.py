@@ -153,9 +153,34 @@ async def test_cli_level_jobs_skips_when_flag_off(
     get_settings.cache_clear()
     monkeypatch.setenv("BACKGROUND_JOBS_ENABLED", "false")
 
+    try:
+        exit_code = await run_eval(_args(level="jobs", output=output))
+
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        assert payload["results"]
+        assert all(result["skipped"] for result in payload["results"])
+        assert exit_code == 0
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_cli_level_jobs_skips_postgres_probe_when_flag_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "jobs-no-db-report.json"
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    get_settings.cache_clear()
+    monkeypatch.setenv("BACKGROUND_JOBS_ENABLED", "false")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://invalid:invalid@127.0.0.1:59999/nodb",
+    )
+
     exit_code = await run_eval(_args(level="jobs", output=output))
 
     payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["run_environment"]["postgres_available"] is False
     assert payload["results"]
     assert all(result["skipped"] for result in payload["results"])
     assert exit_code == 0

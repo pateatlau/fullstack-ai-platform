@@ -7,11 +7,11 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.ai.agent.executor.agent_executor import AgentExecutor
 from app.ai.agent.executor.result_aggregator import AggregatedToolResults
 from app.ai.agent.models.response import AgentResponse
 from app.ai.agent.models.state import AgentExecutionState, AgentExecutionStatus
@@ -21,7 +21,7 @@ from app.ai.deps import (
     build_workflow_manager_for_session,
 )
 from app.ai.documents.pipeline import IngestionPipeline
-from app.ai.evaluation.datasets import EvalCase
+from app.ai.evaluation.datasets import EvalCase, JOBS_SCENARIO_JOB_TYPES
 from app.ai.hitl.models import ApprovalStatus, ProposedToolCall
 from app.ai.hitl.service import AgentApprovalService
 from app.ai.hitl.store import AgentToolApprovalStore
@@ -50,15 +50,6 @@ from app.db.identity import SqlUserStore
 from app.db.models import AgentToolApprovalRecord, ChatMessage, ChatSession, User
 from app.db.models import WorkflowRunRecord
 
-_JOBS_SCENARIOS: dict[str, str] = {
-    "hitl_expiry_agent": "hitl_approval_expiry_sweep",
-    "hitl_expiry_workflow": "hitl_approval_expiry_sweep",
-    "orphan_sweep_resume": "hitl_orphaned_snapshot_sweep",
-    "workflow_retention": "workflow_run_retention_cleanup",
-    "rag_indexing": "rag_document_indexing",
-    "scheduled_eval": "scheduled_evaluation_run",
-}
-
 _EMBED_DIMENSIONS = 1536
 
 
@@ -80,7 +71,7 @@ class JobsScenarioOutcome:
 
 def jobs_scenario_job_type(scenario: str) -> str:
     try:
-        return _JOBS_SCENARIOS[scenario]
+        return JOBS_SCENARIO_JOB_TYPES[scenario]  # type: ignore[index]
     except KeyError as exc:
         raise ValueError(f"unknown job_scenario {scenario!r}") from exc
 
@@ -403,27 +394,45 @@ async def _run_orphan_sweep_resume(
             "hitl_orphan_sweep_grace_seconds": 60,
         }
     )
-    executor = build_hitl_resume_executor(eval_settings)
 
-    async def _stub_resume(*_args, **_kwargs):
+    async def _stub_execute_approved_calls(
+        _calls: list[ProposedToolCall],
+        *,
+        execution_id: str,
+        tool_context: object,
+        scratchpad: object,
+        stream_publisher: object,
+    ) -> AggregatedToolResults:
+        del _calls, execution_id, tool_context, scratchpad, stream_publisher
+        return AggregatedToolResults(records=[])
+
+    async def _stub_resume(*_args: object, **_kwargs: object) -> AgentResponse:
         return AgentResponse(content="Recovered.", finish_reason="stop")
 
-    executor.resume_from_approval = _stub_resume  # type: ignore[method-assign]
+    def _build_eval_approval_service(db_session: AsyncSession) -> AgentApprovalService:
+        service = build_agent_approval_service_for_session(db_session, eval_settings)
+        service._execute_approved_calls = _stub_execute_approved_calls  # type: ignore[method-assign]
+        return service
 
-    with patch.object(
-        AgentApprovalService,
-        "_execute_approved_calls",
-        AsyncMock(return_value=AggregatedToolResults(records=[])),
-    ):
-        result = await hitl_orphaned_snapshot_sweep(
-            _sample_job(job_type="hitl_orphaned_snapshot_sweep"),
-            settings=eval_settings,
-            session_factory=session_factory,
-            build_approval_service=lambda db_session: (
-                build_agent_approval_service_for_session(db_session, eval_settings)
-            ),
-            build_resume_executor=lambda _session, _service: executor,
+    def _build_eval_resume_executor(
+        db_session: AsyncSession,
+        service: AgentApprovalService,
+    ) -> AgentExecutor:
+        del db_session
+        executor = build_hitl_resume_executor(
+            eval_settings,
+            approval_service=service,
         )
+        executor.resume_from_approval = _stub_resume  # type: ignore[method-assign]
+        return executor
+
+    result = await hitl_orphaned_snapshot_sweep(
+        _sample_job(job_type="hitl_orphaned_snapshot_sweep"),
+        settings=eval_settings,
+        session_factory=session_factory,
+        build_approval_service=_build_eval_approval_service,
+        build_resume_executor=_build_eval_resume_executor,
+    )
     if result.counts.get("resumed", 0) < 1:
         return JobsScenarioOutcome(
             passed=False,

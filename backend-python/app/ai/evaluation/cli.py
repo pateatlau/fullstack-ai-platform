@@ -228,7 +228,7 @@ async def _run_with_session(
 
     db_levels = levels & {"retrieval", "e2e", "workflow"}
     hitl_needs_postgres = "hitl" in levels and settings.workflow_engine_enabled
-    jobs_needs_postgres = "jobs" in levels
+    jobs_needs_postgres = "jobs" in levels and settings.background_jobs_enabled
     if db_levels or "plugin" in levels or hitl_needs_postgres or jobs_needs_postgres:
         postgres_ok, pgvector_ok, session, engine = await _probe_postgres(settings)
 

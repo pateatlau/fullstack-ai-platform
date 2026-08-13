@@ -585,8 +585,8 @@ HITL cases in `tests/data/evaluation/sample.yaml` are **skipped** (not failed) w
 | Multiple approvals per conversation | same |
 | Nested parallel workflow approvals | same |
 | Streaming disconnect before decide | same |
-| Expired approvals (timeout enforcement) | `tests/ai/jobs/test_reference_scenarios.py`, `tests/ai/jobs/test_adversarial_scenarios.py` |
-| Server restart mid-resume | `tests/ai/jobs/handlers/test_hitl_orphan_sweep.py`, `tests/ai/jobs/test_reference_scenarios.py` |
+| Expired approvals (timeout enforcement) | `tests/ai/jobs/test_jobs_reference_scenarios.py`, `tests/ai/jobs/test_jobs_adversarial_scenarios.py` |
+| Server restart mid-resume | `tests/ai/jobs/handlers/test_hitl_orphan_sweep.py`, `tests/ai/jobs/test_jobs_reference_scenarios.py` |
 
 **Verify reference plugins:**
 
@@ -621,7 +621,7 @@ Jobs cases in `tests/data/evaluation/sample.yaml` are **skipped** (not failed) w
 
 | Scenario | Covered by |
 | -------- | ---------- |
-| Retry exhaustion → dead-letter → manual retry succeeds | `tests/ai/jobs/test_adversarial_scenarios.py` |
+| Retry exhaustion → dead-letter → manual retry succeeds | `tests/ai/jobs/test_jobs_adversarial_scenarios.py` |
 | Worker crash mid-job → lease reclaim → no double-execution | same |
 | Concurrent claim race (N workers) | same |
 | Scheduler double-tick idempotency | same |
@@ -630,7 +630,7 @@ Jobs cases in `tests/data/evaluation/sample.yaml` are **skipped** (not failed) w
 
 **Dead-letter operational runbook:**
 
-1. **Detect** — monitor `background_jobs_dead_letter_count` on `GET /api/health` or observability dashboards.
+1. **Detect** — monitor `background_jobs_dead_letter_count` on `GET /api/health`, or the `jobs_dead_letter_count` observability metric on dashboards.
 2. **Inspect** — `GET /api/jobs?status=dead_letter`; read `job_type`, `attempt_count`, `last_error` (payload/result are redacted).
 3. **Investigate** — classify transient infra failure vs. poison job (`NonRetryableJobError`, unsupported payload version, deleted resource).
 4. **Remediate** — fix config, restore dependencies, or deploy a handler fix.
@@ -643,7 +643,7 @@ Jobs cases in `tests/data/evaluation/sample.yaml` are **skipped** (not failed) w
 **Verify reference scenarios:**
 
 ```bash
-pytest tests/ai/jobs/test_reference_scenarios.py tests/ai/jobs/test_adversarial_scenarios.py
+pytest tests/ai/jobs/test_jobs_reference_scenarios.py tests/ai/jobs/test_jobs_adversarial_scenarios.py
 ```
 
 ### Module boundaries

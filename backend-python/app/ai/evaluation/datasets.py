@@ -21,6 +21,14 @@ JobScenario = Literal[
     "rag_indexing",
     "scheduled_eval",
 ]
+JOBS_SCENARIO_JOB_TYPES: dict[JobScenario, str] = {
+    "hitl_expiry_agent": "hitl_approval_expiry_sweep",
+    "hitl_expiry_workflow": "hitl_approval_expiry_sweep",
+    "orphan_sweep_resume": "hitl_orphaned_snapshot_sweep",
+    "workflow_retention": "workflow_run_retention_cleanup",
+    "rag_indexing": "rag_document_indexing",
+    "scheduled_eval": "scheduled_evaluation_run",
+}
 HitlSurface = Literal["agent", "workflow"]
 HitlDecision = Literal["approve", "approve_with_edits", "reject"]
 AnswerMatchMode = Literal["exact", "contains", "fuzzy"]
@@ -387,16 +395,14 @@ def _parse_plugin_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
 
 
 def _parse_jobs_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
-    from app.ai.evaluation.jobs_scenarios import _JOBS_SCENARIOS
-
     job_type = _require_str(raw, "job_type", case_id=case_id)
     job_scenario = _require_str(raw, "job_scenario", case_id=case_id)
-    if job_scenario not in _JOBS_SCENARIOS:
-        allowed = ", ".join(sorted(_JOBS_SCENARIOS))
+    if job_scenario not in JOBS_SCENARIO_JOB_TYPES:
+        allowed = ", ".join(sorted(JOBS_SCENARIO_JOB_TYPES))
         raise EvalDatasetError(
             f"Case '{case_id}': job_scenario must be one of: {allowed}."
         )
-    expected_type = _JOBS_SCENARIOS[job_scenario]
+    expected_type = JOBS_SCENARIO_JOB_TYPES[job_scenario]  # type: ignore[index]
     if job_type != expected_type:
         raise EvalDatasetError(
             f"Case '{case_id}': job_type {job_type!r} does not match "
