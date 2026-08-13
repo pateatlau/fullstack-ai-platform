@@ -12,6 +12,7 @@ export function jsonHealthResponse(
   pluginsEnabled = false,
   hitlEnabled = false,
   hitlPendingApprovalsCount = 0,
+  backgroundJobsEnabled = false,
 ): Response {
   return new Response(
     JSON.stringify({
@@ -28,6 +29,7 @@ export function jsonHealthResponse(
       plugins_enabled: pluginsEnabled,
       hitl_enabled: hitlEnabled,
       hitl_pending_approvals_count: hitlPendingApprovalsCount,
+      background_jobs_enabled: backgroundJobsEnabled,
       capabilities: {
         by_provider: {
           openai: { supports_streaming: true, supports_tool_calling: true },
@@ -58,6 +60,7 @@ export function withChatPageFetchStubs(
     pluginsEnabled?: boolean
     hitlEnabled?: boolean
     hitlPendingApprovalsCount?: number
+    backgroundJobsEnabled?: boolean
   },
 ): ReturnType<typeof vi.fn> {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -76,6 +79,7 @@ export function withChatPageFetchStubs(
         options?.pluginsEnabled ?? false,
         options?.hitlEnabled ?? false,
         options?.hitlPendingApprovalsCount ?? 0,
+        options?.backgroundJobsEnabled ?? false,
       )
     }
 

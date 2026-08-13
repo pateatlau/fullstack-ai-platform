@@ -14,6 +14,9 @@ export interface HealthResponse {
   plugins_enabled: boolean
   hitl_enabled: boolean
   hitl_pending_approvals_count?: number
+  background_jobs_enabled?: boolean
+  background_jobs_pending_count?: number
+  background_jobs_dead_letter_count?: number
   capabilities?: {
     by_provider: Record<
       string,

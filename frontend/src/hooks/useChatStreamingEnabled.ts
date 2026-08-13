@@ -18,6 +18,7 @@ export interface ChatHealthFlags {
   pluginsEnabled: boolean
   hitlEnabled: boolean
   hitlPendingApprovalsCount: number
+  backgroundJobsEnabled: boolean
   healthLoading: boolean
   capabilitiesByProvider: Partial<Record<ProviderName, ProviderCapabilityFlags>>
 }
@@ -39,6 +40,7 @@ export function useChatStreamingEnabled(): ChatHealthFlags {
   const [pluginsEnabled, setPluginsEnabled] = useState(false)
   const [hitlEnabled, setHitlEnabled] = useState(false)
   const [hitlPendingApprovalsCount, setHitlPendingApprovalsCount] = useState(0)
+  const [backgroundJobsEnabled, setBackgroundJobsEnabled] = useState(false)
   const [healthLoading, setHealthLoading] = useState(true)
   const [capabilitiesByProvider, setCapabilitiesByProvider] =
     useState<Partial<Record<ProviderName, ProviderCapabilityFlags>>>(DEFAULT_CAPABILITIES)
@@ -59,6 +61,7 @@ export function useChatStreamingEnabled(): ChatHealthFlags {
           setPluginsEnabled(health.plugins_enabled ?? false)
           setHitlEnabled(health.hitl_enabled ?? false)
           setHitlPendingApprovalsCount(health.hitl_pending_approvals_count ?? 0)
+          setBackgroundJobsEnabled(health.background_jobs_enabled ?? false)
           setCapabilitiesByProvider(
             (health.capabilities?.by_provider as
               Partial<Record<ProviderName, ProviderCapabilityFlags>> | undefined) ??
@@ -90,6 +93,7 @@ export function useChatStreamingEnabled(): ChatHealthFlags {
     pluginsEnabled,
     hitlEnabled,
     hitlPendingApprovalsCount,
+    backgroundJobsEnabled,
     healthLoading,
     capabilitiesByProvider,
   }
