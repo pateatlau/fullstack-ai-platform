@@ -351,12 +351,12 @@ sequenceDiagram
 | Concurrency (role/permission changes) | Role assignment/revocation uses simple insert/delete (no `version` column needed — a `user_role_assignments` row either exists or does not; a concurrent double-assign is a harmless no-op via `ON CONFLICT DO NOTHING` on `(user_id, role_id)`, a concurrent double-revoke is a harmless no-op via `DELETE … WHERE` matching zero rows)                                                                                                                                                                                      | —                                                                                                                        |
 | Payload/metadata content              | `audit_events.metadata` follows the exact same posture as Epic 10's job `payload`/`result`: ids, small scalars, short strings only — never file bytes, credentials, secrets, or full tool-argument payloads                                                                                                                                                                                                                                                                                                                   | —                                                                                                                        |
 | Sub-flag independence                 | Any of the four sub-flags (`security_rbac_enforcement_enabled`, `security_audit_log_enabled`, `security_guardrails_enabled`, `security_rate_limit_extensions_enabled`) may be `false` while `SECURITY_GOVERNANCE_ENABLED=true` and the others are `true` — each enforcement point checks its own sub-flag independently, never assumes another sub-flag's state                                                                                                                                                               | —                                                                                                                        |
-| Permission metadata registry        | `PermissionKey` is a str enum; rich metadata lives in a centralized in-code `PERMISSION_REGISTRY: dict[PermissionKey, PermissionDefinition]` (display name, description, category, risk level, `reserved` flag) — single source of truth for migration seed, REST responses, and future admin UI; DB `permissions.description` is seeded from the registry (no separate metadata columns in V2)                                                                                                                                | Per-permission DB metadata columns → future, only if hot-reload without deploy is required                               |
-| Authorization decision object       | `RbacService.authorize()` returns a structured `AuthorizationDecision` (`allowed`, `permission_key`, `matched_role`, `matched_permission`, `denial_reason`); `has_permission()` is a boolean wrapper delegating to `authorize().allowed` — audit logging and observability consume the decision object                                                                                                                                                                                                                       | A full external policy engine (OPA/Cedar) → future                                                                       |
-| Guardrail rule identity             | Every `GuardrailRule` carries a stable `id` (slug), monotonic `version` int, and optional `created_at`; audit events and metrics reference `{rule_id, rule_version}` for reproducible forensics                                                                                                                                                                                                                                                                | Hot-reload of guardrail rules without restart → future                                                                   |
-| Authorization error correlation     | Every security-related denial response includes the active `request_id` from `LogContext` in the JSON error envelope — maps directly to `audit_events.request_id` and structured logs                                                                                                                                                                                                                                                                                                                                            | —                                                                                                                        |
-| Security error codes                | All security-related API errors use a closed set of `SecurityErrorCode` constants registered in `app/ai/security/errors.py` — reused by routers and enforcement points                                                                                                                                                                                                                                                                                                                                                           | —                                                                                                                        |
-| RBAC permission cache               | Optional in-process permission cache with short TTL (`security_rbac_cache_ttl_seconds`, default `60`) keyed by `user_id`; invalidated on role assign/revoke for that user; disabled when `0`                                                                                                                                                                                                                                                                                                                                   | Distributed cache (Redis) → future, only if multi-replica DB load becomes measurable                                     |
+| Permission metadata registry          | `PermissionKey` is a str enum; rich metadata lives in a centralized in-code `PERMISSION_REGISTRY: dict[PermissionKey, PermissionDefinition]` (display name, description, category, risk level, `reserved` flag) — single source of truth for migration seed, REST responses, and future admin UI; DB `permissions.description` is seeded from the registry (no separate metadata columns in V2)                                                                                                                               | Per-permission DB metadata columns → future, only if hot-reload without deploy is required                               |
+| Authorization decision object         | `RbacService.authorize()` returns a structured `AuthorizationDecision` (`allowed`, `permission_key`, `matched_role`, `matched_permission`, `denial_reason`); `has_permission()` is a boolean wrapper delegating to `authorize().allowed` — audit logging and observability consume the decision object                                                                                                                                                                                                                        | A full external policy engine (OPA/Cedar) → future                                                                       |
+| Guardrail rule identity               | Every `GuardrailRule` carries a stable `id` (slug), monotonic `version` int, and optional `created_at`; audit events and metrics reference `{rule_id, rule_version}` for reproducible forensics                                                                                                                                                                                                                                                                                                                               | Hot-reload of guardrail rules without restart → future                                                                   |
+| Authorization error correlation       | Every security-related denial response includes the active `request_id` from `LogContext` in the JSON error envelope — maps directly to `audit_events.request_id` and structured logs                                                                                                                                                                                                                                                                                                                                         | —                                                                                                                        |
+| Security error codes                  | All security-related API errors use a closed set of `SecurityErrorCode` constants registered in `app/ai/security/errors.py` — reused by routers and enforcement points                                                                                                                                                                                                                                                                                                                                                        | —                                                                                                                        |
+| RBAC permission cache                 | Optional in-process permission cache with short TTL (`security_rbac_cache_ttl_seconds`, default `60`) keyed by `user_id`; invalidated on role assign/revoke for that user; disabled when `0`                                                                                                                                                                                                                                                                                                                                  | Distributed cache (Redis) → future, only if multi-replica DB load becomes measurable                                     |
 
 ---
 
@@ -399,20 +399,20 @@ class PermissionDefinition(BaseModel):
 PERMISSION_REGISTRY: dict[PermissionKey, PermissionDefinition] = { ... }
 ```
 
-| Key | Display name | Category | Risk | Reserved | Held by |
-| --- | --- | --- | --- | --- | --- |
-| `*` | All Permissions (wildcard) | rbac | high | No | `owner` only |
-| `rbac:manage` | Manage Roles | rbac | high | No | `owner`, `admin` |
-| `audit:view` | View Audit Log | audit | medium | No | `owner`, `admin`, `operator` |
-| `policy:view` | View Policy Summary | policy | low | No | `owner`, `admin`, `operator` |
-| `jobs:view_all` | View Background Jobs | jobs | medium | No | `owner`, `admin`, `operator` |
-| `jobs:retry` | Retry Dead-Letter Jobs | jobs | high | No | `owner`, `admin`, `operator` |
-| `approvals:decide_all` | Decide Any Approval | approvals | high | No | `owner`, `admin` |
-| `tools:execute` | Execute Tools | tools | low | No | `owner`, `admin`, `operator`, `member` |
-| `tools:execute:destructive` | Execute Destructive Tools | tools | high | No | `owner`, `admin`, `operator` |
-| `plugins:manage` | Manage Plugins | plugins | high | **Yes** | `owner`, `admin` |
-| `workflow:view_all` | View All Workflows | workflow | medium | **Yes** | `owner`, `admin` |
-| `mcp:manage` | Manage MCP Servers | mcp | high | **Yes** | `owner`, `admin` |
+| Key                         | Display name               | Category  | Risk   | Reserved | Held by                                |
+| --------------------------- | -------------------------- | --------- | ------ | -------- | -------------------------------------- |
+| `*`                         | All Permissions (wildcard) | rbac      | high   | No       | `owner` only                           |
+| `rbac:manage`               | Manage Roles               | rbac      | high   | No       | `owner`, `admin`                       |
+| `audit:view`                | View Audit Log             | audit     | medium | No       | `owner`, `admin`, `operator`           |
+| `policy:view`               | View Policy Summary        | policy    | low    | No       | `owner`, `admin`, `operator`           |
+| `jobs:view_all`             | View Background Jobs       | jobs      | medium | No       | `owner`, `admin`, `operator`           |
+| `jobs:retry`                | Retry Dead-Letter Jobs     | jobs      | high   | No       | `owner`, `admin`, `operator`           |
+| `approvals:decide_all`      | Decide Any Approval        | approvals | high   | No       | `owner`, `admin`                       |
+| `tools:execute`             | Execute Tools              | tools     | low    | No       | `owner`, `admin`, `operator`, `member` |
+| `tools:execute:destructive` | Execute Destructive Tools  | tools     | high   | No       | `owner`, `admin`, `operator`           |
+| `plugins:manage`            | Manage Plugins             | plugins   | high   | **Yes**  | `owner`, `admin`                       |
+| `workflow:view_all`         | View All Workflows         | workflow  | medium | **Yes**  | `owner`, `admin`                       |
+| `mcp:manage`                | Manage MCP Servers         | mcp       | high   | **Yes**  | `owner`, `admin`                       |
 
 `plugins:manage`/`workflow:view_all`/`mcp:manage` are seeded now (so the permission vocabulary is stable and future epics do not need a new migration just to add a permission row) but are **not enforced anywhere in V2** — no endpoint currently checks them. This mirrors Epic 09's "reserved but unimplemented" `ApprovalStatus.CANCELLED` precedent.
 
@@ -574,22 +574,22 @@ All `audit_events.action` values follow a canonical `{resource}.{verb}` or `{res
 - Denials use `.denied` suffix; successes use past-tense verb (`.assigned`, `.decided`, `.succeeded`)
 - Guardrail events prefix with `guardrail.`
 
-| Category | Action | Resource type | Outcome | When emitted |
-| --- | --- | --- | --- | --- |
-| **RBAC** | `role.assigned` | `role` | `success` | Role granted to a user |
-| | `role.revoked` | `role` | `success` | Role removed from a user |
-| **Auth** | `login.succeeded` | `user` | `success` | Successful Google OAuth login |
-| **Tools** | `tool.execution.denied` | `tool` | `denied` | RBAC or guest denial before dispatch |
-| | `tool.execution.succeeded` | `tool` | `success` | Optional — high-risk tools only in V2 |
-| **HITL** | `approval.decided` | `approval` | `success` | Terminal approval decision recorded |
-| | `approval.stage.completed` | `approval` | `success` | One `required_stages` step satisfied |
-| | `approval.stage.denied` | `approval` | `denied` | Stage permission check failed |
-| **Jobs** | `job.retried` | `job` | `success` | Manual dead-letter retry |
-| **MCP** | `mcp.permission.denied` | `mcp_tool` | `denied` | `McpPermissionPolicy` denial |
-| **Guardrails** | `guardrail.flagged` | `guardrail` | `success` | Content flagged (allowed through) |
-| | `guardrail.blocked` | `guardrail` | `denied` | Content blocked |
-| **Secrets** | `secret.resolution.missing` | `secret` | `error` | `SecretResolver` key not found |
-| **Rate limits** | `rate_limit.exceeded` | `rate_limit` | `denied` | Per-minute or HTTP limit hit |
+| Category        | Action                      | Resource type | Outcome   | When emitted                          |
+| --------------- | --------------------------- | ------------- | --------- | ------------------------------------- |
+| **RBAC**        | `role.assigned`             | `role`        | `success` | Role granted to a user                |
+|                 | `role.revoked`              | `role`        | `success` | Role removed from a user              |
+| **Auth**        | `login.succeeded`           | `user`        | `success` | Successful Google OAuth login         |
+| **Tools**       | `tool.execution.denied`     | `tool`        | `denied`  | RBAC or guest denial before dispatch  |
+|                 | `tool.execution.succeeded`  | `tool`        | `success` | Optional — high-risk tools only in V2 |
+| **HITL**        | `approval.decided`          | `approval`    | `success` | Terminal approval decision recorded   |
+|                 | `approval.stage.completed`  | `approval`    | `success` | One `required_stages` step satisfied  |
+|                 | `approval.stage.denied`     | `approval`    | `denied`  | Stage permission check failed         |
+| **Jobs**        | `job.retried`               | `job`         | `success` | Manual dead-letter retry              |
+| **MCP**         | `mcp.permission.denied`     | `mcp_tool`    | `denied`  | `McpPermissionPolicy` denial          |
+| **Guardrails**  | `guardrail.flagged`         | `guardrail`   | `success` | Content flagged (allowed through)     |
+|                 | `guardrail.blocked`         | `guardrail`   | `denied`  | Content blocked                       |
+| **Secrets**     | `secret.resolution.missing` | `secret`      | `error`   | `SecretResolver` key not found        |
+| **Rate limits** | `rate_limit.exceeded`       | `rate_limit`  | `denied`  | Per-minute or HTTP limit hit          |
 
 `AuditLogger.record()` validates that `action` is a member of `AuditAction` at call time (raises internally, caught and logged — same fail-open posture as DB errors, but catches taxonomy drift during development).
 
@@ -661,13 +661,13 @@ class GuardrailEngine:
 
 **Default rules** (`app/ai/security/guardrails/rules.py` — `DEFAULT_GUARDRAIL_RULES`, merged with operator-supplied `security_guardrail_rules` config at startup, defaults first so an operator rule can override by priority):
 
-| Name | ID | Version | Pattern (illustrative) | Default action |
-| --- | --- | --- | --- | --- |
-| Ignore prior instructions | `prompt-ignore-instructions` | 1 | `(?i)ignore (all \|the )?(previous\|prior\|above) instructions` | `flag` |
-| Role override attempt | `prompt-injection-role-override` | 1 | `(?i)\byou are now\b` | `flag` |
-| System prompt leak attempt | `prompt-injection-system-prompt-leak` | 1 | `(?i)(reveal\|print\|show).{0,20}(system prompt\|instructions)` | `flag` |
-| Secret-shaped token | `secret-like-token-in-content` | 1 | `sk-[A-Za-z0-9]{20,}` / `AKIA[0-9A-Z]{16}` | `block` |
-| MCP shell marker | `mcp-untrusted-result-shell-marker` | 1 | Shell/command-injection-shaped strings in `mcp_result` | `flag` |
+| Name                       | ID                                    | Version | Pattern (illustrative)                                          | Default action |
+| -------------------------- | ------------------------------------- | ------- | --------------------------------------------------------------- | -------------- |
+| Ignore prior instructions  | `prompt-ignore-instructions`          | 1       | `(?i)ignore (all \|the )?(previous\|prior\|above) instructions` | `flag`         |
+| Role override attempt      | `prompt-injection-role-override`      | 1       | `(?i)\byou are now\b`                                           | `flag`         |
+| System prompt leak attempt | `prompt-injection-system-prompt-leak` | 1       | `(?i)(reveal\|print\|show).{0,20}(system prompt\|instructions)` | `flag`         |
+| Secret-shaped token        | `secret-like-token-in-content`        | 1       | `sk-[A-Za-z0-9]{20,}` / `AKIA[0-9A-Z]{16}`                      | `block`        |
+| MCP shell marker           | `mcp-untrusted-result-shell-marker`   | 1       | Shell/command-injection-shaped strings in `mcp_result`          | `flag`         |
 
 Operator-supplied rules in `security_guardrail_rules` must include `id` and `version`; omitting either causes startup validation to fail fast.
 
@@ -883,9 +883,9 @@ This epic **is** the platform's security control layer, so its own security post
 | Self-elevation prevention            | A caller without `rbac:manage` cannot call the role-assignment endpoints at all (403) — there is no "assign yourself `owner`" code path reachable without already holding `rbac:manage`                                                                                                                                 |
 | Bootstrap admin exposure             | `security_bootstrap_admin_emails` is a server-side config value, never returned by any API response; matching is by exact email equality (case-insensitive) against `users.email`, which is itself only populated by verified Google OAuth (`app/routers/auth.py`) — no self-service email claiming                     |
 | Audit content                        | `audit_events.metadata` never contains credentials, tool arguments, file bytes, or full request/response bodies — same allowlist posture as Epic 10's job `payload`/`result`                                                                                                                                            |
-| Guardrail rule content               | `security_guardrail_rules` (operator config) is never echoed back in a denial response beyond the rule `id`/`name` — the regex pattern itself is not exposed to the end caller whose content was blocked |
-| Denial response correlation          | Every security denial (`403 permission_denied`, `guardrail_blocked`, `stage_permission_invalid`, `429 rate_limit_exceeded`) includes `request_id` in the JSON error envelope — same value as `audit_events.request_id` and structured logs |
-| Secret resolution                    | `EnvSecretResolver` never logs a resolved value; `SecretResolver.resolve()` failures (missing key) are audited by key name only, never by attempted/partial value |
+| Guardrail rule content               | `security_guardrail_rules` (operator config) is never echoed back in a denial response beyond the rule `id`/`name` — the regex pattern itself is not exposed to the end caller whose content was blocked                                                                                                                |
+| Denial response correlation          | Every security denial (`403 permission_denied`, `guardrail_blocked`, `stage_permission_invalid`, `429 rate_limit_exceeded`) includes `request_id` in the JSON error envelope — same value as `audit_events.request_id` and structured logs                                                                              |
+| Secret resolution                    | `EnvSecretResolver` never logs a resolved value; `SecretResolver.resolve()` failures (missing key) are audited by key name only, never by attempted/partial value                                                                                                                                                       |
 | Flag off                             | No RBAC/audit/guardrail/quota code path is consulted; byte-for-byte Epic 10 behaviour                                                                                                                                                                                                                                   |
 
 ---
@@ -914,21 +914,21 @@ Authenticated-only (`Depends(get_current_caller)`), permission-gated per-endpoin
 
 All security-related API errors use a closed registry in `app/ai/security/errors.py`. Routers and enforcement points reference these constants — no ad-hoc error code strings.
 
-| Code | HTTP status | When used |
-| --- | --- | --- |
-| `permission_denied` | 403 | RBAC `AuthorizationDecision.allowed=false` |
-| `guardrail_blocked` | 403 | Guardrail `block` verdict on tool argument or MCP result |
-| `stage_permission_invalid` | 403 | HITL stage decider lacks required permission |
-| `feature_disabled` | 503 | Master flag or relevant sub-flag off |
-| `rate_limit_exceeded` | 429 | HTTP or per-surface per-minute limit hit |
-| `quota_exceeded` | 429 | Daily usage quota exhausted |
-| `role_not_found` | 404 | Unknown role name in assign/revoke |
-| `cannot_revoke_member` | 400 | Attempt to revoke implicit `member` baseline |
+| Code                       | HTTP status | When used                                                |
+| -------------------------- | ----------- | -------------------------------------------------------- |
+| `permission_denied`        | 403         | RBAC `AuthorizationDecision.allowed=false`               |
+| `guardrail_blocked`        | 403         | Guardrail `block` verdict on tool argument or MCP result |
+| `stage_permission_invalid` | 403         | HITL stage decider lacks required permission             |
+| `feature_disabled`         | 503         | Master flag or relevant sub-flag off                     |
+| `rate_limit_exceeded`      | 429         | HTTP or per-surface per-minute limit hit                 |
+| `quota_exceeded`           | 429         | Daily usage quota exhausted                              |
+| `role_not_found`           | 404         | Unknown role name in assign/revoke                       |
+| `cannot_revoke_member`     | 400         | Attempt to revoke implicit `member` baseline             |
 
 Internal-only (never returned to clients, logged/metriced only):
 
-| Code | When used |
-| --- | --- |
+| Code                 | When used                       |
+| -------------------- | ------------------------------- |
 | `audit_write_failed` | `AuditLogger.record()` DB error |
 
 Every client-facing denial response includes `request_id` alongside `code` and `message` (see § Security Model "Denial response correlation").
@@ -1061,12 +1061,12 @@ A sustained pattern of denials for the same `actor_user_id` + `action` combinati
 
 V2 is sized for the same **single-tenant, single-replica** posture as every prior epic:
 
-| Assumption                    | V2 target                                                                                                                                                 |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Expected authz checks/request | 1–3 (tool dispatch, HITL decision, or jobs endpoint — most requests touch zero)                                                                           |
-| Expected audit writes/hour    | ~50–500 in typical usage (dominated by tool-execution denials and HITL decisions)                                                                         |
-| `audit_events` growth         | Bounded by `security_audit_retention_days` cleanup (default 365 days) when Background Jobs is enabled                                                     |
-| Guardrail scan cost           | Microseconds per scan (regex over already-in-memory strings); negligible relative to LLM call latency                                                     |
+| Assumption                    | V2 target                                                                                                                                                                            |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Expected authz checks/request | 1–3 (tool dispatch, HITL decision, or jobs endpoint — most requests touch zero)                                                                                                      |
+| Expected audit writes/hour    | ~50–500 in typical usage (dominated by tool-execution denials and HITL decisions)                                                                                                    |
+| `audit_events` growth         | Bounded by `security_audit_retention_days` cleanup (default 365 days) when Background Jobs is enabled                                                                                |
+| Guardrail scan cost           | Microseconds per scan (regex over already-in-memory strings); negligible relative to LLM call latency                                                                                |
 | Role/permission lookup        | Optional in-process cache (`security_rbac_cache_ttl_seconds`, default 60s); invalidated on role assign/revoke; plus one `get_permissions()` per request via FastAPI dependency scope |
 
 These assumptions are sufficient for the platform's current scale; if `audit_events` write volume becomes a measured bottleneck, revisit queue-backed (asynchronous) audit writes as documented in Locked Decisions.
@@ -1075,16 +1075,16 @@ These assumptions are sufficient for the platform's current scale; if `audit_eve
 
 Rough guidance for capacity planning and retention tuning:
 
-| Signal | Typical range | Notes |
-| --- | --- | --- |
-| Audit events per chat request (no tools) | 0–1 | Login events only on auth |
-| Audit events per tool-invocation request | 1–2 | Authorization check + optional guardrail |
-| Audit events per HITL decision | 1–3 | Stage completion + terminal decision |
-| Estimated daily volume (moderate usage) | ~500–5,000 rows/day | Single-tenant, tens of active users |
-| Estimated daily volume (heavy tool/HITL usage) | ~5,000–50,000 rows/day | Stress-test deployments |
-| Row size (typical) | ~500 bytes–2 KB | Metadata is ids/scalars only |
-| Storage at 5k/day × 365 days | ~1–4 GB/year | Before Postgres overhead/indexes |
-| Recommended cleanup frequency | Daily (via Background Jobs schedule) | Same cadence as Epic 10 workflow retention |
+| Signal                                         | Typical range                        | Notes                                      |
+| ---------------------------------------------- | ------------------------------------ | ------------------------------------------ |
+| Audit events per chat request (no tools)       | 0–1                                  | Login events only on auth                  |
+| Audit events per tool-invocation request       | 1–2                                  | Authorization check + optional guardrail   |
+| Audit events per HITL decision                 | 1–3                                  | Stage completion + terminal decision       |
+| Estimated daily volume (moderate usage)        | ~500–5,000 rows/day                  | Single-tenant, tens of active users        |
+| Estimated daily volume (heavy tool/HITL usage) | ~5,000–50,000 rows/day               | Stress-test deployments                    |
+| Row size (typical)                             | ~500 bytes–2 KB                      | Metadata is ids/scalars only               |
+| Storage at 5k/day × 365 days                   | ~1–4 GB/year                         | Before Postgres overhead/indexes           |
+| Recommended cleanup frequency                  | Daily (via Background Jobs schedule) | Same cadence as Epic 10 workflow retention |
 
 Monitor `audit_events_total` and table size via health/metrics; alert if daily insert rate exceeds 2× the estimated range for more than 24 hours.
 
@@ -1152,10 +1152,10 @@ Future                  Relationship-based authorization
 | `SecretResolver`         | The indirection contract between code that needs a secret and wherever that secret is actually stored            |
 | Shared rule engine       | The `RuleCondition`/`RuleOperator`/`RuleEvaluator` primitive originally built for HITL, now reused by guardrails |
 | Bootstrap admin          | A config-listed email automatically granted `owner` on first matching login/startup                              |
-| `AuthorizationDecision`  | Structured result of `RbacService.authorize()` — carries matched role and denial reason for audit/observability |
-| `PermissionDefinition`   | Metadata record for one `PermissionKey` — display name, description, category, risk level, reserved flag        |
-| `PERMISSION_REGISTRY`    | Centralized in-code map of every `PermissionKey` → `PermissionDefinition`; single source of truth for seed/UI  |
-| `AuditAction`            | Canonical enum of allowed `audit_events.action` values — prevents taxonomy drift                                |
+| `AuthorizationDecision`  | Structured result of `RbacService.authorize()` — carries matched role and denial reason for audit/observability  |
+| `PermissionDefinition`   | Metadata record for one `PermissionKey` — display name, description, category, risk level, reserved flag         |
+| `PERMISSION_REGISTRY`    | Centralized in-code map of every `PermissionKey` → `PermissionDefinition`; single source of truth for seed/UI    |
+| `AuditAction`            | Canonical enum of allowed `audit_events.action` values — prevents taxonomy drift                                 |
 | Stage permission         | A `required_stages` entry interpreted as a permission key the deciding user must hold                            |
 
 ---
@@ -1314,9 +1314,9 @@ _To be verified in Epic 11 Phase 0; source of truth: `docs/audits/post-mvp-v2-ep
 
 _To be updated at each phase completion; release summary will be published at `docs/releases/post-mvp-v2-epic11-release-summary.md`._
 
-| Area                  | State                          |
-| --------------------- | ------------------------------ |
-| Security & Governance | Not started — awaiting Phase 0 |
+| Area                  | State                               |
+| --------------------- | ----------------------------------- |
+| Security & Governance | Phase 0 complete — baseline audited |
 
 ---
 
@@ -1324,7 +1324,7 @@ _To be updated at each phase completion; release summary will be published at `d
 
 | Phase | Name                                                   | Effort | Status      |
 | ----- | ------------------------------------------------------ | ------ | ----------- |
-| 0     | Baseline Audit                                         | XS     | Not Started |
+| 0     | Baseline Audit                                         | XS     | Complete    |
 | 1     | RBAC Domain Model, Migration & Bootstrap               | L      | Not Started |
 | 2     | RBAC Enforcement — Tools, HITL Stages, Jobs Visibility | L      | Not Started |
 | 3     | Global Audit Log & Retention Cleanup                   | M      | Not Started |
@@ -1338,14 +1338,14 @@ _To be updated at each phase completion; release summary will be published at `d
 | 11    | Frontend Security & Governance Dashboard               | S      | Not Started |
 | 12    | Validation & Release                                   | M      | Not Started |
 
-**Epic 11 overall:** Not started. Next gate: user authorization to begin Phase 0.
+**Epic 11 overall:** Phase 0 complete. Next gate: user authorization to begin Phase 1.
 
 ---
 
 # Phase 0 — Baseline Audit
 
 **Effort:** XS
-**Status:** Not Started
+**Status:** Complete
 
 **Objective**
 
@@ -2393,7 +2393,7 @@ metrics  (aggregated by permission_key / action / outcome — never by actor_use
 
 ## Changelog
 
-| Version | Date       | Changes                                                                                          |
-| ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| Version | Date       | Changes                                                                                                                                                                                                                                                                                                                                                                          |
+| ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 2       | 2026-08-13 | Integrated architecture review recommendations — permission metadata registry, `AuthorizationDecision`, versioned guardrail rules, canonical `AuditAction` taxonomy, `SecurityErrorCode` registry, authorization model evolution path, sequence diagrams, expanded runbook/recovery procedures, audit volume guidance, optional RBAC cache, correlation IDs in denial responses. |
-| 1       | 2026-08-13 | Initial epic draft — Part I design + Part II 13-phase execution plan (Phases 0–12). Not started. |
+| 1       | 2026-08-13 | Initial epic draft — Part I design + Part II 13-phase execution plan (Phases 0–12). Not started.                                                                                                                                                                                                                                                                                 |
