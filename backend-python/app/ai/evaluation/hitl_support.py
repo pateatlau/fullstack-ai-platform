@@ -94,6 +94,10 @@ class EvalHitlApprovalStore:
     async def get(self, approval_id: uuid.UUID) -> AgentToolApproval | None:
         return next((row for row in self.rows if row.id == approval_id), None)
 
+    async def get_any(self, approval_id: uuid.UUID) -> AgentToolApproval | None:
+        """Owner-agnostic fetch (Epic 11 Phase 2 RBAC path; unused in eval runs)."""
+        return await self.get(approval_id)
+
     async def get_for_owner(
         self,
         approval_id: uuid.UUID,

@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from app.ai.hitl.store import ApprovalsStore
     from app.ai.hitl.service import AgentApprovalService
     from app.ai.mcp.registry import McpServerRegistry
+    from app.ai.security.rbac.service import RbacService
     from app.ai.memory.context_builder import MemoryContextBuilder
     from app.ai.memory.manager import MemoryManager
     from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
@@ -87,6 +88,26 @@ def get_ai_settings(
     return settings
 
 
+def get_rbac_service(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_ai_settings),
+) -> "RbacService":
+    """Return a request-scoped ``RbacService`` (Epic 11 Phase 2).
+
+    Construction is cheap and side-effect free; callers gate any actual
+    permission check on ``security_governance_enabled`` /
+    ``security_rbac_enforcement_enabled`` so behaviour is unchanged when the
+    flags are off.
+    """
+    from app.ai.security.rbac.service import RbacService
+    from app.ai.security.rbac.store import PostgresRoleStore
+
+    return RbacService(
+        PostgresRoleStore(session),
+        cache_ttl_seconds=settings.security_rbac_cache_ttl_seconds,
+    )
+
+
 @lru_cache
 def get_prompt_repository() -> PromptRepository:
     """Return the process-wide ``PromptRepository`` singleton."""
@@ -136,6 +157,7 @@ def _create_tool_executor(
     *,
     registry: ToolRegistry,
     settings: Settings,
+    rbac_service: "RbacService | None" = None,
 ) -> ToolExecutor:
     """Build a ``ToolExecutor`` with MCP permission policy when MCP is enabled."""
     mcp_permission_policy = None
@@ -150,18 +172,24 @@ def _create_tool_executor(
         registry=registry,
         settings=settings,
         mcp_permission_policy=mcp_permission_policy,
+        rbac_service=rbac_service,
     )
 
 
 def get_tool_executor(
     registry: ToolRegistry = Depends(get_tool_registry),
     settings: Settings = Depends(get_settings),
+    rbac_service: "RbacService | None" = Depends(get_rbac_service),
 ) -> ToolExecutor:
     """Build a ``ToolExecutor`` wired to the app-scoped registry and settings.
 
     Phase 9: Includes MCP permission policy when MCP is enabled.
+    Epic 11 Phase 2: Includes RBAC service for tool-tier authorization
+    (only consulted when Security & Governance RBAC enforcement is on).
     """
-    return _create_tool_executor(registry=registry, settings=settings)
+    return _create_tool_executor(
+        registry=registry, settings=settings, rbac_service=rbac_service
+    )
 
 
 def get_hitl_rule_engine(
@@ -254,6 +282,7 @@ def get_agent_approval_service(
     tool_registry: ToolRegistry = Depends(get_tool_registry),
     tool_executor: ToolExecutor = Depends(get_tool_executor),
     settings: Settings = Depends(get_ai_settings),
+    rbac_service: "RbacService" = Depends(get_rbac_service),
 ) -> "AgentApprovalService":
     """Return a request-scoped agent approval orchestrator."""
     from app.ai.hitl.service import AgentApprovalService
@@ -271,6 +300,11 @@ def get_agent_approval_service(
         approval_timeout_hours=settings.hitl_approval_timeout_hours,
         default_model=settings.default_llm_model(),
         notification_dispatcher=get_hitl_notification_dispatcher(),
+        rbac_service=rbac_service,
+        rbac_enforcement_enabled=(
+            settings.security_governance_enabled
+            and settings.security_rbac_enforcement_enabled
+        ),
     )
 
 

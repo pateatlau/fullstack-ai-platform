@@ -31,6 +31,7 @@ from app.ai.hitl.exceptions import (
     ApprovalNotFoundError,
     ApprovalValidationError,
     HitlError,
+    StagePermissionInvalidError,
 )
 from app.ai.hitl.models import (
     AgentToolApproval,
@@ -105,6 +106,12 @@ def _raise_hitl_error(exc: HitlError) -> NoReturn:
             message=str(exc),
             status_code=422,
         ) from exc
+    if isinstance(exc, StagePermissionInvalidError):
+        raise AppError(
+            code="stage_permission_invalid",
+            message=str(exc),
+            status_code=403,
+        ) from exc
     raise AppError(
         code="hitl_error",
         message=str(exc),
@@ -121,6 +128,8 @@ def _sse_error_from_hitl(exc: HitlError, *, response_id: str) -> str:
         code = "approval_not_found"
     elif isinstance(exc, ApprovalValidationError):
         code = "validation_error"
+    elif isinstance(exc, StagePermissionInvalidError):
+        code = "stage_permission_invalid"
     else:
         code = "hitl_error"
     return format_sse(

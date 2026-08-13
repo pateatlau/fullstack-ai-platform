@@ -135,6 +135,34 @@ class InMemoryApprovalStore:
             )
         return row
 
+    async def get_any(self, approval_id: uuid.UUID) -> AgentToolApproval | None:
+        """Owner-agnostic fetch (Epic 11 Phase 2 RBAC-authorized decider path)."""
+        row = await self.get(approval_id)
+        if row is None:
+            return None
+        if (
+            row.status is ApprovalStatus.PENDING
+            and row.expires_at is not None
+            and row.expires_at <= datetime.datetime.now(datetime.UTC)
+        ):
+            expired = redact_terminal_client_audit_fields(
+                row.model_copy(
+                    update={
+                        "status": ApprovalStatus.EXPIRED,
+                        "source_ip": None,
+                        "client_metadata": {},
+                        "version": row.version + 1,
+                        "updated_at": datetime.datetime.now(datetime.UTC),
+                    }
+                )
+            )
+            self._replace(expired)
+            return expired
+        return apply_client_audit_retention_policy(
+            row,
+            retention_days=self._client_audit_retention_days,
+        )
+
     async def link_pending_message(
         self,
         approval_id: uuid.UUID,

@@ -6,11 +6,14 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query
 
-from app.ai.deps import get_job_queue, get_job_schedule_store
+from app.ai.deps import get_job_queue, get_job_schedule_store, get_rbac_service
 from app.ai.jobs.exceptions import JobNotFoundError
 from app.ai.jobs.models import JobStatus
 from app.ai.jobs.queue import JobQueue
 from app.ai.jobs.schedule_store import JobScheduleStore
+from app.ai.security.errors import SecurityErrorCode
+from app.ai.security.rbac.permissions import PermissionKey
+from app.ai.security.rbac.service import RbacService
 from app.core.caller import CallerContext, require_authenticated_caller
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
@@ -38,11 +41,39 @@ def _require_background_jobs_enabled(settings: Settings) -> None:
         )
 
 
+async def _require_jobs_permission(
+    *,
+    settings: Settings,
+    rbac_service: RbacService,
+    caller: CallerContext,
+    permission: PermissionKey,
+) -> None:
+    """Gate a Jobs REST endpoint on ``permission`` (Epic 11 Phase 2).
+
+    No-op (any authenticated caller passes, Epic 10 behaviour) unless both
+    ``security_governance_enabled`` and ``security_rbac_enforcement_enabled``
+    are true.
+    """
+    if not (
+        settings.security_governance_enabled
+        and settings.security_rbac_enforcement_enabled
+    ):
+        return
+    decision = await rbac_service.authorize(caller.user_id, permission)
+    if not decision.allowed:
+        raise AppError(
+            code=SecurityErrorCode.PERMISSION_DENIED.value,
+            message=f"Requires the '{permission.value}' permission.",
+            status_code=403,
+        )
+
+
 @router.get("/api/jobs", response_model=JobListResponse)
 async def list_jobs(
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     queue: JobQueue = Depends(get_job_queue),
+    rbac_service: RbacService = Depends(get_rbac_service),
     status: JobStatus | None = Query(default=None),
     job_type: str | None = Query(default=None),
     limit: int = Query(default=DEFAULT_JOBS_LIST_LIMIT, ge=1, le=MAX_JOBS_LIST_LIMIT),
@@ -50,6 +81,12 @@ async def list_jobs(
 ) -> JobListResponse:
     _require_background_jobs_enabled(settings)
     bind_context(user_id=str(caller.user_id))
+    await _require_jobs_permission(
+        settings=settings,
+        rbac_service=rbac_service,
+        caller=caller,
+        permission=PermissionKey.JOBS_VIEW_ALL,
+    )
     jobs = await queue.list(
         status=status,
         job_type=job_type,
@@ -64,9 +101,16 @@ async def list_job_schedules(
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     schedule_store: JobScheduleStore = Depends(get_job_schedule_store),
+    rbac_service: RbacService = Depends(get_rbac_service),
 ) -> JobScheduleListResponse:
     _require_background_jobs_enabled(settings)
     bind_context(user_id=str(caller.user_id))
+    await _require_jobs_permission(
+        settings=settings,
+        rbac_service=rbac_service,
+        caller=caller,
+        permission=PermissionKey.JOBS_VIEW_ALL,
+    )
     schedules = await schedule_store.list_all()
     return JobScheduleListResponse(
         schedules=[JobScheduleResponse.from_domain(schedule) for schedule in schedules]
@@ -79,9 +123,16 @@ async def get_job_detail(
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     queue: JobQueue = Depends(get_job_queue),
+    rbac_service: RbacService = Depends(get_rbac_service),
 ) -> JobDetailResponse:
     _require_background_jobs_enabled(settings)
     bind_context(user_id=str(caller.user_id), job_id=str(job_id))
+    await _require_jobs_permission(
+        settings=settings,
+        rbac_service=rbac_service,
+        caller=caller,
+        permission=PermissionKey.JOBS_VIEW_ALL,
+    )
     job = await queue.get(job_id)
     if job is None:
         raise AppError(
@@ -98,9 +149,16 @@ async def retry_dead_letter_job(
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     queue: JobQueue = Depends(get_job_queue),
+    rbac_service: RbacService = Depends(get_rbac_service),
 ) -> JobRetryResponse:
     _require_background_jobs_enabled(settings)
     bind_context(user_id=str(caller.user_id), job_id=str(job_id))
+    await _require_jobs_permission(
+        settings=settings,
+        rbac_service=rbac_service,
+        caller=caller,
+        permission=PermissionKey.JOBS_RETRY,
+    )
     retried = await queue.retry_dead_letter(job_id)
     if retried is not None:
         return JobRetryResponse(job=JobResponse.from_domain(retried))

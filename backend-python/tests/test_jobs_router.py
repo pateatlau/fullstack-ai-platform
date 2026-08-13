@@ -171,6 +171,76 @@ async def test_jobs_api_disabled_returns_503(
     assert body["error"]["message"] == "Background Jobs are not enabled on this server."
 
 
+async def _grant_role(db_session, user_id: uuid.UUID, role_name: str) -> None:
+    from app.ai.security.rbac.service import RbacService
+    from app.ai.security.rbac.store import PostgresRoleStore
+
+    await RbacService(PostgresRoleStore(db_session)).assign_role(user_id, role_name)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/api/jobs"),
+        ("GET", "/api/jobs/schedules"),
+        ("GET", "/api/jobs/00000000-0000-4000-8000-000000000001"),
+        ("POST", "/api/jobs/00000000-0000-4000-8000-000000000001/retry"),
+    ],
+)
+async def test_jobs_api_denies_member_only_user_when_rbac_enforced(
+    db_session,
+    jobs_api_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+) -> None:
+    if not await background_jobs_table_available(db_session):
+        pytest.skip("background_jobs not available — run alembic upgrade head")
+
+    monkeypatch.setenv("SECURITY_GOVERNANCE_ENABLED", "true")
+    monkeypatch.setenv("SECURITY_RBAC_ENFORCEMENT_ENABLED", "true")
+    get_settings.cache_clear()
+    user_id = await _make_user(db_session)
+    headers = _auth_headers(user_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=jobs_api_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.request(method, path, headers=headers)
+
+    get_settings.cache_clear()
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "permission_denied"
+
+
+@pytest.mark.anyio
+async def test_jobs_api_allows_operator_when_rbac_enforced(
+    db_session,
+    jobs_api_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not await background_jobs_table_available(db_session):
+        pytest.skip("background_jobs not available — run alembic upgrade head")
+
+    monkeypatch.setenv("SECURITY_GOVERNANCE_ENABLED", "true")
+    monkeypatch.setenv("SECURITY_RBAC_ENFORCEMENT_ENABLED", "true")
+    get_settings.cache_clear()
+    user_id = await _make_user(db_session)
+    await _grant_role(db_session, user_id, "operator")
+    headers = _auth_headers(user_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=jobs_api_app),
+        base_url="http://testserver",
+    ) as client:
+        list_response = await client.get("/api/jobs", headers=headers)
+
+    get_settings.cache_clear()
+    assert list_response.status_code == 200
+
+
 @pytest.mark.anyio
 async def test_jobs_api_requires_authentication(jobs_api_app: FastAPI) -> None:
     async with AsyncClient(
