@@ -159,10 +159,12 @@ function JobsTab({ onApiError }: JobsTabProps) {
       setSuccessMessage(`Job ${response.job.id.slice(0, 8)}… re-queued.`)
       setRefreshKey((current) => current + 1)
     } catch (apiError) {
-      if (apiError instanceof JobsApiError) {
-        setError(apiError.message)
-      } else {
-        setError('Failed to retry job. Please try again.')
+      if (!onApiError(apiError)) {
+        if (apiError instanceof JobsApiError) {
+          setError(apiError.message)
+        } else {
+          setError('Failed to retry job. Please try again.')
+        }
       }
     } finally {
       setRetryingJobId(null)

@@ -91,6 +91,7 @@ function createJobsFetchMock(options?: {
   jobs?: typeof sampleJobs
   schedules?: typeof sampleSchedules
   jobsError?: { status: number; code: string; message: string }
+  retryError?: { status: number; code: string; message: string }
 }) {
   const backgroundJobsEnabled = options?.backgroundJobsEnabled ?? true
   const jobs = options?.jobs ?? sampleJobs
@@ -121,6 +122,10 @@ function createJobsFetchMock(options?: {
     }
 
     if (url.match(/\/api\/jobs\/[^/]+\/retry$/) && method === 'POST') {
+      if (options?.retryError) {
+        const { status, code, message } = options.retryError
+        return jsonResponse({ error: { code, message } }, status)
+      }
       const jobId = url.split('/')[3]
       const retried = jobs.jobs.find((job) => job.id === jobId)
       return jsonResponse({
@@ -255,6 +260,30 @@ describe('JobsPage', () => {
         return resolved.includes('/retry') && (init?.method ?? 'GET') === 'POST'
       }),
     ).toBe(true)
+  })
+
+  it('shows unavailable notice when retry returns feature_disabled', async () => {
+    storeSession(makeJwt(3600), user)
+    vi.stubGlobal(
+      'fetch',
+      createJobsFetchMock({
+        backgroundJobsEnabled: true,
+        retryError: {
+          status: 503,
+          code: 'feature_disabled',
+          message: 'Background Jobs are not enabled on this server.',
+        },
+      }),
+    )
+
+    renderJobsRoute()
+    const retryButton = await screen.findByRole('button', { name: 'Retry' })
+    await userEvent.click(retryButton)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Background jobs are not available' }),
+    ).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Background jobs' })).toBeNull()
   })
 
   it('renders schedules tab', async () => {
