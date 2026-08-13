@@ -27,7 +27,7 @@ from app.core.config import get_settings
 from app.core.cors import CORS_EXPOSE_HEADER_NAMES, DEV_ORIGIN_REGEX
 from app.core.errors import error_response, register_exception_handlers
 from app.core.logging import bind_context, get_logger, setup_logging
-from app.db.engine import dispose_engine_cache
+from app.db.engine import dispose_engine_cache, get_sessionmaker
 from app.middleware.correlation_id import correlation_id_middleware
 from app.middleware.rate_limit import rate_limit_middleware
 from app.routers import (
@@ -60,6 +60,17 @@ async def lifespan(_: FastAPI):
         set_model_registry(calculator.pricing_table.model_registry)
     MetricInstruments.initialize()
     settings.log_development_warnings(logger)
+
+    if settings.security_governance_enabled:
+        from app.ai.security.rbac.service import RbacService
+        from app.ai.security.rbac.store import PostgresRoleStore
+
+        async with get_sessionmaker()() as session:
+            service = RbacService(
+                PostgresRoleStore(session),
+                cache_ttl_seconds=settings.security_rbac_cache_ttl_seconds,
+            )
+            await service.bootstrap_admins(settings.security_bootstrap_admin_emails)
 
     if settings.plugins_enabled:
         load_plugins(
