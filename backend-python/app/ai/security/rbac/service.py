@@ -28,6 +28,7 @@ class RbacService:
         self.store = store
         self.cache_ttl_seconds = max(cache_ttl_seconds, 0)
         self._permission_cache: dict[uuid.UUID, tuple[float, set[str]]] = {}
+        self._cache_generation: dict[uuid.UUID, int] = {}
 
     async def get_permissions(self, user_id: uuid.UUID | None) -> set[str]:
         if user_id is None:
@@ -41,6 +42,7 @@ class RbacService:
             if time.monotonic() - cached_at < self.cache_ttl_seconds:
                 return set(cached_permissions)
 
+        generation = self._cache_generation.get(cache_key, 0)
         roles = set(await self.store.get_user_roles(user_id))
         roles.add("member")
 
@@ -53,7 +55,11 @@ class RbacService:
         if "owner" in roles:
             permissions.add("*")
 
-        if self.cache_ttl_seconds > 0:
+        # Skip caching if a role mutation invalidated this user while get_user_roles was in flight.
+        if (
+            self.cache_ttl_seconds > 0
+            and self._cache_generation.get(cache_key, 0) == generation
+        ):
             self._permission_cache[cache_key] = (time.monotonic(), set(permissions))
         return set(permissions)
 
@@ -122,6 +128,7 @@ class RbacService:
             raise RoleNotFoundError(role_name)
         assigned = await self.store.assign_role(user_id, role_name)
         if assigned:
+            self._cache_generation[user_id] = self._cache_generation.get(user_id, 0) + 1
             self._permission_cache.pop(user_id, None)
         return assigned
 
@@ -132,6 +139,7 @@ class RbacService:
             raise PermissionDeniedError("member")
         revoked = await self.store.revoke_role(user_id, role_name)
         if revoked:
+            self._cache_generation[user_id] = self._cache_generation.get(user_id, 0) + 1
             self._permission_cache.pop(user_id, None)
         return revoked
 

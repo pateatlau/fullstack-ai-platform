@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
@@ -161,6 +162,38 @@ async def test_permission_cache_invalidates_on_assign_and_revoke() -> None:
     assert PermissionKey.RBAC_MANAGE in updated
 
     await service.revoke_role(user_id, "admin")
+    after_revoke = await service.get_permissions(user_id)
+    assert PermissionKey.RBAC_MANAGE not in after_revoke
+
+
+@pytest.mark.anyio
+async def test_permission_resolution_race_does_not_cache_stale_after_revoke() -> None:
+    store = FakeRoleStore()
+    service = RbacService(store, cache_ttl_seconds=60)
+    user_id = uuid.uuid4()
+    await service.assign_role(user_id, "admin")
+    service._permission_cache.pop(user_id, None)
+
+    real_get_user_roles = store.get_user_roles
+    entered = asyncio.Event()
+    resume = asyncio.Event()
+
+    async def paused_get_user_roles(uid: uuid.UUID) -> list[str]:
+        entered.set()
+        # Snapshot roles now (query already in flight before the concurrent revoke lands).
+        snapshot = await real_get_user_roles(uid)
+        await resume.wait()
+        return snapshot
+
+    store.get_user_roles = paused_get_user_roles  # type: ignore[method-assign]
+
+    resolve_task = asyncio.create_task(service.get_permissions(user_id))
+    await entered.wait()
+    assert await service.revoke_role(user_id, "admin") is True
+    resume.set()
+    stale_result = await resolve_task
+    assert PermissionKey.RBAC_MANAGE in stale_result
+
     after_revoke = await service.get_permissions(user_id)
     assert PermissionKey.RBAC_MANAGE not in after_revoke
 

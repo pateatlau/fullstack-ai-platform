@@ -70,7 +70,12 @@ async def lifespan(_: FastAPI):
                 PostgresRoleStore(session),
                 cache_ttl_seconds=settings.security_rbac_cache_ttl_seconds,
             )
-            await service.bootstrap_admins(settings.security_bootstrap_admin_emails)
+            try:
+                await service.bootstrap_admins(settings.security_bootstrap_admin_emails)
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
 
     if settings.plugins_enabled:
         load_plugins(

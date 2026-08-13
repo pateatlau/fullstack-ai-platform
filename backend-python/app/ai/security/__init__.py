@@ -17,9 +17,9 @@ from app.ai.security.rbac.service import RbacService
 from app.ai.security.rbac.store import PostgresRoleStore
 
 __all__ = [
-    "AuthorizationDecision",
     "DEFAULT_ROLE_PERMISSIONS",
     "PERMISSION_REGISTRY",
+    "AuthorizationDecision",
     "Permission",
     "PermissionDeniedError",
     "PermissionKey",

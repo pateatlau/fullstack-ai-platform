@@ -103,6 +103,43 @@ class PostgresRoleStore:
         return self._role_row_to_model(dict(row))
 
     async def get_permission_keys_for_user(self, user_id: uuid.UUID) -> set[str]:
+        assignments = sa.table(
+            "user_role_assignments",
+            sa.column("user_id", sa.types.Uuid()),
+            sa.column("role_id", sa.types.Uuid()),
+        )
+        role_permissions = sa.table(
+            "role_permissions",
+            sa.column("role_id", sa.types.Uuid()),
+            sa.column("permission_id", sa.types.Uuid()),
+        )
+        permissions = sa.table(
+            "permissions",
+            sa.column("id", sa.types.Uuid()),
+            sa.column("key", sa.Text()),
+        )
+        rows = (
+            (
+                await self.session.execute(
+                    select(permissions.c.key)
+                    .select_from(
+                        assignments.join(
+                            role_permissions,
+                            assignments.c.role_id == role_permissions.c.role_id,
+                        ).join(
+                            permissions,
+                            role_permissions.c.permission_id == permissions.c.id,
+                        )
+                    )
+                    .where(assignments.c.user_id == user_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return {str(key) for key in rows}
+
+    async def get_user_roles(self, user_id: uuid.UUID) -> list[str]:
         table = sa.table(
             "user_role_assignments",
             sa.column("user_id", sa.types.Uuid()),
@@ -126,10 +163,7 @@ class PostgresRoleStore:
             .scalars()
             .all()
         )
-        return {str(name) for name in rows}
-
-    async def get_user_roles(self, user_id: uuid.UUID) -> list[str]:
-        return sorted(await self.get_permission_keys_for_user(user_id))
+        return sorted({str(name) for name in rows})
 
     async def assign_role(self, user_id: uuid.UUID, role_name: str) -> bool:
         normalized = role_name.lower()
