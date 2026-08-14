@@ -100,6 +100,8 @@ _INSTRUMENT_LABEL_KEYS: dict[str, frozenset[str]] = {
     "jobs_dead_letter_count": frozenset(),
     # Handler metrics (Epic 10) — per-attempt execution duration by handler type.
     "job_duration_ms": frozenset({"job_type"}),
+    # Epic 11 Phase 3 stub — full security observability lands in Phase 9.
+    "audit_write_failures_total": frozenset(),
 }
 
 
@@ -214,6 +216,10 @@ class MetricInstruments:
         self.job_duration_ms: Histogram = meter.create_histogram(
             "job_duration_ms",
             unit="ms",
+        )
+        # Epic 11 Phase 3 stub — full security observability lands in Phase 9.
+        self.audit_write_failures_total: Counter = meter.create_counter(
+            "audit_write_failures_total"
         )
 
     @classmethod
@@ -642,6 +648,18 @@ def record_job_duration_ms(*, job_type: str, duration_ms: int) -> None:
         instruments.job_duration_ms.record(duration_ms, labels)
 
     _record("job_duration_ms", _emit)
+
+
+def record_audit_write_failure() -> None:
+    """Epic 11 Phase 3 stub: count ``AuditLogger.record()`` DB/validation failures."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    def _emit() -> None:
+        instruments.audit_write_failures_total.add(1)
+
+    _record("audit_write_failures_total", _emit)
 
 
 def assert_label_keys_allowlisted() -> None:

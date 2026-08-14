@@ -25,7 +25,9 @@ if TYPE_CHECKING:
     from app.ai.hitl.store import ApprovalsStore
     from app.ai.hitl.service import AgentApprovalService
     from app.ai.mcp.registry import McpServerRegistry
+    from app.ai.security.audit.logger import AuditLogger
     from app.ai.security.rbac.service import RbacService
+    from app.ai.security.secrets.resolver import SecretResolver
     from app.ai.memory.context_builder import MemoryContextBuilder
     from app.ai.memory.manager import MemoryManager
     from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
@@ -105,6 +107,7 @@ def get_rbac_service(
     return RbacService(
         PostgresRoleStore(session),
         cache_ttl_seconds=settings.security_rbac_cache_ttl_seconds,
+        audit_logger=get_audit_logger(),
     )
 
 
@@ -120,7 +123,36 @@ def _build_rbac_service_for_session(
     return RbacService(
         PostgresRoleStore(session),
         cache_ttl_seconds=settings.security_rbac_cache_ttl_seconds,
+        audit_logger=get_audit_logger(),
     )
+
+
+@lru_cache
+def get_audit_logger() -> "AuditLogger":
+    """Return the process-wide ``AuditLogger`` singleton (Epic 11 Phase 3).
+
+    Every :meth:`AuditLogger.record` call opens its own DB session (never the
+    caller's request-scoped session), so a single instance is safe to share
+    across requests and background tasks.
+    """
+    from app.ai.security.audit.logger import AuditLogger
+    from app.ai.security.audit.store import PostgresAuditStore
+    from app.db.engine import get_sessionmaker
+
+    settings = get_settings()
+    return AuditLogger(PostgresAuditStore(get_sessionmaker()), settings=settings)
+
+
+@lru_cache
+def get_secret_resolver() -> "SecretResolver":
+    """Return the process-wide ``SecretResolver`` singleton (Epic 11 Phase 4).
+
+    ``EnvSecretResolver`` is V2's only implementation — the vault swap point
+    for a future secret-manager-backed resolver.
+    """
+    from app.ai.security.secrets.resolver import EnvSecretResolver
+
+    return EnvSecretResolver()
 
 
 @lru_cache
@@ -188,6 +220,7 @@ def _create_tool_executor(
         settings=settings,
         mcp_permission_policy=mcp_permission_policy,
         rbac_service=rbac_service,
+        audit_logger=get_audit_logger(),
     )
 
 
@@ -320,6 +353,7 @@ def get_agent_approval_service(
             settings.security_governance_enabled
             and settings.security_rbac_enforcement_enabled
         ),
+        audit_logger=get_audit_logger(),
     )
 
 
@@ -936,6 +970,7 @@ def build_agent_approval_service_for_session(
             settings.security_governance_enabled
             and settings.security_rbac_enforcement_enabled
         ),
+        audit_logger=get_audit_logger(),
     )
 
 

@@ -9,12 +9,15 @@ defensive redaction for accidental sensitive or oversized values.
 from __future__ import annotations
 
 import datetime
-import re
 import uuid
 
 from pydantic import BaseModel, Field
 
 from app.ai.jobs.models import BackgroundJob, JobSchedule, JobStatus, ScheduleStatus
+from app.ai.security.redaction import (
+    build_sensitive_key_pattern,
+    looks_like_secret_value,
+)
 
 DEFAULT_JOBS_LIST_LIMIT = 50
 MAX_JOBS_LIST_LIMIT = 100
@@ -22,9 +25,8 @@ MAX_JOBS_LIST_LIMIT = 100
 _MAX_SCALAR_LEN = 256
 _PAYLOAD_KEY_ALLOWLIST = frozenset({"version", "document_id", "user_id", "level"})
 _RESULT_KEY_ALLOWLIST = frozenset({"summary", "counts"})
-_SENSITIVE_KEY_PATTERN = re.compile(
-    r"(secret|password|token|credential|api[_-]?key|metadata|argument|content|bytes|file|path|tool)",
-    re.IGNORECASE,
+_SENSITIVE_KEY_PATTERN = build_sensitive_key_pattern(
+    "metadata", "argument", "content", "bytes", "file", "path", "tool"
 )
 
 __all__ = [
@@ -43,13 +45,7 @@ __all__ = [
 
 
 def _looks_like_secret_string(value: str) -> bool:
-    if len(value) > _MAX_SCALAR_LEN:
-        return True
-    if "/" in value or "\\" in value:
-        return True
-    if value.startswith("eyJ") or value.startswith("sk-"):
-        return True
-    return False
+    return looks_like_secret_value(value, max_len=_MAX_SCALAR_LEN)
 
 
 def _is_safe_scalar(value: object) -> bool:

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import sys
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 
 from app.core.config import Settings
+
+# Deferred import (function-local, see below) to avoid a circular import:
+# app.ai.security's package __init__ transitively imports app.core.logging.
 
 LogContext = TypedDict(
     "LogContext",
@@ -28,14 +30,6 @@ LogContext = TypedDict(
 )
 
 _LOG_CONTEXT: ContextVar[dict[str, Any]] = ContextVar("_log_context")
-
-_SENSITIVE_KEY_PATTERN = re.compile(
-    r"(api[_-]?key|secret|token|password|authorization|id_token|jwt|credential)",
-    re.IGNORECASE,
-)
-_BEARER_PATTERN = re.compile(r"Bearer\s+\S+", re.IGNORECASE)
-_API_KEY_PATTERN = re.compile(r"\bsk-[A-Za-z0-9_-]+\b")
-_JWT_PATTERN = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 
 _STANDARD_RECORD_ATTRS = {
     "args",
@@ -97,7 +91,9 @@ def get_log_context() -> dict[str, Any]:
 
 def sanitize_value(key: str, value: Any) -> Any:
     """Redact sensitive values before they reach log output."""
-    if _SENSITIVE_KEY_PATTERN.search(key):
+    from app.ai.security.redaction import is_sensitive_key
+
+    if is_sensitive_key(key):
         return "[REDACTED]"
 
     if key in {"content", "message_content", "messages", "prompt", "body"}:
@@ -119,10 +115,9 @@ def sanitize_value(key: str, value: Any) -> Any:
 
 
 def sanitize_message(message: str) -> str:
-    redacted = _BEARER_PATTERN.sub("Bearer [REDACTED]", message)
-    redacted = _API_KEY_PATTERN.sub("sk-[REDACTED]", redacted)
-    redacted = _JWT_PATTERN.sub("[REDACTED-JWT]", redacted)
-    return redacted
+    from app.ai.security.redaction import redact_secret_patterns
+
+    return redact_secret_patterns(message)
 
 
 def _record_extras(record: logging.LogRecord) -> dict[str, Any]:

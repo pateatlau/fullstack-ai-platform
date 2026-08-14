@@ -24,7 +24,10 @@ class McpDiscoveryError(Exception):
 class McpAuthenticationError(Exception):
     """Raised when MCP server authentication or credential resolution fails."""
 
-    pass
+    def __init__(self, message: str, *, missing_key: str | None = None) -> None:
+        super().__init__(message)
+        # Key name only — never an attempted/resolved value (audit-safe).
+        self.missing_key = missing_key
 
 
 class McpPermissionDeniedError(Exception):

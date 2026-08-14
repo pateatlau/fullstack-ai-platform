@@ -8,7 +8,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
-from app.core.caller import GUEST_TOKEN_HEADER
+from app.ai.deps import get_audit_logger
+from app.ai.security.audit.actions import AuditAction
+from app.ai.security.audit.logger import AuditLogger
+from app.ai.security.audit.models import AuditOutcome
+from app.core.caller import GUEST_TOKEN_HEADER, CallerContext
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.core.security import AuthConfigError
@@ -62,6 +66,7 @@ async def login_with_google(
     payload: GoogleLoginRequest,
     request: Request,
     service: AuthService = Depends(get_auth_service),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> TokenResponse:
     guest_token = request.headers.get(GUEST_TOKEN_HEADER)
     result = await service.login_with_google(payload.id_token, guest_token)
@@ -70,6 +75,14 @@ async def login_with_google(
         user_id=str(result.user.id),
         route="/api/auth/google",
         method="POST",
+    )
+    await audit_logger.record(
+        actor=CallerContext.for_user(result.user.id),
+        action=AuditAction.LOGIN_SUCCEEDED.value,
+        outcome=AuditOutcome.SUCCESS,
+        resource_type="user",
+        resource_id=str(result.user.id),
+        request=request,
     )
     return TokenResponse(
         access_token=result.access_token,

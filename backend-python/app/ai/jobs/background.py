@@ -9,6 +9,9 @@ from typing import Any
 
 from app.ai.jobs.handlers import register_all_handlers
 from app.ai.jobs.handlers.scheduled_eval import reconcile_evaluation_schedule_status
+from app.ai.jobs.handlers.security_audit_retention import (
+    reconcile_security_audit_retention_schedule_status,
+)
 from app.ai.jobs.queue import PostgresJobQueue
 from app.ai.jobs.registry import JobHandlerRegistry
 from app.ai.jobs.schedule_store import PostgresJobScheduleStore
@@ -52,6 +55,7 @@ async def start_background_jobs(settings: Settings) -> BackgroundJobsRuntime | N
     await queue.reconcile_depth_metrics()
     store = PostgresJobScheduleStore(session_factory)
     await reconcile_evaluation_schedule_status(store, settings)
+    await reconcile_security_audit_retention_schedule_status(store, settings)
     registry = JobHandlerRegistry()
     register_all_handlers(registry, settings=settings, session_factory=session_factory)
 

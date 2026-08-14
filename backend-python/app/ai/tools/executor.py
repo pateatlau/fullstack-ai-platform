@@ -14,6 +14,8 @@ from app.ai.observability.tracing.spans import (
     record_tool_span_outcome,
     tool_span,
 )
+from app.ai.security.audit.actions import AuditAction
+from app.ai.security.audit.models import AuditOutcome
 from app.ai.tools.authorizer import ToolAuthorizer
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext, ToolResult
@@ -23,6 +25,7 @@ from app.core.logging import get_logger
 
 if TYPE_CHECKING:
     from app.ai.mcp.permissions import McpPermissionPolicy
+    from app.ai.security.audit.logger import AuditLogger
     from app.ai.security.rbac.service import RbacService
 
 _logger = get_logger(__name__)
@@ -40,6 +43,7 @@ class ToolExecutor:
         authorizer: ToolAuthorizer | None = None,
         mcp_permission_policy: McpPermissionPolicy | None = None,
         rbac_service: RbacService | None = None,
+        audit_logger: "AuditLogger | None" = None,
     ) -> None:
         self._registry = registry
         self._settings = settings
@@ -48,6 +52,7 @@ class ToolExecutor:
             rbac_service=rbac_service, settings=settings
         )
         self._mcp_permission_policy = mcp_permission_policy
+        self._audit_logger = audit_logger
 
     async def execute(
         self,
@@ -103,6 +108,15 @@ class ToolExecutor:
 
             auth_error = await self._authorizer.authorize(tool, context)
             if auth_error is not None:
+                if self._audit_logger is not None:
+                    await self._audit_logger.record(
+                        actor=context.caller,
+                        action=AuditAction.TOOL_EXECUTION_DENIED.value,
+                        outcome=AuditOutcome.DENIED,
+                        resource_type="tool",
+                        resource_id=tool_name,
+                        metadata={"reason": auth_error},
+                    )
                 return self._finalize(
                     call=call,
                     context=context,

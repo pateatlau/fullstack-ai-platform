@@ -1314,9 +1314,9 @@ _To be verified in Epic 11 Phase 0; source of truth: `docs/audits/post-mvp-v2-ep
 
 _To be updated at each phase completion; release summary will be published at `docs/releases/post-mvp-v2-epic11-release-summary.md`._
 
-| Area                  | State                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Security & Governance | Phase 0 complete — baseline audited. Phase 1 complete — RBAC domain model, migration `0016_security_rbac`, `RbacService`, bootstrap. Phase 2 complete — RBAC enforcement wired into `ToolAuthorizer` (`tools:execute`/`tools:execute:destructive`), HITL stage decisions (`AgentApprovalService`, RBAC-authorized non-owner deciders), and Jobs REST (`jobs:view_all`/`jobs:retry`). Workflow approval node has no `required_stages` concept (N/A, documented). `PolicyContext.caller_role` RBAC-sourcing deferred (still `caller.kind`). |
+| Area                  | State                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Security & Governance | Phase 0 complete — baseline audited. Phase 1 complete — RBAC domain model, migration `0016_security_rbac`, `RbacService`, bootstrap. Phase 2 complete — RBAC enforcement wired into `ToolAuthorizer` (`tools:execute`/`tools:execute:destructive`), HITL stage decisions (`AgentApprovalService`, RBAC-authorized non-owner deciders), and Jobs REST (`jobs:view_all`/`jobs:retry`). Workflow approval node has no `required_stages` concept (N/A, documented). `PolicyContext.caller_role` RBAC-sourcing deferred (still `caller.kind`). Phase 3 complete — `audit_events` table + migration `0017_security_audit_log`, `AuditLogger`/`PostgresAuditStore`/`AuditAction` taxonomy, wired into tool denial/role assign-revoke/HITL stage+terminal decisions/job retry/login; `security_audit_retention_cleanup` Background Jobs handler (sixth first-class handler, flag-gated registration + schedule reconcile). Phase 4 complete — `SecretResolver`/`EnvSecretResolver` (`app/ai/security/secrets/`), `McpServerCredentials.resolve_credential_env_vars()` rebased onto an injected resolver (defaults to `EnvSecretResolver`, byte-for-byte unchanged), `get_secret_resolver()` DI factory; missing-secret resolution audited (`secret.resolution.missing`) from the async `StdioTransport.connect()` call site; consolidated `app/ai/security/redaction.py` (sensitive-key pattern, Bearer/`sk-`/JWT patterns, safe-scalar heuristic, `clear_pii_fields` helper) with `app/core/logging.py`/`app/ai/hitl/models.py`/`app/schemas/jobs.py` all delegating to it with zero behavioural change. |
 
 ---
 
@@ -1327,8 +1327,8 @@ _To be updated at each phase completion; release summary will be published at `d
 | 0     | Baseline Audit                                         | XS     | Complete    |
 | 1     | RBAC Domain Model, Migration & Bootstrap               | L      | Complete    |
 | 2     | RBAC Enforcement — Tools, HITL Stages, Jobs Visibility | L      | Complete    |
-| 3     | Global Audit Log & Retention Cleanup                   | M      | Not Started |
-| 4     | Secret Resolver Abstraction & Redaction Consolidation  | M      | Not Started |
+| 3     | Global Audit Log & Retention Cleanup                   | M      | Complete    |
+| 4     | Secret Resolver Abstraction & Redaction Consolidation  | M      | Complete    |
 | 5     | Rate Limiting & Usage Quota Extensions                 | M      | Not Started |
 | 6     | Shared Rule Engine Extraction & Guardrails             | L      | Not Started |
 | 7     | Unified Governance Policy Context                      | S      | Not Started |
@@ -1338,7 +1338,7 @@ _To be updated at each phase completion; release summary will be published at `d
 | 11    | Frontend Security & Governance Dashboard               | S      | Not Started |
 | 12    | Validation & Release                                   | M      | Not Started |
 
-**Epic 11 overall:** Phases 0–2 complete. Next gate: user authorization to begin Phase 3.
+**Epic 11 overall:** Phases 0–3 complete. Next gate: user authorization to begin Phase 4.
 
 ---
 
@@ -1613,42 +1613,42 @@ Ship the platform-wide `audit_events` table, `AuditLogger` service, wire it into
 
 ## Migration
 
-- [ ] Create `audit_events` table per Part I § Audit Log Domain Model schema.
-- [ ] Add indexes supporting query filters (`actor_user_id`, `action`, `resource_type`, `outcome`, `occurred_at`).
-- [ ] Verify migration upgrade/downgrade round-trip.
+- [x] Create `audit_events` table per Part I § Audit Log Domain Model schema.
+- [x] Add indexes supporting query filters (`actor_user_id`, `action`, `resource_type`, `outcome`, `occurred_at`).
+- [x] Verify migration upgrade/downgrade round-trip.
 
 ## AuditLogger Implementation
 
-- [ ] Implement `AuditAction` str enum in `app/ai/security/audit/actions.py` — all values from Part I § Audit Event Taxonomy; `AuditLogger.record()` validates `action` is a member at call time.
-- [ ] Implement `PostgresAuditStore.insert()` (own short transaction) and `query()` (filters + pagination for the future REST API).
-- [ ] Implement `AuditLogger.record()` per Part I contract — never raises; on DB error, log at `ERROR` and increment `audit_write_failures_total` (stub the metric now, wire in Phase 9).
-- [ ] Populate `trace_id` from the active OTel span context when `OBSERVABILITY_ENABLED=true` (reuse `app/ai/observability/tracing`'s span-context accessor); `null` otherwise.
-- [ ] Populate `source_ip_hash` via the existing `hash_ip()` helper (`app/core/security.py`).
-- [ ] When `security_audit_log_enabled=false` (or master flag off), `AuditLogger.record()` is a no-op (verified by a dedicated test, not just by absence of rows).
+- [x] Implement `AuditAction` str enum in `app/ai/security/audit/actions.py` — all values from Part I § Audit Event Taxonomy; `AuditLogger.record()` validates `action` is a member at call time.
+- [x] Implement `PostgresAuditStore.insert()` (own short transaction) and `query()` (filters + pagination for the future REST API).
+- [x] Implement `AuditLogger.record()` per Part I contract — never raises; on DB error, log at `ERROR` and increment `audit_write_failures_total` (stub the metric now, wire in Phase 9).
+- [x] Populate `trace_id` from the active OTel span context when `OBSERVABILITY_ENABLED=true` (reuse `app/ai/observability/tracing`'s span-context accessor); `null` otherwise.
+- [x] Populate `source_ip_hash` via the existing `hash_ip()` helper (`app/core/security.py`).
+- [x] When `security_audit_log_enabled=false` (or master flag off), `AuditLogger.record()` is a no-op (verified by a dedicated test, not just by absence of rows).
 
 ## Wire Into Phase 2 Call Sites
 
-- [ ] Tool authorization denial → `action="tool.execution.denied"`.
-- [ ] Role assignment/revocation → `action="role.assigned"` / `"role.revoked"`.
-- [ ] HITL stage/terminal decision → `action="approval.decided"`.
-- [ ] Job manual retry → `action="job.retried"`.
-- [ ] Auth login → `action="login.succeeded"` (from `app/routers/auth.py`).
+- [x] Tool authorization denial → `action="tool.execution.denied"`.
+- [x] Role assignment/revocation → `action="role.assigned"` / `"role.revoked"`.
+- [x] HITL stage/terminal decision → `action="approval.decided"`. _(Also wired `approval.stage.completed`/`approval.stage.denied` for intermediate multi-stage decisions, since those denial/success points already existed from Phase 2.)_
+- [x] Job manual retry → `action="job.retried"`.
+- [x] Auth login → `action="login.succeeded"` (from `app/routers/auth.py`).
 
 ## Retention Cleanup Handler
 
-- [ ] Implement `security_audit_retention_cleanup`: batch-delete `audit_events` rows where `occurred_at < now() - security_audit_retention_days`, looped with `LIMIT security_audit_retention_cleanup_batch_size` per statement (mirrors Epic 10's `workflow_run_retention_cleanup` batching).
-- [ ] Register the handler and a seeded `background_job_schedules` row (daily) only when `BACKGROUND_JOBS_ENABLED=true` **and** `SECURITY_GOVERNANCE_ENABLED=true`; document the "grows unbounded until enabled" caveat per Locked Decisions when Background Jobs is off.
-- [ ] Return a `JobResult` with `counts={"audit_events_deleted": N}`.
+- [x] Implement `security_audit_retention_cleanup`: batch-delete `audit_events` rows where `occurred_at < now() - security_audit_retention_days`, looped with `LIMIT security_audit_retention_cleanup_batch_size` per statement (mirrors Epic 10's `workflow_run_retention_cleanup` batching).
+- [x] Register the handler and a seeded `background_job_schedules` row (daily) only when `BACKGROUND_JOBS_ENABLED=true` **and** `SECURITY_GOVERNANCE_ENABLED=true`; document the "grows unbounded until enabled" caveat per Locked Decisions when Background Jobs is off.
+- [x] Return a `JobResult` with `counts={"audit_events_deleted": N}`.
 
 ## Testing
 
-- [ ] Test: every Phase 2 denial/change produces exactly one `audit_events` row with correctly populated `action`/`outcome`/`resource_type`.
-- [ ] Test: a simulated DB failure during `record()` does not raise to the caller and does not affect the guarded action's own outcome.
-- [ ] Test: `trace_id` is populated when observability is on, `null` when off.
-- [ ] Test: `audit_events.metadata` never contains a raw tool argument, credential, or file byte (redaction/allowlist test, same shape as Epic 10's Phase 7 payload-redaction test).
-- [ ] Test: retention cleanup deletes only rows older than `security_audit_retention_days`; recent rows untouched; batching handles more than one batch's worth of eligible rows.
-- [ ] Test: `AuditLogger.record()` rejects unknown action strings in development (taxonomy drift guard).
-- [ ] Test: flag off — zero `audit_events` rows written regardless of activity.
+- [x] Test: every Phase 2 denial/change produces exactly one `audit_events` row with correctly populated `action`/`outcome`/`resource_type`.
+- [x] Test: a simulated DB failure during `record()` does not raise to the caller and does not affect the guarded action's own outcome.
+- [x] Test: `trace_id` is populated when observability is on, `null` when off.
+- [x] Test: `audit_events.metadata` never contains a raw tool argument, credential, or file byte (redaction/allowlist test, same shape as Epic 10's Phase 7 payload-redaction test).
+- [x] Test: retention cleanup deletes only rows older than `security_audit_retention_days`; recent rows untouched; batching handles more than one batch's worth of eligible rows.
+- [x] Test: `AuditLogger.record()` rejects unknown action strings in development (taxonomy drift guard).
+- [x] Test: flag off — zero `audit_events` rows written regardless of activity.
 
 **Verify**
 
@@ -1662,7 +1662,7 @@ Ship the platform-wide `audit_events` table, `AuditLogger` service, wire it into
 
 **Exit criteria**
 
-- [ ] Audit log tests pass.
+- [x] Audit log tests pass.
 - [ ] User confirmation to proceed to Phase 4.
 
 **Rollback**
@@ -1675,7 +1675,7 @@ Ship the platform-wide `audit_events` table, `AuditLogger` service, wire it into
 # Phase 4 — Secret Resolver Abstraction & Redaction Consolidation
 
 **Effort:** M
-**Status:** Not Started
+**Status:** Complete
 
 **Objective**
 
@@ -1693,23 +1693,23 @@ Introduce `SecretResolver` as the indirection point between code and secret stor
 
 ## SecretResolver
 
-- [ ] Implement `SecretResolver` protocol (`resolve(key: str) -> str | None`) and `EnvSecretResolver` (wraps `Settings`/`os.environ`, identical to today's direct-env-read behaviour).
-- [ ] Rebase `McpServerCredentials.resolve_credential_env_vars()` onto an injected `SecretResolver` (DI factory `get_secret_resolver()` in `app/ai/deps.py`).
-- [ ] Audit-log (via `AuditLogger`) a missing-secret resolution as `action="secret.resolution.missing"` with the key name only, never an attempted value.
+- [x] Implement `SecretResolver` protocol (`resolve(key: str) -> str | None`) and `EnvSecretResolver` (wraps `Settings`/`os.environ`, identical to today's direct-env-read behaviour).
+- [x] Rebase `McpServerCredentials.resolve_credential_env_vars()` onto an injected `SecretResolver` (DI factory `get_secret_resolver()` in `app/ai/deps.py`).
+- [x] Audit-log (via `AuditLogger`) a missing-secret resolution as `action="secret.resolution.missing"` with the key name only, never an attempted value.
 
 ## Redaction Consolidation
 
-- [ ] Extract the shared key-pattern/value-pattern redaction logic into `app/ai/security/redaction.py` (single allowlist + Bearer/`sk-`/JWT pattern source).
-- [ ] Refactor `app/core/logging.sanitize_value`/`sanitize_message` to delegate to the shared module.
-- [ ] Refactor `app/ai/hitl/models.py`'s redact helpers to delegate to the shared module.
-- [ ] Refactor `app/schemas/jobs.py`'s redact helpers to delegate to the shared module.
+- [x] Extract the shared key-pattern/value-pattern redaction logic into `app/ai/security/redaction.py` (single allowlist + Bearer/`sk-`/JWT pattern source).
+- [x] Refactor `app/core/logging.sanitize_value`/`sanitize_message` to delegate to the shared module.
+- [x] Refactor `app/ai/hitl/models.py`'s redact helpers to delegate to the shared module.
+- [x] Refactor `app/schemas/jobs.py`'s redact helpers to delegate to the shared module.
 
 ## Testing
 
-- [ ] Regression test: `McpServerCredentials` serialization output is byte-for-byte identical before/after the `SecretResolver` rebase.
-- [ ] Regression test: `sanitize_value`/`sanitize_message` output is byte-for-byte identical before/after delegating to the shared module (run the full existing `tests/test_logging.py` suite unchanged).
-- [ ] Regression test: HITL and Jobs redaction test suites (`tests/ai/hitl/`, `tests/test_jobs_router.py`) pass unchanged.
-- [ ] Test: `EnvSecretResolver.resolve()` for a missing key returns `None` and does not raise.
+- [x] Regression test: `McpServerCredentials` serialization output is byte-for-byte identical before/after the `SecretResolver` rebase.
+- [x] Regression test: `sanitize_value`/`sanitize_message` output is byte-for-byte identical before/after delegating to the shared module (run the full existing `tests/test_logging.py` suite unchanged).
+- [x] Regression test: HITL and Jobs redaction test suites (`tests/ai/hitl/`, `tests/test_jobs_router.py`) pass unchanged.
+- [x] Test: `EnvSecretResolver.resolve()` for a missing key returns `None` and does not raise.
 
 **Verify**
 
@@ -1722,7 +1722,7 @@ Introduce `SecretResolver` as the indirection point between code and secret stor
 
 **Exit criteria**
 
-- [ ] Secret resolver and redaction consolidation tests pass.
+- [x] Secret resolver and redaction consolidation tests pass.
 - [ ] User confirmation to proceed to Phase 5.
 
 **Rollback**
