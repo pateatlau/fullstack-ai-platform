@@ -31,6 +31,7 @@ from app.ai.hitl.exceptions import (
     ApprovalNotFoundError,
     ApprovalValidationError,
     HitlError,
+    StagePermissionInvalidError,
 )
 from app.ai.hitl.models import (
     AgentToolApproval,
@@ -105,6 +106,12 @@ def _raise_hitl_error(exc: HitlError) -> NoReturn:
             message=str(exc),
             status_code=422,
         ) from exc
+    if isinstance(exc, StagePermissionInvalidError):
+        raise AppError(
+            code="stage_permission_invalid",
+            message=str(exc),
+            status_code=403,
+        ) from exc
     raise AppError(
         code="hitl_error",
         message=str(exc),
@@ -121,6 +128,8 @@ def _sse_error_from_hitl(exc: HitlError, *, response_id: str) -> str:
         code = "approval_not_found"
     elif isinstance(exc, ApprovalValidationError):
         code = "validation_error"
+    elif isinstance(exc, StagePermissionInvalidError):
+        code = "stage_permission_invalid"
     else:
         code = "hitl_error"
     return format_sse(
@@ -283,7 +292,7 @@ async def decide_agent_approval(
         try:
             result = await approval_service.decide(
                 approval_id,
-                owner_id=caller.user_id,
+                decider_id=caller.user_id,
                 decision="rejected",
                 reason=reason,
                 comments=comments,
@@ -296,7 +305,7 @@ async def decide_agent_approval(
     try:
         approval = await approval_service.get_owned_approval(
             approval_id,
-            owner_id=caller.user_id,
+            decider_id=caller.user_id,
         )
     except HitlError as exc:
         _raise_hitl_error(exc)
@@ -318,7 +327,7 @@ async def decide_agent_approval(
         try:
             result = await approval_service.record_stage_approval(
                 approval_id,
-                owner_id=caller.user_id,
+                decider_id=caller.user_id,
                 reason=reason,
                 comments=comments,
             )
@@ -397,7 +406,7 @@ async def _stream_approved_decision(
     placeholder: ChatMessage | None,
 ) -> AsyncIterator[str]:
     assert caller.user_id is not None
-    owner_id = caller.user_id
+    decider_id = caller.user_id
 
     request = _build_resume_request(
         model=placeholder.model if placeholder is not None else None,
@@ -424,7 +433,7 @@ async def _stream_approved_decision(
         try:
             return await approval_service.approve_and_resume(
                 approval_id,
-                owner_id=owner_id,
+                decider_id=decider_id,
                 executor=executor,
                 request=request,
                 context=context,

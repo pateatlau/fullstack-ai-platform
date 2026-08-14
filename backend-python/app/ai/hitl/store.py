@@ -152,6 +152,30 @@ class AgentToolApprovalStore:
                 return expired
         return approval
 
+    async def get_any(self, approval_id: uuid.UUID) -> AgentToolApproval | None:
+        """Fetch an approval regardless of owner (Epic 11 Phase 2).
+
+        Used only after an owner-scoped fetch fails, so an RBAC-authorized
+        decider (``approvals:decide_all`` or a matching stage permission) can
+        act on an approval they do not own.
+        """
+        row = await self._session.scalar(
+            select(AgentToolApprovalRecord).where(
+                AgentToolApprovalRecord.id == approval_id
+            )
+        )
+        if row is None:
+            return None
+        approval = await self._map_row_persisting_retention(row)
+        if (
+            approval.status is ApprovalStatus.PENDING
+            and approval.expires_at is not None
+        ):
+            expired = await self._expire_if_due(approval_id, owner_id=approval.owner_id)
+            if expired is not None:
+                return expired
+        return approval
+
     async def require_for_owner(
         self,
         approval_id: uuid.UUID,

@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from app.ai.hitl.store import ApprovalsStore
     from app.ai.hitl.service import AgentApprovalService
     from app.ai.mcp.registry import McpServerRegistry
+    from app.ai.security.rbac.service import RbacService
     from app.ai.memory.context_builder import MemoryContextBuilder
     from app.ai.memory.manager import MemoryManager
     from app.ai.memory.providers.pgvector import PgVectorMemoryProvider
@@ -87,6 +88,41 @@ def get_ai_settings(
     return settings
 
 
+def get_rbac_service(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_ai_settings),
+) -> "RbacService":
+    """Return a request-scoped ``RbacService`` (Epic 11 Phase 2).
+
+    Construction is cheap and side-effect free; callers gate any actual
+    permission check on ``security_governance_enabled`` /
+    ``security_rbac_enforcement_enabled`` so behaviour is unchanged when the
+    flags are off.
+    """
+    from app.ai.security.rbac.service import RbacService
+    from app.ai.security.rbac.store import PostgresRoleStore
+
+    return RbacService(
+        PostgresRoleStore(session),
+        cache_ttl_seconds=settings.security_rbac_cache_ttl_seconds,
+    )
+
+
+def _build_rbac_service_for_session(
+    session: AsyncSession, settings: Settings
+) -> "RbacService":
+    """Non-DI equivalent of :func:`get_rbac_service` for standalone/background
+    executor construction (workflow tool calls, HITL resume, startup
+    reconciliation) so those paths get RBAC-aware tool authorization too."""
+    from app.ai.security.rbac.service import RbacService
+    from app.ai.security.rbac.store import PostgresRoleStore
+
+    return RbacService(
+        PostgresRoleStore(session),
+        cache_ttl_seconds=settings.security_rbac_cache_ttl_seconds,
+    )
+
+
 @lru_cache
 def get_prompt_repository() -> PromptRepository:
     """Return the process-wide ``PromptRepository`` singleton."""
@@ -136,6 +172,7 @@ def _create_tool_executor(
     *,
     registry: ToolRegistry,
     settings: Settings,
+    rbac_service: "RbacService | None" = None,
 ) -> ToolExecutor:
     """Build a ``ToolExecutor`` with MCP permission policy when MCP is enabled."""
     mcp_permission_policy = None
@@ -150,18 +187,24 @@ def _create_tool_executor(
         registry=registry,
         settings=settings,
         mcp_permission_policy=mcp_permission_policy,
+        rbac_service=rbac_service,
     )
 
 
 def get_tool_executor(
     registry: ToolRegistry = Depends(get_tool_registry),
     settings: Settings = Depends(get_settings),
+    rbac_service: "RbacService | None" = Depends(get_rbac_service),
 ) -> ToolExecutor:
     """Build a ``ToolExecutor`` wired to the app-scoped registry and settings.
 
     Phase 9: Includes MCP permission policy when MCP is enabled.
+    Epic 11 Phase 2: Includes RBAC service for tool-tier authorization
+    (only consulted when Security & Governance RBAC enforcement is on).
     """
-    return _create_tool_executor(registry=registry, settings=settings)
+    return _create_tool_executor(
+        registry=registry, settings=settings, rbac_service=rbac_service
+    )
 
 
 def get_hitl_rule_engine(
@@ -254,6 +297,7 @@ def get_agent_approval_service(
     tool_registry: ToolRegistry = Depends(get_tool_registry),
     tool_executor: ToolExecutor = Depends(get_tool_executor),
     settings: Settings = Depends(get_ai_settings),
+    rbac_service: "RbacService" = Depends(get_rbac_service),
 ) -> "AgentApprovalService":
     """Return a request-scoped agent approval orchestrator."""
     from app.ai.hitl.service import AgentApprovalService
@@ -271,6 +315,11 @@ def get_agent_approval_service(
         approval_timeout_hours=settings.hitl_approval_timeout_hours,
         default_model=settings.default_llm_model(),
         notification_dispatcher=get_hitl_notification_dispatcher(),
+        rbac_service=rbac_service,
+        rbac_enforcement_enabled=(
+            settings.security_governance_enabled
+            and settings.security_rbac_enforcement_enabled
+        ),
     )
 
 
@@ -827,7 +876,10 @@ def build_workflow_manager_for_session(
 
     registry = get_tool_registry()
     prompt_manager = get_prompt_manager()
-    tool_executor = _create_tool_executor(registry=registry, settings=settings)
+    rbac_service = _build_rbac_service_for_session(session, settings)
+    tool_executor = _create_tool_executor(
+        registry=registry, settings=settings, rbac_service=rbac_service
+    )
     agent_runtime = create_default_agent(
         settings=settings,
         tool_registry=registry,
@@ -864,6 +916,7 @@ def build_agent_approval_service_for_session(
     from app.db.chat import SqlChatStore
 
     registry = get_tool_registry()
+    rbac_service = _build_rbac_service_for_session(session, settings)
     return AgentApprovalService(
         approval_store=AgentToolApprovalStore(
             session,
@@ -871,11 +924,18 @@ def build_agent_approval_service_for_session(
         ),
         chat_store=SqlChatStore(session),
         tool_registry=registry,
-        tool_executor=_create_tool_executor(registry=registry, settings=settings),
+        tool_executor=_create_tool_executor(
+            registry=registry, settings=settings, rbac_service=rbac_service
+        ),
         scratchpad_store=scratchpad_store or ScratchpadStore(),
         approval_timeout_hours=settings.hitl_approval_timeout_hours,
         default_model=settings.default_llm_model(),
         notification_dispatcher=get_hitl_notification_dispatcher(),
+        rbac_service=rbac_service,
+        rbac_enforcement_enabled=(
+            settings.security_governance_enabled
+            and settings.security_rbac_enforcement_enabled
+        ),
     )
 
 
@@ -884,8 +944,15 @@ def build_hitl_resume_executor(
     *,
     approval_service: "AgentApprovalService | None" = None,
     scratchpad_store: "ScratchpadStore | None" = None,
+    session: AsyncSession | None = None,
 ) -> "AgentExecutor":
-    """Build an ``AgentExecutor`` for background orphan-resume jobs."""
+    """Build an ``AgentExecutor`` for background orphan-resume jobs.
+
+    ``session``, when provided, wires an RBAC-aware tool executor (Epic 11
+    Phase 2) so resumed approved tool calls respect ``tools:execute``/
+    ``tools:execute:destructive``; omitted callers keep the legacy
+    authenticated-only check.
+    """
     from app.ai.agent.executor.agent_executor import AgentExecutor
     from app.ai.agent.executor.tool_runner import ToolRunner
     from app.ai.agent.planner.react_planner import ReActPlanner
@@ -896,7 +963,14 @@ def build_hitl_resume_executor(
 
     registry = get_tool_registry()
     prompt_manager = get_prompt_manager()
-    tool_executor = _create_tool_executor(registry=registry, settings=settings)
+    rbac_service = (
+        _build_rbac_service_for_session(session, settings)
+        if session is not None
+        else None
+    )
+    tool_executor = _create_tool_executor(
+        registry=registry, settings=settings, rbac_service=rbac_service
+    )
     shared_scratchpad_store = scratchpad_store or ScratchpadStore()
     if approval_service is not None:
         approval_service._scratchpad_store = shared_scratchpad_store
@@ -936,16 +1010,19 @@ async def reconcile_workflow_runs_at_startup(settings: Settings) -> int:
 
     registry = get_tool_registry()
     prompt_manager = get_prompt_manager()
-    tool_executor = _create_tool_executor(registry=registry, settings=settings)
-    agent_runtime = create_default_agent(
-        settings=settings,
-        tool_registry=registry,
-        prompt_manager=prompt_manager,
-        tool_executor=tool_executor,
-    )
 
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session:
+        rbac_service = _build_rbac_service_for_session(session, settings)
+        tool_executor = _create_tool_executor(
+            registry=registry, settings=settings, rbac_service=rbac_service
+        )
+        agent_runtime = create_default_agent(
+            settings=settings,
+            tool_registry=registry,
+            prompt_manager=prompt_manager,
+            tool_executor=tool_executor,
+        )
         store = PostgresWorkflowStore(session=session, settings=settings)
 
         def background_store_factory(

@@ -25,6 +25,19 @@ class ApprovalExpiredError(HitlError):
     """Raised when a pending approval is touched after its expiration deadline."""
 
 
+class StagePermissionInvalidError(HitlError):
+    """Raised when the deciding user lacks the current stage's RBAC permission.
+
+    Epic 11 Phase 2: only raised when Security & Governance RBAC enforcement
+    is enabled; the decider must hold either the stage's permission key or
+    ``approvals:decide_all``.
+    """
+
+    def __init__(self, stage: str) -> None:
+        self.stage = stage
+        super().__init__(f"Caller lacks the required permission for stage '{stage}'.")
+
+
 class ToolCallRejectedByPolicyError(HitlError):
     """Raised when the rule-based policy rejects a proposed tool call outright.
 

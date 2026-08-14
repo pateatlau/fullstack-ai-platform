@@ -315,5 +315,7 @@ def test_di_singleton_registry() -> None:
 
 def test_di_executor_wiring() -> None:
     registry = get_tool_registry()
-    executor = get_tool_executor(registry=registry, settings=Settings())
+    executor = get_tool_executor(
+        registry=registry, settings=Settings(), rbac_service=None
+    )
     assert executor._registry is registry

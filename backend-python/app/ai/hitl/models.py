@@ -39,9 +39,12 @@ class StageDecision(BaseModel):
     """One recorded step in a multi-stage approval checklist (recommendation #5).
 
     Stages are named labels supplied by the matching :class:`ApprovalRule`
-    (``required_stages``). Any approval owner may currently satisfy any
-    stage — enforcing that a specific *reviewer identity* holds the
-    required role is deferred to Epic 11 RBAC.
+    (``required_stages``), interpreted as RBAC permission keys. Any
+    authenticated user holding the stage's permission (or
+    ``approvals:decide_all``) may satisfy it when Security & Governance RBAC
+    enforcement is enabled (Epic 11 Phase 2); with enforcement disabled this
+    remains an unenforced, auditable checklist (any owner may satisfy any
+    stage), matching pre-Epic-11 behaviour.
     """
 
     stage: str

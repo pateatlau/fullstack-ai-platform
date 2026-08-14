@@ -23,6 +23,7 @@ from app.core.logging import get_logger
 
 if TYPE_CHECKING:
     from app.ai.mcp.permissions import McpPermissionPolicy
+    from app.ai.security.rbac.service import RbacService
 
 _logger = get_logger(__name__)
 
@@ -38,11 +39,14 @@ class ToolExecutor:
         validator: ToolValidator | None = None,
         authorizer: ToolAuthorizer | None = None,
         mcp_permission_policy: McpPermissionPolicy | None = None,
+        rbac_service: RbacService | None = None,
     ) -> None:
         self._registry = registry
         self._settings = settings
         self._validator = validator or ToolValidator()
-        self._authorizer = authorizer or ToolAuthorizer()
+        self._authorizer = authorizer or ToolAuthorizer(
+            rbac_service=rbac_service, settings=settings
+        )
         self._mcp_permission_policy = mcp_permission_policy
 
     async def execute(
@@ -97,7 +101,7 @@ class ToolExecutor:
                     span=span,
                 )
 
-            auth_error = self._authorizer.authorize(tool, context)
+            auth_error = await self._authorizer.authorize(tool, context)
             if auth_error is not None:
                 return self._finalize(
                     call=call,

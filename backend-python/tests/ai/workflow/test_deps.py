@@ -30,7 +30,9 @@ def test_get_workflow_store_returns_postgres_provider() -> None:
 def test_get_workflow_manager_wires_the_resolved_store() -> None:
     session = AsyncMock()
     settings = Settings(openai_api_key="test-key")
-    tool_executor = get_tool_executor(registry=get_tool_registry(), settings=settings)
+    tool_executor = get_tool_executor(
+        registry=get_tool_registry(), settings=settings, rbac_service=None
+    )
 
     manager = get_workflow_manager(
         store=get_workflow_store(session=session, settings=settings),

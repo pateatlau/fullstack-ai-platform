@@ -32,8 +32,11 @@ from app.ai.agent.state.manager import AgentStateManager
 from app.ai.agent.streaming import NoOpStreamPublisher
 from app.ai.hitl.exceptions import (
     AgentApprovalPauseError,
+    ApprovalExpiredError,
+    ApprovalNotFoundError,
     ApprovalValidationError,
     HitlError,
+    StagePermissionInvalidError,
 )
 from app.ai.hitl.models import (
     AgentToolApproval,
@@ -62,6 +65,8 @@ from app.ai.observability.tracing.spans import (
     hitl_decision_latency_ms,
     record_approval_span_outcome,
 )
+from app.ai.security.rbac.permissions import PermissionKey
+from app.ai.security.rbac.service import RbacService
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext
@@ -212,6 +217,15 @@ class AgentApprovalStore(Protocol):
 
     async def get(self, approval_id: uuid.UUID) -> AgentToolApproval | None: ...
 
+    async def get_any(self, approval_id: uuid.UUID) -> AgentToolApproval | None: ...
+
+    async def get_for_owner(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        owner_id: uuid.UUID,
+    ) -> AgentToolApproval | None: ...
+
     async def claim_pause_snapshot(
         self, approval_id: uuid.UUID
     ) -> AgentToolApproval | None: ...
@@ -270,6 +284,8 @@ class AgentApprovalService:
         approval_timeout_hours: int = 0,
         default_model: str = "gpt-4o-mini",
         notification_dispatcher: NotificationDispatcher | None = None,
+        rbac_service: RbacService | None = None,
+        rbac_enforcement_enabled: bool = False,
     ) -> None:
         self._approval_store = approval_store
         self._chat_store = chat_store
@@ -280,10 +296,98 @@ class AgentApprovalService:
         self._approval_timeout_hours = approval_timeout_hours
         self._default_model = default_model
         self._notification_dispatcher = notification_dispatcher
+        self._rbac_service = rbac_service
+        self._rbac_enforcement_enabled = rbac_enforcement_enabled
 
     async def _notify(self, event: ApprovalNotificationEvent) -> None:
         if self._notification_dispatcher is not None:
             await self._notification_dispatcher.dispatch(event)
+
+    def _rbac_active(self) -> bool:
+        """True when Epic 11 RBAC enforcement should gate stage decisions."""
+        return self._rbac_enforcement_enabled and self._rbac_service is not None
+
+    async def _check_stage_permission(
+        self,
+        *,
+        decider_id: uuid.UUID,
+        stage: str,
+    ) -> None:
+        """Verify the decider holds ``stage`` (or ``approvals:decide_all``).
+
+        Checked immediately before the ``StageDecision`` write (never as an
+        earlier, separate check) so a concurrent role revocation cannot
+        leave a stale, already-granted decision in flight.
+        """
+        if not self._rbac_active():
+            return
+        assert self._rbac_service is not None
+        decide_all = await self._rbac_service.authorize(
+            decider_id, PermissionKey.APPROVALS_DECIDE_ALL
+        )
+        if decide_all.allowed:
+            return
+        stage_decision = await self._rbac_service.authorize(decider_id, stage)
+        if not stage_decision.allowed:
+            raise StagePermissionInvalidError(stage)
+
+    async def _resolve_approval_for_decider(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        decider_id: uuid.UUID,
+    ) -> AgentToolApproval:
+        """Fetch an approval the decider may act on.
+
+        The approval's owner may always act on it (V1 behaviour, unchanged).
+        When RBAC enforcement is enabled, a non-owner caller holding
+        ``approvals:decide_all`` or the permission for the current
+        outstanding stage may also fetch it (Epic 11 Phase 2 — the deciding
+        user, not the approval's owner, is who stage permissions are
+        evaluated against).
+        """
+        approval = await self._approval_store.get_for_owner(
+            approval_id, owner_id=decider_id
+        )
+        if approval is not None:
+            if approval.status is ApprovalStatus.EXPIRED:
+                raise ApprovalExpiredError(
+                    f"Approval {approval_id} expired at "
+                    f"{approval.expires_at.isoformat() if approval.expires_at else 'unknown'}."
+                )
+            return approval
+
+        not_found = ApprovalNotFoundError(
+            f"Approval {approval_id} not found or not owned by caller."
+        )
+        if not self._rbac_active():
+            raise not_found
+
+        candidate = await self._approval_store.get_any(approval_id)
+        if candidate is None:
+            raise not_found
+
+        assert self._rbac_service is not None
+        decide_all = await self._rbac_service.authorize(
+            decider_id, PermissionKey.APPROVALS_DECIDE_ALL
+        )
+        authorized = decide_all.allowed
+        if not authorized and _has_outstanding_stages(candidate):
+            stage_decision = await self._rbac_service.authorize(
+                decider_id, _current_stage(candidate)
+            )
+            authorized = stage_decision.allowed
+
+        # Authorization is resolved before revealing status/expiry to avoid
+        # leaking approval existence to a caller who isn't entitled to see it.
+        if not authorized:
+            raise not_found
+        if candidate.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at "
+                f"{candidate.expires_at.isoformat() if candidate.expires_at else 'unknown'}."
+            )
+        return candidate
 
     async def pause(
         self,
@@ -423,7 +527,7 @@ class AgentApprovalService:
         self,
         approval_id: uuid.UUID,
         *,
-        owner_id: uuid.UUID,
+        decider_id: uuid.UUID,
         decision: Literal["approved", "rejected"],
         edited_calls: list[ProposedToolCall] | None = None,
         reason: str | None = None,
@@ -431,9 +535,9 @@ class AgentApprovalService:
         request_metadata: RequestMetadata | None = None,
     ) -> ApprovalResult:
         """Record a terminal decision. Approve path requires follow-up resume call."""
-        approval = await self._approval_store.require_for_owner(
+        approval = await self._resolve_approval_for_decider(
             approval_id,
-            owner_id=owner_id,
+            decider_id=decider_id,
         )
         if edited_calls is not None:
             _validate_edited_calls(
@@ -452,7 +556,7 @@ class AgentApprovalService:
                 if _has_outstanding_stages(approval):
                     decided = await self._cas_decide_with_stage_append(
                         approval_id,
-                        owner_id=owner_id,
+                        decider_id=decider_id,
                         approval=approval,
                         stage_decision="rejected",
                         status=ApprovalStatus.REJECTED,
@@ -463,9 +567,9 @@ class AgentApprovalService:
                 else:
                     decided = await self._approval_store.cas_decide(
                         approval_id,
-                        owner_id=owner_id,
+                        owner_id=approval.owner_id,
                         status=ApprovalStatus.REJECTED,
-                        decided_by=owner_id,
+                        decided_by=decider_id,
                         reason=reason,
                         comments=comments,
                         request_metadata=request_metadata,
@@ -500,7 +604,7 @@ class AgentApprovalService:
             if _has_outstanding_stages(approval):
                 decided = await self._cas_decide_with_stage_append(
                     approval_id,
-                    owner_id=owner_id,
+                    decider_id=decider_id,
                     approval=approval,
                     stage_decision="approved",
                     status=ApprovalStatus.APPROVED,
@@ -512,9 +616,9 @@ class AgentApprovalService:
             else:
                 decided = await self._approval_store.cas_decide(
                     approval_id,
-                    owner_id=owner_id,
+                    owner_id=approval.owner_id,
                     status=ApprovalStatus.APPROVED,
-                    decided_by=owner_id,
+                    decided_by=decider_id,
                     reason=reason,
                     comments=comments,
                     edited_calls=edited_calls,
@@ -524,7 +628,7 @@ class AgentApprovalService:
                 await self._approval_store.append_revision(
                     approval_id=approval_id,
                     approval_kind=ApprovalKind.AGENT_TOOL,
-                    edited_by=owner_id,
+                    edited_by=decider_id,
                     edited_payload=edited_calls,
                     note=reason,
                 )
@@ -545,7 +649,7 @@ class AgentApprovalService:
         self,
         approval_id: uuid.UUID,
         *,
-        owner_id: uuid.UUID,
+        decider_id: uuid.UUID,
         reason: str | None = None,
         comments: str | None = None,
     ) -> ApprovalResult:
@@ -556,21 +660,23 @@ class AgentApprovalService:
         ``pending`` and no tool execution happens. Callers must route the
         *final* stage's approval through :meth:`approve_and_resume` instead.
         """
-        approval = await self._approval_store.require_for_owner(
+        approval = await self._resolve_approval_for_decider(
             approval_id,
-            owner_id=owner_id,
+            decider_id=decider_id,
         )
         if not _has_outstanding_stages(approval) or _is_final_stage(approval):
             raise ApprovalValidationError(
                 f"Approval {approval_id} must be finalized via decide()/"
                 "approve_and_resume(), not record_stage_approval()."
             )
+        stage = _current_stage(approval)
+        await self._check_stage_permission(decider_id=decider_id, stage=stage)
         updated = await self._approval_store.append_stage_decision(
             approval_id,
-            owner_id=owner_id,
-            stage=_current_stage(approval),
+            owner_id=approval.owner_id,
+            stage=stage,
             decision="approved",
-            decided_by=owner_id,
+            decided_by=decider_id,
             reason=reason,
             comments=comments,
         )
@@ -581,7 +687,7 @@ class AgentApprovalService:
             edited=_has_edits(updated),
             final_payload=_resolve_final_payload(updated),
             reason=reason,
-            approver=owner_id,
+            approver=decider_id,
             decided_at=datetime.datetime.now(datetime.UTC),
             approval_correlation_id=updated.approval_correlation_id,
             comments=comments,
@@ -663,7 +769,7 @@ class AgentApprovalService:
         self,
         approval_id: uuid.UUID,
         *,
-        owner_id: uuid.UUID,
+        decider_id: uuid.UUID,
         executor: AgentExecutor,
         request: AgentRequest,
         context: AgentContext,
@@ -675,9 +781,9 @@ class AgentApprovalService:
         request_metadata: RequestMetadata | None = None,
     ) -> tuple[ApprovalResult, AgentResponse]:
         """Record approval, execute gated tools, and resume the ReAct loop."""
-        approval = await self._approval_store.require_for_owner(
+        approval = await self._resolve_approval_for_decider(
             approval_id,
-            owner_id=owner_id,
+            decider_id=decider_id,
         )
         if edited_calls is not None:
             _validate_edited_calls(
@@ -697,7 +803,7 @@ class AgentApprovalService:
             if _has_outstanding_stages(approval):
                 decided = await self._cas_decide_with_stage_append(
                     approval_id,
-                    owner_id=owner_id,
+                    decider_id=decider_id,
                     approval=approval,
                     stage_decision="approved",
                     status=ApprovalStatus.APPROVED,
@@ -709,9 +815,9 @@ class AgentApprovalService:
             else:
                 decided = await self._approval_store.cas_decide(
                     approval_id,
-                    owner_id=owner_id,
+                    owner_id=approval.owner_id,
                     status=ApprovalStatus.APPROVED,
-                    decided_by=owner_id,
+                    decided_by=decider_id,
                     reason=reason,
                     comments=comments,
                     edited_calls=edited_calls,
@@ -721,7 +827,7 @@ class AgentApprovalService:
                 await self._approval_store.append_revision(
                     approval_id=approval_id,
                     approval_kind=ApprovalKind.AGENT_TOOL,
-                    edited_by=owner_id,
+                    edited_by=decider_id,
                     edited_payload=edited_calls,
                     note=reason,
                 )
@@ -960,11 +1066,11 @@ class AgentApprovalService:
         self,
         approval_id: uuid.UUID,
         *,
-        owner_id: uuid.UUID,
+        decider_id: uuid.UUID,
     ) -> AgentToolApproval:
-        return await self._approval_store.require_for_owner(
+        return await self._resolve_approval_for_decider(
             approval_id,
-            owner_id=owner_id,
+            decider_id=decider_id,
         )
 
     async def get_placeholder_message(
@@ -979,7 +1085,7 @@ class AgentApprovalService:
         self,
         approval_id: uuid.UUID,
         *,
-        owner_id: uuid.UUID,
+        decider_id: uuid.UUID,
         approval: AgentToolApproval,
         stage_decision: Literal["approved", "rejected"],
         status: ApprovalStatus,
@@ -988,23 +1094,29 @@ class AgentApprovalService:
         edited_calls: list[ProposedToolCall] | None = None,
         request_metadata: RequestMetadata | None = None,
     ) -> AgentToolApproval:
-        """Append the current stage, then CAS — rolling back the append on failure."""
+        """Append the current stage, then CAS — rolling back the append on failure.
+
+        ``approval.owner_id`` (never ``decider_id``) scopes the store's CAS
+        writes, since Epic 11 Phase 2 lets an RBAC-authorized non-owner
+        decide a stage; ``decided_by`` always records the actual decider.
+        """
         stage = _current_stage(approval)
+        await self._check_stage_permission(decider_id=decider_id, stage=stage)
         await self._approval_store.append_stage_decision(
             approval_id,
-            owner_id=owner_id,
+            owner_id=approval.owner_id,
             stage=stage,
             decision=stage_decision,
-            decided_by=owner_id,
+            decided_by=decider_id,
             reason=reason,
             comments=comments,
         )
         try:
             return await self._approval_store.cas_decide(
                 approval_id,
-                owner_id=owner_id,
+                owner_id=approval.owner_id,
                 status=status,
-                decided_by=owner_id,
+                decided_by=decider_id,
                 reason=reason,
                 comments=comments,
                 edited_calls=edited_calls,
@@ -1013,7 +1125,7 @@ class AgentApprovalService:
         except HitlError:
             await self._approval_store.rollback_last_stage_decision(
                 approval_id,
-                owner_id=owner_id,
+                owner_id=approval.owner_id,
                 stage=stage,
                 decision=stage_decision,
             )

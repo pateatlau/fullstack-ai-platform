@@ -211,9 +211,11 @@ class ApprovalRule(BaseModel):
     condition: RuleCondition
     outcome: RuleOutcome
     # Sequential approval-stage scaffold (recommendation #5). Recorded and
-    # enforced in order by ``AgentApprovalService.decide`` when non-empty.
-    # Real per-role *identity* enforcement requires Epic 11 RBAC; today any
-    # owner can satisfy any stage, so this behaves as an auditable checklist.
+    # enforced in order by ``AgentApprovalService.decide``/``record_stage_approval``
+    # when non-empty. Each stage string is interpreted as an RBAC permission
+    # key: the deciding user must hold it (or ``approvals:decide_all``) when
+    # Security & Governance RBAC enforcement is enabled (Epic 11 Phase 2);
+    # otherwise this remains an unenforced, auditable checklist as before.
     required_stages: list[str] = Field(default_factory=list)
 
 

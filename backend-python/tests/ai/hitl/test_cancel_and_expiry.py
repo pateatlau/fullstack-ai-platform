@@ -156,7 +156,7 @@ class TestCancel:
         approval_id = await _seed_pending(
             store=store, chat_store=chat_store, owner_id=owner_id
         )
-        await service.decide(approval_id, owner_id=owner_id, decision="rejected")
+        await service.decide(approval_id, decider_id=owner_id, decision="rejected")
 
         with pytest.raises(ApprovalDecisionConflictError):
             await service.cancel(approval_id, owner_id=owner_id)
@@ -207,7 +207,7 @@ class TestLazyExpiration:
         )
 
         with pytest.raises(ApprovalExpiredError):
-            await service.decide(approval_id, owner_id=owner_id, decision="rejected")
+            await service.decide(approval_id, decider_id=owner_id, decision="rejected")
 
     @pytest.mark.anyio
     async def test_touching_expired_approval_transitions_status(self) -> None:
@@ -221,7 +221,7 @@ class TestLazyExpiration:
         )
 
         with pytest.raises(ApprovalExpiredError):
-            await service.get_owned_approval(approval_id, owner_id=owner_id)
+            await service.get_owned_approval(approval_id, decider_id=owner_id)
 
         approval = await store.get(approval_id)
         assert approval is not None
@@ -257,7 +257,7 @@ class TestLazyExpiration:
         )
 
         with pytest.raises(ApprovalExpiredError):
-            await service.record_stage_approval(approval_id, owner_id=owner_id)
+            await service.record_stage_approval(approval_id, decider_id=owner_id)
 
         approval = await store.get(approval_id)
         assert approval is not None
@@ -275,7 +275,7 @@ class TestLazyExpiration:
             store=store, chat_store=chat_store, owner_id=owner_id, expires_at=future
         )
 
-        approval = await service.get_owned_approval(approval_id, owner_id=owner_id)
+        approval = await service.get_owned_approval(approval_id, decider_id=owner_id)
         assert approval.status == ApprovalStatus.PENDING
 
     @pytest.mark.anyio
