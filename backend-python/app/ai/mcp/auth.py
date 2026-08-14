@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 from types import MappingProxyType
 from typing import Any, Sequence
@@ -16,6 +15,7 @@ from pydantic import (
 )
 
 from app.ai.mcp.exceptions import McpAuthenticationError
+from app.ai.security.secrets.resolver import EnvSecretResolver, SecretResolver
 
 
 class McpServerCredentials(BaseModel):
@@ -83,24 +83,31 @@ class McpServerCredentials(BaseModel):
 
 
 def resolve_credential_env_vars(
-    env_vars: dict[str, str], allow_missing: bool = False
+    env_vars: dict[str, str],
+    allow_missing: bool = False,
+    *,
+    resolver: SecretResolver | None = None,
 ) -> dict[str, str]:
     """Resolve environment variable placeholders in credential values.
 
-    Interpolates ${VAR_NAME} placeholders with actual environment variable values
-    at startup. Supports nested placeholders and validates all required vars exist.
+    Interpolates ${VAR_NAME} placeholders with secret values resolved via
+    ``resolver``. Supports nested placeholders and validates all required
+    vars exist.
 
     Args:
         env_vars: Dict with values potentially containing ${VAR_NAME} placeholders.
         allow_missing: If False (default), raise error on missing env vars;
                       if True, preserve placeholder for missing vars.
+        resolver: ``SecretResolver`` to resolve placeholder names against.
+                  Defaults to ``EnvSecretResolver`` (byte-for-byte today's
+                  direct ``os.environ`` behaviour) — the vault swap point.
 
     Returns:
-        Dict with all placeholders replaced by actual env var values.
+        Dict with all placeholders replaced by resolved secret values.
 
     Raises:
-        McpAuthenticationError: If required environment variable is missing
-                               and allow_missing=False.
+        McpAuthenticationError: If a required secret is missing and
+                               allow_missing=False.
 
     Examples:
         >>> os.environ["GITHUB_TOKEN"] = "ghp_abc123"
@@ -119,6 +126,8 @@ def resolve_credential_env_vars(
         ... )
         {'KEY': '${MISSING_VAR}'}  # Placeholder preserved
     """
+    resolver = resolver or EnvSecretResolver()
+
     # Pattern to match ${VAR_NAME} placeholders
     env_var_pattern = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -141,7 +150,7 @@ def resolve_credential_env_vars(
         resolved_value = value
         for env_var_name in matches:
             placeholder = f"${{{env_var_name}}}"
-            env_value = os.environ.get(env_var_name)
+            env_value = resolver.resolve(env_var_name)
 
             if env_value is None:
                 if allow_missing:
@@ -149,8 +158,9 @@ def resolve_credential_env_vars(
                     continue
                 else:
                     raise McpAuthenticationError(
-                        f"Missing required environment variable '{env_var_name}' "
-                        f"referenced in credential field '{key}'"
+                        f"Failed to resolve required secret '{env_var_name}' "
+                        f"referenced in credential field '{key}'",
+                        missing_key=env_var_name,
                     )
 
             resolved_value = resolved_value.replace(placeholder, env_value)

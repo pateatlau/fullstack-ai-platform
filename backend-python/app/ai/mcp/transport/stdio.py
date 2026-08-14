@@ -15,7 +15,11 @@ from typing import Any
 
 from app.ai.mcp.auth import resolve_credential_env_vars
 from app.ai.mcp.config import McpConnectionConfig
-from app.ai.mcp.exceptions import McpConnectionError, McpToolExecutionError
+from app.ai.mcp.exceptions import (
+    McpAuthenticationError,
+    McpConnectionError,
+    McpToolExecutionError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +43,30 @@ class StdioTransport:
         self._request_id_counter = 0
         self._shutdown_timeout_seconds = 5.0
 
+    async def _resolve_env_or_audit(self, env_vars: dict[str, str]) -> dict[str, str]:
+        """Resolve credential env vars, audit-logging (and re-raising) a
+        missing secret by key name only — never an attempted value."""
+        try:
+            from app.ai.deps import get_secret_resolver
+
+            return resolve_credential_env_vars(
+                env_vars, allow_missing=False, resolver=get_secret_resolver()
+            )
+        except McpAuthenticationError as exc:
+            from app.ai.deps import get_audit_logger
+            from app.ai.security.audit.actions import AuditAction
+            from app.ai.security.audit.models import AuditOutcome
+
+            await get_audit_logger().record(
+                actor=None,
+                action=AuditAction.SECRET_RESOLUTION_MISSING.value,
+                outcome=AuditOutcome.ERROR,
+                resource_type="secret",
+                resource_id=exc.missing_key,
+                metadata={"server_name": self.config.name},
+            )
+            raise
+
     async def connect(self, timeout_seconds: float = 10.0) -> None:
         """Spawn MCP server subprocess and establish stdin/stdout streams.
 
@@ -58,8 +86,8 @@ class StdioTransport:
 
         # Merge config env vars (may contain placeholders)
         if self.config.env:
-            resolved_config_env = resolve_credential_env_vars(
-                dict(self.config.env), allow_missing=False
+            resolved_config_env = await self._resolve_env_or_audit(
+                dict(self.config.env)
             )
             env_vars.update(resolved_config_env)
 
@@ -67,8 +95,8 @@ class StdioTransport:
         if self.config.credentials:
             # Resolve credential env vars (interpolate ${VAR_NAME})
             if self.config.credentials.env_vars:
-                resolved_cred_env = resolve_credential_env_vars(
-                    dict(self.config.credentials.env_vars), allow_missing=False
+                resolved_cred_env = await self._resolve_env_or_audit(
+                    dict(self.config.credentials.env_vars)
                 )
                 env_vars.update(resolved_cred_env)
 

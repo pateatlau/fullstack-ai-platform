@@ -65,6 +65,8 @@ from app.ai.observability.tracing.spans import (
     hitl_decision_latency_ms,
     record_approval_span_outcome,
 )
+from app.ai.security.audit.actions import AuditAction
+from app.ai.security.audit.models import AuditOutcome
 from app.ai.security.rbac.permissions import PermissionKey
 from app.ai.security.rbac.service import RbacService
 from app.ai.tools.executor import ToolExecutor
@@ -74,6 +76,9 @@ from app.ai.tools.validator import ToolValidator
 from app.core.caller import CallerContext
 from app.db.models import ChatMessage
 from app.middleware.correlation_id import get_request_id
+
+if TYPE_CHECKING:
+    from app.ai.security.audit.logger import AuditLogger
 
 
 def normalize_hitl_reason(reason: str | None, *, max_length: int) -> str | None:
@@ -286,6 +291,7 @@ class AgentApprovalService:
         notification_dispatcher: NotificationDispatcher | None = None,
         rbac_service: RbacService | None = None,
         rbac_enforcement_enabled: bool = False,
+        audit_logger: "AuditLogger | None" = None,
     ) -> None:
         self._approval_store = approval_store
         self._chat_store = chat_store
@@ -298,6 +304,7 @@ class AgentApprovalService:
         self._notification_dispatcher = notification_dispatcher
         self._rbac_service = rbac_service
         self._rbac_enforcement_enabled = rbac_enforcement_enabled
+        self._audit_logger = audit_logger
 
     async def _notify(self, event: ApprovalNotificationEvent) -> None:
         if self._notification_dispatcher is not None:
@@ -310,6 +317,7 @@ class AgentApprovalService:
     async def _check_stage_permission(
         self,
         *,
+        approval_id: uuid.UUID,
         decider_id: uuid.UUID,
         stage: str,
     ) -> None:
@@ -329,6 +337,15 @@ class AgentApprovalService:
             return
         stage_decision = await self._rbac_service.authorize(decider_id, stage)
         if not stage_decision.allowed:
+            if self._audit_logger is not None:
+                await self._audit_logger.record(
+                    actor=CallerContext.for_user(decider_id),
+                    action=AuditAction.APPROVAL_STAGE_DENIED.value,
+                    outcome=AuditOutcome.DENIED,
+                    resource_type="approval",
+                    resource_id=str(approval_id),
+                    metadata={"stage": stage},
+                )
             raise StagePermissionInvalidError(stage)
 
     async def _resolve_approval_for_decider(
@@ -587,6 +604,15 @@ class AgentApprovalService:
                     finish_reason="rejected",
                     clear_pending=True,
                 )
+            if self._audit_logger is not None:
+                await self._audit_logger.record(
+                    actor=CallerContext.for_user(decider_id),
+                    action=AuditAction.APPROVAL_DECIDED.value,
+                    outcome=AuditOutcome.SUCCESS,
+                    resource_type="approval",
+                    resource_id=str(approval_id),
+                    metadata={"decision": "rejected"},
+                )
             await self._notify_decided(decided)
             return _build_approval_result(
                 decided,
@@ -638,6 +664,15 @@ class AgentApprovalService:
                 decision="approved",
                 edited=_has_edits(decided),
             )
+        if self._audit_logger is not None:
+            await self._audit_logger.record(
+                actor=CallerContext.for_user(decider_id),
+                action=AuditAction.APPROVAL_DECIDED.value,
+                outcome=AuditOutcome.SUCCESS,
+                resource_type="approval",
+                resource_id=str(approval_id),
+                metadata={"decision": "approved"},
+            )
         await self._notify_decided(decided)
         return _build_approval_result(
             decided,
@@ -670,7 +705,9 @@ class AgentApprovalService:
                 "approve_and_resume(), not record_stage_approval()."
             )
         stage = _current_stage(approval)
-        await self._check_stage_permission(decider_id=decider_id, stage=stage)
+        await self._check_stage_permission(
+            approval_id=approval_id, decider_id=decider_id, stage=stage
+        )
         updated = await self._approval_store.append_stage_decision(
             approval_id,
             owner_id=approval.owner_id,
@@ -680,6 +717,15 @@ class AgentApprovalService:
             reason=reason,
             comments=comments,
         )
+        if self._audit_logger is not None:
+            await self._audit_logger.record(
+                actor=CallerContext.for_user(decider_id),
+                action=AuditAction.APPROVAL_STAGE_COMPLETED.value,
+                outcome=AuditOutcome.SUCCESS,
+                resource_type="approval",
+                resource_id=str(approval_id),
+                metadata={"stage": stage, "decision": "approved"},
+            )
         return ApprovalResult(
             approval_id=updated.id,
             approval_kind=ApprovalKind.AGENT_TOOL,
@@ -837,6 +883,15 @@ class AgentApprovalService:
                 decision="approved",
                 edited=_has_edits(decided),
             )
+            if self._audit_logger is not None:
+                await self._audit_logger.record(
+                    actor=CallerContext.for_user(decider_id),
+                    action=AuditAction.APPROVAL_DECIDED.value,
+                    outcome=AuditOutcome.SUCCESS,
+                    resource_type="approval",
+                    resource_id=str(approval_id),
+                    metadata={"decision": "approved"},
+                )
             await self._notify_decided(decided)
             result = _build_approval_result(
                 decided,
@@ -1101,7 +1156,9 @@ class AgentApprovalService:
         decide a stage; ``decided_by`` always records the actual decider.
         """
         stage = _current_stage(approval)
-        await self._check_stage_permission(decider_id=decider_id, stage=stage)
+        await self._check_stage_permission(
+            approval_id=approval_id, decider_id=decider_id, stage=stage
+        )
         await self._approval_store.append_stage_decision(
             approval_id,
             owner_id=approval.owner_id,
@@ -1112,7 +1169,7 @@ class AgentApprovalService:
             comments=comments,
         )
         try:
-            return await self._approval_store.cas_decide(
+            result = await self._approval_store.cas_decide(
                 approval_id,
                 owner_id=approval.owner_id,
                 status=status,
@@ -1122,6 +1179,16 @@ class AgentApprovalService:
                 edited_calls=edited_calls,
                 request_metadata=request_metadata,
             )
+            if self._audit_logger is not None:
+                await self._audit_logger.record(
+                    actor=CallerContext.for_user(decider_id),
+                    action=AuditAction.APPROVAL_STAGE_COMPLETED.value,
+                    outcome=AuditOutcome.SUCCESS,
+                    resource_type="approval",
+                    resource_id=str(approval_id),
+                    metadata={"stage": stage, "decision": stage_decision},
+                )
+            return result
         except HitlError:
             await self._approval_store.rollback_last_stage_decision(
                 approval_id,

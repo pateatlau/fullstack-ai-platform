@@ -89,6 +89,53 @@ class TestStdioTransport:
             with pytest.raises(McpConnectionError, match="Failed to spawn"):
                 await transport.connect()
 
+    async def test_connect_missing_secret_is_audited(self) -> None:
+        """A missing credential env var audit-logs the key name, then re-raises."""
+        from app.ai.deps import get_audit_logger
+        from app.ai.mcp.exceptions import McpAuthenticationError
+        from app.ai.security.audit.actions import AuditAction
+        from app.ai.security.audit.logger import AuditLogger
+        from app.ai.security.audit.models import AuditEvent, AuditOutcome
+        from app.core.config import Settings
+
+        class FakeAuditStore:
+            def __init__(self) -> None:
+                self.events: list[AuditEvent] = []
+
+            async def insert(self, event: AuditEvent) -> None:
+                self.events.append(event)
+
+            async def query(self, **_: object) -> list[AuditEvent]:
+                return list(self.events)
+
+        fake_store = FakeAuditStore()
+        fake_logger = AuditLogger(
+            fake_store,
+            settings=Settings(
+                security_governance_enabled=True, security_audit_log_enabled=True
+            ),
+        )
+        get_audit_logger.cache_clear()
+
+        config = McpConnectionConfig(
+            name="test-server",
+            command="test-mcp-server",
+            env={"TOKEN": "${MISSING_CREDENTIAL_VAR}"},
+            transport="stdio",
+        )
+        transport = StdioTransport(config)
+
+        with patch("app.ai.deps.get_audit_logger", return_value=fake_logger):
+            with pytest.raises(McpAuthenticationError):
+                await transport.connect()
+
+        get_audit_logger.cache_clear()
+        assert len(fake_store.events) == 1
+        event = fake_store.events[0]
+        assert event.action == AuditAction.SECRET_RESOLUTION_MISSING
+        assert event.outcome is AuditOutcome.ERROR
+        assert event.resource_id == "MISSING_CREDENTIAL_VAR"
+
     async def test_connect_already_connected(
         self, mock_config: McpConnectionConfig, mock_process: Mock
     ) -> None:

@@ -6,11 +6,19 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query
 
-from app.ai.deps import get_job_queue, get_job_schedule_store, get_rbac_service
+from app.ai.deps import (
+    get_audit_logger,
+    get_job_queue,
+    get_job_schedule_store,
+    get_rbac_service,
+)
 from app.ai.jobs.exceptions import JobNotFoundError
 from app.ai.jobs.models import JobStatus
 from app.ai.jobs.queue import JobQueue
 from app.ai.jobs.schedule_store import JobScheduleStore
+from app.ai.security.audit.actions import AuditAction
+from app.ai.security.audit.logger import AuditLogger
+from app.ai.security.audit.models import AuditOutcome
 from app.ai.security.errors import SecurityErrorCode
 from app.ai.security.rbac.permissions import PermissionKey
 from app.ai.security.rbac.service import RbacService
@@ -150,6 +158,7 @@ async def retry_dead_letter_job(
     settings: Settings = Depends(get_settings),
     queue: JobQueue = Depends(get_job_queue),
     rbac_service: RbacService = Depends(get_rbac_service),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> JobRetryResponse:
     _require_background_jobs_enabled(settings)
     bind_context(user_id=str(caller.user_id), job_id=str(job_id))
@@ -161,6 +170,13 @@ async def retry_dead_letter_job(
     )
     retried = await queue.retry_dead_letter(job_id)
     if retried is not None:
+        await audit_logger.record(
+            actor=caller,
+            action=AuditAction.JOB_RETRIED.value,
+            outcome=AuditOutcome.SUCCESS,
+            resource_type="job",
+            resource_id=str(job_id),
+        )
         return JobRetryResponse(job=JobResponse.from_domain(retried))
 
     existing = await queue.get(job_id)

@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.ai.security.redaction import clear_pii_fields
+
 
 class ApprovalKind(str, enum.Enum):
     """Surface that produced an approval record."""
@@ -85,9 +87,7 @@ def redact_terminal_client_audit_fields(
     """Strip client PII once an approval leaves the pending window."""
     if approval.status not in _TERMINAL_APPROVAL_STATUSES:
         return approval
-    if approval.source_ip is None and not approval.client_metadata:
-        return approval
-    return approval.model_copy(update={"source_ip": None, "client_metadata": {}})
+    return clear_pii_fields(approval, source_ip=None, client_metadata={})
 
 
 class AgentToolApproval(BaseModel):
@@ -188,9 +188,7 @@ class ApprovalAuditEntry(BaseModel):
 
 def redact_client_audit_fields(approval: AgentToolApproval) -> AgentToolApproval:
     """Remove pending client audit fields without changing approval status."""
-    if approval.source_ip is None and not approval.client_metadata:
-        return approval
-    return approval.model_copy(update={"source_ip": None, "client_metadata": {}})
+    return clear_pii_fields(approval, source_ip=None, client_metadata={})
 
 
 def client_audit_retention_expired(

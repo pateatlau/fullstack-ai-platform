@@ -79,6 +79,29 @@ class TestResolveCredentialEnvVars:
 
         assert "MISSING_VAR" in str(exc_info.value)
         assert "TOKEN" in str(exc_info.value)
+        assert exc_info.value.missing_key == "MISSING_VAR"
+
+    def test_default_resolver_is_env_secret_resolver(self) -> None:
+        """No injected resolver falls back to EnvSecretResolver (os.environ)."""
+        with patch.dict(os.environ, {"PLAIN_VAR": "plain_value"}, clear=False):
+            env_vars = {"TOKEN": "${PLAIN_VAR}"}
+
+            result = resolve_credential_env_vars(env_vars)
+
+            assert result == {"TOKEN": "plain_value"}
+
+    def test_injected_resolver_is_the_vault_swap_point(self) -> None:
+        """A caller-supplied SecretResolver is consulted instead of os.environ."""
+
+        class FakeResolver:
+            def resolve(self, key: str) -> str | None:
+                return {"VAULT_SECRET": "vault_value"}.get(key)
+
+        env_vars = {"TOKEN": "${VAULT_SECRET}"}
+
+        result = resolve_credential_env_vars(env_vars, resolver=FakeResolver())
+
+        assert result == {"TOKEN": "vault_value"}
 
     def test_placeholder_missing_preserved_if_allowed(self) -> None:
         """Missing env var preserves placeholder when allow_missing=True."""

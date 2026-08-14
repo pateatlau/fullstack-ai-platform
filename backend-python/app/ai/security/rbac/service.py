@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import time
 import uuid
+from typing import TYPE_CHECKING
 
+from app.ai.security.audit.actions import AuditAction
+from app.ai.security.audit.models import AuditOutcome
 from app.ai.security.errors import SecurityErrorCode
 from app.ai.security.exceptions import PermissionDeniedError, RoleNotFoundError
 from app.ai.security.rbac.models import (
@@ -17,6 +20,10 @@ from app.ai.security.rbac.permissions import (
 )
 from app.ai.security.rbac.store import RoleStore
 
+if TYPE_CHECKING:
+    from app.ai.security.audit.logger import AuditLogger
+    from app.core.caller import CallerContext
+
 
 class RbacService:
     def __init__(
@@ -24,9 +31,11 @@ class RbacService:
         store: RoleStore | None = None,
         *,
         cache_ttl_seconds: int = 60,
+        audit_logger: "AuditLogger | None" = None,
     ) -> None:
         self.store = store
         self.cache_ttl_seconds = max(cache_ttl_seconds, 0)
+        self._audit_logger = audit_logger
         self._permission_cache: dict[uuid.UUID, tuple[float, set[str]]] = {}
         self._cache_generation: dict[uuid.UUID, int] = {}
 
@@ -120,7 +129,13 @@ class RbacService:
             denial_reason=SecurityErrorCode.PERMISSION_DENIED,
         )
 
-    async def assign_role(self, user_id: uuid.UUID, role_name: str) -> bool:
+    async def assign_role(
+        self,
+        user_id: uuid.UUID,
+        role_name: str,
+        *,
+        actor: "CallerContext | None" = None,
+    ) -> bool:
         if self.store is None:
             raise RuntimeError("RbacService requires a RoleStore")
         role = await self.store.get_role_by_name(role_name)
@@ -130,17 +145,44 @@ class RbacService:
         if assigned:
             self._cache_generation[user_id] = self._cache_generation.get(user_id, 0) + 1
             self._permission_cache.pop(user_id, None)
+        if assigned and self._audit_logger is not None:
+            await self._audit_logger.record(
+                actor=actor,
+                action=AuditAction.ROLE_ASSIGNED.value,
+                outcome=AuditOutcome.SUCCESS,
+                resource_type="role",
+                resource_id=str(user_id),
+                metadata={"role": role.name},
+            )
         return assigned
 
-    async def revoke_role(self, user_id: uuid.UUID, role_name: str) -> bool:
+    async def revoke_role(
+        self,
+        user_id: uuid.UUID,
+        role_name: str,
+        *,
+        actor: "CallerContext | None" = None,
+    ) -> bool:
         if self.store is None:
             raise RuntimeError("RbacService requires a RoleStore")
         if role_name.lower() == "member":
             raise PermissionDeniedError("member")
+        role = await self.store.get_role_by_name(role_name)
+        if role is None:
+            raise RoleNotFoundError(role_name)
         revoked = await self.store.revoke_role(user_id, role_name)
         if revoked:
             self._cache_generation[user_id] = self._cache_generation.get(user_id, 0) + 1
             self._permission_cache.pop(user_id, None)
+        if revoked and self._audit_logger is not None:
+            await self._audit_logger.record(
+                actor=actor,
+                action=AuditAction.ROLE_REVOKED.value,
+                outcome=AuditOutcome.SUCCESS,
+                resource_type="role",
+                resource_id=str(user_id),
+                metadata={"role": role.name},
+            )
         return revoked
 
     async def list_roles(self) -> list[Role]:

@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     security_bootstrap_admin_emails: list[str] = Field(default_factory=list)
     security_rbac_cache_ttl_seconds: int = Field(default=60, ge=0)
 
+    # Epic 11 Phase 3: platform-wide audit log + retention cleanup. Consulted
+    # only when ``security_governance_enabled`` is also true.
+    security_audit_log_enabled: bool = True
+    security_audit_retention_days: int = Field(default=365, ge=1)
+    security_audit_retention_cleanup_batch_size: int = Field(default=500, ge=1)
+
     # AI / RAG configuration matrix (Phase 1). Feature flags default off so
     # MVP chat/auth/persistence behave identically until later phases enable
     # RAG and tool endpoints.
