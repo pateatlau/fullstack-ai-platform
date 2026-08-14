@@ -30,6 +30,7 @@ _OUTCOME_CHECK = "outcome IN ('success', 'denied', 'error')"
 _SCHEDULE_NAME = "security-audit-retention-cleanup"
 _SCHEDULE_JOB_TYPE = "security_audit_retention_cleanup"
 _SCHEDULE_INTERVAL_SECONDS = 86400
+_SCHEDULE_MIGRATION_MARKER = revision
 
 
 def upgrade() -> None:
@@ -74,7 +75,10 @@ def upgrade() -> None:
                 :id,
                 :name,
                 :job_type,
-                '{"version": 1}'::jsonb,
+                jsonb_build_object(
+                    'version', 1,
+                    '_migration_revision', :migration_marker
+                ),
                 :interval_seconds,
                 now(),
                 1,
@@ -90,14 +94,22 @@ def upgrade() -> None:
             name=_SCHEDULE_NAME,
             job_type=_SCHEDULE_JOB_TYPE,
             interval_seconds=_SCHEDULE_INTERVAL_SECONDS,
+            migration_marker=_SCHEDULE_MIGRATION_MARKER,
         )
     )
 
 
 def downgrade() -> None:
     op.execute(
-        sa.text("DELETE FROM background_job_schedules WHERE name = :name").bindparams(
-            name=_SCHEDULE_NAME
+        sa.text(
+            """
+            DELETE FROM background_job_schedules
+            WHERE name = :name
+              AND payload->>'_migration_revision' = :migration_marker
+            """
+        ).bindparams(
+            name=_SCHEDULE_NAME,
+            migration_marker=_SCHEDULE_MIGRATION_MARKER,
         )
     )
     op.drop_table("audit_events")

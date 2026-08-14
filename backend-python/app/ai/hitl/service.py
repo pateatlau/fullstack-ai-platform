@@ -883,6 +883,15 @@ class AgentApprovalService:
                 decision="approved",
                 edited=_has_edits(decided),
             )
+            if self._audit_logger is not None:
+                await self._audit_logger.record(
+                    actor=CallerContext.for_user(decider_id),
+                    action=AuditAction.APPROVAL_DECIDED.value,
+                    outcome=AuditOutcome.SUCCESS,
+                    resource_type="approval",
+                    resource_id=str(approval_id),
+                    metadata={"decision": "approved"},
+                )
             await self._notify_decided(decided)
             result = _build_approval_result(
                 decided,
@@ -1159,17 +1168,8 @@ class AgentApprovalService:
             reason=reason,
             comments=comments,
         )
-        if self._audit_logger is not None:
-            await self._audit_logger.record(
-                actor=CallerContext.for_user(decider_id),
-                action=AuditAction.APPROVAL_STAGE_COMPLETED.value,
-                outcome=AuditOutcome.SUCCESS,
-                resource_type="approval",
-                resource_id=str(approval_id),
-                metadata={"stage": stage, "decision": stage_decision},
-            )
         try:
-            return await self._approval_store.cas_decide(
+            result = await self._approval_store.cas_decide(
                 approval_id,
                 owner_id=approval.owner_id,
                 status=status,
@@ -1179,6 +1179,16 @@ class AgentApprovalService:
                 edited_calls=edited_calls,
                 request_metadata=request_metadata,
             )
+            if self._audit_logger is not None:
+                await self._audit_logger.record(
+                    actor=CallerContext.for_user(decider_id),
+                    action=AuditAction.APPROVAL_STAGE_COMPLETED.value,
+                    outcome=AuditOutcome.SUCCESS,
+                    resource_type="approval",
+                    resource_id=str(approval_id),
+                    metadata={"stage": stage, "decision": stage_decision},
+                )
+            return result
         except HitlError:
             await self._approval_store.rollback_last_stage_decision(
                 approval_id,

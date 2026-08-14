@@ -1338,7 +1338,7 @@ _To be updated at each phase completion; release summary will be published at `d
 | 11    | Frontend Security & Governance Dashboard               | S      | Not Started |
 | 12    | Validation & Release                                   | M      | Not Started |
 
-**Epic 11 overall:** Phases 0–3 complete. Next gate: user authorization to begin Phase 4.
+**Epic 11 overall:** Phases 0–4 complete. Next gate: user authorization to begin Phase 5.
 
 ---
 

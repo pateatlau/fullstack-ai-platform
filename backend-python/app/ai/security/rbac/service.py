@@ -152,7 +152,7 @@ class RbacService:
                 outcome=AuditOutcome.SUCCESS,
                 resource_type="role",
                 resource_id=str(user_id),
-                metadata={"role": role_name},
+                metadata={"role": role.name},
             )
         return assigned
 
@@ -167,6 +167,9 @@ class RbacService:
             raise RuntimeError("RbacService requires a RoleStore")
         if role_name.lower() == "member":
             raise PermissionDeniedError("member")
+        role = await self.store.get_role_by_name(role_name)
+        if role is None:
+            raise RoleNotFoundError(role_name)
         revoked = await self.store.revoke_role(user_id, role_name)
         if revoked:
             self._cache_generation[user_id] = self._cache_generation.get(user_id, 0) + 1
@@ -178,7 +181,7 @@ class RbacService:
                 outcome=AuditOutcome.SUCCESS,
                 resource_type="role",
                 resource_id=str(user_id),
-                metadata={"role": role_name},
+                metadata={"role": role.name},
             )
         return revoked
 

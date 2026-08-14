@@ -47,7 +47,11 @@ class StdioTransport:
         """Resolve credential env vars, audit-logging (and re-raising) a
         missing secret by key name only — never an attempted value."""
         try:
-            return resolve_credential_env_vars(env_vars, allow_missing=False)
+            from app.ai.deps import get_secret_resolver
+
+            return resolve_credential_env_vars(
+                env_vars, allow_missing=False, resolver=get_secret_resolver()
+            )
         except McpAuthenticationError as exc:
             from app.ai.deps import get_audit_logger
             from app.ai.security.audit.actions import AuditAction
@@ -55,7 +59,7 @@ class StdioTransport:
 
             await get_audit_logger().record(
                 actor=None,
-                action=AuditAction.SECRET_RESOLUTION_MISSING,
+                action=AuditAction.SECRET_RESOLUTION_MISSING.value,
                 outcome=AuditOutcome.ERROR,
                 resource_type="secret",
                 resource_id=exc.missing_key,

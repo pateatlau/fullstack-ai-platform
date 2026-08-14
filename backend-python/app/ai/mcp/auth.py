@@ -158,7 +158,7 @@ def resolve_credential_env_vars(
                     continue
                 else:
                     raise McpAuthenticationError(
-                        f"Missing required environment variable '{env_var_name}' "
+                        f"Failed to resolve required secret '{env_var_name}' "
                         f"referenced in credential field '{key}'",
                         missing_key=env_var_name,
                     )
