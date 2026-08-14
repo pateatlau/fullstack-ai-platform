@@ -418,10 +418,10 @@ async def _run_orphan_sweep_resume(
         db_session: AsyncSession,
         service: AgentApprovalService,
     ) -> AgentExecutor:
-        del db_session
         executor = build_hitl_resume_executor(
             eval_settings,
             approval_service=service,
+            session=db_session,
         )
         executor.resume_from_approval = _stub_resume  # type: ignore[method-assign]
         return executor

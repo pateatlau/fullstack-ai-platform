@@ -82,10 +82,10 @@ async def test_duplicate_decision_returns_409() -> None:
         paused_state={"status": "waiting_approval"},
     )
 
-    await service.decide(approval.id, owner_id=owner_id, decision="rejected")
+    await service.decide(approval.id, decider_id=owner_id, decision="rejected")
 
     with pytest.raises(ApprovalDecisionConflictError):
-        await service.decide(approval.id, owner_id=owner_id, decision="rejected")
+        await service.decide(approval.id, decider_id=owner_id, decision="rejected")
 
 
 @pytest.mark.anyio
@@ -111,8 +111,8 @@ async def test_concurrent_decisions_only_one_wins() -> None:
     )
 
     results = await asyncio.gather(
-        service.decide(approval.id, owner_id=owner_id, decision="approved"),
-        service.decide(approval.id, owner_id=owner_id, decision="rejected"),
+        service.decide(approval.id, decider_id=owner_id, decision="approved"),
+        service.decide(approval.id, decider_id=owner_id, decision="rejected"),
         return_exceptions=True,
     )
     errors = [item for item in results if isinstance(item, Exception)]
@@ -153,7 +153,7 @@ async def test_invalid_edited_calls_on_decide_stay_pending() -> None:
     with pytest.raises(ApprovalValidationError):
         await service.approve_and_resume(
             approval.id,
-            owner_id=owner_id,
+            decider_id=owner_id,
             executor=executor,
             request=AgentRequest(
                 messages=[AgentMessage(role="user", content="notify")],
@@ -224,7 +224,7 @@ async def test_stale_approval_id_raises_not_found() -> None:
     service, _, _ = build_approval_service(registry=reference_tool_registry())
 
     with pytest.raises(ApprovalNotFoundError):
-        await service.decide(uuid.uuid4(), owner_id=owner_id, decision="approved")
+        await service.decide(uuid.uuid4(), decider_id=owner_id, decision="approved")
 
 
 @pytest.mark.anyio
@@ -249,7 +249,7 @@ async def test_decide_on_terminal_approval_raises_conflict() -> None:
         paused_scratchpad=[],
         paused_state={"status": "waiting_approval"},
     )
-    await service.decide(approval.id, owner_id=owner_id, decision="rejected")
+    await service.decide(approval.id, decider_id=owner_id, decision="rejected")
 
     with pytest.raises(ApprovalDecisionConflictError):
         await service.revise(
@@ -288,7 +288,7 @@ async def test_plugin_tool_full_pause_decide_resume_loop() -> None:
     pending = approval_store.rows[0]
     await service.approve_and_resume(
         approval_id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         executor=executor,
         request=AgentRequest(
             messages=[AgentMessage(role="user", content="plugin")],
@@ -330,7 +330,7 @@ async def test_mcp_tool_full_pause_decide_resume_loop() -> None:
     pending = approval_store.rows[0]
     await service.approve_and_resume(
         approval_id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         executor=executor,
         request=AgentRequest(
             messages=[AgentMessage(role="user", content="mcp")],
@@ -386,7 +386,7 @@ async def test_multiple_approvals_in_one_conversation() -> None:
     )
     _, second = await service.approve_and_resume(
         first_id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         executor=executor,
         request=request,
         context=context,
@@ -403,7 +403,7 @@ async def test_multiple_approvals_in_one_conversation() -> None:
 
     _, final = await service.approve_and_resume(
         approval_store.rows[1].id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         executor=executor,
         request=request,
         context=context,
@@ -509,7 +509,7 @@ async def test_streaming_interruption_leaves_resumable_pending_approval() -> Non
     ):
         _, response = await service.approve_and_resume(
             pending.id,
-            owner_id=owner_id,
+            decider_id=owner_id,
             executor=resume_executor,
             request=request,
             context=context,
@@ -646,7 +646,7 @@ async def test_expiry_sweep_race_with_decide_only_one_wins(db_session) -> None:
             try:
                 result = await service.decide(
                     approval.id,
-                    owner_id=user.id,
+                    decider_id=user.id,
                     decision="rejected",
                 )
             except ApprovalExpiredError:
@@ -738,6 +738,6 @@ async def test_expiry_sweep_race_with_decide_only_one_wins(db_session) -> None:
         with pytest.raises(ApprovalExpiredError):
             await service.decide(
                 race_lost.id,
-                owner_id=user.id,
+                decider_id=user.id,
                 decision="rejected",
             )

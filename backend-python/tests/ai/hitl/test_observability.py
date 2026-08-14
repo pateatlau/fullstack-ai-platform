@@ -314,7 +314,7 @@ async def test_decide_reject_emits_span_and_decision_metrics(
 
     await service.decide(
         approval.id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         decision="rejected",
         reason="no",
     )
@@ -370,7 +370,7 @@ async def test_decide_reject_records_metrics_before_placeholder_update_fails(
     with pytest.raises(RuntimeError, match="update failed"):
         await service.decide(
             approval.id,
-            owner_id=owner_id,
+            decider_id=owner_id,
             decision="rejected",
         )
 
@@ -407,7 +407,7 @@ async def test_approve_and_resume_links_tool_span_correlation_id(
 
     await service.approve_and_resume(
         approval.id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         executor=_resume_executor(registry=registry, scratchpad_store=scratchpad_store),
         request=AgentRequest(
             messages=[AgentMessage(role="user", content="delete")],
@@ -505,7 +505,7 @@ async def test_resume_does_not_leak_approval_correlation_id_to_later_tools(
 
     await service.approve_and_resume(
         approval.id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         executor=executor,
         request=AgentRequest(
             messages=[AgentMessage(role="user", content="delete")],

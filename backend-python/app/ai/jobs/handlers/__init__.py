@@ -48,6 +48,7 @@ def register_all_handlers(
             build_resume_executor=lambda session, service: build_hitl_resume_executor(
                 settings,
                 approval_service=service,
+                session=session,
             ),
         )
 

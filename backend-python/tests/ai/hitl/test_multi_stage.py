@@ -150,7 +150,7 @@ class TestRecordStageApproval:
         )
 
         result = await service.record_stage_approval(
-            approval_id, owner_id=owner_id, reason="looks fine"
+            approval_id, decider_id=owner_id, reason="looks fine"
         )
 
         assert result.status == ApprovalStatus.PENDING
@@ -177,7 +177,7 @@ class TestRecordStageApproval:
 
         result = await service.record_stage_approval(
             approval_id,
-            owner_id=owner_id,
+            decider_id=owner_id,
             reason="manager ok",
             comments="please review carefully",
         )
@@ -201,9 +201,9 @@ class TestRecordStageApproval:
             owner_id=owner_id,
             required_stages=["manager", "security", "compliance"],
         )
-        await service.record_stage_approval(approval_id, owner_id=owner_id)
+        await service.record_stage_approval(approval_id, decider_id=owner_id)
 
-        result = await service.record_stage_approval(approval_id, owner_id=owner_id)
+        result = await service.record_stage_approval(approval_id, decider_id=owner_id)
 
         assert result.status == ApprovalStatus.PENDING
         assert result.outstanding_stages == ["compliance"]
@@ -222,7 +222,7 @@ class TestRecordStageApproval:
         )
 
         with pytest.raises(ApprovalValidationError):
-            await service.record_stage_approval(approval_id, owner_id=owner_id)
+            await service.record_stage_approval(approval_id, decider_id=owner_id)
 
     @pytest.mark.anyio
     async def test_rejects_call_when_no_stages_configured(self) -> None:
@@ -235,7 +235,7 @@ class TestRecordStageApproval:
         )
 
         with pytest.raises(ApprovalValidationError):
-            await service.record_stage_approval(approval_id, owner_id=owner_id)
+            await service.record_stage_approval(approval_id, decider_id=owner_id)
 
 
 class TestFinalStageDecide:
@@ -251,10 +251,10 @@ class TestFinalStageDecide:
             owner_id=owner_id,
             required_stages=["manager", "security"],
         )
-        await service.record_stage_approval(approval_id, owner_id=owner_id)
+        await service.record_stage_approval(approval_id, decider_id=owner_id)
 
         result = await service.decide(
-            approval_id, owner_id=owner_id, decision="rejected"
+            approval_id, decider_id=owner_id, decision="rejected"
         )
 
         assert result.status == ApprovalStatus.REJECTED
@@ -277,13 +277,13 @@ class TestFinalStageDecide:
             owner_id=owner_id,
             required_stages=["manager", "security"],
         )
-        await service.record_stage_approval(approval_id, owner_id=owner_id)
+        await service.record_stage_approval(approval_id, decider_id=owner_id)
         registry = _registry()
         caller = CallerContext.for_user(owner_id)
 
         _, response = await service.approve_and_resume(
             approval_id,
-            owner_id=owner_id,
+            decider_id=owner_id,
             executor=_resume_executor(
                 registry=registry, scratchpad_store=scratchpad_store
             ),
@@ -330,7 +330,7 @@ class TestFinalStageDecide:
 
         await service.approve_and_resume(
             approval_id,
-            owner_id=owner_id,
+            decider_id=owner_id,
             executor=_resume_executor(
                 registry=registry, scratchpad_store=scratchpad_store
             ),
@@ -372,7 +372,7 @@ class TestIntermediateStageGuard:
         )
 
         with pytest.raises(ApprovalValidationError):
-            await service.decide(approval_id, owner_id=owner_id, decision="approved")
+            await service.decide(approval_id, decider_id=owner_id, decision="approved")
 
         approval = await store.get(approval_id)
         assert approval is not None
@@ -401,7 +401,7 @@ class TestIntermediateStageGuard:
         with pytest.raises(ApprovalValidationError):
             await service.approve_and_resume(
                 approval_id,
-                owner_id=owner_id,
+                decider_id=owner_id,
                 executor=_resume_executor(
                     registry=registry, scratchpad_store=scratchpad_store
                 ),
@@ -455,7 +455,7 @@ class TestStageAppendRollback:
         )
 
         with pytest.raises(HitlError, match="simulated CAS failure"):
-            await service.decide(approval_id, owner_id=owner_id, decision="rejected")
+            await service.decide(approval_id, decider_id=owner_id, decision="rejected")
 
         approval = await store.get(approval_id)
         assert approval is not None

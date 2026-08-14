@@ -301,7 +301,7 @@ async def test_expiry_sweep_race_with_decide_only_one_wins(db_session) -> None:
             try:
                 result = await service.decide(
                     approval.id,
-                    owner_id=user.id,
+                    decider_id=user.id,
                     decision="rejected",
                 )
             except ApprovalExpiredError:

@@ -75,7 +75,7 @@ async def test_agent_full_pause_decide_resume_loop() -> None:
     ):
         _, response = await service.approve_and_resume(
             pending.id,
-            owner_id=owner_id,
+            decider_id=owner_id,
             executor=executor,
             request=request,
             context=context,
@@ -183,7 +183,7 @@ async def test_agent_approve_with_edits_executes_edited_payload() -> None:
     ):
         await service.approve_and_resume(
             pending.id,
-            owner_id=owner_id,
+            decider_id=owner_id,
             executor=executor,
             request=request,
             context=context,
@@ -223,7 +223,7 @@ async def test_agent_reject_skips_tool_execution() -> None:
 
     result = await service.decide(
         approval_store.rows[0].id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         decision="rejected",
         reason="not now",
     )

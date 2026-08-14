@@ -179,7 +179,7 @@ async def test_approve_as_is_executes_and_finalizes() -> None:
 
     _, response = await service.approve_and_resume(
         approval_id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         executor=_resume_executor(registry=registry, scratchpad_store=scratchpad_store),
         request=AgentRequest(
             messages=[AgentMessage(role="user", content="delete")],
@@ -227,7 +227,7 @@ async def test_approve_with_edited_calls_executes_edited_arguments() -> None:
 
     await service.approve_and_resume(
         approval_id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         executor=_resume_executor(registry=registry, scratchpad_store=scratchpad_store),
         request=AgentRequest(
             messages=[AgentMessage(role="user", content="delete")],
@@ -266,7 +266,7 @@ async def test_approve_invalid_edited_calls_stays_pending() -> None:
     with pytest.raises(ApprovalValidationError):
         await service.approve_and_resume(
             approval_id,
-            owner_id=owner_id,
+            decider_id=owner_id,
             executor=_resume_executor(
                 registry=registry, scratchpad_store=ScratchpadStore()
             ),
@@ -310,7 +310,7 @@ async def test_reject_never_executes_tool() -> None:
 
     result = await service.decide(
         approval_id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         decision="rejected",
         reason="too risky",
     )
@@ -331,10 +331,10 @@ async def test_duplicate_decision_raises_409() -> None:
     approval_id, _ = await _seed_pending(
         store=store, chat_store=chat_store, owner_id=owner_id
     )
-    await service.decide(approval_id, owner_id=owner_id, decision="rejected")
+    await service.decide(approval_id, decider_id=owner_id, decision="rejected")
 
     with pytest.raises(ApprovalDecisionConflictError):
-        await service.decide(approval_id, owner_id=owner_id, decision="rejected")
+        await service.decide(approval_id, decider_id=owner_id, decision="rejected")
 
 
 @pytest.mark.anyio
@@ -352,7 +352,7 @@ async def test_execution_failure_keeps_approval_approved() -> None:
 
     _, response = await service.approve_and_resume(
         approval_id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         executor=_resume_executor(
             registry=registry,
             scratchpad_store=scratchpad_store,
@@ -402,7 +402,7 @@ async def test_revise_then_approve_uses_latest_revision() -> None:
 
     await service.approve_and_resume(
         approval_id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         executor=_resume_executor(registry=registry, scratchpad_store=scratchpad_store),
         request=AgentRequest(
             messages=[AgentMessage(role="user", content="delete")],
@@ -482,7 +482,7 @@ async def test_resumed_turn_second_pause_new_correlation_id() -> None:
 
     _, response = await service.approve_and_resume(
         approval_id,
-        owner_id=owner_id,
+        decider_id=owner_id,
         executor=executor,
         request=AgentRequest(
             messages=[AgentMessage(role="user", content="delete")],

@@ -1124,7 +1124,7 @@ class HitlEvalRunner:
         if decision == "reject":
             result = await approval_service.decide(
                 approval_id,
-                owner_id=owner_id,
+                decider_id=owner_id,
                 decision="rejected",
                 reason="eval reject",
             )
@@ -1133,7 +1133,7 @@ class HitlEvalRunner:
         edited_calls = _edited_calls_from_case(case)
         _, response = await approval_service.approve_and_resume(
             approval_id,
-            owner_id=owner_id,
+            decider_id=owner_id,
             executor=executor,
             request=request,
             context=context,

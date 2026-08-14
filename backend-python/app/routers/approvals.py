@@ -292,7 +292,7 @@ async def decide_agent_approval(
         try:
             result = await approval_service.decide(
                 approval_id,
-                owner_id=caller.user_id,
+                decider_id=caller.user_id,
                 decision="rejected",
                 reason=reason,
                 comments=comments,
@@ -305,7 +305,7 @@ async def decide_agent_approval(
     try:
         approval = await approval_service.get_owned_approval(
             approval_id,
-            owner_id=caller.user_id,
+            decider_id=caller.user_id,
         )
     except HitlError as exc:
         _raise_hitl_error(exc)
@@ -327,7 +327,7 @@ async def decide_agent_approval(
         try:
             result = await approval_service.record_stage_approval(
                 approval_id,
-                owner_id=caller.user_id,
+                decider_id=caller.user_id,
                 reason=reason,
                 comments=comments,
             )
@@ -406,7 +406,7 @@ async def _stream_approved_decision(
     placeholder: ChatMessage | None,
 ) -> AsyncIterator[str]:
     assert caller.user_id is not None
-    owner_id = caller.user_id
+    decider_id = caller.user_id
 
     request = _build_resume_request(
         model=placeholder.model if placeholder is not None else None,
@@ -433,7 +433,7 @@ async def _stream_approved_decision(
         try:
             return await approval_service.approve_and_resume(
                 approval_id,
-                owner_id=owner_id,
+                decider_id=decider_id,
                 executor=executor,
                 request=request,
                 context=context,

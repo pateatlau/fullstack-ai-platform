@@ -133,7 +133,7 @@ async def test_owner_without_stage_permission_is_denied() -> None:
     service = _service(store, chat_store, user_roles={})
 
     with pytest.raises(StagePermissionInvalidError):
-        await service.decide(approval_id, owner_id=owner_id, decision="approved")
+        await service.decide(approval_id, decider_id=owner_id, decision="approved")
 
 
 @pytest.mark.anyio
@@ -152,7 +152,7 @@ async def test_non_owner_holding_stage_permission_can_decide() -> None:
     )
 
     result = await service.decide(
-        approval_id, owner_id=reviewer_id, decision="approved"
+        approval_id, decider_id=reviewer_id, decision="approved"
     )
 
     assert result.status is ApprovalStatus.APPROVED
@@ -177,7 +177,7 @@ async def test_non_owner_without_permission_cannot_see_approval() -> None:
     from app.ai.hitl.exceptions import ApprovalNotFoundError
 
     with pytest.raises(ApprovalNotFoundError):
-        await service.decide(approval_id, owner_id=stranger_id, decision="approved")
+        await service.decide(approval_id, decider_id=stranger_id, decision="approved")
 
 
 @pytest.mark.anyio
@@ -196,5 +196,5 @@ async def test_flag_off_preserves_owner_only_checklist_behaviour() -> None:
         rbac_enforcement_enabled=False,
     )
 
-    result = await service.decide(approval_id, owner_id=owner_id, decision="approved")
+    result = await service.decide(approval_id, decider_id=owner_id, decision="approved")
     assert result.status is ApprovalStatus.APPROVED

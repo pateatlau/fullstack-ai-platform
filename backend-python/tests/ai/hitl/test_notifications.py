@@ -295,7 +295,7 @@ class TestServiceDispatchesNotifications:
             notification_dispatcher=NotificationDispatcher([recording]),
         )
 
-        await service.decide(approval.id, owner_id=owner_id, decision="rejected")
+        await service.decide(approval.id, decider_id=owner_id, decision="rejected")
         await _drain_background_notifications()
 
         assert len(recording.events) == 1
@@ -361,6 +361,6 @@ class TestServiceDispatchesNotifications:
         service = AgentApprovalService(approval_store=store, chat_store=chat_store)
 
         result = await service.decide(
-            approval.id, owner_id=owner_id, decision="rejected"
+            approval.id, decider_id=owner_id, decision="rejected"
         )
         assert result.status.value == "rejected"

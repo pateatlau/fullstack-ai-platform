@@ -131,7 +131,7 @@ async def test_decide_increments_duration_seconds_histogram(
     )
     service = AgentApprovalService(approval_store=store, chat_store=chat_store)
 
-    await service.decide(approval.id, owner_id=owner_id, decision="rejected")
+    await service.decide(approval.id, decider_id=owner_id, decision="rejected")
 
     assert _metric_present(metric_reader, "approval_duration_seconds")
     assert _metric_sum(metric_reader, "approval_decisions_total") == 1.0

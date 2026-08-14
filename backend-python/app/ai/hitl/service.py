@@ -366,27 +366,28 @@ class AgentApprovalService:
         candidate = await self._approval_store.get_any(approval_id)
         if candidate is None:
             raise not_found
-        if candidate.status is ApprovalStatus.EXPIRED:
-            raise ApprovalExpiredError(
-                f"Approval {approval_id} expired at "
-                f"{candidate.expires_at.isoformat() if candidate.expires_at else 'unknown'}."
-            )
 
         assert self._rbac_service is not None
         decide_all = await self._rbac_service.authorize(
             decider_id, PermissionKey.APPROVALS_DECIDE_ALL
         )
-        if decide_all.allowed:
-            return candidate
-
-        if _has_outstanding_stages(candidate):
+        authorized = decide_all.allowed
+        if not authorized and _has_outstanding_stages(candidate):
             stage_decision = await self._rbac_service.authorize(
                 decider_id, _current_stage(candidate)
             )
-            if stage_decision.allowed:
-                return candidate
+            authorized = stage_decision.allowed
 
-        raise not_found
+        # Authorization is resolved before revealing status/expiry to avoid
+        # leaking approval existence to a caller who isn't entitled to see it.
+        if not authorized:
+            raise not_found
+        if candidate.status is ApprovalStatus.EXPIRED:
+            raise ApprovalExpiredError(
+                f"Approval {approval_id} expired at "
+                f"{candidate.expires_at.isoformat() if candidate.expires_at else 'unknown'}."
+            )
+        return candidate
 
     async def pause(
         self,
@@ -526,7 +527,7 @@ class AgentApprovalService:
         self,
         approval_id: uuid.UUID,
         *,
-        owner_id: uuid.UUID,
+        decider_id: uuid.UUID,
         decision: Literal["approved", "rejected"],
         edited_calls: list[ProposedToolCall] | None = None,
         reason: str | None = None,
@@ -536,7 +537,7 @@ class AgentApprovalService:
         """Record a terminal decision. Approve path requires follow-up resume call."""
         approval = await self._resolve_approval_for_decider(
             approval_id,
-            decider_id=owner_id,
+            decider_id=decider_id,
         )
         if edited_calls is not None:
             _validate_edited_calls(
@@ -555,7 +556,7 @@ class AgentApprovalService:
                 if _has_outstanding_stages(approval):
                     decided = await self._cas_decide_with_stage_append(
                         approval_id,
-                        decider_id=owner_id,
+                        decider_id=decider_id,
                         approval=approval,
                         stage_decision="rejected",
                         status=ApprovalStatus.REJECTED,
@@ -568,7 +569,7 @@ class AgentApprovalService:
                         approval_id,
                         owner_id=approval.owner_id,
                         status=ApprovalStatus.REJECTED,
-                        decided_by=owner_id,
+                        decided_by=decider_id,
                         reason=reason,
                         comments=comments,
                         request_metadata=request_metadata,
@@ -603,7 +604,7 @@ class AgentApprovalService:
             if _has_outstanding_stages(approval):
                 decided = await self._cas_decide_with_stage_append(
                     approval_id,
-                    decider_id=owner_id,
+                    decider_id=decider_id,
                     approval=approval,
                     stage_decision="approved",
                     status=ApprovalStatus.APPROVED,
@@ -617,7 +618,7 @@ class AgentApprovalService:
                     approval_id,
                     owner_id=approval.owner_id,
                     status=ApprovalStatus.APPROVED,
-                    decided_by=owner_id,
+                    decided_by=decider_id,
                     reason=reason,
                     comments=comments,
                     edited_calls=edited_calls,
@@ -627,7 +628,7 @@ class AgentApprovalService:
                 await self._approval_store.append_revision(
                     approval_id=approval_id,
                     approval_kind=ApprovalKind.AGENT_TOOL,
-                    edited_by=owner_id,
+                    edited_by=decider_id,
                     edited_payload=edited_calls,
                     note=reason,
                 )
@@ -648,7 +649,7 @@ class AgentApprovalService:
         self,
         approval_id: uuid.UUID,
         *,
-        owner_id: uuid.UUID,
+        decider_id: uuid.UUID,
         reason: str | None = None,
         comments: str | None = None,
     ) -> ApprovalResult:
@@ -661,7 +662,7 @@ class AgentApprovalService:
         """
         approval = await self._resolve_approval_for_decider(
             approval_id,
-            decider_id=owner_id,
+            decider_id=decider_id,
         )
         if not _has_outstanding_stages(approval) or _is_final_stage(approval):
             raise ApprovalValidationError(
@@ -669,13 +670,13 @@ class AgentApprovalService:
                 "approve_and_resume(), not record_stage_approval()."
             )
         stage = _current_stage(approval)
-        await self._check_stage_permission(decider_id=owner_id, stage=stage)
+        await self._check_stage_permission(decider_id=decider_id, stage=stage)
         updated = await self._approval_store.append_stage_decision(
             approval_id,
             owner_id=approval.owner_id,
             stage=stage,
             decision="approved",
-            decided_by=owner_id,
+            decided_by=decider_id,
             reason=reason,
             comments=comments,
         )
@@ -686,7 +687,7 @@ class AgentApprovalService:
             edited=_has_edits(updated),
             final_payload=_resolve_final_payload(updated),
             reason=reason,
-            approver=owner_id,
+            approver=decider_id,
             decided_at=datetime.datetime.now(datetime.UTC),
             approval_correlation_id=updated.approval_correlation_id,
             comments=comments,
@@ -768,7 +769,7 @@ class AgentApprovalService:
         self,
         approval_id: uuid.UUID,
         *,
-        owner_id: uuid.UUID,
+        decider_id: uuid.UUID,
         executor: AgentExecutor,
         request: AgentRequest,
         context: AgentContext,
@@ -782,7 +783,7 @@ class AgentApprovalService:
         """Record approval, execute gated tools, and resume the ReAct loop."""
         approval = await self._resolve_approval_for_decider(
             approval_id,
-            decider_id=owner_id,
+            decider_id=decider_id,
         )
         if edited_calls is not None:
             _validate_edited_calls(
@@ -802,7 +803,7 @@ class AgentApprovalService:
             if _has_outstanding_stages(approval):
                 decided = await self._cas_decide_with_stage_append(
                     approval_id,
-                    decider_id=owner_id,
+                    decider_id=decider_id,
                     approval=approval,
                     stage_decision="approved",
                     status=ApprovalStatus.APPROVED,
@@ -816,7 +817,7 @@ class AgentApprovalService:
                     approval_id,
                     owner_id=approval.owner_id,
                     status=ApprovalStatus.APPROVED,
-                    decided_by=owner_id,
+                    decided_by=decider_id,
                     reason=reason,
                     comments=comments,
                     edited_calls=edited_calls,
@@ -826,7 +827,7 @@ class AgentApprovalService:
                 await self._approval_store.append_revision(
                     approval_id=approval_id,
                     approval_kind=ApprovalKind.AGENT_TOOL,
-                    edited_by=owner_id,
+                    edited_by=decider_id,
                     edited_payload=edited_calls,
                     note=reason,
                 )
@@ -1065,11 +1066,11 @@ class AgentApprovalService:
         self,
         approval_id: uuid.UUID,
         *,
-        owner_id: uuid.UUID,
+        decider_id: uuid.UUID,
     ) -> AgentToolApproval:
         return await self._resolve_approval_for_decider(
             approval_id,
-            decider_id=owner_id,
+            decider_id=decider_id,
         )
 
     async def get_placeholder_message(

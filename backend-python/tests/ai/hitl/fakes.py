@@ -158,10 +158,15 @@ class InMemoryApprovalStore:
             )
             self._replace(expired)
             return expired
-        return apply_client_audit_retention_policy(
+        mapped = apply_client_audit_retention_policy(
             row,
             retention_days=self._client_audit_retention_days,
         )
+        if (row.source_ip or row.client_metadata) and not (
+            mapped.source_ip or mapped.client_metadata
+        ):
+            self._replace(mapped)
+        return mapped
 
     async def link_pending_message(
         self,
