@@ -22,6 +22,7 @@ from app.ai.tools.schemas import ToolCall, ToolExecutionContext, ToolResult
 from app.ai.tools.validator import ToolValidator
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.middleware.rate_limit import check_rate_limit_bucket
 
 if TYPE_CHECKING:
     from app.ai.mcp.permissions import McpPermissionPolicy
@@ -145,6 +146,29 @@ class ToolExecutor:
                         start=start,
                         span=span,
                         authorization_result="denied",
+                    )
+
+            if (
+                self._settings.security_rate_limit_extensions_enabled
+                and context.caller.user_id is not None
+            ):
+                retry_after = await check_rate_limit_bucket(
+                    f"tool:{context.caller.user_id}",
+                    self._settings.tool_invocation_per_minute,
+                )
+                if retry_after is not None:
+                    return self._finalize(
+                        call=call,
+                        context=context,
+                        result=ToolResult(
+                            success=False,
+                            error="Tool invocation rate limit exceeded",
+                            error_code="rate_limit_exceeded",
+                            metadata={"retry_after": retry_after},
+                        ),
+                        start=start,
+                        span=span,
+                        authorization_result="allowed",
                     )
 
             try:

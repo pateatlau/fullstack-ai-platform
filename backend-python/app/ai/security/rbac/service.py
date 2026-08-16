@@ -195,6 +195,14 @@ class RbacService:
             raise RuntimeError("RbacService requires a RoleStore")
         return await self.store.get_user_roles(user_id)
 
+    async def get_highest_priority_role(self, user_id: uuid.UUID) -> str:
+        roles = set(await self.get_user_roles(user_id))
+        roles.add("member")
+        for role in ("owner", "admin", "operator", "member"):
+            if role in roles:
+                return role
+        return "member"
+
     async def get_permission_registry(self) -> dict[str, PermissionDefinition]:
         return {str(key): definition for key, definition in PERMISSION_REGISTRY.items()}
 

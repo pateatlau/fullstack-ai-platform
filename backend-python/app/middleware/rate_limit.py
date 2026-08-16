@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
+import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Literal
@@ -42,6 +43,7 @@ CallerTier = Literal["authenticated", "anonymous"]
 class RateLimitIdentity:
     tier: CallerTier
     bucket_key: str
+    user_id: uuid.UUID | None = None
 
 
 class SlidingWindowRateLimiter:
@@ -84,6 +86,11 @@ def reset_rate_limiter() -> None:
     _limiter.reset()
 
 
+async def check_rate_limit_bucket(bucket_key: str, limit: int) -> int | None:
+    """Check a non-HTTP bucket using the shared sliding-window limiter."""
+    return await get_rate_limiter().check(bucket_key, limit)
+
+
 def _extract_bearer_token(request: Request) -> str | None:
     header = request.headers.get("Authorization")
     if not header:
@@ -105,6 +112,7 @@ def resolve_rate_limit_identity(
             return RateLimitIdentity(
                 tier="authenticated",
                 bucket_key=f"auth:{user_id}",
+                user_id=user_id,
             )
         except InvalidAccessTokenError:
             pass
@@ -138,7 +146,24 @@ async def rate_limit_middleware(
         else settings.rate_limit_anonymous_per_minute
     )
 
-    retry_after = await get_rate_limiter().check(identity.bucket_key, limit)
+    if identity.user_id is not None and settings.security_rate_limit_extensions_enabled:
+        role = "member"
+        try:
+            from app.ai.security.rbac.service import RbacService
+            from app.ai.security.rbac.store import PostgresRoleStore
+            from app.db.engine import get_sessionmaker
+
+            async with get_sessionmaker()() as session:
+                role = await RbacService(
+                    PostgresRoleStore(session),
+                    cache_ttl_seconds=settings.security_rbac_cache_ttl_seconds,
+                ).get_highest_priority_role(identity.user_id)
+        except Exception:
+            logger.exception("Unable to resolve rate-limit role; using member")
+        multiplier = settings.security_role_rate_limit_multipliers.get(role, 1.0)
+        limit = max(1, math.floor(limit * max(multiplier, 0.0)))
+
+    retry_after = await check_rate_limit_bucket(identity.bucket_key, limit)
     if retry_after is not None:
         logger.warning(
             "HTTP rate limit exceeded",

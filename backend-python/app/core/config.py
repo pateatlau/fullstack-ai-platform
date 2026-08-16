@@ -92,6 +92,12 @@ class Settings(BaseSettings):
     security_rbac_enforcement_enabled: bool = True
     security_bootstrap_admin_emails: list[str] = Field(default_factory=list)
     security_rbac_cache_ttl_seconds: int = Field(default=60, ge=0)
+    security_rate_limit_extensions_enabled: bool = False
+    security_role_rate_limit_multipliers: dict[str, float] = Field(default_factory=dict)
+    tool_invocation_per_minute: int = Field(default=60, ge=1)
+    mcp_invocation_per_minute: int = Field(default=60, ge=1)
+    background_jobs_enqueue_per_minute: int = Field(default=30, ge=1)
+    approval_decision_per_minute: int = Field(default=30, ge=1)
 
     # Epic 11 Phase 3: platform-wide audit log + retention cleanup. Consulted
     # only when ``security_governance_enabled`` is also true.

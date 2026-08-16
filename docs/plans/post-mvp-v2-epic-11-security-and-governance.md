@@ -1329,7 +1329,7 @@ _To be updated at each phase completion; release summary will be published at `d
 | 2     | RBAC Enforcement — Tools, HITL Stages, Jobs Visibility | L      | Complete    |
 | 3     | Global Audit Log & Retention Cleanup                   | M      | Complete    |
 | 4     | Secret Resolver Abstraction & Redaction Consolidation  | M      | Complete    |
-| 5     | Rate Limiting & Usage Quota Extensions                 | M      | Not Started |
+| 5     | Rate Limiting & Usage Quota Extensions                 | M      | In Progress |
 | 6     | Shared Rule Engine Extraction & Guardrails             | L      | Not Started |
 | 7     | Unified Governance Policy Context                      | S      | Not Started |
 | 8     | Security & Governance REST API & Health                | S      | Not Started |

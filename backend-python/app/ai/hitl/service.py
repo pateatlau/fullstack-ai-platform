@@ -74,8 +74,11 @@ from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext
 from app.ai.tools.validator import ToolValidator
 from app.core.caller import CallerContext
+from app.core.config import Settings, get_settings
+from app.core.errors import RateLimitExceededError
 from app.db.models import ChatMessage
 from app.middleware.correlation_id import get_request_id
+from app.middleware.rate_limit import check_rate_limit_bucket
 
 if TYPE_CHECKING:
     from app.ai.security.audit.logger import AuditLogger
@@ -292,6 +295,7 @@ class AgentApprovalService:
         rbac_service: RbacService | None = None,
         rbac_enforcement_enabled: bool = False,
         audit_logger: "AuditLogger | None" = None,
+        settings: Settings | None = None,
     ) -> None:
         self._approval_store = approval_store
         self._chat_store = chat_store
@@ -305,6 +309,7 @@ class AgentApprovalService:
         self._rbac_service = rbac_service
         self._rbac_enforcement_enabled = rbac_enforcement_enabled
         self._audit_logger = audit_logger
+        self._settings = settings or get_settings()
 
     async def _notify(self, event: ApprovalNotificationEvent) -> None:
         if self._notification_dispatcher is not None:
@@ -552,6 +557,16 @@ class AgentApprovalService:
         request_metadata: RequestMetadata | None = None,
     ) -> ApprovalResult:
         """Record a terminal decision. Approve path requires follow-up resume call."""
+        if self._settings.security_rate_limit_extensions_enabled:
+            retry_after = await check_rate_limit_bucket(
+                f"approval_decision:{decider_id}",
+                self._settings.approval_decision_per_minute,
+            )
+            if retry_after is not None:
+                raise RateLimitExceededError(
+                    retry_after_seconds=retry_after,
+                    message="Approval decision rate limit exceeded.",
+                )
         approval = await self._resolve_approval_for_decider(
             approval_id,
             decider_id=decider_id,
