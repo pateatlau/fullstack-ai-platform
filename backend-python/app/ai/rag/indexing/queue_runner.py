@@ -9,7 +9,6 @@ from app.ai.jobs.queue import JobQueue
 from app.ai.rag.indexing.sync_runner import IndexingJobNotFoundError
 from app.ai.rag.schemas import IndexingJobState, IndexingJobStatus
 from app.core.config import Settings, get_settings
-from app.core.errors import RateLimitExceededError
 from app.middleware.rate_limit import check_rate_limit_bucket
 
 _PAYLOAD_VERSION = 1
@@ -55,6 +54,8 @@ class QueueIndexingRunner:
                 self._settings.background_jobs_enqueue_per_minute,
             )
             if retry_after is not None:
+                from app.core.errors import RateLimitExceededError
+
                 raise RateLimitExceededError(
                     retry_after_seconds=retry_after,
                     message="Background job enqueue rate limit exceeded.",

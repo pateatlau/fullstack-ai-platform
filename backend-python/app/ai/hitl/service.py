@@ -75,7 +75,6 @@ from app.ai.tools.schemas import ToolCall, ToolExecutionContext
 from app.ai.tools.validator import ToolValidator
 from app.core.caller import CallerContext
 from app.core.config import Settings, get_settings
-from app.core.errors import RateLimitExceededError
 from app.db.models import ChatMessage
 from app.middleware.correlation_id import get_request_id
 from app.middleware.rate_limit import check_rate_limit_bucket
@@ -563,6 +562,8 @@ class AgentApprovalService:
                 self._settings.approval_decision_per_minute,
             )
             if retry_after is not None:
+                from app.core.errors import RateLimitExceededError
+
                 raise RateLimitExceededError(
                     retry_after_seconds=retry_after,
                     message="Approval decision rate limit exceeded.",

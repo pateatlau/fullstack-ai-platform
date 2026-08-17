@@ -22,7 +22,6 @@ from starlette.responses import Response
 
 from app.core.caller import GUEST_TOKEN_HEADER
 from app.core.config import Settings, get_settings
-from app.core.errors import rate_limit_error_response
 from app.core.logging import get_logger
 from app.core.security import (
     InvalidAccessTokenError,
@@ -135,6 +134,8 @@ def resolve_rate_limit_identity(
 async def rate_limit_middleware(
     request: Request, call_next: RequestResponseEndpoint
 ) -> Response:
+    from app.core.errors import rate_limit_error_response
+
     if request.url.path in EXEMPT_PATHS:
         return await call_next(request)
 
