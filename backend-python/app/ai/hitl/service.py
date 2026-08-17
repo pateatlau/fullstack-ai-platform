@@ -557,6 +557,19 @@ class AgentApprovalService:
     ) -> ApprovalResult:
         """Record a terminal decision. Approve path requires follow-up resume call."""
         if self._settings.security_rate_limit_extensions_enabled:
+            from app.ai.security.quotas.store import check_daily_usage_quota
+
+            daily_allowed = await check_daily_usage_quota(
+                str(decider_id),
+                "approval_decision",
+                self._settings.approval_decision_daily_quota,
+            )
+            if not daily_allowed:
+                from app.core.errors import RateLimitExceededError
+
+                raise RateLimitExceededError(
+                    message="Daily approval decision quota exceeded.",
+                )
             retry_after = await check_rate_limit_bucket(
                 f"approval_decision:{decider_id}",
                 self._settings.approval_decision_per_minute,

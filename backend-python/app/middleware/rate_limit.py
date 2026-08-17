@@ -75,6 +75,8 @@ class SlidingWindowRateLimiter:
 
 
 _limiter = SlidingWindowRateLimiter()
+_role_cache: dict[uuid.UUID, tuple[float, str]] = {}
+_role_cache_lock = asyncio.Lock()
 
 
 def get_rate_limiter() -> SlidingWindowRateLimiter:
@@ -83,11 +85,46 @@ def get_rate_limiter() -> SlidingWindowRateLimiter:
 
 def reset_rate_limiter() -> None:
     _limiter.reset()
+    _role_cache.clear()
 
 
 async def check_rate_limit_bucket(bucket_key: str, limit: int) -> int | None:
     """Check a non-HTTP bucket using the shared sliding-window limiter."""
     return await get_rate_limiter().check(bucket_key, limit)
+
+
+async def _get_rate_limit_role(user_id: uuid.UUID, settings: Settings) -> str:
+    now = time.monotonic()
+    if settings.security_rbac_cache_ttl_seconds > 0:
+        cached = _role_cache.get(user_id)
+        if (
+            cached is not None
+            and now - cached[0] < settings.security_rbac_cache_ttl_seconds
+        ):
+            return cached[1]
+
+    async with _role_cache_lock:
+        now = time.monotonic()
+        if settings.security_rbac_cache_ttl_seconds > 0:
+            cached = _role_cache.get(user_id)
+            if (
+                cached is not None
+                and now - cached[0] < settings.security_rbac_cache_ttl_seconds
+            ):
+                return cached[1]
+
+        from app.ai.security.rbac.service import RbacService
+        from app.ai.security.rbac.store import PostgresRoleStore
+        from app.db.engine import get_sessionmaker
+
+        async with get_sessionmaker()() as session:
+            role = await RbacService(
+                PostgresRoleStore(session),
+                cache_ttl_seconds=settings.security_rbac_cache_ttl_seconds,
+            ).get_highest_priority_role(user_id)
+        if settings.security_rbac_cache_ttl_seconds > 0:
+            _role_cache[user_id] = (time.monotonic(), role)
+        return role
 
 
 def _extract_bearer_token(request: Request) -> str | None:
@@ -150,15 +187,7 @@ async def rate_limit_middleware(
     if identity.user_id is not None and settings.security_rate_limit_extensions_enabled:
         role = "member"
         try:
-            from app.ai.security.rbac.service import RbacService
-            from app.ai.security.rbac.store import PostgresRoleStore
-            from app.db.engine import get_sessionmaker
-
-            async with get_sessionmaker()() as session:
-                role = await RbacService(
-                    PostgresRoleStore(session),
-                    cache_ttl_seconds=settings.security_rbac_cache_ttl_seconds,
-                ).get_highest_priority_role(identity.user_id)
+            role = await _get_rate_limit_role(identity.user_id, settings)
         except Exception:
             logger.exception("Unable to resolve rate-limit role; using member")
         multiplier = settings.security_role_rate_limit_multipliers.get(role, 1.0)

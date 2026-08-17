@@ -86,6 +86,24 @@ class McpToolExecutionAdapter:
                 self.settings.security_rate_limit_extensions_enabled
                 and context.caller.user_id
             ):
+                from app.ai.security.quotas.store import check_daily_usage_quota
+
+                daily_allowed = await check_daily_usage_quota(
+                    str(context.caller.user_id),
+                    "mcp",
+                    self.settings.mcp_invocation_daily_quota,
+                )
+                if not daily_allowed:
+                    return ToolResult(
+                        success=False,
+                        error="Daily MCP invocation quota exceeded",
+                        error_code="rate_limit_exceeded",
+                        metadata={
+                            "server_name": self.server_name,
+                            "tool_name": self.tool_name,
+                            "source": "mcp",
+                        },
+                    )
                 retry_after = await check_rate_limit_bucket(
                     f"mcp:{context.caller.user_id}",
                     self.settings.mcp_invocation_per_minute,
@@ -95,7 +113,12 @@ class McpToolExecutionAdapter:
                         success=False,
                         error="MCP invocation rate limit exceeded",
                         error_code="rate_limit_exceeded",
-                        metadata={"retry_after": retry_after},
+                        metadata={
+                            "server_name": self.server_name,
+                            "tool_name": self.tool_name,
+                            "source": "mcp",
+                            "retry_after": retry_after,
+                        },
                     )
             mcp_result = await self.client.call_tool(self.tool_name, args)
 

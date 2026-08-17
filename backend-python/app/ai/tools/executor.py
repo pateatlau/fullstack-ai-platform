@@ -152,12 +152,25 @@ class ToolExecutor:
                 self._settings.security_rate_limit_extensions_enabled
                 and context.caller.user_id is not None
             ):
+                from app.ai.security.quotas.store import check_daily_usage_quota
+
+                daily_allowed = await check_daily_usage_quota(
+                    str(context.caller.user_id),
+                    "tool",
+                    self._settings.tool_invocation_daily_quota,
+                )
+                if not daily_allowed:
+                    from app.core.errors import RateLimitExceededError
+
+                    raise RateLimitExceededError(
+                        message="Daily tool invocation quota exceeded.",
+                    )
                 retry_after = await check_rate_limit_bucket(
                     f"tool:{context.caller.user_id}",
                     self._settings.tool_invocation_per_minute,
                 )
                 if retry_after is not None:
-                    return self._finalize(
+                    self._finalize(
                         call=call,
                         context=context,
                         result=ToolResult(
@@ -168,7 +181,13 @@ class ToolExecutor:
                         ),
                         start=start,
                         span=span,
-                        authorization_result="allowed",
+                        authorization_result="denied",
+                    )
+                    from app.core.errors import RateLimitExceededError
+
+                    raise RateLimitExceededError(
+                        retry_after_seconds=retry_after,
+                        message="Tool invocation rate limit exceeded.",
                     )
 
             try:

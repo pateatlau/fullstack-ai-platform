@@ -48,3 +48,23 @@ class SqlUsageQuotaStore:
             where=UsageQuotaCounter.count < limit,
         ).returning(UsageQuotaCounter.count)
         return await self._session.scalar(stmt) is not None
+
+
+async def check_daily_usage_quota(
+    subject_id: str,
+    quota_type: str,
+    limit: int | None,
+) -> bool:
+    """Atomically reserve today's UTC quota slot when a limit is configured."""
+    if limit is None:
+        return True
+
+    from app.db.engine import get_sessionmaker
+
+    day = datetime.datetime.now(datetime.UTC).date()
+    async with get_sessionmaker()() as session:
+        allowed = await SqlUsageQuotaStore(session).check_and_increment(
+            subject_id, quota_type, limit, day
+        )
+        await session.commit()
+        return allowed

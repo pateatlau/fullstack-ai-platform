@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     mcp_invocation_per_minute: int = Field(default=60, ge=1)
     background_jobs_enqueue_per_minute: int = Field(default=30, ge=1)
     approval_decision_per_minute: int = Field(default=30, ge=1)
+    tool_invocation_daily_quota: int | None = Field(default=None, ge=1)
+    mcp_invocation_daily_quota: int | None = Field(default=None, ge=1)
+    background_jobs_enqueue_daily_quota: int | None = Field(default=None, ge=1)
+    approval_decision_daily_quota: int | None = Field(default=None, ge=1)
 
     # Epic 11 Phase 3: platform-wide audit log + retention cleanup. Consulted
     # only when ``security_governance_enabled`` is also true.
