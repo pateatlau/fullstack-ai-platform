@@ -21,6 +21,9 @@ from app.ai.tools.schemas import ToolDefinition
 if TYPE_CHECKING:
     from app.ai.mcp.client import McpClient
     from app.ai.mcp.executor import McpToolExecutionAdapter
+    from app.ai.security.audit.logger import AuditLogger
+    from app.ai.security.guardrails.engine import GuardrailEngine
+    from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,10 @@ class McpToolDiscovery:
     async def discover(
         client: McpClient,
         server_name: str,
+        *,
+        settings: Settings | None = None,
+        guardrail_engine: GuardrailEngine | None = None,
+        audit_logger: AuditLogger | None = None,
     ) -> list[tuple[ToolDefinition, McpToolExecutionAdapter]]:
         """Discover tools from MCP server and map to ToolDefinition + adapter pairs.
 
@@ -77,7 +84,12 @@ class McpToolDiscovery:
         for mcp_tool in mcp_tools:
             try:
                 tool_def, adapter = McpToolDiscovery._map_tool(
-                    mcp_tool, server_name, client
+                    mcp_tool,
+                    server_name,
+                    client,
+                    settings=settings,
+                    guardrail_engine=guardrail_engine,
+                    audit_logger=audit_logger,
                 )
                 results.append((tool_def, adapter))
             except Exception as e:
@@ -137,6 +149,10 @@ class McpToolDiscovery:
         mcp_tool: dict[str, Any],
         server_name: str,
         client: McpClient,
+        *,
+        settings: Settings | None = None,
+        guardrail_engine: GuardrailEngine | None = None,
+        audit_logger: AuditLogger | None = None,
     ) -> tuple[ToolDefinition, McpToolExecutionAdapter]:
         """Map a single MCP tool schema to ToolDefinition + adapter.
 
@@ -190,6 +206,9 @@ class McpToolDiscovery:
             tool_name=original_name,
             client=client,
             metadata=metadata,
+            settings=settings,
+            guardrail_engine=guardrail_engine,
+            audit_logger=audit_logger,
         )
 
         logger.debug(

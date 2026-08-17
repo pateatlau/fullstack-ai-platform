@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from app.ai.hitl.service import AgentApprovalService
     from app.ai.mcp.registry import McpServerRegistry
     from app.ai.security.audit.logger import AuditLogger
+    from app.ai.security.guardrails.engine import GuardrailEngine
     from app.ai.security.rbac.service import RbacService
     from app.ai.security.secrets.resolver import SecretResolver
     from app.ai.memory.context_builder import MemoryContextBuilder
@@ -155,6 +156,32 @@ def get_secret_resolver() -> "SecretResolver":
     return EnvSecretResolver()
 
 
+def build_guardrail_engine(settings: Settings) -> "GuardrailEngine | None":
+    """Build the configured guardrail engine, or ``None`` when disabled."""
+    if not (
+        settings.security_governance_enabled and settings.security_guardrails_enabled
+    ):
+        return None
+
+    from app.ai.security.guardrails.engine import GuardrailEngine
+    from app.ai.security.guardrails.models import GuardrailAction, GuardrailRule
+    from app.ai.security.guardrails.rules import DEFAULT_GUARDRAIL_RULES
+
+    operator_rules = [
+        GuardrailRule.model_validate(raw) for raw in settings.security_guardrail_rules
+    ]
+    return GuardrailEngine(
+        [*DEFAULT_GUARDRAIL_RULES, *operator_rules],
+        default_mode=GuardrailAction(settings.security_guardrails_mode),
+    )
+
+
+def get_guardrail_engine(
+    settings: Settings = Depends(get_ai_settings),
+) -> "GuardrailEngine | None":
+    return build_guardrail_engine(settings)
+
+
 @lru_cache
 def get_prompt_repository() -> PromptRepository:
     """Return the process-wide ``PromptRepository`` singleton."""
@@ -221,6 +248,7 @@ def _create_tool_executor(
         mcp_permission_policy=mcp_permission_policy,
         rbac_service=rbac_service,
         audit_logger=get_audit_logger(),
+        guardrail_engine=build_guardrail_engine(settings),
     )
 
 
@@ -547,6 +575,7 @@ def get_advanced_retrieval_pipeline(
     prompt_manager: PromptManager = Depends(get_prompt_manager),
     settings: Settings = Depends(get_ai_settings),
     session: AsyncSession = Depends(get_db_session),
+    guardrail_engine: "GuardrailEngine | None" = Depends(get_guardrail_engine),
 ) -> AdvancedRetrievalPipeline:
     """Return the flag-on advanced retrieval orchestrator (Phase 10).
 
@@ -571,6 +600,8 @@ def get_advanced_retrieval_pipeline(
         ),
         citation_builder=CitationBuilder(settings=settings),
         settings=settings,
+        guardrail_engine=guardrail_engine,
+        audit_logger=get_audit_logger(),
     )
 
 
@@ -582,6 +613,7 @@ def get_rag_service(
     advanced_pipeline: AdvancedRetrievalPipeline = Depends(
         get_advanced_retrieval_pipeline
     ),
+    guardrail_engine: "GuardrailEngine | None" = Depends(get_guardrail_engine),
 ) -> RAGService:
     """Return a request-scoped ``RAGService`` wired to retrieval components."""
     return RAGService(
@@ -590,6 +622,8 @@ def get_rag_service(
         prompt_builder=prompt_builder,
         settings=settings,
         advanced_pipeline=advanced_pipeline,
+        guardrail_engine=guardrail_engine,
+        audit_logger=get_audit_logger(),
     )
 
 

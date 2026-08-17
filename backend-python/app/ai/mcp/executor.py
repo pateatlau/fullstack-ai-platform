@@ -6,6 +6,7 @@ Phase 5: Full Tool Execution Adapter implementation.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import TYPE_CHECKING, Any
@@ -20,6 +21,8 @@ from app.middleware.rate_limit import check_rate_limit_bucket
 
 if TYPE_CHECKING:
     from app.ai.mcp.client import McpClient
+    from app.ai.security.audit.logger import AuditLogger
+    from app.ai.security.guardrails.engine import GuardrailEngine
     from app.ai.tools.schemas import ToolExecutionContext
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,8 @@ class McpToolExecutionAdapter:
         client: McpClient,
         metadata: dict[str, Any] | None = None,
         settings: Settings | None = None,
+        guardrail_engine: GuardrailEngine | None = None,
+        audit_logger: AuditLogger | None = None,
     ) -> None:
         """Initialize MCP tool execution adapter.
 
@@ -53,6 +58,8 @@ class McpToolExecutionAdapter:
         self.client = client
         self.metadata = metadata or {}
         self.settings = settings or get_settings()
+        self.guardrail_engine = guardrail_engine
+        self.audit_logger = audit_logger
 
     async def execute(
         self,
@@ -121,6 +128,32 @@ class McpToolExecutionAdapter:
                         },
                     )
             mcp_result = await self.client.call_tool(self.tool_name, args)
+
+            if self.guardrail_engine is not None:
+                from app.ai.security.guardrails.enforcement import evaluate_guardrail
+                from app.ai.security.guardrails.models import (
+                    GuardrailAction,
+                    GuardrailContext,
+                )
+
+                verdict = await evaluate_guardrail(
+                    self.guardrail_engine,
+                    GuardrailContext(
+                        content_text=json.dumps(
+                            mcp_result, sort_keys=True, default=str
+                        ),
+                        source="mcp_result",
+                        tool_name=self.tool_name,
+                        mcp_server=self.server_name,
+                    ),
+                    audit_logger=self.audit_logger,
+                    actor=context.caller,
+                )
+                if verdict.action is GuardrailAction.BLOCK:
+                    mcp_result = {
+                        "blocked": True,
+                        "message": "MCP result blocked by security policy",
+                    }
 
             success = True
             latency_ms = int((time.perf_counter() - start_time) * 1000)

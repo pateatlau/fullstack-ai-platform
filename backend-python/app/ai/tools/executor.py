@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import TYPE_CHECKING
 
@@ -27,6 +28,7 @@ from app.middleware.rate_limit import check_rate_limit_bucket
 if TYPE_CHECKING:
     from app.ai.mcp.permissions import McpPermissionPolicy
     from app.ai.security.audit.logger import AuditLogger
+    from app.ai.security.guardrails.engine import GuardrailEngine
     from app.ai.security.rbac.service import RbacService
 
 _logger = get_logger(__name__)
@@ -45,6 +47,7 @@ class ToolExecutor:
         mcp_permission_policy: McpPermissionPolicy | None = None,
         rbac_service: RbacService | None = None,
         audit_logger: "AuditLogger | None" = None,
+        guardrail_engine: "GuardrailEngine | None" = None,
     ) -> None:
         self._registry = registry
         self._settings = settings
@@ -54,6 +57,7 @@ class ToolExecutor:
         )
         self._mcp_permission_policy = mcp_permission_policy
         self._audit_logger = audit_logger
+        self._guardrail_engine = guardrail_engine
 
     async def execute(
         self,
@@ -188,6 +192,41 @@ class ToolExecutor:
                     raise RateLimitExceededError(
                         retry_after_seconds=retry_after,
                         message="Tool invocation rate limit exceeded.",
+                    )
+
+            if self._guardrail_engine is not None:
+                from app.ai.security.guardrails.enforcement import evaluate_guardrail
+                from app.ai.security.guardrails.models import (
+                    GuardrailAction,
+                    GuardrailContext,
+                )
+
+                verdict = await evaluate_guardrail(
+                    self._guardrail_engine,
+                    GuardrailContext(
+                        content_text=json.dumps(arguments, sort_keys=True, default=str),
+                        source="tool_argument",
+                        tool_name=tool_name,
+                    ),
+                    audit_logger=self._audit_logger,
+                    actor=context.caller,
+                )
+                if verdict.action is GuardrailAction.BLOCK:
+                    return self._finalize(
+                        call=call,
+                        context=context,
+                        result=ToolResult(
+                            success=False,
+                            error="Tool arguments blocked by security policy",
+                            error_code="guardrail_blocked",
+                            metadata={
+                                "rule_id": verdict.matched_rule_id,
+                                "rule_version": verdict.matched_rule_version,
+                            },
+                        ),
+                        start=start,
+                        span=span,
+                        authorization_result="denied",
                     )
 
             try:
