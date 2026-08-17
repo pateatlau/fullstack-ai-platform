@@ -22,6 +22,7 @@ from app.ai.tools.schemas import ToolCall, ToolExecutionContext, ToolResult
 from app.ai.tools.validator import ToolValidator
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.middleware.rate_limit import check_rate_limit_bucket
 
 if TYPE_CHECKING:
     from app.ai.mcp.permissions import McpPermissionPolicy
@@ -145,6 +146,48 @@ class ToolExecutor:
                         start=start,
                         span=span,
                         authorization_result="denied",
+                    )
+
+            if (
+                self._settings.security_rate_limit_extensions_enabled
+                and context.caller.user_id is not None
+            ):
+                from app.ai.security.quotas.store import check_daily_usage_quota
+
+                daily_allowed = await check_daily_usage_quota(
+                    str(context.caller.user_id),
+                    "tool",
+                    self._settings.tool_invocation_daily_quota,
+                )
+                if not daily_allowed:
+                    from app.core.errors import RateLimitExceededError
+
+                    raise RateLimitExceededError(
+                        message="Daily tool invocation quota exceeded.",
+                    )
+                retry_after = await check_rate_limit_bucket(
+                    f"tool:{context.caller.user_id}",
+                    self._settings.tool_invocation_per_minute,
+                )
+                if retry_after is not None:
+                    self._finalize(
+                        call=call,
+                        context=context,
+                        result=ToolResult(
+                            success=False,
+                            error="Tool invocation rate limit exceeded",
+                            error_code="rate_limit_exceeded",
+                            metadata={"retry_after": retry_after},
+                        ),
+                        start=start,
+                        span=span,
+                        authorization_result="denied",
+                    )
+                    from app.core.errors import RateLimitExceededError
+
+                    raise RateLimitExceededError(
+                        retry_after_seconds=retry_after,
+                        message="Tool invocation rate limit exceeded.",
                     )
 
             try:

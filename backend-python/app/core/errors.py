@@ -36,7 +36,7 @@ class AppError(Exception):
 RATE_LIMIT_MESSAGE = "Too many requests. Please retry shortly."
 
 
-class RateLimitExceededError(AppError):
+class RateLimitExceededError(ChatServiceError, AppError):
     """HTTP rate-limit exceeded (middleware or explicit raise)."""
 
     def __init__(
@@ -45,7 +45,8 @@ class RateLimitExceededError(AppError):
         retry_after_seconds: int | None = None,
         message: str = RATE_LIMIT_MESSAGE,
     ) -> None:
-        super().__init__(
+        AppError.__init__(
+            self,
             code="rate_limit_exceeded",
             message=message,
             status_code=429,
@@ -82,7 +83,10 @@ def _format_validation_errors(exc: RequestValidationError) -> str:
 
 
 def _handle_app_error(exc: AppError | AuthError | ChatServiceError) -> JSONResponse:
-    return error_response(exc.status_code, exc.code, exc.message)
+    response = error_response(exc.status_code, exc.code, exc.message)
+    if isinstance(exc, RateLimitExceededError) and exc.retry_after_seconds is not None:
+        response.headers["Retry-After"] = str(exc.retry_after_seconds)
+    return response
 
 
 def _document_service_status_code(code: str) -> int:

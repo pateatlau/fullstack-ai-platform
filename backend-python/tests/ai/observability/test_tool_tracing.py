@@ -28,6 +28,7 @@ from app.ai.tools.schemas import (
 from app.ai.tools.stubs.echo import ECHO_TOOL_DEFINITION, echo_handler
 from app.core.caller import CallerContext
 from app.core.config import Settings
+from app.core.errors import RateLimitExceededError
 
 pytestmark = pytest.mark.anyio
 
@@ -140,6 +141,38 @@ async def test_tool_execute_success_emits_span_with_outcome_attributes(
     assert isinstance(attributes["latency_ms"], int)
     assert attributes["latency_ms"] >= 0
     assert all("hello" not in str(value) for value in attributes.values())
+
+
+async def test_tool_execute_rate_limit_raises_http_error_after_recording_denial(
+    memory_exporter: InMemorySpanExporter,
+    registry: ToolRegistry,
+    user_context: ToolExecutionContext,
+) -> None:
+    executor = ToolExecutor(
+        registry=registry,
+        settings=Settings(
+            request_timeout_seconds=5,
+            security_rate_limit_extensions_enabled=True,
+        ),
+    )
+
+    with patch(
+        "app.ai.tools.executor.check_rate_limit_bucket",
+        new=AsyncMock(return_value=12),
+    ):
+        with pytest.raises(RateLimitExceededError) as raised:
+            await executor.execute(
+                ToolCall(name="echo", arguments={"message": "hello"}),
+                user_context,
+            )
+
+    assert raised.value.status_code == 429
+    assert raised.value.retry_after_seconds == 12
+    spans = memory_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attributes = dict(spans[0].attributes or {})
+    assert attributes["success"] is False
+    assert attributes["authorization_result"] == "denied"
 
 
 async def test_tool_execute_failure_records_error_status_without_raising(

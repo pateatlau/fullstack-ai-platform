@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -26,6 +26,7 @@ from app.ai.mcp.exceptions import (
 from app.ai.mcp.executor import McpToolExecutionAdapter
 from app.ai.tools.schemas import ToolExecutionContext, ToolResult
 from app.core.caller import CallerContext
+from app.core.config import Settings
 
 
 @pytest.fixture
@@ -117,6 +118,37 @@ class TestMcpToolExecutionAdapter:
         mock_client.call_tool.assert_awaited_once_with(
             "test_tool", {"path": "/tmp/test.txt"}
         )
+
+    @pytest.mark.anyio
+    async def test_execute_rate_limit_preserves_mcp_metadata(
+        self,
+        mock_client: AsyncMock,
+        execution_context: ToolExecutionContext,
+    ) -> None:
+        adapter = McpToolExecutionAdapter(
+            server_name="test-server",
+            tool_name="test_tool",
+            client=mock_client,
+            settings=Settings(
+                security_rate_limit_extensions_enabled=True,
+            ),
+        )
+
+        with patch(
+            "app.ai.mcp.executor.check_rate_limit_bucket",
+            new=AsyncMock(return_value=9),
+        ):
+            result = await adapter.execute(args={}, context=execution_context)
+
+        assert result.success is False
+        assert result.error_code == "rate_limit_exceeded"
+        assert result.metadata == {
+            "server_name": "test-server",
+            "tool_name": "test_tool",
+            "source": "mcp",
+            "retry_after": 9,
+        }
+        mock_client.call_tool.assert_not_awaited()
 
     @pytest.mark.anyio
     async def test_execute_mcp_tool_execution_error(

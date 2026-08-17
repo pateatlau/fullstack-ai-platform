@@ -8,6 +8,8 @@ from app.ai.jobs.models import BackgroundJob, JobStatus
 from app.ai.jobs.queue import JobQueue
 from app.ai.rag.indexing.sync_runner import IndexingJobNotFoundError
 from app.ai.rag.schemas import IndexingJobState, IndexingJobStatus
+from app.core.config import Settings, get_settings
+from app.middleware.rate_limit import check_rate_limit_bucket
 
 _PAYLOAD_VERSION = 1
 
@@ -41,10 +43,36 @@ def to_indexing_job_status(job: BackgroundJob) -> IndexingJobStatus:
 class QueueIndexingRunner:
     """IndexingJob implementation backed by the Background Jobs queue."""
 
-    def __init__(self, *, queue: JobQueue) -> None:
+    def __init__(self, *, queue: JobQueue, settings: Settings | None = None) -> None:
         self._queue = queue
+        self._settings = settings or get_settings()
 
     async def submit(self, *, document_id: uuid.UUID, user_id: uuid.UUID) -> str:
+        if self._settings.security_rate_limit_extensions_enabled:
+            from app.ai.security.quotas.store import check_daily_usage_quota
+
+            daily_allowed = await check_daily_usage_quota(
+                str(user_id),
+                "job_enqueue",
+                self._settings.background_jobs_enqueue_daily_quota,
+            )
+            if not daily_allowed:
+                from app.core.errors import RateLimitExceededError
+
+                raise RateLimitExceededError(
+                    message="Daily background job enqueue quota exceeded.",
+                )
+            retry_after = await check_rate_limit_bucket(
+                f"job_enqueue:{user_id}",
+                self._settings.background_jobs_enqueue_per_minute,
+            )
+            if retry_after is not None:
+                from app.core.errors import RateLimitExceededError
+
+                raise RateLimitExceededError(
+                    retry_after_seconds=retry_after,
+                    message="Background job enqueue rate limit exceeded.",
+                )
         job = await self._queue.enqueue(
             job_type="rag_document_indexing",
             payload={

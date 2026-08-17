@@ -336,6 +336,22 @@ class UploadQuotaCounter(Base):
     )
 
 
+class UsageQuotaCounter(Base):
+    """Generic durable daily usage counter for security quota types."""
+
+    __tablename__ = "usage_quota_counters"
+
+    subject_id: Mapped[str] = mapped_column(primary_key=True)
+    quota_type: Mapped[str] = mapped_column(primary_key=True)
+    day: Mapped[datetime.date] = mapped_column(Date, primary_key=True)
+    count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=_NOW, onupdate=_NOW
+    )
+
+
 class Document(Base):
     """Auth-owned uploaded document (Post-MVP V1 Phase 5)."""
 

@@ -15,6 +15,8 @@ from app.ai.mcp.exceptions import (
     McpToolExecutionError,
 )
 from app.ai.tools.schemas import ToolResult
+from app.core.config import Settings, get_settings
+from app.middleware.rate_limit import check_rate_limit_bucket
 
 if TYPE_CHECKING:
     from app.ai.mcp.client import McpClient
@@ -36,6 +38,7 @@ class McpToolExecutionAdapter:
         tool_name: str,
         client: McpClient,
         metadata: dict[str, Any] | None = None,
+        settings: Settings | None = None,
     ) -> None:
         """Initialize MCP tool execution adapter.
 
@@ -49,6 +52,7 @@ class McpToolExecutionAdapter:
         self.tool_name = tool_name
         self.client = client
         self.metadata = metadata or {}
+        self.settings = settings or get_settings()
 
     async def execute(
         self,
@@ -78,6 +82,44 @@ class McpToolExecutionAdapter:
         error_code: str | None = None
 
         try:
+            if (
+                self.settings.security_rate_limit_extensions_enabled
+                and context.caller.user_id
+            ):
+                from app.ai.security.quotas.store import check_daily_usage_quota
+
+                daily_allowed = await check_daily_usage_quota(
+                    str(context.caller.user_id),
+                    "mcp",
+                    self.settings.mcp_invocation_daily_quota,
+                )
+                if not daily_allowed:
+                    return ToolResult(
+                        success=False,
+                        error="Daily MCP invocation quota exceeded",
+                        error_code="rate_limit_exceeded",
+                        metadata={
+                            "server_name": self.server_name,
+                            "tool_name": self.tool_name,
+                            "source": "mcp",
+                        },
+                    )
+                retry_after = await check_rate_limit_bucket(
+                    f"mcp:{context.caller.user_id}",
+                    self.settings.mcp_invocation_per_minute,
+                )
+                if retry_after is not None:
+                    return ToolResult(
+                        success=False,
+                        error="MCP invocation rate limit exceeded",
+                        error_code="rate_limit_exceeded",
+                        metadata={
+                            "server_name": self.server_name,
+                            "tool_name": self.tool_name,
+                            "source": "mcp",
+                            "retry_after": retry_after,
+                        },
+                    )
             mcp_result = await self.client.call_tool(self.tool_name, args)
 
             success = True
