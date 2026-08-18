@@ -108,6 +108,9 @@ class Settings(BaseSettings):
     security_audit_log_enabled: bool = True
     security_audit_retention_days: int = Field(default=365, ge=1)
     security_audit_retention_cleanup_batch_size: int = Field(default=500, ge=1)
+    security_guardrails_enabled: bool = True
+    security_guardrails_mode: Literal["flag", "block"] = "flag"
+    security_guardrail_rules: list[dict[str, Any]] = Field(default_factory=list)
 
     # AI / RAG configuration matrix (Phase 1). Feature flags default off so
     # MVP chat/auth/persistence behave identically until later phases enable
@@ -370,6 +373,23 @@ class Settings(BaseSettings):
     def normalize_authenticated_daily_upload_quota(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("security_guardrail_rules")
+    @classmethod
+    def validate_security_guardrail_rule_identity(
+        cls, value: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        for index, rule in enumerate(value):
+            missing = {"id", "version"} - rule.keys()
+            if missing:
+                names = ", ".join(sorted(missing))
+                raise ValueError(
+                    f"security_guardrail_rules[{index}] is missing: {names}"
+                )
+            from app.ai.security.guardrails.models import GuardrailRule
+
+            GuardrailRule.model_validate(rule)
         return value
 
     @property

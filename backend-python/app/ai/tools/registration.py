@@ -70,6 +70,7 @@ async def register_mcp_tools(
         permission_policy: Optional McpPermissionPolicy for per-server/per-tool auth.
     """
     from app.ai.mcp import MCP_SPEC_VERSION
+    from app.ai.deps import build_guardrail_engine, get_audit_logger
     from app.ai.mcp.discovery import McpToolDiscovery
     from app.ai.mcp.exceptions import McpConnectionError, McpDiscoveryError
     from app.ai.mcp.permissions import McpPermissionPolicy
@@ -161,7 +162,13 @@ async def register_mcp_tools(
 
             # Discover tools (validates capabilities internally)
             try:
-                discovered_tools = await McpToolDiscovery.discover(client, server_name)
+                discovered_tools = await McpToolDiscovery.discover(
+                    client,
+                    server_name,
+                    settings=settings,
+                    guardrail_engine=build_guardrail_engine(settings),
+                    audit_logger=get_audit_logger(),
+                )
                 discovery_cache[server_name] = discovered_tools
                 logger.info(
                     "MCP tool discovery succeeded",

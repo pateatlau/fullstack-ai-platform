@@ -612,7 +612,7 @@ No caller of `app.ai.hitl.rules.RuleCondition` (or `RuleOperator`/`RuleEvaluator
 
 ## Guardrail Domain Model
 
-`app/ai/security/guardrails/` — a second consumer of the shared rule engine, following the exact same "context → ordered rules → first match wins → typed outcome" shape as `RulePolicyEngine`:
+`app/ai/security/guardrails/` — a second consumer of the shared rule engine, following a "context → ordered rules → strongest match wins → typed outcome" shape so `block` cannot be shadowed by `flag`:
 
 ```python
 class GuardrailContext(BaseModel):
@@ -656,7 +656,7 @@ class GuardrailEngine:
     def __init__(self, rules: list[GuardrailRule], *, default_mode: GuardrailAction) -> None: ...
 
     def evaluate(self, context: GuardrailContext) -> GuardrailVerdict:
-        """First matching rule wins; no match -> GuardrailVerdict(action=ALLOW)."""
+        """Strongest matching action wins; no match -> GuardrailVerdict(action=ALLOW)."""
 ```
 
 **Default rules** (`app/ai/security/guardrails/rules.py` — `DEFAULT_GUARDRAIL_RULES`, merged with operator-supplied `security_guardrail_rules` config at startup, defaults first so an operator rule can override by priority):
@@ -1261,20 +1261,21 @@ Early phases build **RBAC and audit as generic primitives** (unit tests against 
 
 **DO NOT REIMPLEMENT**
 
-| Component                                                                            | Location                                |
-| ------------------------------------------------------------------------------------ | --------------------------------------- |
-| `ToolAuthorizer`, `ToolExecutor` pipeline                                            | `app/ai/tools/`                         |
-| `RuleCondition`, `RuleOperator`, `RuleEvaluator`, `ApprovalRule`, `RulePolicyEngine` | `app/ai/hitl/rules.py`                  |
-| `AgentApprovalService`, `AgentToolApprovalStore` CAS pattern                         | `app/ai/hitl/`                          |
-| `McpPermissionPolicy`, `McpServerCredentials`                                        | `app/ai/mcp/`                           |
-| `SlidingWindowRateLimiter`, `resolve_rate_limit_identity`                            | `app/middleware/rate_limit.py`          |
-| `QuotaService` (conceptual precedent only — not modified)                            | `app/services/quota_service.py`         |
-| `JobQueue`, `JobHandlerRegistry`, `JobScheduler`                                     | `app/ai/jobs/`                          |
-| `sanitize_value`, `sanitize_message`, `bind_context`, `LogContext`                   | `app/core/logging.py`                   |
-| `approval_span`, `job_span`, `tool_span` helper style                                | `app/ai/observability/tracing/spans.py` |
-| `get_current_caller`, `require_authenticated_caller`, `CallerContext`                | `app/core/caller.py`                    |
-| Feature flag infrastructure                                                          | `app/core/config.py`                    |
-| `get_sessionmaker`, standalone-session pattern                                       | `app/db/engine.py`, `app/ai/deps.py`    |
+| Component                                                                  | Location                                |
+| -------------------------------------------------------------------------- | --------------------------------------- |
+| `ToolAuthorizer`, `ToolExecutor` pipeline                                  | `app/ai/tools/`                         |
+| `RuleCondition`, `RuleOperator`, `RuleEvaluator`                           | `app/ai/security/rules_engine.py`       |
+| `ApprovalRule`, `RulePolicyEngine`; shared-engine compatibility re-exports | `app/ai/hitl/rules.py`                  |
+| `AgentApprovalService`, `AgentToolApprovalStore` CAS pattern               | `app/ai/hitl/`                          |
+| `McpPermissionPolicy`, `McpServerCredentials`                              | `app/ai/mcp/`                           |
+| `SlidingWindowRateLimiter`, `resolve_rate_limit_identity`                  | `app/middleware/rate_limit.py`          |
+| `QuotaService` (conceptual precedent only — not modified)                  | `app/services/quota_service.py`         |
+| `JobQueue`, `JobHandlerRegistry`, `JobScheduler`                           | `app/ai/jobs/`                          |
+| `sanitize_value`, `sanitize_message`, `bind_context`, `LogContext`         | `app/core/logging.py`                   |
+| `approval_span`, `job_span`, `tool_span` helper style                      | `app/ai/observability/tracing/spans.py` |
+| `get_current_caller`, `require_authenticated_caller`, `CallerContext`      | `app/core/caller.py`                    |
+| Feature flag infrastructure                                                | `app/core/config.py`                    |
+| `get_sessionmaker`, standalone-session pattern                             | `app/db/engine.py`, `app/ai/deps.py`    |
 
 When `SECURITY_GOVERNANCE_ENABLED=false`, existing platform behaviour must remain unchanged.
 
@@ -1314,9 +1315,9 @@ _To be verified in Epic 11 Phase 0; source of truth: `docs/audits/post-mvp-v2-ep
 
 _To be updated at each phase completion; release summary will be published at `docs/releases/post-mvp-v2-epic11-release-summary.md`._
 
-| Area                  | State                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Security & Governance | Phase 0 complete — baseline audited. Phase 1 complete — RBAC domain model, migration `0016_security_rbac`, `RbacService`, bootstrap. Phase 2 complete — RBAC enforcement wired into `ToolAuthorizer` (`tools:execute`/`tools:execute:destructive`), HITL stage decisions (`AgentApprovalService`, RBAC-authorized non-owner deciders), and Jobs REST (`jobs:view_all`/`jobs:retry`). Workflow approval node has no `required_stages` concept (N/A, documented). `PolicyContext.caller_role` RBAC-sourcing deferred (still `caller.kind`). Phase 3 complete — `audit_events` table + migration `0017_security_audit_log`, `AuditLogger`/`PostgresAuditStore`/`AuditAction` taxonomy, wired into tool denial/role assign-revoke/HITL stage+terminal decisions/job retry/login; `security_audit_retention_cleanup` Background Jobs handler (sixth first-class handler, flag-gated registration + schedule reconcile). Phase 4 complete — `SecretResolver`/`EnvSecretResolver` (`app/ai/security/secrets/`), `McpServerCredentials.resolve_credential_env_vars()` rebased onto an injected resolver (defaults to `EnvSecretResolver`, byte-for-byte unchanged), `get_secret_resolver()` DI factory; missing-secret resolution audited (`secret.resolution.missing`) from the async `StdioTransport.connect()` call site; consolidated `app/ai/security/redaction.py` (sensitive-key pattern, Bearer/`sk-`/JWT patterns, safe-scalar heuristic, `clear_pii_fields` helper) with `app/core/logging.py`/`app/ai/hitl/models.py`/`app/schemas/jobs.py` all delegating to it with zero behavioural change. |
+| Area                  | State                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Security & Governance | Phase 0 complete — baseline audited. Phase 1 complete — RBAC domain model, migration `0016_security_rbac`, `RbacService`, bootstrap. Phase 2 complete — RBAC enforcement wired into `ToolAuthorizer` (`tools:execute`/`tools:execute:destructive`), HITL stage decisions (`AgentApprovalService`, RBAC-authorized non-owner deciders), and Jobs REST (`jobs:view_all`/`jobs:retry`). Workflow approval node has no `required_stages` concept (N/A, documented). `PolicyContext.caller_role` RBAC-sourcing deferred (still `caller.kind`). Phase 3 complete — `audit_events` table + migration `0017_security_audit_log`, `AuditLogger`/`PostgresAuditStore`/`AuditAction` taxonomy, wired into tool denial/role assign-revoke/HITL stage+terminal decisions/job retry/login; `security_audit_retention_cleanup` Background Jobs handler (sixth first-class handler, flag-gated registration + schedule reconcile). Phase 4 complete — `SecretResolver`/`EnvSecretResolver` (`app/ai/security/secrets/`), `McpServerCredentials.resolve_credential_env_vars()` rebased onto an injected resolver (defaults to `EnvSecretResolver`, byte-for-byte unchanged), `get_secret_resolver()` DI factory; missing-secret resolution audited (`secret.resolution.missing`) from the async `StdioTransport.connect()` call site; consolidated `app/ai/security/redaction.py` (sensitive-key pattern, Bearer/`sk-`/JWT patterns, safe-scalar heuristic, `clear_pii_fields` helper) with `app/core/logging.py`/`app/ai/hitl/models.py`/`app/schemas/jobs.py` all delegating to it with zero behavioural change. Phase 6 complete — generic `RuleCondition`/`RuleOperator`/`RuleEvaluator` relocated to `app/ai/security/rules_engine.py` with HITL re-exports and unchanged rule tests; versioned heuristic `GuardrailEngine` defaults/config added; RAG chunks, tool arguments, and MCP results now enforce flag/block verdicts with bounded audit metadata and flag-off parity. Guardrail metrics remain owned by Phase 9. |
 
 ---
 
@@ -1330,7 +1331,7 @@ _To be updated at each phase completion; release summary will be published at `d
 | 3     | Global Audit Log & Retention Cleanup                   | M      | Complete    |
 | 4     | Secret Resolver Abstraction & Redaction Consolidation  | M      | Complete    |
 | 5     | Rate Limiting & Usage Quota Extensions                 | M      | In Progress |
-| 6     | Shared Rule Engine Extraction & Guardrails             | L      | Not Started |
+| 6     | Shared Rule Engine Extraction & Guardrails             | L      | Complete    |
 | 7     | Unified Governance Policy Context                      | S      | Not Started |
 | 8     | Security & Governance REST API & Health                | S      | Not Started |
 | 9     | Security Observability                                 | S      | Not Started |
@@ -1338,7 +1339,7 @@ _To be updated at each phase completion; release summary will be published at `d
 | 11    | Frontend Security & Governance Dashboard               | S      | Not Started |
 | 12    | Validation & Release                                   | M      | Not Started |
 
-**Epic 11 overall:** Phases 0–4 complete. Next gate: user authorization to begin Phase 5.
+**Epic 11 overall:** Phase 6 complete. Next gate: user authorization to begin Phase 7. Earlier phase statuses remain recorded independently above.
 
 ---
 
@@ -1802,7 +1803,7 @@ Extend the existing HTTP rate limiter with per-role multipliers, add new per-min
 # Phase 6 — Shared Rule Engine Extraction & Guardrails
 
 **Effort:** L
-**Status:** Not Started
+**Status:** Completed (2026-08-17)
 
 **Objective**
 
@@ -1823,36 +1824,36 @@ Relocate `RuleCondition`/`RuleOperator`/`RuleEvaluator` from `app/ai/hitl/rules.
 
 ## Rule Engine Relocation
 
-- [ ] Move `RuleCondition`, `RuleOperator`, `RuleEvaluator` (and their validators/regex-compilation logic) verbatim into `app/ai/security/rules_engine.py`.
-- [ ] Update `app/ai/hitl/rules.py` to import and re-export the relocated names; keep `PolicyContext`, `ApprovalRule`, `PolicyDecision`, `RulePolicyEngine`, `load_rules_from_config` in place, now depending on the relocated engine.
-- [ ] Run the **full, unmodified** existing `tests/ai/hitl/test_rules.py` suite against the relocated engine before writing a single guardrail-specific test — any failure blocks the phase.
+- [x] Move `RuleCondition`, `RuleOperator`, `RuleEvaluator` (and their validators/regex-compilation logic) verbatim into `app/ai/security/rules_engine.py`.
+- [x] Update `app/ai/hitl/rules.py` to import and re-export the relocated names; keep `PolicyContext`, `ApprovalRule`, `PolicyDecision`, `RulePolicyEngine`, `load_rules_from_config` in place, now depending on the relocated engine.
+- [x] Run the **full, unmodified** existing `tests/ai/hitl/test_rules.py` suite against the relocated engine before writing a single guardrail-specific test — any failure blocks the phase.
 
 ## Guardrail Engine
 
-- [ ] Implement `GuardrailContext`, `GuardrailAction`, `GuardrailRule` (with required `id`, `version`, optional `created_at`), `GuardrailVerdict` (with `matched_rule_id`, `matched_rule_version`) per Part I § Guardrail Domain Model.
-- [ ] Validate operator-supplied `security_guardrail_rules` entries include `id` and `version` at startup (fail fast on omission).
-- [ ] Implement `GuardrailEngine.evaluate()` — first-match-wins over priority-sorted rules; no match → `GuardrailVerdict(action=ALLOW)`.
-- [ ] Implement `DEFAULT_GUARDRAIL_RULES` with stable ids/versions per Part I table; merge with operator config at startup.
+- [x] Implement `GuardrailContext`, `GuardrailAction`, `GuardrailRule` (with required `id`, `version`, optional `created_at`), `GuardrailVerdict` (with `matched_rule_id`, `matched_rule_version`) per Part I § Guardrail Domain Model.
+- [x] Validate operator-supplied `security_guardrail_rules` entries include `id` and `version` at startup (fail fast on omission).
+- [x] Implement `GuardrailEngine.evaluate()` — strongest mapped action wins across priority-sorted rules (`block` > `flag` > `allow`); priority breaks ties; no match → `GuardrailVerdict(action=ALLOW)`.
+- [x] Implement `DEFAULT_GUARDRAIL_RULES` with stable ids/versions per Part I table; merge with operator config at startup.
 
 ## Enforcement Wiring
 
-- [ ] RAG: scan each selected chunk's text immediately before prompt-context assembly (`source="rag_chunk"`); on `block`, exclude only that chunk (never fail the whole response); on `flag`, include the chunk and emit an audit event + metric.
-- [ ] Tools: scan stringified tool call arguments inside `ToolExecutor` before dispatch (`source="tool_argument"`); on `block`, deny with `error_code="guardrail_blocked"` (same response shape as an authorization denial); on `flag`, proceed and emit an audit event + metric.
-- [ ] MCP: scan raw MCP tool results inside `McpToolExecutionAdapter` before returning to the agent loop (`source="mcp_result"`); on `block`, substitute a redacted placeholder result; on `flag`, pass through and emit an audit event + metric.
-- [ ] All three wiring points are no-ops when `security_guardrails_enabled=false` (or master flag off).
+- [x] RAG: scan each selected chunk's text immediately before prompt-context assembly (`source="rag_chunk"`); on `block`, exclude only that chunk (never fail the whole response); on `flag`, include the chunk and emit an audit event. Metric wiring remains Phase 9.
+- [x] Tools: scan stringified tool call arguments inside `ToolExecutor` before dispatch (`source="tool_argument"`); on `block`, deny with `error_code="guardrail_blocked"` (same response shape as an authorization denial); on `flag`, proceed and emit an audit event. Metric wiring remains Phase 9.
+- [x] MCP: scan raw MCP tool results inside `McpToolExecutionAdapter` before returning to the agent loop (`source="mcp_result"`); on `block`, substitute a redacted placeholder result; on `flag`, pass through and emit an audit event. Metric wiring remains Phase 9.
+- [x] All three wiring points are no-ops when `security_guardrails_enabled=false` (or master flag off).
 
 ## Testing
 
-- [ ] Regression: full pre-existing HITL rule-engine test suite passes unchanged post-relocation.
-- [ ] Test: each default guardrail rule's true-positive pattern is caught; each rule's adjacent-but-safe text is not (false-positive check).
-- [ ] Test: a `block`-verdict RAG chunk is excluded from context; the rest of the response still succeeds.
-- [ ] Test: a `block`-verdict tool argument denies the tool call with `guardrail_blocked`.
-- [ ] Test: a `block`-verdict MCP result is replaced with a safe placeholder, never propagated raw into the agent loop.
-- [ ] Test: `flag`-verdict content passes through unchanged on all three surfaces, with an audit event recorded.
-- [ ] Test: operator-supplied `security_guardrail_rules` entries are merged with and can override (by priority) the defaults.
-- [ ] Test: operator-supplied guardrail rules missing `id` or `version` fail startup validation.
-- [ ] Test: guardrail audit events include `matched_rule_id` and `matched_rule_version` in metadata.
-- [ ] Test: flag off — no guardrail scan ever runs on any of the three surfaces.
+- [x] Regression: full pre-existing HITL rule-engine test suite passes unchanged post-relocation.
+- [x] Test: each default guardrail rule's true-positive pattern is caught; each rule's adjacent-but-safe text is not (false-positive check).
+- [x] Test: a `block`-verdict RAG chunk is excluded from context; the rest of the response still succeeds.
+- [x] Test: a `block`-verdict tool argument denies the tool call with `guardrail_blocked`.
+- [x] Test: a `block`-verdict MCP result is replaced with a safe placeholder, never propagated raw into the agent loop.
+- [x] Test: `flag`-verdict content passes through unchanged on all three surfaces, with an audit event recorded.
+- [x] Test: operator-supplied `security_guardrail_rules` entries are merged with and can override (by priority) the defaults.
+- [x] Test: operator-supplied guardrail rules missing `id` or `version` fail startup validation.
+- [x] Test: guardrail audit events include `matched_rule_id` and `matched_rule_version` in metadata.
+- [x] Test: flag off — no guardrail scan ever runs on any of the three surfaces.
 
 **Verify**
 
@@ -1865,7 +1866,7 @@ Relocate `RuleCondition`/`RuleOperator`/`RuleEvaluator` from `app/ai/hitl/rules.
 
 **Exit criteria**
 
-- [ ] Rule engine relocation and guardrail tests pass.
+- [x] Rule engine relocation and guardrail tests pass.
 - [ ] User confirmation to proceed to Phase 7.
 
 **Rollback**
@@ -2395,6 +2396,7 @@ metrics  (aggregated by permission_key / action / outcome — never by actor_use
 
 | Version | Date       | Changes                                                                                                                                                                                                                                                                                                                                                                          |
 | ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.3     | 2026-08-17 | Part II Phase 6 complete — shared rule engine relocated to `app/ai/security/rules_engine.py` with HITL re-exports and unchanged behavior; versioned heuristic guardrails added for RAG chunks, tool arguments, and MCP results with flag/block handling, audit events, configuration validation, and flag-off parity.                                                            |
 | 2.2     | 2026-08-13 | Part II Phase 2 complete — RBAC enforcement wired into `ToolAuthorizer`, `AgentApprovalService` HITL stage decisions (RBAC-authorized non-owner deciders honoring `approvals:decide_all`/stage permissions), and Jobs REST (`jobs:view_all`/`jobs:retry`); flag-off parity preserved. `PolicyContext.caller_role` RBAC-sourcing deferred by user decision.                       |
 | 2.1     | 2026-08-13 | Part II Phase 1 complete — RBAC domain model, migration `0016_security_rbac`, `RbacService`, admin bootstrap.                                                                                                                                                                                                                                                                    |
 | 2       | 2026-08-13 | Integrated architecture review recommendations — permission metadata registry, `AuthorizationDecision`, versioned guardrail rules, canonical `AuditAction` taxonomy, `SecurityErrorCode` registry, authorization model evolution path, sequence diagrams, expanded runbook/recovery procedures, audit volume guidance, optional RBAC cache, correlation IDs in denial responses. |

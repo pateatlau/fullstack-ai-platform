@@ -19,6 +19,9 @@ from app.ai.rag.prompt_builder import BuiltPrompt, PromptBuilder
 from app.ai.rag.retriever import Retriever
 from app.ai.rag.schemas import RAGResponse
 from app.ai.rag.service import EMPTY_CORPUS_MESSAGE, RAGService
+from app.ai.security.guardrails.engine import GuardrailEngine
+from app.ai.security.guardrails.models import GuardrailAction
+from app.ai.security.guardrails.rules import DEFAULT_GUARDRAIL_RULES
 from app.ai.vectorstores.pgvector import PgVectorStore
 from app.core.config import Settings
 from app.db.identity import SqlUserStore
@@ -360,6 +363,50 @@ async def test_rag_service_empty_retrieval_skips_llm(
     assert response.retrieved_chunks == []
     assert response.truncated is False
     assert response.llm_latency_ms == 0
+    assert llm.complete_chat_calls == 0
+
+
+@pytest.mark.anyio
+async def test_rag_service_all_guardrail_blocked_chunks_skip_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunks = [
+        _chunk(
+            index=0,
+            content="sk-abcdefghijklmnopqrstuvwxyz1234",
+            score=0.95,
+        )
+    ]
+    embed = AsyncMock()
+    embed.embed_texts = AsyncMock(return_value=[[0.1]])
+    store = AsyncMock()
+    store.similarity_search = AsyncMock(return_value=chunks)
+    settings = _settings()
+    retriever = Retriever(
+        embedding_provider=embed,
+        vector_store=store,
+        settings=settings,
+    )
+    prompt_builder = MagicMock(spec=PromptBuilder)
+    llm = _CapturingLLMProvider()
+    _patch_provider_factory(monkeypatch, llm)
+    service = RAGService(
+        retriever=retriever,
+        context_builder=ContextBuilder(settings),
+        prompt_builder=prompt_builder,
+        settings=settings,
+        guardrail_engine=GuardrailEngine(
+            DEFAULT_GUARDRAIL_RULES,
+            default_mode=GuardrailAction.FLAG,
+        ),
+    )
+
+    response = await service.ask(user_id=uuid.uuid4(), question="anything?")
+
+    assert response.answer == EMPTY_CORPUS_MESSAGE
+    assert response.retrieved_chunks == []
+    assert response.llm_latency_ms == 0
+    prompt_builder.build.assert_not_called()
     assert llm.complete_chat_calls == 0
 
 

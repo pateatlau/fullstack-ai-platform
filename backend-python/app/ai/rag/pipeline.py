@@ -13,7 +13,7 @@ Citations are assigned after compression with contiguous ``[1..n]``.
 from __future__ import annotations
 
 import time
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from app.ai.interfaces.context_compressor import ContextCompressor
 from app.ai.interfaces.query_rewriter import QueryRewriter
@@ -37,6 +37,10 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 
 _logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from app.ai.security.audit.logger import AuditLogger
+    from app.ai.security.guardrails.engine import GuardrailEngine
 
 
 class AdvancedRetrievalPipeline(Protocol):
@@ -64,6 +68,8 @@ class DefaultAdvancedRetrievalPipeline:
         context_compressor: ContextCompressor | None = None,
         citation_builder: CitationBuilder | None = None,
         settings: Settings | None = None,
+        guardrail_engine: GuardrailEngine | None = None,
+        audit_logger: AuditLogger | None = None,
     ) -> None:
         if hybrid_retriever is None and retriever is None:
             raise ValueError(
@@ -78,6 +84,8 @@ class DefaultAdvancedRetrievalPipeline:
         self._context_compressor = context_compressor
         self._citation_builder = citation_builder
         self._settings = settings
+        self._guardrail_engine = guardrail_engine
+        self._audit_logger = audit_logger
 
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
         start = time.perf_counter()
@@ -101,6 +109,7 @@ class DefaultAdvancedRetrievalPipeline:
         candidates = await self._maybe_expand_parents(candidates)
         # Part I stage 5 — cross-encoder rerank (Protocol); failures keep order.
         candidates = await self._maybe_rerank(search_query, candidates, request)
+        candidates = await self._filter_guarded_candidates(candidates, request)
         # Part I stage 6 — faithful compress into context budget.
         built = self._maybe_compress(candidates)
         # Part I stage 7 — citations after compression, before prompt construction.
@@ -121,6 +130,39 @@ class DefaultAdvancedRetrievalPipeline:
             truncated=built.truncated if built is not None else False,
             retrieval_latency_ms=latency_ms,
         )
+
+    async def _filter_guarded_candidates(
+        self,
+        candidates: list[RetrievedCandidate],
+        request: RetrievalRequest,
+    ) -> list[RetrievedCandidate]:
+        if self._guardrail_engine is None:
+            return candidates
+
+        from app.ai.security.guardrails.enforcement import evaluate_guardrail
+        from app.ai.security.guardrails.models import (
+            GuardrailAction,
+            GuardrailContext,
+        )
+        from app.core.caller import CallerContext
+
+        included: list[RetrievedCandidate] = []
+        actor = CallerContext.for_user(request.user_id)
+        for candidate in candidates:
+            content = candidate.parent or candidate.chunk.content
+            verdict = await evaluate_guardrail(
+                self._guardrail_engine,
+                GuardrailContext(
+                    content_text=content,
+                    source="rag_chunk",
+                    document_id=str(candidate.chunk.document_id),
+                ),
+                audit_logger=self._audit_logger,
+                actor=actor,
+            )
+            if verdict.action is not GuardrailAction.BLOCK:
+                included.append(candidate)
+        return included
 
     async def _retrieve_candidates(
         self,

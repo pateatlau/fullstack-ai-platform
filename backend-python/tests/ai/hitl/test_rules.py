@@ -155,15 +155,17 @@ class TestRuleEvaluator:
                 value="a" * 257,
             )
 
-    def test_regex_input_length_limit_returns_false(self) -> None:
+    def test_regex_scans_long_input_in_bounded_windows(self) -> None:
         context = PolicyContext(
             tool_name="delete_file",
-            tool_arguments={"path": "a" * 5000},
+            tool_arguments={"path": "a" * 5000 + "blocked-token"},
         )
         condition = RuleCondition(
-            field="tool_arguments.path", operator=RuleOperator.REGEX, value="a+"
+            field="tool_arguments.path",
+            operator=RuleOperator.REGEX,
+            value="blocked-token$",
         )
-        assert self.evaluator.evaluate(condition, context) is False
+        assert self.evaluator.evaluate(condition, context) is True
 
     def test_all_of_requires_every_child(self) -> None:
         context = PolicyContext(

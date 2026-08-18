@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from app.ai.interfaces.vector_store import ScoredChunk
 from app.ai.rag.context_builder import ContextBuilder
@@ -26,6 +26,10 @@ from app.schemas.chat import ChatMessageSchema, ProviderName
 
 _logger = get_logger(__name__)
 
+if TYPE_CHECKING:
+    from app.ai.security.audit.logger import AuditLogger
+    from app.ai.security.guardrails.engine import GuardrailEngine
+
 EMPTY_CORPUS_MESSAGE = "I couldn't find any relevant documents to answer your question."
 
 
@@ -44,12 +48,16 @@ class RAGService:
         prompt_builder: PromptBuilder,
         settings: Settings,
         advanced_pipeline: AdvancedRetrievalPipeline | None = None,
+        guardrail_engine: GuardrailEngine | None = None,
+        audit_logger: AuditLogger | None = None,
     ) -> None:
         self._retriever = retriever
         self._context_builder = context_builder
         self._prompt_builder = prompt_builder
         self._settings = settings
         self._advanced_pipeline = advanced_pipeline
+        self._guardrail_engine = guardrail_engine
+        self._audit_logger = audit_logger
 
     async def ask(
         self,
@@ -123,6 +131,16 @@ class RAGService:
                     citations=None,
                 )
 
+            chunks = await self._filter_guarded_chunks(chunks, user_id=user_id)
+            if not chunks:
+                return self._empty_response(
+                    start=start,
+                    resolved_model=resolved_model,
+                    provider_name=provider_name,
+                    retrieval_latency_ms=retrieval_latency_ms,
+                    citations=None,
+                )
+
             built_context = self._context_builder.build(chunks)
             context_text = built_context.text
             truncated = built_context.truncated
@@ -173,6 +191,36 @@ class RAGService:
             llm_latency_ms=llm_latency_ms,
             citations=citations,
         )
+
+    async def _filter_guarded_chunks(
+        self, chunks: list[ScoredChunk], *, user_id: uuid.UUID
+    ) -> list[ScoredChunk]:
+        if self._guardrail_engine is None:
+            return chunks
+
+        from app.ai.security.guardrails.enforcement import evaluate_guardrail
+        from app.ai.security.guardrails.models import (
+            GuardrailAction,
+            GuardrailContext,
+        )
+        from app.core.caller import CallerContext
+
+        included: list[ScoredChunk] = []
+        actor = CallerContext.for_user(user_id)
+        for chunk in chunks:
+            verdict = await evaluate_guardrail(
+                self._guardrail_engine,
+                GuardrailContext(
+                    content_text=chunk.content,
+                    source="rag_chunk",
+                    document_id=str(chunk.document_id),
+                ),
+                audit_logger=self._audit_logger,
+                actor=actor,
+            )
+            if verdict.action is not GuardrailAction.BLOCK:
+                included.append(chunk)
+        return included
 
     def _use_advanced_pipeline(self) -> bool:
         return (
