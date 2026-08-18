@@ -15,7 +15,7 @@ _EVIDENCE_MAX_CHARS = 160
 
 
 class GuardrailEngine:
-    """Evaluate content against ordered rules; the first match wins."""
+    """Evaluate content against ordered rules; the strongest match wins."""
 
     def __init__(
         self,
@@ -36,16 +36,35 @@ class GuardrailEngine:
         return self._default_mode
 
     def evaluate(self, context: GuardrailContext) -> GuardrailVerdict:
+        selected: tuple[GuardrailRule, GuardrailAction] | None = None
+        action_strength = {
+            GuardrailAction.ALLOW: 0,
+            GuardrailAction.FLAG: 1,
+            GuardrailAction.BLOCK: 2,
+        }
+
         for rule in self._rules:
-            if self._evaluator.evaluate(rule.condition, context):
-                evidence = redact_secret_patterns(context.content_text)
-                action = rule.action
-                if action is GuardrailAction.FLAG:
-                    action = self._default_mode
-                return GuardrailVerdict(
-                    action=action,
-                    matched_rule_id=rule.id,
-                    matched_rule_version=rule.version,
-                    evidence_snippet=evidence[:_EVIDENCE_MAX_CHARS],
-                )
-        return GuardrailVerdict(action=GuardrailAction.ALLOW)
+            if not self._evaluator.evaluate(rule.condition, context):
+                continue
+            action = (
+                self._default_mode
+                if rule.action is GuardrailAction.FLAG
+                else rule.action
+            )
+            if (
+                selected is None
+                or action_strength[action] > action_strength[selected[1]]
+            ):
+                selected = (rule, action)
+
+        if selected is None:
+            return GuardrailVerdict(action=GuardrailAction.ALLOW)
+
+        rule, action = selected
+        evidence = redact_secret_patterns(context.content_text[:_EVIDENCE_MAX_CHARS])
+        return GuardrailVerdict(
+            action=action,
+            matched_rule_id=rule.id,
+            matched_rule_version=rule.version,
+            evidence_snippet=evidence,
+        )

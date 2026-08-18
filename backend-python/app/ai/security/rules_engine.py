@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 
 _REGEX_MAX_PATTERN_LEN = 256
 _REGEX_MAX_INPUT_LEN = 4096
+_REGEX_WINDOW_OVERLAP = _REGEX_MAX_PATTERN_LEN
 
 
 class RuleContext(Protocol):
@@ -112,13 +113,18 @@ def _compare(operator: RuleOperator, actual: Any, expected: Any) -> bool:
 
 
 def _regex_matches(actual: Any, pattern: re.Pattern[str]) -> bool:
-    """Return whether ``actual`` matches a precompiled, bounded regex pattern."""
+    """Search all of ``actual`` using bounded, overlapping regex windows."""
     if actual is None:
         return False
     text = str(actual)
-    if len(text) > _REGEX_MAX_INPUT_LEN:
-        return False
-    return bool(pattern.search(text))
+    step = _REGEX_MAX_INPUT_LEN - _REGEX_WINDOW_OVERLAP
+    for start in range(0, max(len(text), 1), step):
+        end = min(start + _REGEX_MAX_INPUT_LEN, len(text))
+        if pattern.search(text, start, end):
+            return True
+        if end == len(text):
+            break
+    return False
 
 
 class RuleEvaluator:

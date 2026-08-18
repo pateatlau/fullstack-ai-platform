@@ -132,6 +132,14 @@ class RAGService:
                 )
 
             chunks = await self._filter_guarded_chunks(chunks, user_id=user_id)
+            if not chunks:
+                return self._empty_response(
+                    start=start,
+                    resolved_model=resolved_model,
+                    provider_name=provider_name,
+                    retrieval_latency_ms=retrieval_latency_ms,
+                    citations=None,
+                )
 
             built_context = self._context_builder.build(chunks)
             context_text = built_context.text

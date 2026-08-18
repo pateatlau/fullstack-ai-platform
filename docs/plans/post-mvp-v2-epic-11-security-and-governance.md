@@ -612,7 +612,7 @@ No caller of `app.ai.hitl.rules.RuleCondition` (or `RuleOperator`/`RuleEvaluator
 
 ## Guardrail Domain Model
 
-`app/ai/security/guardrails/` — a second consumer of the shared rule engine, following the exact same "context → ordered rules → first match wins → typed outcome" shape as `RulePolicyEngine`:
+`app/ai/security/guardrails/` — a second consumer of the shared rule engine, following a "context → ordered rules → strongest match wins → typed outcome" shape so `block` cannot be shadowed by `flag`:
 
 ```python
 class GuardrailContext(BaseModel):
@@ -656,7 +656,7 @@ class GuardrailEngine:
     def __init__(self, rules: list[GuardrailRule], *, default_mode: GuardrailAction) -> None: ...
 
     def evaluate(self, context: GuardrailContext) -> GuardrailVerdict:
-        """First matching rule wins; no match -> GuardrailVerdict(action=ALLOW)."""
+        """Strongest matching action wins; no match -> GuardrailVerdict(action=ALLOW)."""
 ```
 
 **Default rules** (`app/ai/security/guardrails/rules.py` — `DEFAULT_GUARDRAIL_RULES`, merged with operator-supplied `security_guardrail_rules` config at startup, defaults first so an operator rule can override by priority):
@@ -1261,20 +1261,21 @@ Early phases build **RBAC and audit as generic primitives** (unit tests against 
 
 **DO NOT REIMPLEMENT**
 
-| Component                                                                            | Location                                |
-| ------------------------------------------------------------------------------------ | --------------------------------------- |
-| `ToolAuthorizer`, `ToolExecutor` pipeline                                            | `app/ai/tools/`                         |
-| `RuleCondition`, `RuleOperator`, `RuleEvaluator`, `ApprovalRule`, `RulePolicyEngine` | `app/ai/hitl/rules.py`                  |
-| `AgentApprovalService`, `AgentToolApprovalStore` CAS pattern                         | `app/ai/hitl/`                          |
-| `McpPermissionPolicy`, `McpServerCredentials`                                        | `app/ai/mcp/`                           |
-| `SlidingWindowRateLimiter`, `resolve_rate_limit_identity`                            | `app/middleware/rate_limit.py`          |
-| `QuotaService` (conceptual precedent only — not modified)                            | `app/services/quota_service.py`         |
-| `JobQueue`, `JobHandlerRegistry`, `JobScheduler`                                     | `app/ai/jobs/`                          |
-| `sanitize_value`, `sanitize_message`, `bind_context`, `LogContext`                   | `app/core/logging.py`                   |
-| `approval_span`, `job_span`, `tool_span` helper style                                | `app/ai/observability/tracing/spans.py` |
-| `get_current_caller`, `require_authenticated_caller`, `CallerContext`                | `app/core/caller.py`                    |
-| Feature flag infrastructure                                                          | `app/core/config.py`                    |
-| `get_sessionmaker`, standalone-session pattern                                       | `app/db/engine.py`, `app/ai/deps.py`    |
+| Component                                                                  | Location                                |
+| -------------------------------------------------------------------------- | --------------------------------------- |
+| `ToolAuthorizer`, `ToolExecutor` pipeline                                  | `app/ai/tools/`                         |
+| `RuleCondition`, `RuleOperator`, `RuleEvaluator`                           | `app/ai/security/rules_engine.py`       |
+| `ApprovalRule`, `RulePolicyEngine`; shared-engine compatibility re-exports | `app/ai/hitl/rules.py`                  |
+| `AgentApprovalService`, `AgentToolApprovalStore` CAS pattern               | `app/ai/hitl/`                          |
+| `McpPermissionPolicy`, `McpServerCredentials`                              | `app/ai/mcp/`                           |
+| `SlidingWindowRateLimiter`, `resolve_rate_limit_identity`                  | `app/middleware/rate_limit.py`          |
+| `QuotaService` (conceptual precedent only — not modified)                  | `app/services/quota_service.py`         |
+| `JobQueue`, `JobHandlerRegistry`, `JobScheduler`                           | `app/ai/jobs/`                          |
+| `sanitize_value`, `sanitize_message`, `bind_context`, `LogContext`         | `app/core/logging.py`                   |
+| `approval_span`, `job_span`, `tool_span` helper style                      | `app/ai/observability/tracing/spans.py` |
+| `get_current_caller`, `require_authenticated_caller`, `CallerContext`      | `app/core/caller.py`                    |
+| Feature flag infrastructure                                                | `app/core/config.py`                    |
+| `get_sessionmaker`, standalone-session pattern                             | `app/db/engine.py`, `app/ai/deps.py`    |
 
 When `SECURITY_GOVERNANCE_ENABLED=false`, existing platform behaviour must remain unchanged.
 
@@ -1831,7 +1832,7 @@ Relocate `RuleCondition`/`RuleOperator`/`RuleEvaluator` from `app/ai/hitl/rules.
 
 - [x] Implement `GuardrailContext`, `GuardrailAction`, `GuardrailRule` (with required `id`, `version`, optional `created_at`), `GuardrailVerdict` (with `matched_rule_id`, `matched_rule_version`) per Part I § Guardrail Domain Model.
 - [x] Validate operator-supplied `security_guardrail_rules` entries include `id` and `version` at startup (fail fast on omission).
-- [x] Implement `GuardrailEngine.evaluate()` — first-match-wins over priority-sorted rules; no match → `GuardrailVerdict(action=ALLOW)`.
+- [x] Implement `GuardrailEngine.evaluate()` — strongest mapped action wins across priority-sorted rules (`block` > `flag` > `allow`); priority breaks ties; no match → `GuardrailVerdict(action=ALLOW)`.
 - [x] Implement `DEFAULT_GUARDRAIL_RULES` with stable ids/versions per Part I table; merge with operator config at startup.
 
 ## Enforcement Wiring

@@ -6,7 +6,6 @@ Phase 5: Full Tool Execution Adapter implementation.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from typing import TYPE_CHECKING, Any
@@ -15,6 +14,7 @@ from app.ai.mcp.exceptions import (
     McpConnectionError,
     McpToolExecutionError,
 )
+from app.ai.security.guardrails.serialization import serialize_guardrail_content
 from app.ai.tools.schemas import ToolResult
 from app.core.config import Settings, get_settings
 from app.middleware.rate_limit import check_rate_limit_bucket
@@ -139,9 +139,7 @@ class McpToolExecutionAdapter:
                 verdict = await evaluate_guardrail(
                     self.guardrail_engine,
                     GuardrailContext(
-                        content_text=json.dumps(
-                            mcp_result, sort_keys=True, default=str
-                        ),
+                        content_text=serialize_guardrail_content(mcp_result),
                         source="mcp_result",
                         tool_name=self.tool_name,
                         mcp_server=self.server_name,

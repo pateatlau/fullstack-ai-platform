@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from typing import TYPE_CHECKING
 
@@ -17,6 +16,7 @@ from app.ai.observability.tracing.spans import (
 )
 from app.ai.security.audit.actions import AuditAction
 from app.ai.security.audit.models import AuditOutcome
+from app.ai.security.guardrails.serialization import serialize_guardrail_content
 from app.ai.tools.authorizer import ToolAuthorizer
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext, ToolResult
@@ -152,6 +152,41 @@ class ToolExecutor:
                         authorization_result="denied",
                     )
 
+            if self._guardrail_engine is not None:
+                from app.ai.security.guardrails.enforcement import evaluate_guardrail
+                from app.ai.security.guardrails.models import (
+                    GuardrailAction,
+                    GuardrailContext,
+                )
+
+                verdict = await evaluate_guardrail(
+                    self._guardrail_engine,
+                    GuardrailContext(
+                        content_text=serialize_guardrail_content(arguments),
+                        source="tool_argument",
+                        tool_name=tool_name,
+                    ),
+                    audit_logger=self._audit_logger,
+                    actor=context.caller,
+                )
+                if verdict.action is GuardrailAction.BLOCK:
+                    return self._finalize(
+                        call=call,
+                        context=context,
+                        result=ToolResult(
+                            success=False,
+                            error="Tool arguments blocked by security policy",
+                            error_code="guardrail_blocked",
+                            metadata={
+                                "rule_id": verdict.matched_rule_id,
+                                "rule_version": verdict.matched_rule_version,
+                            },
+                        ),
+                        start=start,
+                        span=span,
+                        authorization_result="denied",
+                    )
+
             if (
                 self._settings.security_rate_limit_extensions_enabled
                 and context.caller.user_id is not None
@@ -192,41 +227,6 @@ class ToolExecutor:
                     raise RateLimitExceededError(
                         retry_after_seconds=retry_after,
                         message="Tool invocation rate limit exceeded.",
-                    )
-
-            if self._guardrail_engine is not None:
-                from app.ai.security.guardrails.enforcement import evaluate_guardrail
-                from app.ai.security.guardrails.models import (
-                    GuardrailAction,
-                    GuardrailContext,
-                )
-
-                verdict = await evaluate_guardrail(
-                    self._guardrail_engine,
-                    GuardrailContext(
-                        content_text=json.dumps(arguments, sort_keys=True, default=str),
-                        source="tool_argument",
-                        tool_name=tool_name,
-                    ),
-                    audit_logger=self._audit_logger,
-                    actor=context.caller,
-                )
-                if verdict.action is GuardrailAction.BLOCK:
-                    return self._finalize(
-                        call=call,
-                        context=context,
-                        result=ToolResult(
-                            success=False,
-                            error="Tool arguments blocked by security policy",
-                            error_code="guardrail_blocked",
-                            metadata={
-                                "rule_id": verdict.matched_rule_id,
-                                "rule_version": verdict.matched_rule_version,
-                            },
-                        ),
-                        start=start,
-                        span=span,
-                        authorization_result="denied",
                     )
 
             try:
