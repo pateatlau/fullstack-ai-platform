@@ -6,6 +6,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.ai.agent.executor.dependency_resolver import resolve_step_batches
 from app.ai.agent.executor.result_aggregator import (
@@ -26,7 +27,6 @@ from app.ai.agent.streaming.publisher import NoOpStreamPublisher
 from app.ai.hitl.exceptions import HitlError, ToolCallRejectedByPolicyError
 from app.ai.hitl.policy import ApprovalPolicy
 from app.ai.hitl.rules import RuleOutcome
-from app.ai.hitl.service import AgentApprovalService, raise_pause
 from app.ai.observability.tracing.spans import (
     agent_span,
     elapsed_ms_since,
@@ -37,6 +37,10 @@ from app.ai.observability.tracing.spans import (
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import ToolCall, ToolExecutionContext, ToolResult
+
+if TYPE_CHECKING:
+    from app.ai.hitl.service import AgentApprovalService
+    from app.ai.security.rbac.service import RbacService
 
 
 class ToolExecutionRetryableError(Exception):
@@ -81,6 +85,8 @@ class ToolRunner:
         hitl_enabled: bool = False,
         approval_policy: ApprovalPolicy | None = None,
         approval_service: AgentApprovalService | None = None,
+        rbac_service: RbacService | None = None,
+        rbac_enforcement_enabled: bool = False,
     ) -> None:
         self._executor = tool_executor
         self._registry = tool_registry
@@ -90,6 +96,8 @@ class ToolRunner:
         self._hitl_enabled = hitl_enabled
         self._approval_policy = approval_policy
         self._approval_service = approval_service
+        self._rbac_service = rbac_service
+        self._rbac_enforcement_enabled = rbac_enforcement_enabled
 
     async def run_tool_steps(
         self,
@@ -245,11 +253,19 @@ class ToolRunner:
             raise HitlError(
                 "HITL is enabled but ToolRunner is missing ToolRegistry or ApprovalPolicy."
             )
+        from app.ai.security.rbac.service import resolve_caller_role
+
+        caller_role = await resolve_caller_role(
+            tool_context.caller,
+            self._rbac_service,
+            enforcement_enabled=self._rbac_enforcement_enabled,
+        )
         outcome = _evaluate_step_policy(
             step,
             self._registry,
             self._approval_policy,
             tool_context,
+            caller_role=caller_role,
         )
         if outcome is None or outcome.outcome is RuleOutcome.AUTO_APPROVE:
             return
@@ -283,6 +299,8 @@ class ToolRunner:
             model=model,
             required_stages=outcome.required_stages,
         )
+        from app.ai.hitl.service import raise_pause
+
         raise_pause(approval)
 
     async def _preflight_approval_for_steps(
@@ -416,6 +434,8 @@ def _evaluate_step_policy(
     registry: ToolRegistry,
     policy: ApprovalPolicy,
     tool_context: ToolExecutionContext,
+    *,
+    caller_role: str | None,
 ) -> _StepPolicyOutcome | None:
     """Evaluate the rule-based policy for every call in a step.
 
@@ -423,9 +443,9 @@ def _evaluate_step_policy(
     blocked call halts the step even when a sibling call would otherwise
     pause for review.
 
-    ``caller_role``, ``workspace``, ``tenant``, and ``estimated_cost`` are
-    sourced from :meth:`ToolExecutionContext.trusted_policy_kwargs` (server
-    metadata) — never from LLM tool arguments.
+    ``caller_role`` is resolved from RBAC when enforcement is enabled and
+    otherwise preserves ``CallerContext.kind``. Other policy fields come from
+    server metadata — never from LLM tool arguments.
     """
     pending: _StepPolicyOutcome | None = None
     for call in step.tool_calls:
@@ -435,7 +455,10 @@ def _evaluate_step_policy(
         decision = policy.evaluate(
             tool,
             arguments=call.arguments,
-            **tool_context.trusted_policy_kwargs(),
+            caller_role=caller_role,
+            workspace=tool_context.workspace,
+            tenant=tool_context.tenant,
+            estimated_cost=tool_context.estimated_cost,
         )
         if decision.outcome is RuleOutcome.AUTO_APPROVE:
             continue

@@ -26,6 +26,8 @@ from app.ai.hitl.rules import (
 )
 from app.ai.hitl.service import AgentApprovalService
 from app.ai.agent.models.state import AgentExecutionState, AgentExecutionStatus
+from app.ai.security.rbac.service import RbacService
+from app.ai.security.rbac.models import Role, UserRoleAssignment
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.schemas import (
@@ -38,6 +40,84 @@ from app.core.caller import CallerContext
 from app.core.config import Settings
 from tests.ai.hitl.fakes import InMemoryApprovalStore
 from tests.fakes import FakeChatStore
+
+
+class _RoleStore:
+    def __init__(self, user_roles: dict[uuid.UUID, set[str]]) -> None:
+        self._user_roles = user_roles
+
+    async def list_roles(self) -> list[Role]:
+        return []
+
+    async def get_role_by_name(self, name: str) -> Role | None:
+        return None
+
+    async def get_permission_keys_for_user(self, user_id: uuid.UUID) -> set[str]:
+        return set()
+
+    async def get_user_roles(self, user_id: uuid.UUID) -> list[str]:
+        return sorted(self._user_roles.get(user_id, set()))
+
+    async def assign_role(self, user_id: uuid.UUID, role_name: str) -> bool:
+        return False
+
+    async def revoke_role(self, user_id: uuid.UUID, role_name: str) -> bool:
+        return False
+
+    async def bootstrap_admins(self, emails: list[str]) -> int:
+        return 0
+
+    async def get_user_role_assignments(
+        self, user_id: uuid.UUID
+    ) -> list[UserRoleAssignment]:
+        return []
+
+
+@pytest.mark.anyio
+async def test_rbac_enabled_policy_uses_resolved_operator_role() -> None:
+    user_id = uuid.uuid4()
+    policy = ApprovalPolicy(
+        required_tool_names=frozenset(),
+        rule_engine=RulePolicyEngine(
+            [
+                ApprovalRule(
+                    name="reject-operators",
+                    outcome=RuleOutcome.REJECT,
+                    condition=RuleCondition(
+                        field="caller_role",
+                        operator=RuleOperator.EQ,
+                        value="operator",
+                    ),
+                )
+            ]
+        ),
+    )
+    registry = _registry()
+    runner = ToolRunner(
+        tool_executor=ToolExecutor(registry=registry, settings=Settings()),
+        tool_registry=registry,
+        hitl_enabled=True,
+        approval_policy=policy,
+        rbac_service=RbacService(_RoleStore({user_id: {"operator"}})),
+        rbac_enforcement_enabled=True,
+    )
+
+    with pytest.raises(ToolCallRejectedByPolicyError) as exc_info:
+        await runner.run_tool_steps(
+            [
+                PlannedStep(
+                    step_id="s1",
+                    action=StepAction.TOOL_CALL,
+                    tool_calls=[
+                        ToolCall(name="delete_file", arguments={"path": "/prod/x"})
+                    ],
+                )
+            ],
+            execution_id="exec-operator-policy",
+            tool_context=ToolExecutionContext(caller=CallerContext.for_user(user_id)),
+        )
+
+    assert exc_info.value.matched_rule == "reject-operators"
 
 
 class _Handler:

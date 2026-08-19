@@ -405,6 +405,7 @@ def get_agent_runtime(
     tool_executor: ToolExecutor = Depends(get_tool_executor),
     approval_policy: "ApprovalPolicy" = Depends(get_approval_policy),
     approval_service: "AgentApprovalService" = Depends(get_agent_approval_service),
+    rbac_service: "RbacService" = Depends(get_rbac_service),
 ) -> DefaultAgent:
     """Return a request-scoped :class:`DefaultAgent` wired to AI dependencies."""
     return create_default_agent(
@@ -414,6 +415,7 @@ def get_agent_runtime(
         tool_executor=tool_executor,
         approval_policy=approval_policy if settings.hitl_enabled else None,
         approval_service=approval_service if settings.hitl_enabled else None,
+        rbac_service=rbac_service,
     )
 
 
@@ -953,6 +955,7 @@ def build_workflow_manager_for_session(
         tool_registry=registry,
         prompt_manager=prompt_manager,
         tool_executor=tool_executor,
+        rbac_service=rbac_service,
     )
     store = PostgresWorkflowStore(session=session, settings=settings)
 
@@ -1056,6 +1059,11 @@ def build_hitl_resume_executor(
         hitl_enabled=settings.hitl_enabled,
         approval_policy=approval_policy,
         approval_service=approval_service,
+        rbac_service=rbac_service,
+        rbac_enforcement_enabled=(
+            settings.security_governance_enabled
+            and settings.security_rbac_enforcement_enabled
+        ),
     )
     return AgentExecutor(
         planner=ReActPlanner(
@@ -1091,6 +1099,7 @@ async def reconcile_workflow_runs_at_startup(settings: Settings) -> int:
             tool_registry=registry,
             prompt_manager=prompt_manager,
             tool_executor=tool_executor,
+            rbac_service=rbac_service,
         )
         store = PostgresWorkflowStore(session=session, settings=settings)
 

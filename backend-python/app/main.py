@@ -41,6 +41,7 @@ from app.routers import (
     observability,
     plugins,
     rag,
+    security,
     workflows,
 )
 
@@ -157,6 +158,7 @@ app.include_router(workflows.router)
 app.include_router(observability.router)
 app.include_router(plugins.router)
 app.include_router(jobs.router)
+app.include_router(security.router)
 
 if settings.voice_enabled:
     from app.routers.voice import create_voice_router
