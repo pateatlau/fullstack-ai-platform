@@ -84,7 +84,9 @@ class RbacService:
         user_id: uuid.UUID | None,
         permission: str | PermissionKey,
     ) -> AuthorizationDecision:
-        permission_key = str(permission)
+        permission_key = (
+            permission.value if isinstance(permission, PermissionKey) else permission
+        )
         if user_id is None:
             return AuthorizationDecision(
                 allowed=False,

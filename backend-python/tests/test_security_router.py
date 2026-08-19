@@ -5,6 +5,7 @@ import uuid
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.security.rbac.service import RbacService
 from app.ai.security.rbac.store import PostgresRoleStore
@@ -27,7 +28,7 @@ def _build_test_app() -> FastAPI:
     return test_app
 
 
-async def _make_user(session) -> uuid.UUID:
+async def _make_user(session: AsyncSession) -> uuid.UUID:
     user = await SqlUserStore(session).create(
         sub=f"security-router-{uuid.uuid4()}",
         email=None,
@@ -37,13 +38,16 @@ async def _make_user(session) -> uuid.UUID:
     return user.id
 
 
-async def _grant_role(db_session, user_id: uuid.UUID, role_name: str) -> None:
+async def _grant_role(
+    db_session: AsyncSession, user_id: uuid.UUID, role_name: str
+) -> None:
     await RbacService(PostgresRoleStore(db_session)).assign_role(user_id, role_name)
+    await db_session.commit()
 
 
 @pytest.mark.anyio
 async def test_security_routes_are_feature_flagged_off(
-    db_session, monkeypatch: pytest.MonkeyPatch
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SECURITY_GOVERNANCE_ENABLED", "false")
     get_settings.cache_clear()
@@ -64,7 +68,7 @@ async def test_security_routes_are_feature_flagged_off(
 
 @pytest.mark.anyio
 async def test_security_roles_endpoint_requires_rbac_manage(
-    db_session,
+    db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SECURITY_GOVERNANCE_ENABLED", "true")
@@ -72,8 +76,8 @@ async def test_security_roles_endpoint_requires_rbac_manage(
     get_settings.cache_clear()
 
     member_id = await _make_user(db_session)
-    operator_id = await _make_user(db_session)
-    await _grant_role(db_session, operator_id, "operator")
+    admin_id = await _make_user(db_session)
+    await _grant_role(db_session, admin_id, "admin")
 
     app = _build_test_app()
     async with AsyncClient(
@@ -84,20 +88,20 @@ async def test_security_roles_endpoint_requires_rbac_manage(
             "/api/security/roles",
             headers=_auth_headers(member_id),
         )
-        operator_response = await client.get(
+        admin_response = await client.get(
             "/api/security/roles",
-            headers=_auth_headers(operator_id),
+            headers=_auth_headers(admin_id),
         )
 
     get_settings.cache_clear()
     assert member_response.status_code == 403
-    assert operator_response.status_code == 200
-    assert isinstance(operator_response.json(), list)
+    assert admin_response.status_code == 200
+    assert isinstance(admin_response.json(), list)
 
 
 @pytest.mark.anyio
 async def test_security_policy_summary_and_audit_routes_work_for_operator(
-    db_session,
+    db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SECURITY_GOVERNANCE_ENABLED", "true")
