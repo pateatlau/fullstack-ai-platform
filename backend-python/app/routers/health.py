@@ -54,6 +54,7 @@ async def health(
     plugins_enabled = settings.plugins_enabled
     hitl_enabled = settings.hitl_enabled
     background_jobs_enabled = settings.background_jobs_enabled
+    security_governance_enabled = settings.security_governance_enabled
     hitl_pending_approvals_count = await _hitl_pending_approvals_count(
         hitl_enabled=hitl_enabled,
         approvals_store=approvals_store,
@@ -76,9 +77,13 @@ async def health(
         "memory_enabled": settings.memory_enabled,
         "workflow_engine_enabled": settings.workflow_engine_enabled,
         "observability_enabled": settings.observability_enabled,
-        "security_governance_enabled": settings.security_governance_enabled,
-        "rbac_enforcement_enabled": settings.security_rbac_enforcement_enabled,
-        "guardrails_enabled": settings.security_guardrails_enabled,
+        "security_governance_enabled": security_governance_enabled,
+        "rbac_enforcement_enabled": (
+            security_governance_enabled and settings.security_rbac_enforcement_enabled
+        ),
+        "guardrails_enabled": (
+            security_governance_enabled and settings.security_guardrails_enabled
+        ),
         "hitl_enabled": hitl_enabled,
         "hitl_pending_approvals_count": hitl_pending_approvals_count,
         "background_jobs_enabled": background_jobs_enabled,

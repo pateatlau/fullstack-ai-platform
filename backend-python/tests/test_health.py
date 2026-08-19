@@ -56,6 +56,15 @@ async def test_health_returns_expected_shape() -> None:
         "memory_enabled": settings.memory_enabled,
         "workflow_engine_enabled": settings.workflow_engine_enabled,
         "observability_enabled": settings.observability_enabled,
+        "security_governance_enabled": settings.security_governance_enabled,
+        "rbac_enforcement_enabled": (
+            settings.security_governance_enabled
+            and settings.security_rbac_enforcement_enabled
+        ),
+        "guardrails_enabled": (
+            settings.security_governance_enabled
+            and settings.security_guardrails_enabled
+        ),
         "hitl_enabled": settings.hitl_enabled,
         "hitl_pending_approvals_count": 0,
         "background_jobs_enabled": settings.background_jobs_enabled,
