@@ -34,6 +34,17 @@ class AuditStore(Protocol):
 
     async def get_by_id(self, event_id: uuid.UUID) -> AuditEvent | None: ...
 
+    async def count(
+        self,
+        *,
+        actor_user_id: uuid.UUID | None = None,
+        action: str | None = None,
+        resource_type: str | None = None,
+        outcome: AuditOutcome | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int: ...
+
     async def query(
         self,
         *,
@@ -114,6 +125,33 @@ class PostgresAuditStore:
         async with self._session_factory() as session:
             rows = (await session.execute(stmt)).mappings().all()
         return [_row_to_event(dict(row)) for row in rows]
+
+    async def count(
+        self,
+        *,
+        actor_user_id: uuid.UUID | None = None,
+        action: str | None = None,
+        resource_type: str | None = None,
+        outcome: AuditOutcome | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        stmt = sa.select(sa.func.count()).select_from(_TABLE)
+        if actor_user_id is not None:
+            stmt = stmt.where(_TABLE.c.actor_user_id == actor_user_id)
+        if action is not None:
+            stmt = stmt.where(_TABLE.c.action == action)
+        if resource_type is not None:
+            stmt = stmt.where(_TABLE.c.resource_type == resource_type)
+        if outcome is not None:
+            stmt = stmt.where(_TABLE.c.outcome == outcome.value)
+        if since is not None:
+            stmt = stmt.where(_TABLE.c.occurred_at >= since)
+        if until is not None:
+            stmt = stmt.where(_TABLE.c.occurred_at <= until)
+
+        async with self._session_factory() as session:
+            return int((await session.execute(stmt)).scalar_one())
 
 
 def _coerce_metadata(value: object) -> dict[str, Any]:

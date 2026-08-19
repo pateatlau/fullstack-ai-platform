@@ -46,6 +46,9 @@ class FakeAuditStore:
     async def query(self, **_: object) -> list[AuditEvent]:
         return list(self.events)
 
+    async def count(self, **_: object) -> int:
+        return len(self.events)
+
 
 class FakeRoleStore:
     def __init__(self) -> None:

@@ -955,6 +955,7 @@ def build_workflow_manager_for_session(
         tool_registry=registry,
         prompt_manager=prompt_manager,
         tool_executor=tool_executor,
+        rbac_service=rbac_service,
     )
     store = PostgresWorkflowStore(session=session, settings=settings)
 

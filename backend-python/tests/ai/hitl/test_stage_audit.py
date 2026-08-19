@@ -77,6 +77,9 @@ class FakeAuditStore:
     async def query(self, **_: object) -> list[AuditEvent]:
         return list(self.events)
 
+    async def count(self, **_: object) -> int:
+        return len(self.events)
+
 
 def _settings() -> Settings:
     return Settings(

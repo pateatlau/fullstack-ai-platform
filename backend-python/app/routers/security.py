@@ -11,6 +11,7 @@ from app.ai.deps import get_audit_logger, get_rbac_service
 from app.ai.security.audit.logger import AuditLogger
 from app.ai.security.audit.models import AuditOutcome
 from app.ai.security.errors import SecurityErrorCode
+from app.ai.security.exceptions import RoleNotFoundError
 from app.ai.security.rbac.permissions import DEFAULT_ROLE_PERMISSIONS, PermissionKey
 from app.ai.security.rbac.service import RbacService
 from app.core.caller import CallerContext, require_authenticated_caller
@@ -52,8 +53,6 @@ async def _require_permission(
             message="Security & Governance are not enabled on this server.",
             status_code=503,
         )
-    if not settings.security_rbac_enforcement_enabled:
-        return
     if caller.user_id is None:
         raise AppError(
             code=SecurityErrorCode.PERMISSION_DENIED.value,
@@ -139,6 +138,7 @@ async def list_user_roles(
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     rbac_service: RbacService = Depends(get_rbac_service),
+    session: AsyncSession = Depends(get_db_session),
 ) -> list[SecurityUserRoleResponse]:
     _require_security_enabled(settings)
     await _require_manage_or_self(
@@ -147,6 +147,7 @@ async def list_user_roles(
         caller=caller,
         user_id=user_id,
     )
+    await _ensure_user_exists(session, user_id)
 
     explicit_roles = await rbac_service.get_user_roles(user_id)
     assignments = [
@@ -190,13 +191,14 @@ async def assign_user_role(
     await _ensure_user_exists(session, user_id)
 
     role_name = payload.role_name.strip().lower()
-    assigned = await rbac_service.assign_role(user_id, role_name, actor=caller)
-    if not assigned:
+    try:
+        await rbac_service.assign_role(user_id, role_name, actor=caller)
+    except RoleNotFoundError as exc:
         raise AppError(
             code=SecurityErrorCode.ROLE_NOT_FOUND.value,
-            message=f"Role '{role_name}' was not found.",
+            message=f"Role '{exc.role_name}' was not found.",
             status_code=404,
-        )
+        ) from exc
     return SecurityUserRoleResponse(
         user_id=user_id, role_name=role_name, implicit=False
     )
@@ -226,7 +228,14 @@ async def revoke_user_role(
             message="The 'member' role cannot be revoked.",
             status_code=400,
         )
-    revoked = await rbac_service.revoke_role(user_id, normalized, actor=caller)
+    try:
+        revoked = await rbac_service.revoke_role(user_id, normalized, actor=caller)
+    except RoleNotFoundError as exc:
+        raise AppError(
+            code=SecurityErrorCode.ROLE_NOT_FOUND.value,
+            message=f"Role '{exc.role_name}' was not found.",
+            status_code=404,
+        ) from exc
     if not revoked:
         raise AppError(
             code=SecurityErrorCode.ROLE_NOT_FOUND.value,
@@ -280,9 +289,17 @@ async def list_security_audit(
         limit=limit,
         offset=offset,
     )
+    total = await audit_logger.count(
+        actor_user_id=actor_user_id,
+        action=action,
+        resource_type=resource_type,
+        outcome=parsed_outcome,
+        since=since,
+        until=until,
+    )
     return SecurityAuditListResponse(
         items=[SecurityAuditEntryResponse(**event.model_dump()) for event in rows],
-        total=len(rows),
+        total=total,
         limit=limit,
         offset=offset,
     )

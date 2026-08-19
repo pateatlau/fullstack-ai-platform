@@ -4,7 +4,28 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.ai.security.redaction import (
+    REDACTED_PLACEHOLDER,
+    is_sensitive_key,
+    redact_secret_patterns,
+)
+
+
+def _redact_audit_metadata(value: Any, *, key: str | None = None) -> Any:
+    if key is not None and is_sensitive_key(key):
+        return REDACTED_PLACEHOLDER
+    if isinstance(value, dict):
+        return {
+            str(child_key): _redact_audit_metadata(child_value, key=str(child_key))
+            for child_key, child_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_audit_metadata(item) for item in value]
+    if isinstance(value, str):
+        return redact_secret_patterns(value)
+    return value
 
 
 class SecurityRoleResponse(BaseModel):
@@ -35,6 +56,12 @@ class SecurityAuditEntryResponse(BaseModel):
     trace_id: str | None = None
     source_ip_hash: str | None = None
     created_at: datetime | None = None
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def redact_metadata(cls, value: Any) -> dict[str, Any]:
+        redacted = _redact_audit_metadata(value)
+        return redacted if isinstance(redacted, dict) else {}
 
 
 class SecurityAuditListResponse(BaseModel):

@@ -47,6 +47,7 @@ async def test_insert_and_query_round_trip(db_session) -> None:
     await store.insert(event)
 
     rows = await store.query(actor_user_id=event.actor_user_id)
+    assert await store.count(actor_user_id=event.actor_user_id) == 1
 
     assert len(rows) == 1
     fetched = rows[0]

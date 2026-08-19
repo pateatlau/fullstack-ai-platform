@@ -18,6 +18,7 @@ from app.core.config import Settings
 class FakeAuditStore:
     def __init__(self, *, fail: bool = False) -> None:
         self.events: list[AuditEvent] = []
+        self.read_calls = 0
         self._fail = fail
 
     async def insert(self, event: AuditEvent) -> None:
@@ -26,13 +27,18 @@ class FakeAuditStore:
         self.events.append(event)
 
     async def get_by_id(self, event_id: uuid.UUID) -> AuditEvent | None:
+        self.read_calls += 1
         for event in self.events:
             if event.id == event_id:
                 return event
         return None
 
     async def query(self, **_: object) -> list[AuditEvent]:
+        self.read_calls += 1
         return list(self.events)
+
+    async def count(self, **_: object) -> int:
+        return len(self.events)
 
 
 def _settings(**overrides: object) -> Settings:
@@ -100,6 +106,16 @@ async def test_record_is_noop_when_audit_log_sub_flag_off() -> None:
     )
 
     assert store.events == []
+
+
+@pytest.mark.anyio
+async def test_reads_are_noop_when_audit_log_is_disabled() -> None:
+    store = FakeAuditStore()
+    logger = AuditLogger(store, settings=_settings(security_audit_log_enabled=False))
+
+    assert await logger.get_by_id(uuid.uuid4()) is None
+    assert await logger.query() == []
+    assert store.read_calls == 0
 
 
 @pytest.mark.anyio

@@ -66,8 +66,9 @@ class AuditLogger:
         )
 
     async def get_by_id(self, event_id: uuid.UUID) -> AuditEvent | None:
-        if self._store is None:
+        if not self._enabled():
             return None
+        assert self._store is not None
         return await self._store.get_by_id(event_id)
 
     async def query(
@@ -82,8 +83,9 @@ class AuditLogger:
         limit: int = 50,
         offset: int = 0,
     ) -> list[AuditEvent]:
-        if self._store is None:
+        if not self._enabled():
             return []
+        assert self._store is not None
         return await self._store.query(
             actor_user_id=actor_user_id,
             action=action,
@@ -93,6 +95,28 @@ class AuditLogger:
             until=until,
             limit=limit,
             offset=offset,
+        )
+
+    async def count(
+        self,
+        *,
+        actor_user_id: uuid.UUID | None = None,
+        action: str | None = None,
+        resource_type: str | None = None,
+        outcome: AuditOutcome | None = None,
+        since: datetime.datetime | None = None,
+        until: datetime.datetime | None = None,
+    ) -> int:
+        if not self._enabled():
+            return 0
+        assert self._store is not None
+        return await self._store.count(
+            actor_user_id=actor_user_id,
+            action=action,
+            resource_type=resource_type,
+            outcome=outcome,
+            since=since,
+            until=until,
         )
 
     async def record(
