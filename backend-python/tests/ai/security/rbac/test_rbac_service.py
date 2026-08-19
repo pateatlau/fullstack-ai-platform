@@ -9,7 +9,8 @@ from app.ai.security.errors import SecurityErrorCode
 from app.ai.security.exceptions import PermissionDeniedError, RoleNotFoundError
 from app.ai.security.rbac.models import Role, UserRoleAssignment
 from app.ai.security.rbac.permissions import DEFAULT_ROLE_PERMISSIONS, PermissionKey
-from app.ai.security.rbac.service import RbacService
+from app.ai.security.rbac.service import RbacService, resolve_caller_role
+from app.core.caller import CallerContext
 
 
 class FakeRoleStore:
@@ -78,6 +79,47 @@ class FakeRoleStore:
             UserRoleAssignment(user_id=user_id, role_name=role_name)
             for role_name in sorted(self._user_assignments.get(user_id, set()))
         ]
+
+
+@pytest.mark.anyio
+async def test_resolve_caller_role_preserves_flag_off_identity() -> None:
+    caller = CallerContext.anonymous(guest_id=uuid.uuid4())
+
+    assert await resolve_caller_role(caller, None, enforcement_enabled=False) == "guest"
+
+
+@pytest.mark.anyio
+async def test_resolve_caller_role_uses_rbac_baseline_and_priority() -> None:
+    member_id = uuid.uuid4()
+    operator_id = uuid.uuid4()
+    store = FakeRoleStore()
+    store._user_assignments[operator_id] = {"operator", "admin"}
+    service = RbacService(store)
+
+    assert (
+        await resolve_caller_role(
+            CallerContext.anonymous(guest_id=uuid.uuid4()),
+            service,
+            enforcement_enabled=True,
+        )
+        is None
+    )
+    assert (
+        await resolve_caller_role(
+            CallerContext.for_user(member_id),
+            service,
+            enforcement_enabled=True,
+        )
+        == "member"
+    )
+    assert (
+        await resolve_caller_role(
+            CallerContext.for_user(operator_id),
+            service,
+            enforcement_enabled=True,
+        )
+        == "admin"
+    )
 
 
 @pytest.mark.anyio

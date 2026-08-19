@@ -32,6 +32,8 @@ _TABLE = sa.table(
 class AuditStore(Protocol):
     async def insert(self, event: AuditEvent) -> None: ...
 
+    async def get_by_id(self, event_id: uuid.UUID) -> AuditEvent | None: ...
+
     async def query(
         self,
         *,
@@ -73,6 +75,14 @@ class PostgresAuditStore:
                 )
             )
             await session.commit()
+
+    async def get_by_id(self, event_id: uuid.UUID) -> AuditEvent | None:
+        stmt = sa.select(_TABLE).where(_TABLE.c.id == event_id)
+        async with self._session_factory() as session:
+            row = (await session.execute(stmt)).mappings().one_or_none()
+        if row is None:
+            return None
+        return _row_to_event(dict(row))
 
     async def query(
         self,

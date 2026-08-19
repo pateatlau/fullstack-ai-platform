@@ -25,6 +25,12 @@ class FakeAuditStore:
             raise RuntimeError("simulated DB failure")
         self.events.append(event)
 
+    async def get_by_id(self, event_id: uuid.UUID) -> AuditEvent | None:
+        for event in self.events:
+            if event.id == event_id:
+                return event
+        return None
+
     async def query(self, **_: object) -> list[AuditEvent]:
         return list(self.events)
 

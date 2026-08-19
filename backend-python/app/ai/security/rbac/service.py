@@ -215,3 +215,24 @@ class RbacService:
         if not normalized:
             return 0
         return await self.store.bootstrap_admins(normalized)
+
+
+async def resolve_caller_role(
+    caller: "CallerContext",
+    rbac: RbacService | None,
+    *,
+    enforcement_enabled: bool,
+) -> str | None:
+    """Resolve the policy role while preserving the legacy flag-off value.
+
+    RBAC-enabled policy evaluation uses the implicit ``member`` baseline for
+    authenticated callers and no role for guests. Disabled enforcement keeps
+    the existing ``CallerContext.kind`` value unchanged.
+    """
+    if not enforcement_enabled:
+        return caller.kind
+    if not caller.is_authenticated or caller.user_id is None:
+        return None
+    if rbac is None:
+        return "member"
+    return await rbac.get_highest_priority_role(caller.user_id)

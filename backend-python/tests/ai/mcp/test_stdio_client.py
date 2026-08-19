@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -104,6 +105,12 @@ class TestStdioTransport:
 
             async def insert(self, event: AuditEvent) -> None:
                 self.events.append(event)
+
+            async def get_by_id(self, event_id: uuid.UUID) -> AuditEvent | None:
+                for event in self.events:
+                    if event.id == event_id:
+                        return event
+                return None
 
             async def query(self, **_: object) -> list[AuditEvent]:
                 return list(self.events)

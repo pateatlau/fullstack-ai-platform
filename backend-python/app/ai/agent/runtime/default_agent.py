@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import uuid
 from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 
 from app.ai.agent.executor.agent_executor import AgentExecutor
 from app.ai.agent.executor.tool_runner import ToolRunner
@@ -29,6 +30,9 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 from app.providers.factory import ProviderFactory
 
+if TYPE_CHECKING:
+    from app.ai.security.rbac.service import RbacService
+
 _logger = get_logger(__name__)
 
 
@@ -45,6 +49,7 @@ class DefaultAgent:
         scratchpad_store: ScratchpadStore | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approval_service: AgentApprovalService | None = None,
+        rbac_service: RbacService | None = None,
     ) -> None:
         self._settings = settings
         self._tool_registry = tool_registry
@@ -53,6 +58,7 @@ class DefaultAgent:
         self._scratchpad_store = scratchpad_store or get_scratchpad_store()
         self._approval_policy = approval_policy
         self._approval_service = approval_service
+        self._rbac_service = rbac_service
 
     async def run(
         self,
@@ -131,6 +137,11 @@ class DefaultAgent:
             hitl_enabled=self._settings.hitl_enabled,
             approval_policy=self._approval_policy,
             approval_service=self._approval_service,
+            rbac_service=self._rbac_service,
+            rbac_enforcement_enabled=(
+                self._settings.security_governance_enabled
+                and self._settings.security_rbac_enforcement_enabled
+            ),
         )
         planner = ReActPlanner(
             provider=provider,
