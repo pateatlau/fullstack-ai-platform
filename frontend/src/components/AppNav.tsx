@@ -12,6 +12,7 @@ interface AppNavProps {
     | 'plugins'
     | 'approvals'
     | 'jobs'
+    | 'security'
 }
 
 const NAV_LINK_CLASS =
@@ -29,6 +30,7 @@ export function AppNav({ current }: AppNavProps) {
     pluginsEnabled,
     hitlEnabled,
     backgroundJobsEnabled,
+    securityGovernanceEnabled,
     healthLoading,
   } = useChatStreamingEnabled()
 
@@ -76,6 +78,11 @@ export function AppNav({ current }: AppNavProps) {
       {!healthLoading && backgroundJobsEnabled && current !== 'jobs' ? (
         <Link to="/jobs" className={NAV_LINK_CLASS}>
           Jobs
+        </Link>
+      ) : null}
+      {!healthLoading && securityGovernanceEnabled && current !== 'security' ? (
+        <Link to="/security" className={NAV_LINK_CLASS}>
+          Security
         </Link>
       ) : null}
     </nav>

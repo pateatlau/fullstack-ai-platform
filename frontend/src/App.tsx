@@ -10,6 +10,7 @@ import { ObservabilityPage } from './pages/ObservabilityPage'
 import { PluginsPage } from './pages/PluginsPage'
 import { ApprovalsPage } from './pages/ApprovalsPage'
 import { JobsPage } from './pages/JobsPage'
+import { SecurityPage } from './pages/SecurityPage'
 
 function App() {
   return (
@@ -71,6 +72,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <JobsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/security"
+              element={
+                <ProtectedRoute>
+                  <SecurityPage />
                 </ProtectedRoute>
               }
             />
