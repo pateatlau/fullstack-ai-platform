@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from app.ai.security.observability.wrappers import (
+    authz_span_context,
+    record_authz_allowed,
+    record_authz_denial,
+)
 from app.ai.security.rbac.permissions import PermissionKey
 from app.ai.security.rbac.service import RbacService
 from app.ai.tools.schemas import ToolDefinition, ToolExecutionContext
@@ -45,26 +50,65 @@ class ToolAuthorizer:
         tool: ToolDefinition,
         context: ToolExecutionContext,
     ) -> str | None:
-        if context.caller.kind != "user":
-            return "Tool invocation requires an authenticated user"
+        actor_user_id = str(context.caller.user_id) if context.caller.user_id else None
+        permission_key = str(PermissionKey.TOOLS_EXECUTE)
 
-        if not self._rbac_enforced():
-            return None
-
-        assert self._rbac_service is not None
-        decision = await self._rbac_service.authorize(
-            context.caller.user_id, PermissionKey.TOOLS_EXECUTE
-        )
-        if not decision.allowed:
-            return "Tool invocation requires the 'tools:execute' permission"
-
-        if _is_destructive(tool):
-            destructive = await self._rbac_service.authorize(
-                context.caller.user_id, PermissionKey.TOOLS_EXECUTE_DESTRUCTIVE
-            )
-            if not destructive.allowed:
-                return (
-                    "Destructive tool invocation requires the "
-                    "'tools:execute:destructive' permission"
+        with authz_span_context(
+            actor_user_id=actor_user_id,
+            permission_key=permission_key,
+        ) as span:
+            if context.caller.kind != "user":
+                record_authz_denial(
+                    span,
+                    actor_user_id=actor_user_id,
+                    permission_key=permission_key,
+                    resource_type="tool",
                 )
-        return None
+                return "Tool invocation requires an authenticated user"
+
+            if not self._rbac_enforced():
+                record_authz_allowed(
+                    span,
+                    actor_user_id=actor_user_id,
+                    permission_key=permission_key,
+                    resource_type="tool",
+                )
+                return None
+
+            assert self._rbac_service is not None
+            decision = await self._rbac_service.authorize(
+                context.caller.user_id, PermissionKey.TOOLS_EXECUTE
+            )
+            if not decision.allowed:
+                record_authz_denial(
+                    span,
+                    actor_user_id=actor_user_id,
+                    permission_key=permission_key,
+                    resource_type="tool",
+                )
+                return "Tool invocation requires the 'tools:execute' permission"
+
+            if _is_destructive(tool):
+                destructive_permission = str(PermissionKey.TOOLS_EXECUTE_DESTRUCTIVE)
+                destructive = await self._rbac_service.authorize(
+                    context.caller.user_id, PermissionKey.TOOLS_EXECUTE_DESTRUCTIVE
+                )
+                if not destructive.allowed:
+                    record_authz_denial(
+                        span,
+                        actor_user_id=actor_user_id,
+                        permission_key=destructive_permission,
+                        resource_type="tool",
+                    )
+                    return (
+                        "Destructive tool invocation requires the "
+                        "'tools:execute:destructive' permission"
+                    )
+
+            record_authz_allowed(
+                span,
+                actor_user_id=actor_user_id,
+                permission_key=permission_key,
+                resource_type="tool",
+            )
+            return None

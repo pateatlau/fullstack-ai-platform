@@ -334,6 +334,11 @@ class AgentApprovalService:
         if not self._rbac_active():
             return
         assert self._rbac_service is not None
+        from app.ai.security.observability.wrappers import (
+            authz_span_context,
+            record_authz_allowed,
+        )
+
         decide_all = await self._rbac_service.authorize(
             decider_id, PermissionKey.APPROVALS_DECIDE_ALL
         )
@@ -351,6 +356,16 @@ class AgentApprovalService:
                     metadata={"stage": stage},
                 )
             raise StagePermissionInvalidError(stage)
+        with authz_span_context(
+            actor_user_id=str(decider_id),
+            permission_key=stage,
+        ) as span:
+            record_authz_allowed(
+                span,
+                actor_user_id=str(decider_id),
+                permission_key=stage,
+                resource_type="approval",
+            )
 
     async def _resolve_approval_for_decider(
         self,

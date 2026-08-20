@@ -831,3 +831,91 @@ def record_workflow_node_outcome(
 def elapsed_ms_since(start: float) -> int:
     """Return whole milliseconds elapsed since a ``time.perf_counter()`` timestamp."""
     return int((time.perf_counter() - start) * 1000)
+
+
+@contextmanager
+def authz_span(
+    *,
+    actor_user_id: str | None = None,
+    permission_key: str | None = None,
+    outcome: str | None = None,
+) -> Generator[Span | None, None, None]:
+    """Authorization decision span — actor_user_id/permission_key are span attributes only.
+
+    Never includes user_id or permission_key as metric labels (bounded cardinality only).
+    """
+    attributes: dict[str, Any] = {}
+    if actor_user_id is not None:
+        attributes["actor_user_id"] = actor_user_id
+    if permission_key is not None:
+        attributes["permission_key"] = permission_key
+    if outcome is not None:
+        attributes["outcome"] = outcome
+
+    with _observability_span("authz.decide", attributes=attributes) as span:
+        yield span
+
+
+@contextmanager
+def guardrail_span(
+    *,
+    source: str | None = None,
+    action: str | None = None,
+    matched_rule_id: str | None = None,
+) -> Generator[Span | None, None, None]:
+    """Guardrail evaluation span — matched_rule_id is span attribute only.
+
+    Never includes rule_id as a metric label (bounded cardinality only).
+    """
+    attributes: dict[str, Any] = {}
+    if source is not None:
+        attributes["source"] = source
+    if action is not None:
+        attributes["action"] = action
+    if matched_rule_id is not None:
+        attributes["matched_rule_id"] = matched_rule_id
+
+    with _observability_span("guardrail.evaluate", attributes=attributes) as span:
+        yield span
+
+
+def record_authz_outcome(
+    span: Span | None,
+    *,
+    actor_user_id: str | None = None,
+    permission_key: str | None = None,
+    outcome: str,
+    resource_type: str | None = None,
+) -> None:
+    """Attach terminal authorization decision attributes to an ``authz.decide`` span."""
+    if span is None:
+        return
+    attributes: dict[str, Any] = {"outcome": outcome}
+    if actor_user_id is not None:
+        attributes["actor_user_id"] = actor_user_id
+    if permission_key is not None:
+        attributes["permission_key"] = permission_key
+    if resource_type is not None:
+        attributes["resource_type"] = resource_type
+    _set_span_attributes(span, attributes)
+
+
+def record_guardrail_outcome(
+    span: Span | None,
+    *,
+    source: str | None = None,
+    action: str,
+    matched_rule_id: str | None = None,
+    matched_rule_version: str | None = None,
+) -> None:
+    """Attach terminal guardrail evaluation attributes to a ``guardrail.evaluate`` span."""
+    if span is None:
+        return
+    attributes: dict[str, Any] = {"action": action}
+    if source is not None:
+        attributes["source"] = source
+    if matched_rule_id is not None:
+        attributes["matched_rule_id"] = matched_rule_id
+    if matched_rule_version is not None:
+        attributes["matched_rule_version"] = matched_rule_version
+    _set_span_attributes(span, attributes)

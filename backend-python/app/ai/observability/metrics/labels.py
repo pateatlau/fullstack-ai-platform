@@ -15,6 +15,11 @@ ALLOWED_LABEL_KEYS = frozenset(
         "decision",
         "job_type",
         "outcome",
+        "permission_key",
+        "resource_type",
+        "role_name",
+        "source",
+        "action",
     }
 )
 
