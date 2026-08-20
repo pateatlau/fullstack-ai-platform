@@ -46,6 +46,10 @@ async def _require_permission(
     rbac_service: RbacService,
     caller: CallerContext,
     permission: PermissionKey,
+    audit_logger: AuditLogger | None = None,
+    denied_action: str | None = None,
+    resource_id: str | None = None,
+    metadata: dict[str, object] | None = None,
 ) -> None:
     if not settings.security_governance_enabled:
         raise AppError(
@@ -61,6 +65,15 @@ async def _require_permission(
         )
     decision = await rbac_service.authorize(caller.user_id, permission)
     if not decision.allowed:
+        if audit_logger is not None and denied_action is not None:
+            await audit_logger.record(
+                actor=caller,
+                action=denied_action,
+                outcome=AuditOutcome.DENIED,
+                resource_type="role",
+                resource_id=resource_id,
+                metadata=metadata or {"permission": permission.value},
+            )
         raise AppError(
             code=SecurityErrorCode.PERMISSION_DENIED.value,
             message=f"Requires the '{permission.value}' permission.",
@@ -179,6 +192,7 @@ async def assign_user_role(
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     rbac_service: RbacService = Depends(get_rbac_service),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
     session: AsyncSession = Depends(get_db_session),
 ) -> SecurityUserRoleResponse:
     _require_security_enabled(settings)
@@ -187,6 +201,10 @@ async def assign_user_role(
         rbac_service=rbac_service,
         caller=caller,
         permission=PermissionKey.RBAC_MANAGE,
+        audit_logger=audit_logger,
+        denied_action="role.assigned",
+        resource_id=str(user_id),
+        metadata={"role": payload.role_name.strip().lower()},
     )
     await _ensure_user_exists(session, user_id)
 
@@ -211,6 +229,7 @@ async def revoke_user_role(
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     rbac_service: RbacService = Depends(get_rbac_service),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, str | uuid.UUID]:
     _require_security_enabled(settings)
@@ -219,6 +238,10 @@ async def revoke_user_role(
         rbac_service=rbac_service,
         caller=caller,
         permission=PermissionKey.RBAC_MANAGE,
+        audit_logger=audit_logger,
+        denied_action="role.revoked",
+        resource_id=str(user_id),
+        metadata={"role": role_name.strip().lower()},
     )
     await _ensure_user_exists(session, user_id)
     normalized = role_name.strip().lower()

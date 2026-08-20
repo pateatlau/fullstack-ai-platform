@@ -11,8 +11,34 @@ from typing import Any, Literal
 import yaml
 
 EvalLevel = Literal[
-    "prompt", "retrieval", "e2e", "agent", "workflow", "plugin", "hitl", "jobs"
+    "prompt",
+    "retrieval",
+    "e2e",
+    "agent",
+    "workflow",
+    "plugin",
+    "hitl",
+    "jobs",
+    "security",
 ]
+SecurityScenario = Literal[
+    "destructive_tool_rbac",
+    "hitl_stage_rbac",
+    "jobs_visibility_rbac",
+    "guardrail_block",
+    "guardrail_flag",
+    "role_rate_limit",
+]
+SECURITY_SCENARIOS: frozenset[str] = frozenset(
+    {
+        "destructive_tool_rbac",
+        "hitl_stage_rbac",
+        "jobs_visibility_rbac",
+        "guardrail_block",
+        "guardrail_flag",
+        "role_rate_limit",
+    }
+)
 JobScenario = Literal[
     "hitl_expiry_agent",
     "hitl_expiry_workflow",
@@ -81,6 +107,7 @@ class EvalCase:
     hitl_edited_arguments: dict[str, object] = field(default_factory=dict)
     job_type: str | None = None
     job_scenario: JobScenario | None = None
+    security_scenario: SecurityScenario | None = None
 
 
 @dataclass(frozen=True)
@@ -181,6 +208,8 @@ def _parse_case(raw: dict[str, Any], *, index: int) -> EvalCase:
         return _parse_hitl_case(raw, case_id=case_id)
     if level == "jobs":
         return _parse_jobs_case(raw, case_id=case_id)
+    if level == "security":
+        return _parse_security_case(raw, case_id=case_id)
     return _parse_workflow_case(raw, case_id=case_id)
 
 
@@ -413,6 +442,20 @@ def _parse_jobs_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
         level="jobs",
         job_type=job_type,
         job_scenario=job_scenario,  # type: ignore[arg-type]
+    )
+
+
+def _parse_security_case(raw: dict[str, Any], *, case_id: str) -> EvalCase:
+    scenario = _require_str(raw, "security_scenario", case_id=case_id)
+    if scenario not in SECURITY_SCENARIOS:
+        allowed = ", ".join(sorted(SECURITY_SCENARIOS))
+        raise EvalDatasetError(
+            f"Case '{case_id}': security_scenario must be one of: {allowed}."
+        )
+    return EvalCase(
+        id=case_id,
+        level="security",
+        security_scenario=scenario,  # type: ignore[arg-type]
     )
 
 
@@ -745,9 +788,10 @@ def _require_level(raw: dict[str, Any], *, index: int) -> EvalLevel:
         "plugin",
         "hitl",
         "jobs",
+        "security",
     }:
         raise EvalDatasetError(
             f"Case at index {index}: level must be prompt, retrieval, e2e, agent, "
-            "workflow, plugin, hitl, or jobs."
+            "workflow, plugin, hitl, jobs, or security."
         )
     return value  # type: ignore[return-value]

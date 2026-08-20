@@ -385,3 +385,27 @@ cases:
     level: jobs
     job_type: scheduled_evaluation_run
     job_scenario: scheduled_eval
+
+  - id: security_destructive_tool_rbac
+    level: security
+    security_scenario: destructive_tool_rbac
+
+  - id: security_hitl_stage_rbac
+    level: security
+    security_scenario: hitl_stage_rbac
+
+  - id: security_jobs_visibility_rbac
+    level: security
+    security_scenario: jobs_visibility_rbac
+
+  - id: security_guardrail_block
+    level: security
+    security_scenario: guardrail_block
+
+  - id: security_guardrail_flag
+    level: security
+    security_scenario: guardrail_flag
+
+  - id: security_role_rate_limit
+    level: security
+    security_scenario: role_rate_limit

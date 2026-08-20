@@ -28,6 +28,7 @@ from app.ai.evaluation.runners import (
     EndToEndEvalRunner,
     PromptEvalRunner,
     RetrievalEvalRunner,
+    SecurityEvalRunner,
     WorkflowEvalRunner,
 )
 
@@ -44,6 +45,7 @@ __all__ = [
     "RegressionChecker",
     "RegressionResult",
     "RetrievalEvalRunner",
+    "SecurityEvalRunner",
     "WorkflowEvalRunner",
     "TARGET_RAG_RESPONSE_MS",
     "TARGET_RETRIEVAL_MS",

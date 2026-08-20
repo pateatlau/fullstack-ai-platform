@@ -36,6 +36,7 @@ from app.ai.evaluation.runners import (
     PluginEvalRunner,
     PromptEvalRunner,
     RetrievalEvalRunner,
+    SecurityEvalRunner,
     WorkflowEvalRunner,
     pgvector_available,
     postgres_available,
@@ -64,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
             "plugin",
             "hitl",
             "jobs",
+            "security",
             "all",
         ],
         default="all",
@@ -74,7 +76,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Use --level hitl for HITL reference scenarios "
             "(skipped when HITL_ENABLED=false). "
             "Use --level jobs for Background Jobs reference scenarios "
-            "(skipped when BACKGROUND_JOBS_ENABLED=false)."
+            "(skipped when BACKGROUND_JOBS_ENABLED=false). "
+            "Use --level security for Security & Governance reference scenarios "
+            "(skipped when SECURITY_GOVERNANCE_ENABLED=false)."
         ),
     )
     parser.add_argument(
@@ -138,6 +142,7 @@ def _settings_snapshot(settings: Settings) -> dict[str, object]:
         "plugins_enabled": settings.plugins_enabled,
         "hitl_enabled": settings.hitl_enabled,
         "background_jobs_enabled": settings.background_jobs_enabled,
+        "security_governance_enabled": settings.security_governance_enabled,
     }
 
 
@@ -290,6 +295,11 @@ async def _run_with_session(
         )
         for case in filter_cases(dataset, "jobs"):
             report.results.append(await jobs_runner.run_case(case))
+
+    if "security" in levels:
+        security_runner = SecurityEvalRunner(settings=settings)
+        for case in filter_cases(dataset, "security"):
+            report.results.append(await security_runner.run_case(case))
 
     if not db_levels:
         await _dispose_db_resources(session, engine, rollback=True)

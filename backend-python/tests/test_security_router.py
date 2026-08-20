@@ -3,12 +3,15 @@ from __future__ import annotations
 import datetime
 import uuid
 from collections.abc import Iterator
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.security.errors import SecurityErrorCode
+from app.ai.security.rbac.models import AuthorizationDecision
 from app.ai.security.rbac.service import RbacService
 from app.ai.security.rbac.store import PostgresRoleStore
 from app.core.config import get_settings
@@ -162,6 +165,49 @@ async def test_security_mutation_remains_protected_when_rbac_enforcement_is_off(
     get_settings.cache_clear()
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "permission_denied"
+
+
+@pytest.mark.anyio
+async def test_member_cannot_self_elevate_and_denial_is_audited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SECURITY_GOVERNANCE_ENABLED", "true")
+    monkeypatch.setenv("SECURITY_RBAC_ENFORCEMENT_ENABLED", "true")
+    monkeypatch.setenv("SECURITY_AUDIT_LOG_ENABLED", "true")
+    get_settings.cache_clear()
+
+    member_id = uuid.uuid4()
+    rbac_service = AsyncMock(spec=RbacService)
+    rbac_service.authorize.return_value = AuthorizationDecision(
+        allowed=False,
+        permission_key="rbac:manage",
+        denial_reason=SecurityErrorCode.PERMISSION_DENIED,
+    )
+    audit_logger = AsyncMock()
+
+    async def _unused_session() -> None:
+        return None
+
+    app = _build_test_app()
+    app.dependency_overrides[security_router.get_rbac_service] = lambda: rbac_service
+    app.dependency_overrides[security_router.get_audit_logger] = lambda: audit_logger
+    app.dependency_overrides[security_router.get_db_session] = _unused_session
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/security/users/{member_id}/roles",
+            headers=_auth_headers(member_id),
+            json={"role_name": "owner"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "permission_denied"
+    rbac_service.assign_role.assert_not_awaited()
+    audit_logger.record.assert_awaited_once()
+    assert audit_logger.record.await_args.kwargs["action"] == "role.assigned"
+    assert audit_logger.record.await_args.kwargs["outcome"].value == "denied"
 
 
 @pytest.mark.anyio
