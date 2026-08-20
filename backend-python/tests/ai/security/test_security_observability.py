@@ -8,7 +8,7 @@ from collections.abc import Generator
 import pytest
 from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader, Sum
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -38,6 +38,8 @@ from app.ai.security.observability.wrappers import (
     record_authz_denial,
     record_guardrail_verdict_telemetry,
 )
+from app.ai.hitl.exceptions import StagePermissionInvalidError
+from app.ai.hitl.service import AgentApprovalService
 from app.ai.security.rbac.models import Role, UserRoleAssignment
 from app.ai.security.rbac.service import RbacService
 from app.ai.tools.authorizer import ToolAuthorizer
@@ -83,10 +85,30 @@ def _span_attributes(span: ReadableSpan) -> dict[str, object]:
     return dict(attributes)
 
 
-def _assert_metrics_recorded(reader: InMemoryMetricReader) -> None:
+def _assert_metric_recorded(
+    reader: InMemoryMetricReader,
+    *,
+    name: str,
+    attributes: dict[str, str],
+    value: int = 1,
+) -> None:
     metric_data = reader.get_metrics_data()
     assert metric_data is not None
-    assert len(metric_data.resource_metrics) > 0
+    metrics_by_name = {
+        metric.name: metric
+        for resource_metric in metric_data.resource_metrics
+        for scope_metric in resource_metric.scope_metrics
+        for metric in scope_metric.metrics
+    }
+    assert name in metrics_by_name
+    metric = metrics_by_name[name]
+    assert isinstance(metric.data, Sum)
+    points = metric.data.data_points
+    assert len(points) == 1
+    assert points[0].value == value
+    point_attributes = points[0].attributes
+    assert point_attributes is not None
+    assert {key: item for key, item in point_attributes.items()} == attributes
 
 
 def _tool_definition(*, risk_level: str | None = None) -> ToolDefinition:
@@ -105,6 +127,16 @@ def _execution_context(user_id: uuid.UUID | None) -> ToolExecutionContext:
         else CallerContext.anonymous(guest_id=uuid.uuid4())
     )
     return ToolExecutionContext(caller=caller)
+
+
+def _stage_permission_service(
+    *, decider_id: uuid.UUID, roles: set[str]
+) -> AgentApprovalService:
+    service = object.__new__(AgentApprovalService)
+    service._rbac_service = RbacService(_FakeRoleStore(user_roles={decider_id: roles}))
+    service._rbac_enforcement_enabled = True
+    service._audit_logger = None
+    return service
 
 
 @pytest.fixture
@@ -296,7 +328,70 @@ async def test_tool_authorizer_emits_authz_telemetry(
     assert denied is not None
     spans = in_memory_span_exporter.get_finished_spans()
     assert any(span.name == "authz.decide" for span in spans)
-    _assert_metrics_recorded(in_memory_metric_reader)
+    _assert_metric_recorded(
+        in_memory_metric_reader,
+        name="authz_denied_total",
+        attributes={
+            "permission_key": "tools:execute:destructive",
+            "resource_type": "tool",
+        },
+    )
+
+
+@pytest.mark.anyio
+async def test_stage_permission_decide_all_emits_allowed_span(
+    in_memory_span_exporter: InMemorySpanExporter,
+) -> None:
+    """The decide-all terminal path records its successful authorization."""
+    decider_id = uuid.uuid4()
+    service = _stage_permission_service(decider_id=decider_id, roles={"admin"})
+
+    await service._check_stage_permission(
+        approval_id=uuid.uuid4(),
+        decider_id=decider_id,
+        stage="jobs:retry",
+    )
+
+    spans = in_memory_span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert _span_attributes(spans[0]) == {
+        "actor_user_id": str(decider_id),
+        "permission_key": "approvals:decide_all",
+        "outcome": "allowed",
+        "resource_type": "approval",
+    }
+
+
+@pytest.mark.anyio
+async def test_stage_permission_denial_emits_span_and_metric(
+    in_memory_span_exporter: InMemorySpanExporter,
+    in_memory_metric_reader: InMemoryMetricReader,
+) -> None:
+    """A custom denied stage stays on the span but is bounded in metrics."""
+    decider_id = uuid.uuid4()
+    service = _stage_permission_service(decider_id=decider_id, roles=set())
+    stage = "approvals:decide:finance"
+
+    with pytest.raises(StagePermissionInvalidError):
+        await service._check_stage_permission(
+            approval_id=uuid.uuid4(),
+            decider_id=decider_id,
+            stage=stage,
+        )
+
+    spans = in_memory_span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert _span_attributes(spans[0]) == {
+        "actor_user_id": str(decider_id),
+        "permission_key": stage,
+        "outcome": "denied",
+        "resource_type": "approval",
+    }
+    _assert_metric_recorded(
+        in_memory_metric_reader,
+        name="authz_denied_total",
+        attributes={"permission_key": "other", "resource_type": "approval"},
+    )
 
 
 # Guardrail Span Tests
@@ -404,7 +499,11 @@ def test_guardrail_engine_emits_verdict_telemetry(
     assert verdict.action is GuardrailAction.FLAG
     spans = in_memory_span_exporter.get_finished_spans()
     assert any(span.name == "guardrail.evaluate" for span in spans)
-    _assert_metrics_recorded(in_memory_metric_reader)
+    _assert_metric_recorded(
+        in_memory_metric_reader,
+        name="guardrail_verdicts_total",
+        attributes={"source": "tool_argument", "action": "flag"},
+    )
 
 
 def test_record_guardrail_verdict_telemetry(
@@ -434,7 +533,14 @@ def test_record_authz_denied_metric(
         permission_key="tools:execute:destructive", resource_type="tool"
     )
 
-    _assert_metrics_recorded(in_memory_metric_reader)
+    _assert_metric_recorded(
+        in_memory_metric_reader,
+        name="authz_denied_total",
+        attributes={
+            "permission_key": "tools:execute:destructive",
+            "resource_type": "tool",
+        },
+    )
 
 
 def test_authz_denied_without_resource_type(
@@ -443,7 +549,11 @@ def test_authz_denied_without_resource_type(
     """Record authorization denied without optional resource_type."""
     record_authz_denied(permission_key="tools:execute")
 
-    _assert_metrics_recorded(in_memory_metric_reader)
+    _assert_metric_recorded(
+        in_memory_metric_reader,
+        name="authz_denied_total",
+        attributes={"permission_key": "tools:execute"},
+    )
 
 
 # Role Assignment Metrics Tests
@@ -451,14 +561,22 @@ def test_record_role_assignment(in_memory_metric_reader: InMemoryMetricReader) -
     """Record role assignment."""
     record_role_assignment(role_name="operator", action="assigned")
 
-    _assert_metrics_recorded(in_memory_metric_reader)
+    _assert_metric_recorded(
+        in_memory_metric_reader,
+        name="role_assignments_total",
+        attributes={"role_name": "operator", "action": "assigned"},
+    )
 
 
 def test_record_role_revocation(in_memory_metric_reader: InMemoryMetricReader) -> None:
     """Record role revocation."""
     record_role_assignment(role_name="operator", action="revoked")
 
-    _assert_metrics_recorded(in_memory_metric_reader)
+    _assert_metric_recorded(
+        in_memory_metric_reader,
+        name="role_assignments_total",
+        attributes={"role_name": "operator", "action": "revoked"},
+    )
 
 
 # Guardrail Verdict Metrics Tests
@@ -468,7 +586,11 @@ def test_record_guardrail_verdict_allow(
     """Record guardrail verdict allow."""
     record_guardrail_verdict(source="rag_chunk", action="allow")
 
-    _assert_metrics_recorded(in_memory_metric_reader)
+    _assert_metric_recorded(
+        in_memory_metric_reader,
+        name="guardrail_verdicts_total",
+        attributes={"source": "rag_chunk", "action": "allow"},
+    )
 
 
 def test_record_guardrail_verdict_flag(
@@ -477,7 +599,11 @@ def test_record_guardrail_verdict_flag(
     """Record guardrail verdict flag."""
     record_guardrail_verdict(source="tool_argument", action="flag")
 
-    _assert_metrics_recorded(in_memory_metric_reader)
+    _assert_metric_recorded(
+        in_memory_metric_reader,
+        name="guardrail_verdicts_total",
+        attributes={"source": "tool_argument", "action": "flag"},
+    )
 
 
 def test_record_guardrail_verdict_block(
@@ -486,7 +612,11 @@ def test_record_guardrail_verdict_block(
     """Record guardrail verdict block."""
     record_guardrail_verdict(source="mcp_result", action="block")
 
-    _assert_metrics_recorded(in_memory_metric_reader)
+    _assert_metric_recorded(
+        in_memory_metric_reader,
+        name="guardrail_verdicts_total",
+        attributes={"source": "mcp_result", "action": "block"},
+    )
 
 
 # Audit Event Metrics Tests
@@ -496,7 +626,11 @@ def test_record_audit_event_succeeded(
     """Record audit event with succeeded outcome."""
     record_audit_event(action="tool.execution.denied", outcome="succeeded")
 
-    _assert_metrics_recorded(in_memory_metric_reader)
+    _assert_metric_recorded(
+        in_memory_metric_reader,
+        name="audit_events_total",
+        attributes={"action": "tool.execution.denied", "outcome": "succeeded"},
+    )
 
 
 def test_record_audit_event_failed(
@@ -505,7 +639,11 @@ def test_record_audit_event_failed(
     """Record audit event with failed outcome."""
     record_audit_event(action="login.succeeded", outcome="failed")
 
-    _assert_metrics_recorded(in_memory_metric_reader)
+    _assert_metric_recorded(
+        in_memory_metric_reader,
+        name="audit_events_total",
+        attributes={"action": "login.succeeded", "outcome": "failed"},
+    )
 
 
 # Async Tests

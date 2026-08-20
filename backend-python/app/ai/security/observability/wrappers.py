@@ -148,9 +148,6 @@ async def guardrail_span_async(
     *,
     source: str | None = None,
 ) -> AsyncGenerator[Span | None, None]:
-    """Async context manager for guardrail evaluation spans.
-
-    For use with async GuardrailEngine.evaluate() calls.
-    """
+    """Async-compatible context manager for guardrail evaluation spans."""
     with guardrail_span(source=source) as span:
         yield span
