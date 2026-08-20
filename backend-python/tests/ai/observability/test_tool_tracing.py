@@ -119,6 +119,12 @@ class FlakyTimeoutHandler:
         return ToolResult(success=True, data={"echo": args["message"]})
 
 
+def _get_tool_span(memory_exporter: InMemorySpanExporter):
+    spans = memory_exporter.get_finished_spans()
+    assert sorted(span.name for span in spans) == ["authz.decide", "tool.execute"]
+    return next(span for span in spans if span.name == "tool.execute")
+
+
 async def test_tool_execute_success_emits_span_with_outcome_attributes(
     memory_exporter: InMemorySpanExporter,
     executor: ToolExecutor,
@@ -130,10 +136,8 @@ async def test_tool_execute_success_emits_span_with_outcome_attributes(
     )
 
     assert result.success is True
-    spans = memory_exporter.get_finished_spans()
-    assert len(spans) == 1
-    assert spans[0].name == "tool.execute"
-    attributes = dict(spans[0].attributes or {})
+    span = _get_tool_span(memory_exporter)
+    attributes = dict(span.attributes or {})
     assert attributes["tool_name"] == "echo"
     assert attributes["success"] is True
     assert attributes["authorization_result"] == "allowed"
@@ -168,9 +172,8 @@ async def test_tool_execute_rate_limit_raises_http_error_after_recording_denial(
 
     assert raised.value.status_code == 429
     assert raised.value.retry_after_seconds == 12
-    spans = memory_exporter.get_finished_spans()
-    assert len(spans) == 1
-    attributes = dict(spans[0].attributes or {})
+    span = _get_tool_span(memory_exporter)
+    attributes = dict(span.attributes or {})
     assert attributes["success"] is False
     assert attributes["authorization_result"] == "denied"
 
@@ -191,12 +194,11 @@ async def test_tool_execute_failure_records_error_status_without_raising(
     )
 
     assert result.success is False
-    spans = memory_exporter.get_finished_spans()
-    assert len(spans) == 1
-    attributes = dict(spans[0].attributes or {})
+    span = _get_tool_span(memory_exporter)
+    attributes = dict(span.attributes or {})
     assert attributes["success"] is False
     assert attributes["authorization_result"] == "allowed"
-    assert spans[0].status.status_code.name == "ERROR"
+    assert span.status.status_code.name == "ERROR"
     assert all("secret-input" not in str(value) for value in attributes.values())
 
 
@@ -212,12 +214,11 @@ async def test_tool_execute_authorization_denied_records_error_status(
 
     assert result.success is False
     assert result.error_code == "forbidden"
-    spans = memory_exporter.get_finished_spans()
-    assert len(spans) == 1
-    attributes = dict(spans[0].attributes or {})
+    span = _get_tool_span(memory_exporter)
+    attributes = dict(span.attributes or {})
     assert attributes["success"] is False
     assert attributes["authorization_result"] == "denied"
-    assert spans[0].status.status_code.name == "ERROR"
+    assert span.status.status_code.name == "ERROR"
 
 
 async def test_tool_runner_retry_emits_one_span_per_attempt_with_retry_count(
