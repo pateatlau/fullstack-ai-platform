@@ -541,5 +541,11 @@ def test_dataset_loads_all_new_cases() -> None:
         "jobs_workflow_retention",
         "jobs_rag_indexing",
         "jobs_scheduled_eval",
+        "security_destructive_tool_rbac",
+        "security_hitl_stage_rbac",
+        "security_jobs_visibility_rbac",
+        "security_guardrail_block",
+        "security_guardrail_flag",
+        "security_role_rate_limit",
     }
     assert case_ids == expected

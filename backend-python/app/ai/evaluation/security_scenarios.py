@@ -80,6 +80,11 @@ def _settings() -> Settings:
         security_governance_enabled=True,
         security_rbac_enforcement_enabled=True,
         security_rate_limit_extensions_enabled=True,
+        security_role_rate_limit_multipliers={
+            "owner": 10.0,
+            "admin": 5.0,
+            "operator": 3.0,
+        },
     )
 
 
@@ -195,13 +200,15 @@ async def _role_rate_limit() -> bool:
     owner_limit = math.floor(
         base_limit * settings.security_role_rate_limit_multipliers.get(owner_role, 1.0)
     )
+    member_bucket = f"security-eval:member:{member_id}"
+    owner_bucket = f"security-eval:owner:{owner_id}"
     for _ in range(member_limit):
-        if await limiter.check("member", member_limit) is not None:
+        if await limiter.check(member_bucket, member_limit) is not None:
             return False
-    member_blocked = await limiter.check("member", member_limit) is not None
+    member_blocked = await limiter.check(member_bucket, member_limit) is not None
     owner_allowed = all(
         [
-            await limiter.check("owner", owner_limit) is None
+            await limiter.check(owner_bucket, owner_limit) is None
             for _ in range(member_limit + 1)
         ]
     )
