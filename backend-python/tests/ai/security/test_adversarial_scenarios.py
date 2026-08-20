@@ -9,9 +9,8 @@ from unittest.mock import AsyncMock
 import pytest
 from starlette.requests import Request
 
-from app.ai.evaluation.datasets import EvalCase
 from app.ai.evaluation.hitl_support import EvalHitlApprovalStore, EvalHitlChatStore
-from app.ai.evaluation.security_scenarios import run_security_reference_scenario
+from app.ai.hitl.exceptions import StagePermissionInvalidError
 from app.ai.hitl.models import ApprovalStatus, ProposedToolCall
 from app.ai.hitl.service import AgentApprovalService
 from app.ai.interfaces.vector_store import ScoredChunk
@@ -25,8 +24,9 @@ from app.ai.security.rbac.permissions import PermissionKey
 from app.ai.security.rbac.service import RbacService
 from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.registry import ToolRegistry
+from app.ai.tools.schemas import ToolCall, ToolExecutionContext
 from app.ai.tools.stubs.echo import ECHO_TOOL_DEFINITION, echo_handler
-from app.core.caller import GUEST_TOKEN_HEADER
+from app.core.caller import GUEST_TOKEN_HEADER, CallerContext
 from app.core.config import Settings
 from app.core.security import create_access_token
 from app.middleware.rate_limit import (
@@ -39,7 +39,6 @@ from app.middleware.rate_limit import (
 async def test_stage_decision_and_role_revocation_have_one_terminal_outcome() -> None:
     permission_read_started = asyncio.Event()
     release_permission_read = asyncio.Event()
-    owner_id = uuid.uuid4()
     reviewer_id = uuid.uuid4()
 
     class RacingRoleStore:
@@ -94,12 +93,12 @@ async def test_stage_decision_and_role_revocation_have_one_terminal_outcome() ->
     rbac = RbacService(role_store, cache_ttl_seconds=0)
     approval_store = EvalHitlApprovalStore()
     chat_store = EvalHitlChatStore()
-    chat_session = await chat_store.create_session(user_id=owner_id)
+    chat_session = await chat_store.create_session(user_id=reviewer_id)
     registry = ToolRegistry()
     registry.register(ECHO_TOOL_DEFINITION, echo_handler())
     approval = await approval_store.create(
         session_id=chat_session.id,
-        owner_id=owner_id,
+        owner_id=reviewer_id,
         execution_id="concurrent-stage",
         approval_correlation_id=uuid.uuid4(),
         proposed_calls=[
@@ -130,7 +129,7 @@ async def test_stage_decision_and_role_revocation_have_one_terminal_outcome() ->
                 decision="approved",
             )
             return "recorded"
-        except Exception:
+        except StagePermissionInvalidError:
             return "rejected"
 
     async def revoke() -> str:
@@ -151,15 +150,29 @@ async def test_stage_decision_and_role_revocation_have_one_terminal_outcome() ->
 
 @pytest.mark.anyio
 async def test_secret_shaped_argument_is_blocked_before_dispatch() -> None:
-    outcome = await run_security_reference_scenario(
-        EvalCase(
-            id="secret-argument",
-            level="security",
-            security_scenario="guardrail_block",
-        )
+    registry = ToolRegistry()
+    handler = AsyncMock(wraps=echo_handler())
+    registry.register(ECHO_TOOL_DEFINITION, handler)
+    executor = ToolExecutor(
+        registry=registry,
+        settings=Settings(),
+        guardrail_engine=GuardrailEngine(
+            DEFAULT_GUARDRAIL_RULES,
+            default_mode=GuardrailAction.FLAG,
+        ),
     )
 
-    assert outcome.passed is True
+    result = await executor.execute(
+        ToolCall(
+            name="echo",
+            arguments={"message": "sk-abcdefghijklmnopqrstuvwxyz1234"},
+        ),
+        ToolExecutionContext(caller=CallerContext.for_user(uuid.uuid4())),
+    )
+
+    assert result.success is False
+    assert result.error_code == "guardrail_blocked"
+    handler.execute.assert_not_awaited()
 
 
 @pytest.mark.anyio

@@ -6,7 +6,7 @@ import json
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import yaml
 
@@ -29,16 +29,7 @@ SecurityScenario = Literal[
     "guardrail_flag",
     "role_rate_limit",
 ]
-SECURITY_SCENARIOS: frozenset[str] = frozenset(
-    {
-        "destructive_tool_rbac",
-        "hitl_stage_rbac",
-        "jobs_visibility_rbac",
-        "guardrail_block",
-        "guardrail_flag",
-        "role_rate_limit",
-    }
-)
+SECURITY_SCENARIOS: frozenset[str] = frozenset(get_args(SecurityScenario))
 JobScenario = Literal[
     "hitl_expiry_agent",
     "hitl_expiry_workflow",

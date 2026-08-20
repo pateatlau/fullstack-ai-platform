@@ -10,7 +10,7 @@ from app.ai.evaluation.datasets import EvalCase, load_dataset
 from app.ai.evaluation.runners import SecurityEvalRunner
 from app.core.config import Settings
 
-DATASET = Path("tests/data/evaluation/sample.yaml")
+DATASET = Path(__file__).resolve().parents[2] / "data" / "evaluation" / "sample.yaml"
 
 
 def _settings(*, enabled: bool = True) -> Settings:

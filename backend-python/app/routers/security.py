@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.deps import get_audit_logger, get_rbac_service
+from app.ai.security.audit.actions import AuditAction
 from app.ai.security.audit.logger import AuditLogger
 from app.ai.security.audit.models import AuditOutcome
 from app.ai.security.errors import SecurityErrorCode
@@ -47,7 +48,7 @@ async def _require_permission(
     caller: CallerContext,
     permission: PermissionKey,
     audit_logger: AuditLogger | None = None,
-    denied_action: str | None = None,
+    denied_action: AuditAction | None = None,
     resource_id: str | None = None,
     metadata: dict[str, object] | None = None,
 ) -> None:
@@ -66,13 +67,15 @@ async def _require_permission(
     decision = await rbac_service.authorize(caller.user_id, permission)
     if not decision.allowed:
         if audit_logger is not None and denied_action is not None:
+            audit_metadata = dict(metadata or {})
+            audit_metadata["permission"] = permission.value
             await audit_logger.record(
                 actor=caller,
-                action=denied_action,
+                action=denied_action.value,
                 outcome=AuditOutcome.DENIED,
                 resource_type="role",
                 resource_id=resource_id,
-                metadata=metadata or {"permission": permission.value},
+                metadata=audit_metadata,
             )
         raise AppError(
             code=SecurityErrorCode.PERMISSION_DENIED.value,
@@ -202,7 +205,7 @@ async def assign_user_role(
         caller=caller,
         permission=PermissionKey.RBAC_MANAGE,
         audit_logger=audit_logger,
-        denied_action="role.assigned",
+        denied_action=AuditAction.ROLE_ASSIGNED,
         resource_id=str(user_id),
         metadata={"role": payload.role_name.strip().lower()},
     )
@@ -239,7 +242,7 @@ async def revoke_user_role(
         caller=caller,
         permission=PermissionKey.RBAC_MANAGE,
         audit_logger=audit_logger,
-        denied_action="role.revoked",
+        denied_action=AuditAction.ROLE_REVOKED,
         resource_id=str(user_id),
         metadata={"role": role_name.strip().lower()},
     )

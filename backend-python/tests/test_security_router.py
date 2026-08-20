@@ -202,12 +202,17 @@ async def test_member_cannot_self_elevate_and_denial_is_audited(
             json={"role_name": "owner"},
         )
 
+    get_settings.cache_clear()
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "permission_denied"
     rbac_service.assign_role.assert_not_awaited()
     audit_logger.record.assert_awaited_once()
     assert audit_logger.record.await_args.kwargs["action"] == "role.assigned"
     assert audit_logger.record.await_args.kwargs["outcome"].value == "denied"
+    assert audit_logger.record.await_args.kwargs["metadata"] == {
+        "role": "owner",
+        "permission": "rbac:manage",
+    }
 
 
 @pytest.mark.anyio

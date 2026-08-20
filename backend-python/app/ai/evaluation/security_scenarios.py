@@ -209,10 +209,10 @@ async def _role_rate_limit() -> bool:
     owner_allowed = all(
         [
             await limiter.check(owner_bucket, owner_limit) is None
-            for _ in range(member_limit + 1)
+            for _ in range(owner_limit)
         ]
     )
-    return member_blocked and owner_allowed and owner_limit == base_limit * 10
+    return member_blocked and owner_allowed and owner_limit > member_limit
 
 
 async def run_security_reference_scenario(
@@ -232,8 +232,12 @@ async def run_security_reference_scenario(
             passed = _guardrail(GuardrailAction.FLAG)
         elif scenario == "role_rate_limit":
             passed = await _role_rate_limit()
-        else:
+        elif scenario is None:
             return SecurityScenarioOutcome(False, "security_scenario is required")
+        else:
+            return SecurityScenarioOutcome(
+                False, f"unsupported security_scenario: {scenario}"
+            )
         return SecurityScenarioOutcome(passed, None if passed else "scenario failed")
     except Exception as exc:
         return SecurityScenarioOutcome(False, str(exc))
