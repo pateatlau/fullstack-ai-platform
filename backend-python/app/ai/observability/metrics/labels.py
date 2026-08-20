@@ -15,6 +15,11 @@ ALLOWED_LABEL_KEYS = frozenset(
         "decision",
         "job_type",
         "outcome",
+        "permission_key",
+        "resource_type",
+        "role_name",
+        "source",
+        "action",
     }
 )
 
@@ -75,7 +80,64 @@ JOB_TYPE_REGISTRY = frozenset(
         "other",
     }
 )
-OUTCOME_REGISTRY = frozenset({"succeeded", "dead_letter", "other"})
+OUTCOME_REGISTRY = frozenset(
+    {"allowed", "denied", "succeeded", "failed", "dead_letter", "other"}
+)
+PERMISSION_KEY_REGISTRY = frozenset(
+    {
+        "*",
+        "rbac:manage",
+        "audit:view",
+        "policy:view",
+        "jobs:view_all",
+        "jobs:retry",
+        "approvals:decide_all",
+        "tools:execute",
+        "tools:execute:destructive",
+        "plugins:manage",
+        "workflow:view_all",
+        "mcp:manage",
+        "other",
+    }
+)
+RESOURCE_TYPE_REGISTRY = frozenset(
+    {
+        "approval",
+        "guardrail",
+        "job",
+        "role",
+        "secret",
+        "tool",
+        "user",
+        "other",
+    }
+)
+ROLE_NAME_REGISTRY = frozenset({"member", "operator", "admin", "owner", "other"})
+SOURCE_REGISTRY = frozenset({"rag_chunk", "tool_argument", "mcp_result", "other"})
+ACTION_REGISTRY = frozenset(
+    {
+        "assigned",
+        "revoked",
+        "allow",
+        "flag",
+        "block",
+        "role.assigned",
+        "role.revoked",
+        "login.succeeded",
+        "tool.execution.denied",
+        "tool.execution.succeeded",
+        "approval.decided",
+        "approval.stage.completed",
+        "approval.stage.denied",
+        "job.retried",
+        "mcp.permission.denied",
+        "guardrail.flagged",
+        "guardrail.blocked",
+        "secret.resolution.missing",
+        "rate_limit.exceeded",
+        "other",
+    }
+)
 
 _OTHER = "other"
 
@@ -125,6 +187,16 @@ def normalize_metric_label(dimension: str, raw_value: str | None) -> str:
         return value if value in JOB_TYPE_REGISTRY else _OTHER
     if dimension == "outcome":
         return value if value in OUTCOME_REGISTRY else _OTHER
+    if dimension == "permission_key":
+        return value if value in PERMISSION_KEY_REGISTRY else _OTHER
+    if dimension == "resource_type":
+        return value if value in RESOURCE_TYPE_REGISTRY else _OTHER
+    if dimension == "role_name":
+        return value if value in ROLE_NAME_REGISTRY else _OTHER
+    if dimension == "source":
+        return value if value in SOURCE_REGISTRY else _OTHER
+    if dimension == "action":
+        return value if value in ACTION_REGISTRY else _OTHER
     return _OTHER
 
 

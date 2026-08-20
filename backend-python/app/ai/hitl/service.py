@@ -334,23 +334,55 @@ class AgentApprovalService:
         if not self._rbac_active():
             return
         assert self._rbac_service is not None
+        from app.ai.security.observability.wrappers import (
+            authz_span_context,
+            record_authz_allowed,
+            record_authz_denial,
+        )
+
         decide_all = await self._rbac_service.authorize(
             decider_id, PermissionKey.APPROVALS_DECIDE_ALL
         )
         if decide_all.allowed:
+            with authz_span_context(
+                actor_user_id=str(decider_id),
+                permission_key=PermissionKey.APPROVALS_DECIDE_ALL.value,
+            ) as span:
+                record_authz_allowed(
+                    span,
+                    actor_user_id=str(decider_id),
+                    permission_key=PermissionKey.APPROVALS_DECIDE_ALL.value,
+                    resource_type="approval",
+                )
             return
         stage_decision = await self._rbac_service.authorize(decider_id, stage)
-        if not stage_decision.allowed:
-            if self._audit_logger is not None:
-                await self._audit_logger.record(
-                    actor=CallerContext.for_user(decider_id),
-                    action=AuditAction.APPROVAL_STAGE_DENIED.value,
-                    outcome=AuditOutcome.DENIED,
+        with authz_span_context(
+            actor_user_id=str(decider_id),
+            permission_key=stage,
+        ) as span:
+            if not stage_decision.allowed:
+                record_authz_denial(
+                    span,
+                    actor_user_id=str(decider_id),
+                    permission_key=stage,
                     resource_type="approval",
-                    resource_id=str(approval_id),
-                    metadata={"stage": stage},
                 )
-            raise StagePermissionInvalidError(stage)
+                if self._audit_logger is not None:
+                    await self._audit_logger.record(
+                        actor=CallerContext.for_user(decider_id),
+                        action=AuditAction.APPROVAL_STAGE_DENIED.value,
+                        outcome=AuditOutcome.DENIED,
+                        resource_type="approval",
+                        resource_id=str(approval_id),
+                        metadata={"stage": stage},
+                    )
+                raise StagePermissionInvalidError(stage)
+            record_authz_allowed(
+                span,
+                actor_user_id=str(decider_id),
+                permission_key=stage,
+                resource_type="approval",
+            )
 
     async def _resolve_approval_for_decider(
         self,

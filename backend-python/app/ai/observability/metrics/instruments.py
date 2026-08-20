@@ -100,7 +100,11 @@ _INSTRUMENT_LABEL_KEYS: dict[str, frozenset[str]] = {
     "jobs_dead_letter_count": frozenset(),
     # Handler metrics (Epic 10) — per-attempt execution duration by handler type.
     "job_duration_ms": frozenset({"job_type"}),
-    # Epic 11 Phase 3 stub — full security observability lands in Phase 9.
+    # Epic 11 Phase 9 — Security & Governance observability.
+    "authz_denied_total": frozenset({"permission_key", "resource_type"}),
+    "role_assignments_total": frozenset({"role_name", "action"}),
+    "guardrail_verdicts_total": frozenset({"source", "action"}),
+    "audit_events_total": frozenset({"action", "outcome"}),
     "audit_write_failures_total": frozenset(),
 }
 
@@ -221,6 +225,15 @@ class MetricInstruments:
         self.audit_write_failures_total: Counter = meter.create_counter(
             "audit_write_failures_total"
         )
+        # Epic 11 Phase 9 — Security & Governance observability.
+        self.authz_denied_total: Counter = meter.create_counter("authz_denied_total")
+        self.role_assignments_total: Counter = meter.create_counter(
+            "role_assignments_total"
+        )
+        self.guardrail_verdicts_total: Counter = meter.create_counter(
+            "guardrail_verdicts_total"
+        )
+        self.audit_events_total: Counter = meter.create_counter("audit_events_total")
 
     @classmethod
     def initialize(cls) -> None:
@@ -660,6 +673,93 @@ def record_audit_write_failure() -> None:
         instruments.audit_write_failures_total.add(1)
 
     _record("audit_write_failures_total", _emit)
+
+
+def record_authz_denied(
+    *,
+    permission_key: str,
+    resource_type: str | None = None,
+) -> None:
+    """Epic 11 Phase 9: authorization denial counter.
+
+    Labels: permission_key (always bounded), resource_type (optional, bounded).
+    Never includes actor_user_id (unbounded cardinality).
+    """
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(
+        permission_key=permission_key,
+        **({"resource_type": resource_type} if resource_type else {}),
+    )
+
+    def _emit() -> None:
+        instruments.authz_denied_total.add(1, labels)
+
+    _record("authz_denied_total", _emit)
+
+
+def record_role_assignment(
+    *,
+    role_name: str,
+    action: str,  # "assigned" or "revoked"
+) -> None:
+    """Epic 11 Phase 9: role assignment/revocation counter."""
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(role_name=role_name, action=action)
+
+    def _emit() -> None:
+        instruments.role_assignments_total.add(1, labels)
+
+    _record("role_assignments_total", _emit)
+
+
+def record_guardrail_verdict(
+    *,
+    source: str,
+    action: str,  # "allow", "flag", or "block"
+) -> None:
+    """Epic 11 Phase 9: guardrail verdict counter.
+
+    Labels: source (rag_chunk, tool_argument, mcp_result), action (allow, flag, block).
+    Never includes matched_rule_id (unbounded cardinality).
+    """
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(source=source, action=action)
+
+    def _emit() -> None:
+        instruments.guardrail_verdicts_total.add(1, labels)
+
+    _record("guardrail_verdicts_total", _emit)
+
+
+def record_audit_event(
+    *,
+    action: str,
+    outcome: str,
+) -> None:
+    """Epic 11 Phase 9: audit event counter.
+
+    Labels: action (canonical taxonomy), outcome (succeeded or failed).
+    Never includes actor_user_id/audit_event_id (unbounded cardinality).
+    """
+    instruments = MetricInstruments.get()
+    if instruments is None:
+        return
+
+    labels = build_metric_attributes(action=action, outcome=outcome)
+
+    def _emit() -> None:
+        instruments.audit_events_total.add(1, labels)
+
+    _record("audit_events_total", _emit)
 
 
 def assert_label_keys_allowlisted() -> None:
