@@ -646,6 +646,31 @@ Jobs cases in `tests/data/evaluation/sample.yaml` are **skipped** (not failed) w
 pytest tests/ai/jobs/test_jobs_reference_scenarios.py tests/ai/jobs/test_jobs_adversarial_scenarios.py
 ```
 
+### Security & Governance operations (V2 Epic 11)
+
+Run `alembic upgrade head` before first enablement so the RBAC, audit, and usage-quota tables exist.
+
+**Bootstrap and staged rollout:**
+
+1. Set `SECURITY_GOVERNANCE_ENABLED=true` and `SECURITY_BOOTSTRAP_ADMIN_EMAILS=ops@example.com`.
+2. Restart after that verified Google OAuth user has logged in at least once; startup grants `owner` idempotently.
+3. For an observe-first rollout, temporarily set `SECURITY_RBAC_ENFORCEMENT_ENABLED=false` while audit logging and guardrails remain enabled, review denials, then enable enforcement.
+4. Verify the owner with `GET /api/security/roles` and `GET /api/security/users/{user_id}/roles`.
+5. Assign or revoke roles with `POST /api/security/users/{user_id}/roles` and `DELETE /api/security/users/{user_id}/roles/{role_name}`. The server always enforces `rbac:manage`; UI visibility is not an authorization control.
+
+Review security decisions with `GET /api/security/audit?outcome=denied&since=...`; use each row's `trace_id` to correlate traces and logs. Guardrail rules are configured with stable `id` and `version` fields, default to `flag`, and take effect after restart. Keep blocking rules narrow and run the adjacent-safe-content tests before promotion. Role throughput is adjusted with `SECURITY_ROLE_RATE_LIMIT_MULTIPLIERS`; roles absent from the map use `1.0`.
+
+**Security eval level** (deterministic and provider-free):
+
+```bash
+SECURITY_GOVERNANCE_ENABLED=true uv run python -m app.ai.evaluation.cli --level security
+pytest tests/ai/security/test_reference_scenarios.py tests/ai/security/test_adversarial_scenarios.py
+```
+
+Security cases are **skipped** when `SECURITY_GOVERNANCE_ENABLED=false`. `--level all` does not include them; run `--level security` explicitly. Coverage includes destructive-tool RBAC, HITL stage authorization, Jobs visibility, guardrail block/flag behavior, role-scaled limits, self-elevation denial, concurrent role revocation, secret-shaped arguments, and bucket-identity manipulation.
+
+**Prior-epic closures:** Epic 11 supplies tool RBAC (Epic 01), MCP secret indirection and guarded results (Epic 03), workflow/HITL policy-role consistency (Epic 06/09), audit-to-trace correlation (Epic 07), reserved plugin-management RBAC framing (Epic 08), and Jobs visibility/retry authorization (Epic 10). Implementations live under `app/ai/security/` and at the existing tool, HITL, MCP, RAG, Jobs, and middleware enforcement points.
+
 ### Module boundaries
 
 | Layer | Location | Responsibility |

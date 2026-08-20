@@ -19,7 +19,7 @@ def test_load_valid_sample_yaml() -> None:
     dataset = load_dataset(DATA_DIR / "sample.yaml")
 
     assert dataset.path.name == "sample.yaml"
-    assert len(dataset.cases) == 29
+    assert len(dataset.cases) == 35
     levels = {case.level for case in dataset.cases}
     assert levels == {
         "prompt",
@@ -30,6 +30,18 @@ def test_load_valid_sample_yaml() -> None:
         "plugin",
         "hitl",
         "jobs",
+        "security",
+    }
+    security_scenarios = {
+        case.security_scenario for case in dataset.cases if case.level == "security"
+    }
+    assert security_scenarios == {
+        "destructive_tool_rbac",
+        "hitl_stage_rbac",
+        "jobs_visibility_rbac",
+        "guardrail_block",
+        "guardrail_flag",
+        "role_rate_limit",
     }
 
 

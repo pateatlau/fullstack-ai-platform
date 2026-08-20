@@ -1926,3 +1926,34 @@ class JobsEvalRunner:
                 latency_ms=latency_ms,
                 error=str(exc),
             )
+
+
+@dataclass(frozen=True)
+class SecurityEvalRunner:
+    """Run deterministic Security & Governance reference scenarios."""
+
+    settings: Settings
+
+    async def run_case(self, case: EvalCase) -> EvalCaseResult:
+        from app.ai.evaluation.security_scenarios import (
+            run_security_reference_scenario,
+        )
+
+        start = time.perf_counter()
+        if not self.settings.security_governance_enabled:
+            return EvalCaseResult(
+                case_id=case.id,
+                level="security",
+                passed=False,
+                latency_ms=0,
+                skipped=True,
+                skip_reason="SECURITY_GOVERNANCE_ENABLED=false",
+            )
+        outcome = await run_security_reference_scenario(case)
+        return EvalCaseResult(
+            case_id=case.id,
+            level="security",
+            passed=outcome.passed,
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            error=outcome.error,
+        )
