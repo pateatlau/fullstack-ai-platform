@@ -16,7 +16,7 @@ from app.ai.voice.config import VoiceConfig
 from app.ai.voice.interrupt import InterruptController
 from app.ai.voice.session import VoiceSessionManager
 from app.core.config import Settings, get_settings
-from app.core.security import create_access_token
+from app.core.security import create_access_token, create_voice_auth_ticket
 from app.main import app as main_app
 from app.providers.capabilities import capabilities_by_provider
 from app.routers.voice import VoiceConnectionServices, create_voice_router
@@ -431,6 +431,34 @@ async def test_handshake_accepts_access_token_query_param(
         with TestClient(test_app) as client:
             with client.websocket_connect(
                 f"/api/voice/ws?session_id={chat_session.id}&access_token={token}"
+            ) as ws:
+                started = json.loads(ws.receive_text())
+                assert started["type"] == "session_started"
+                assert started["audio_format"] == "pcm16_24k_mono"
+                ws.send_text(json.dumps({"type": "session_end"}))
+                closed = json.loads(ws.receive_text())
+                assert closed["type"] == "session_closed"
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_handshake_accepts_short_lived_auth_ticket_query_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Browser WebSocket clients use a short-lived signed ticket instead of raw JWTs."""
+    monkeypatch.setenv("VOICE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    user_id = uuid.uuid4()
+    chat_store = FakeChatStore()
+    chat_session = await chat_store.create_session(user_id=user_id, title="Voice")
+    test_app = _build_voice_test_app(chat_store)
+    ticket = create_voice_auth_ticket(user_id=user_id, settings=get_settings())
+
+    try:
+        with TestClient(test_app) as client:
+            with client.websocket_connect(
+                f"/api/voice/ws?session_id={chat_session.id}&auth_ticket={ticket}"
             ) as ws:
                 started = json.loads(ws.receive_text())
                 assert started["type"] == "session_started"

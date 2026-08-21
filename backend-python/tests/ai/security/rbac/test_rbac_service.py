@@ -172,6 +172,61 @@ async def test_assign_role_is_idempotent_and_member_revocation_raises() -> None:
 
 
 @pytest.mark.anyio
+async def test_role_management_respects_hierarchy_and_final_owner_protection() -> None:
+    store = FakeRoleStore()
+    service = RbacService(store)
+    actor_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+    owner_id = uuid.uuid4()
+
+    await service.assign_role(actor_id, "admin")
+    await service.assign_role(target_id, "operator")
+    await service.assign_role(owner_id, "owner")
+
+    with pytest.raises(PermissionDeniedError):
+        await service.assign_role(
+            actor_id, "owner", actor=CallerContext.for_user(actor_id)
+        )
+
+    with pytest.raises(PermissionDeniedError):
+        await service.assign_role(
+            owner_id, "admin", actor=CallerContext.for_user(actor_id)
+        )
+
+    with pytest.raises(PermissionDeniedError):
+        await service.revoke_role(
+            owner_id, "owner", actor=CallerContext.for_user(owner_id)
+        )
+
+    assert (
+        await service.assign_role(
+            target_id, "admin", actor=CallerContext.for_user(actor_id)
+        )
+        is True
+    )
+    assert (
+        await service.revoke_role(
+            target_id, "admin", actor=CallerContext.for_user(actor_id)
+        )
+        is True
+    )
+
+
+@pytest.mark.anyio
+async def test_lower_roles_cannot_manage_roles() -> None:
+    store = FakeRoleStore()
+    service = RbacService(store)
+    member_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+
+    await service.assign_role(member_id, "member")
+    with pytest.raises(PermissionDeniedError):
+        await service.assign_role(
+            target_id, "operator", actor=CallerContext.for_user(member_id)
+        )
+
+
+@pytest.mark.anyio
 async def test_guest_permission_and_bootstrap_admins_are_case_insensitive_and_idempotent() -> (
     None
 ):

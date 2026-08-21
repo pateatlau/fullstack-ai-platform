@@ -183,6 +183,7 @@ class Settings(BaseSettings):
     # STT/TTS pipelines, WebSocket voice endpoint, and voice mode UI for auth users.
     # Flag-off keeps text chat SSE unchanged.
     voice_enabled: bool = False
+    voice_ws_auth_ticket_ttl_seconds: int = Field(default=30, ge=1)
 
     # V2 Epic 4: Voice provider and model configuration.
     voice_provider: str = "openai"

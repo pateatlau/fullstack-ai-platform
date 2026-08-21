@@ -60,6 +60,29 @@ async def test_preflight_allows_alternate_local_vite_port() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+async def test_preflight_allows_put_patch_delete_and_authorized_headers(
+    method: str,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.options(
+            "/api/security/users/123/roles/owner",
+            headers={
+                "Origin": "http://localhost:5174",
+                "Access-Control-Request-Method": method,
+                "Access-Control-Request-Headers": "Authorization, Content-Type",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5174"
+    assert method in response.headers["access-control-allow-methods"]
+    assert "authorization" in response.headers["access-control-allow-headers"].lower()
+
+
+@pytest.mark.anyio
 async def test_validation_error_includes_cors_for_allowed_origin() -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"

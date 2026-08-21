@@ -13,6 +13,7 @@ export type WebSocketFactory = (url: string, protocols?: string | string[]) => W
 export interface VoiceConnectOptions {
   sessionId: string
   accessToken?: string | null
+  authTicket?: string | null
   useWebSearch?: boolean
   useDocuments?: boolean
   provider?: string
@@ -57,14 +58,44 @@ export function buildVoiceWebSocketUrl(options: VoiceConnectOptions): string {
     params.set('model', options.model)
   }
 
-  const token = options.accessToken ?? getStoredAccessToken()
-  if (token) {
-    // Browser WebSocket cannot set Authorization headers; pass token for same-origin proxy
-    // or server-side query-param auth (see backend voice router).
-    params.set('access_token', token)
+  const ticket = options.authTicket ?? null
+  if (ticket) {
+    params.set('auth_ticket', ticket)
+  } else {
+    const token = options.accessToken ?? getStoredAccessToken()
+    if (token) {
+      params.set('access_token', token)
+    }
   }
 
   return `${resolveWebSocketOrigin()}/api/voice/ws?${params.toString()}`
+}
+
+export async function requestVoiceAuthTicket(accessToken?: string | null): Promise<string | null> {
+  const token = accessToken ?? getStoredAccessToken()
+  if (!token) {
+    return null
+  }
+
+  const baseUrl =
+    API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost')
+
+  try {
+    const response = await fetch(`${baseUrl}/api/voice/auth-ticket`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+
+    if (!response.ok) {
+      return null
+    }
+
+    const payload = (await response.json()) as { ticket?: string | null }
+    return payload.ticket ?? null
+  } catch {
+    return null
+  }
 }
 
 /** Serializes an outbound voice frame. */
@@ -174,14 +205,17 @@ export class VoiceClient {
     return this.ws?.readyState === WebSocket.OPEN
   }
 
-  connect(options: VoiceConnectOptions): Promise<void> {
+  async connect(options: VoiceConnectOptions): Promise<void> {
     if (this.ws) {
       this.disconnect()
     }
 
     this.audioSeq = 0
+    const authTicket =
+      options.authTicket ??
+      (await requestVoiceAuthTicket(options.accessToken ?? getStoredAccessToken()))
 
-    const url = buildVoiceWebSocketUrl(options)
+    const url = buildVoiceWebSocketUrl({ ...options, authTicket })
     const socket = this.webSocketFactory(url)
     this.ws = socket
 
