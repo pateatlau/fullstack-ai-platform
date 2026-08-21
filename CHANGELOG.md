@@ -8,6 +8,24 @@ Platform releases use internal names (Post-MVP V1.1, V2 Epic 04). Git tags follo
 
 ## [Unreleased]
 
+## [V2 Epic 11 — Security & Governance] — 2026-08-21
+
+Feature-flagged platform security controls spanning RBAC, audit logging, secrets, guardrails, rate limits, governance APIs, observability, evaluation, and administration UI.
+
+### Added
+
+- Global RBAC with four system roles, an implicit member baseline, admin bootstrap, and enforcement for tools, HITL stages, and Background Jobs
+- Durable, trace-correlated audit events with retention cleanup and a canonical action taxonomy
+- Environment-backed `SecretResolver`, consolidated redaction, and MCP credential integration
+- Shared rule engine and heuristic guardrails for RAG chunks, tool arguments, and MCP results
+- Role-aware HTTP limits, per-surface limits, and daily usage quota counters
+- Security REST APIs, health fields, observability, six eval scenarios, and the `/security` dashboard
+
+### Changed
+
+- Security sub-capabilities can be enabled independently beneath `SECURITY_GOVERNANCE_ENABLED`; the master flag remains off by default
+- Member-only callers are denied destructive tools and Jobs administration when RBAC enforcement is enabled
+
 ## [V2 Epic 09 — Human-in-the-Loop] — 2026-08-12
 
 Platform-wide human approval for tool calls on agent and workflow surfaces, with editable arguments and audit history.

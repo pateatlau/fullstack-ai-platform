@@ -39,16 +39,11 @@ def _reset_observability_registries() -> None:
     MetricInstruments.reset_for_tests()
 
 
-def _dispose_engine_cache_sync_fallback() -> None:
-    """Dispose cached engines from sync teardown when no anyio loop is active."""
-    import asyncio
+def _reset_database_dependency_caches() -> None:
+    """Drop services that retain the cached application sessionmaker."""
+    from app.ai.deps import get_audit_logger
 
-    from app.db.engine import dispose_engine_cache
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.run(dispose_engine_cache())
+    get_audit_logger.cache_clear()
 
 
 _background_jobs_teardown_db_unavailable = False
@@ -128,6 +123,7 @@ async def _dispose_engine_cache_after_test(
 
     yield
     await _truncate_background_jobs_tables_if_present()
+    _reset_database_dependency_caches()
     await dispose_engine_cache()
 
 
@@ -150,7 +146,7 @@ def _isolate_rate_limit_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]
     reset_rate_limiter()
     get_settings.cache_clear()
     _reset_observability_registries()
-    _dispose_engine_cache_sync_fallback()
+    _reset_database_dependency_caches()
 
 
 @pytest.fixture

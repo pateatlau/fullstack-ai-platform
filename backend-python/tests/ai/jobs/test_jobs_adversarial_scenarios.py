@@ -640,6 +640,7 @@ async def test_rest_retry_after_exhaustion_completes(
 ) -> None:
     await require_background_jobs_tables(db_session)
     monkeypatch.setenv("BACKGROUND_JOBS_ENABLED", "true")
+    monkeypatch.setenv("SECURITY_GOVERNANCE_ENABLED", "false")
     get_settings.cache_clear()
     settings = job_settings(
         background_jobs_enabled=True,

@@ -91,7 +91,10 @@ async def test_flag_off_preserves_v1_behaviour_even_with_service_wired() -> None
     rbac_service = RbacService(_FakeRoleStore(user_roles={}))
     authorizer = ToolAuthorizer(
         rbac_service=rbac_service,
-        settings=Settings(openai_api_key="test-key"),  # security flags default off
+        settings=Settings(
+            openai_api_key="test-key",
+            security_governance_enabled=False,
+        ),
     )
     result = await authorizer.authorize(_tool(risk_level="high"), _context(user_id))
     assert result is None

@@ -298,7 +298,7 @@ async def test_flagged_rag_chunk_remains_in_context() -> None:
 
 
 def test_flag_off_builds_no_engine() -> None:
-    assert build_guardrail_engine(Settings()) is None
+    assert build_guardrail_engine(Settings(security_governance_enabled=False)) is None
     assert (
         build_guardrail_engine(
             Settings(
@@ -314,6 +314,7 @@ def test_operator_rule_can_precede_defaults_by_priority() -> None:
     engine = build_guardrail_engine(
         Settings(
             security_governance_enabled=True,
+            security_guardrails_enabled=True,
             security_guardrail_rules=[
                 {
                     "id": "operator-override",
