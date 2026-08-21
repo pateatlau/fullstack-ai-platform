@@ -123,6 +123,7 @@ async def _claim_job(
 @pytest.fixture
 def jobs_api_app(db_session, monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:
     monkeypatch.setenv("BACKGROUND_JOBS_ENABLED", "true")
+    monkeypatch.setenv("SECURITY_GOVERNANCE_ENABLED", "false")
     get_settings.cache_clear()
     settings = _job_settings()
     factory = make_queue_session_factory(db_session.bind)

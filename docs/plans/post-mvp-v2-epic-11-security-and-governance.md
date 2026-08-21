@@ -1,8 +1,8 @@
 ---
 epic: v2-11
 title: Security & Governance
-status: not_started
-version: 2
+status: complete
+version: 2.5
 depends_on: [v2-01, v2-03, v2-06, v2-07, v2-08, v2-09, v2-10]
 provides:
   [
@@ -1315,31 +1315,31 @@ _To be verified in Epic 11 Phase 0; source of truth: `docs/audits/post-mvp-v2-ep
 
 _To be updated at each phase completion; release summary will be published at `docs/releases/post-mvp-v2-epic11-release-summary.md`._
 
-| Area                  | State                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Security & Governance | Phase 0 complete — baseline audited. Phase 1 complete — RBAC domain model, migration `0016_security_rbac`, `RbacService`, bootstrap. Phase 2 complete — RBAC enforcement wired into `ToolAuthorizer` (`tools:execute`/`tools:execute:destructive`), HITL stage decisions (`AgentApprovalService`, RBAC-authorized non-owner deciders), and Jobs REST (`jobs:view_all`/`jobs:retry`). Workflow approval node has no `required_stages` concept (N/A, documented). `PolicyContext.caller_role` RBAC-sourcing deferred (still `caller.kind`). Phase 3 complete — `audit_events` table + migration `0017_security_audit_log`, `AuditLogger`/`PostgresAuditStore`/`AuditAction` taxonomy, wired into tool denial/role assign-revoke/HITL stage+terminal decisions/job retry/login; `security_audit_retention_cleanup` Background Jobs handler (sixth first-class handler, flag-gated registration + schedule reconcile). Phase 4 complete — `SecretResolver`/`EnvSecretResolver` (`app/ai/security/secrets/`), `McpServerCredentials.resolve_credential_env_vars()` rebased onto an injected resolver (defaults to `EnvSecretResolver`, byte-for-byte unchanged), `get_secret_resolver()` DI factory; missing-secret resolution audited (`secret.resolution.missing`) from the async `StdioTransport.connect()` call site; consolidated `app/ai/security/redaction.py` (sensitive-key pattern, Bearer/`sk-`/JWT patterns, safe-scalar heuristic, `clear_pii_fields` helper) with `app/core/logging.py`/`app/ai/hitl/models.py`/`app/schemas/jobs.py` all delegating to it with zero behavioural change. Phase 6 complete — generic `RuleCondition`/`RuleOperator`/`RuleEvaluator` relocated to `app/ai/security/rules_engine.py` with HITL re-exports and unchanged rule tests; versioned heuristic `GuardrailEngine` defaults/config added; RAG chunks, tool arguments, and MCP results now enforce flag/block verdicts with bounded audit metadata and flag-off parity. Guardrail metrics remain owned by Phase 9. |
+| Area                  | State                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Security & Governance | Phases 0–12 complete. RBAC, audit logging, secret resolution, redaction, rate limits/quotas, shared policy context, guardrails, REST/health, observability, security eval scenarios, and the frontend dashboard are delivered. Phase 12 validated 2,287 backend tests at 88.84% overall coverage (88.68% on `app/ai/security/`), four independent sub-flag full-suite runs, 15/15 standard eval cases, 6/6 security eval cases, and 326 frontend tests. Release summary published. |
 
 ---
 
 ## Phase Status
 
-| Phase | Name                                                   | Effort | Status      |
-| ----- | ------------------------------------------------------ | ------ | ----------- |
-| 0     | Baseline Audit                                         | XS     | Complete    |
-| 1     | RBAC Domain Model, Migration & Bootstrap               | L      | Complete    |
-| 2     | RBAC Enforcement — Tools, HITL Stages, Jobs Visibility | L      | Complete    |
-| 3     | Global Audit Log & Retention Cleanup                   | M      | Complete    |
-| 4     | Secret Resolver Abstraction & Redaction Consolidation  | M      | Complete    |
-| 5     | Rate Limiting & Usage Quota Extensions                 | M      | In Progress |
-| 6     | Shared Rule Engine Extraction & Guardrails             | L      | Complete    |
-| 7     | Unified Governance Policy Context                      | S      | Not Started |
-| 8     | Security & Governance REST API & Health                | S      | Not Started |
-| 9     | Security Observability                                 | S      | Not Started |
-| 10    | Reference Scenarios & Adversarial Eval Cases           | M      | Not Started |
-| 11    | Frontend Security & Governance Dashboard               | S      | Not Started |
-| 12    | Validation & Release                                   | M      | Not Started |
+| Phase | Name                                                   | Effort | Status   |
+| ----- | ------------------------------------------------------ | ------ | -------- |
+| 0     | Baseline Audit                                         | XS     | Complete |
+| 1     | RBAC Domain Model, Migration & Bootstrap               | L      | Complete |
+| 2     | RBAC Enforcement — Tools, HITL Stages, Jobs Visibility | L      | Complete |
+| 3     | Global Audit Log & Retention Cleanup                   | M      | Complete |
+| 4     | Secret Resolver Abstraction & Redaction Consolidation  | M      | Complete |
+| 5     | Rate Limiting & Usage Quota Extensions                 | M      | Complete |
+| 6     | Shared Rule Engine Extraction & Guardrails             | L      | Complete |
+| 7     | Unified Governance Policy Context                      | S      | Complete |
+| 8     | Security & Governance REST API & Health                | S      | Complete |
+| 9     | Security Observability                                 | S      | Complete |
+| 10    | Reference Scenarios & Adversarial Eval Cases           | M      | Complete |
+| 11    | Frontend Security & Governance Dashboard               | S      | Complete |
+| 12    | Validation & Release                                   | M      | Complete |
 
-**Epic 11 overall:** Phase 6 complete. Next gate: user authorization to begin Phase 7. Earlier phase statuses remain recorded independently above.
+**Epic 11 overall:** Implementation and Phase 12 validation complete. Awaiting user authorization for the next epic / V2 program closure.
 
 ---
 
@@ -1364,32 +1364,32 @@ Establish a verified implementation baseline before introducing Security & Gover
 
 ## Platform Verification
 
-- [ ] Confirm Epic 10 Phase 11 complete / authorized for Epic 11.
-- [ ] Inventory `ToolAuthorizer.authorize()` (`app/ai/tools/authorizer.py`) and confirm its exact current "authenticated only" logic.
-- [ ] Inventory `PolicyContext.caller_role`, `ApprovalRule.required_stages`, `RuleCondition`/`RuleOperator`/`RuleEvaluator` (`app/ai/hitl/rules.py`) and the exact `TODO`/comment markers at L33, L215–216 to confirm this epic's closure targets.
-- [ ] Inventory `app/ai/hitl/models.py` L44's stage-reviewer-identity comment.
-- [ ] Inventory `GET /api/jobs`/`GET /api/jobs/{id}`/`GET /api/jobs/schedules`/`POST /api/jobs/{id}/retry` (`app/routers/jobs.py`) and confirm none currently check any permission beyond `require_authenticated_caller`.
-- [ ] Inventory `McpServerCredentials.resolve_credential_env_vars()` (`app/ai/mcp/auth.py`) and confirm it reads `os.environ` directly.
-- [ ] Inventory `SlidingWindowRateLimiter`, `resolve_rate_limit_identity` (`app/middleware/rate_limit.py`) and confirm the existing anonymous/authenticated bucket kinds.
-- [ ] Inventory the four independent redaction implementations (`app/core/logging.py`, `app/ai/mcp/auth.py`, `app/ai/hitl/models.py`, `app/schemas/jobs.py`) to confirm consolidation scope for Phase 4.
-- [ ] Verify chat, RAG, MCP, memory, voice, agent, tool, workflow, plugin, HITL, and background jobs pipelines operational.
+- [x] Confirm Epic 10 Phase 11 complete / authorized for Epic 11.
+- [x] Inventory `ToolAuthorizer.authorize()` (`app/ai/tools/authorizer.py`) and confirm its exact current "authenticated only" logic.
+- [x] Inventory `PolicyContext.caller_role`, `ApprovalRule.required_stages`, `RuleCondition`/`RuleOperator`/`RuleEvaluator` (`app/ai/hitl/rules.py`) and the exact `TODO`/comment markers at L33, L215–216 to confirm this epic's closure targets.
+- [x] Inventory `app/ai/hitl/models.py` L44's stage-reviewer-identity comment.
+- [x] Inventory `GET /api/jobs`/`GET /api/jobs/{id}`/`GET /api/jobs/schedules`/`POST /api/jobs/{id}/retry` (`app/routers/jobs.py`) and confirm none currently check any permission beyond `require_authenticated_caller`.
+- [x] Inventory `McpServerCredentials.resolve_credential_env_vars()` (`app/ai/mcp/auth.py`) and confirm it reads `os.environ` directly.
+- [x] Inventory `SlidingWindowRateLimiter`, `resolve_rate_limit_identity` (`app/middleware/rate_limit.py`) and confirm the existing anonymous/authenticated bucket kinds.
+- [x] Inventory the four independent redaction implementations (`app/core/logging.py`, `app/ai/mcp/auth.py`, `app/ai/hitl/models.py`, `app/schemas/jobs.py`) to confirm consolidation scope for Phase 4.
+- [x] Verify chat, RAG, MCP, memory, voice, agent, tool, workflow, plugin, HITL, and background jobs pipelines operational.
 
 ## Architecture Review
 
-- [ ] Review frozen Part I architecture (this document, version 2).
-- [ ] Confirm `users` table has no existing `role`/`permission` columns to collide with.
-- [ ] Confirm no `app/ai/security/` package exists.
+- [x] Review frozen Part I architecture (this document, version 2).
+- [x] Confirm `users` table has no existing `role`/`permission` columns to collide with.
+- [x] Confirm no `app/ai/security/` package exists.
 
 ## Dependency Verification
 
-- [ ] Verify DI and feature flag patterns in `app/ai/deps.py` / `app/core/config.py`.
-- [ ] Verify Alembic migration numbering (head: `0015_document_upload_staging`; next available revisions: **0016**, **0017**).
-- [ ] Confirm no RBAC/authorization library (e.g. `casbin`, `oso`) dependency exists in `pyproject.toml`/`uv.lock` (this epic must not add one — RBAC is hand-rolled per Locked Decisions).
+- [x] Verify DI and feature flag patterns in `app/ai/deps.py` / `app/core/config.py`.
+- [x] Verify Alembic migration numbering (head: `0015_document_upload_staging`; next available revisions: **0016**, **0017**).
+- [x] Confirm no RBAC/authorization library (e.g. `casbin`, `oso`) dependency exists in `pyproject.toml`/`uv.lock` (this epic must not add one — RBAC is hand-rolled per Locked Decisions).
 
 ## Baseline Quality Validation
 
-- [ ] Execute lint, typecheck, unit tests, integration tests, eval suite.
-- [ ] Record baseline metrics in audit doc.
+- [x] Execute lint, typecheck, unit tests, integration tests, eval suite.
+- [x] Record baseline metrics in audit doc.
 
 **Verify**
 
@@ -1407,12 +1407,12 @@ Establish a verified implementation baseline before introducing Security & Gover
 
 **Exit criteria**
 
-- [ ] Baseline audit published.
-- [ ] User confirmation to proceed to Phase 1.
+- [x] Baseline audit published.
+- [x] User confirmation to proceed to Phase 1.
 
 **Rollback**
 
-- [ ] No rollback required (no code changes).
+- [x] No rollback required (no code changes).
 
 ---
 
@@ -1442,55 +1442,55 @@ Introduce the `app/ai/security/` package (RBAC subpackage only), domain models, 
 
 ## Package Structure
 
-- [ ] Create `app/ai/security/` per Part I package layout (`exceptions.py`, `rbac/permissions.py`, `rbac/models.py`, `rbac/store.py`, `rbac/service.py`; `audit/`, `secrets/`, `guardrails/`, `quotas/`, `rules_engine.py`, `redaction.py` stubbed for later phases).
-- [ ] Export public API from `__init__.py`.
-- [ ] Verify import cycle freedom.
+- [x] Create `app/ai/security/` per Part I package layout (`exceptions.py`, `rbac/permissions.py`, `rbac/models.py`, `rbac/store.py`, `rbac/service.py`; `audit/`, `secrets/`, `guardrails/`, `quotas/`, `rules_engine.py`, `redaction.py` stubbed for later phases).
+- [x] Export public API from `__init__.py`.
+- [x] Verify import cycle freedom.
 
 ## Models
 
-- [ ] Implement `PermissionKey` str enum and `PermissionDefinition` model with `display_name`, `description`, `category`, `risk_level`, `reserved` fields.
-- [ ] Implement `PERMISSION_REGISTRY` dict — single source of truth per Part I § RBAC Domain Model table; migration seed reads from this registry.
-- [ ] Implement `AuthorizationDecision` frozen dataclass (`allowed`, `permission_key`, `matched_role`, `matched_permission`, `denial_reason`).
-- [ ] Implement `Role`, `Permission`, `UserRoleAssignment` Pydantic models.
-- [ ] Implement `SecurityErrorCode` enum in `app/ai/security/errors.py` per Part I § Security Error Codes.
-- [ ] Add `PermissionDeniedError`, `RoleNotFoundError` to `exceptions.py`.
+- [x] Implement `PermissionKey` str enum and `PermissionDefinition` model with `display_name`, `description`, `category`, `risk_level`, `reserved` fields.
+- [x] Implement `PERMISSION_REGISTRY` dict — single source of truth per Part I § RBAC Domain Model table; migration seed reads from this registry.
+- [x] Implement `AuthorizationDecision` frozen dataclass (`allowed`, `permission_key`, `matched_role`, `matched_permission`, `denial_reason`).
+- [x] Implement `Role`, `Permission`, `UserRoleAssignment` Pydantic models.
+- [x] Implement `SecurityErrorCode` enum in `app/ai/security/errors.py` per Part I § Security Error Codes.
+- [x] Add `PermissionDeniedError`, `RoleNotFoundError` to `exceptions.py`.
 
 ## Migration
 
-- [ ] Create `roles`, `permissions`, `role_permissions`, `user_role_assignments` tables per Part I § RBAC Domain Model schema.
-- [ ] Seed the four system roles, the full `PermissionKey` vocabulary, and `DEFAULT_ROLE_PERMISSIONS` rows (idempotent — guarded by unique constraints so re-running is a no-op).
-- [ ] Add supporting indexes (`user_role_assignments(user_id)`, unique `(user_id, role_id)`).
-- [ ] Verify migration upgrade/downgrade round-trip.
+- [x] Create `roles`, `permissions`, `role_permissions`, `user_role_assignments` tables per Part I § RBAC Domain Model schema.
+- [x] Seed the four system roles, the full `PermissionKey` vocabulary, and `DEFAULT_ROLE_PERMISSIONS` rows (idempotent — guarded by unique constraints so re-running is a no-op).
+- [x] Add supporting indexes (`user_role_assignments(user_id)`, unique `(user_id, role_id)`).
+- [x] Verify migration upgrade/downgrade round-trip.
 
 ## RbacService Implementation
 
-- [ ] Implement `PostgresRoleStore` — CRUD for roles/permissions/assignments; `ON CONFLICT DO NOTHING` on assignment insert, no-op `DELETE` on revoke.
-- [ ] Implement `RbacService.authorize()` returning `AuthorizationDecision`; implement `has_permission()` as `authorize().allowed` wrapper.
-- [ ] Implement `RbacService.get_permissions()` — guests return empty set; authenticated users return `member` ∪ explicit role permissions; `"*"` wildcard short-circuit for `owner`.
-- [ ] Implement optional in-process permission cache (`security_rbac_cache_ttl_seconds`); invalidate on assign/revoke for affected `user_id`.
-- [ ] Implement `assign_role()`, `revoke_role()` (rejecting `"member"` revocation), `list_roles()`, `get_user_roles()`, `get_permission_registry()`.
-- [ ] Implement `bootstrap_admins()` — case-insensitive email match; idempotent grant of `owner`.
+- [x] Implement `PostgresRoleStore` — CRUD for roles/permissions/assignments; `ON CONFLICT DO NOTHING` on assignment insert, no-op `DELETE` on revoke.
+- [x] Implement `RbacService.authorize()` returning `AuthorizationDecision`; implement `has_permission()` as `authorize().allowed` wrapper.
+- [x] Implement `RbacService.get_permissions()` — guests return empty set; authenticated users return `member` ∪ explicit role permissions; `"*"` wildcard short-circuit for `owner`.
+- [x] Implement optional in-process permission cache (`security_rbac_cache_ttl_seconds`); invalidate on assign/revoke for affected `user_id`.
+- [x] Implement `assign_role()`, `revoke_role()` (rejecting `"member"` revocation), `list_roles()`, `get_user_roles()`, `get_permission_registry()`.
+- [x] Implement `bootstrap_admins()` — case-insensitive email match; idempotent grant of `owner`.
 
 ## Configuration
 
-- [ ] Add `SECURITY_GOVERNANCE_ENABLED` (default `false`), `security_rbac_enforcement_enabled` (default `true`), `security_bootstrap_admin_emails` (default `[]`), `security_rbac_cache_ttl_seconds` (default `60`) to `app/core/config.py`.
-- [ ] Document settings in `backend-python/.env.example`.
+- [x] Add `SECURITY_GOVERNANCE_ENABLED` (default `false`), `security_rbac_enforcement_enabled` (default `true`), `security_bootstrap_admin_emails` (default `[]`), `security_rbac_cache_ttl_seconds` (default `60`) to `app/core/config.py`.
+- [x] Document settings in `backend-python/.env.example`.
 
 ## Lifespan Wiring
 
-- [ ] Call `RbacService.bootstrap_admins()` once at app startup when `SECURITY_GOVERNANCE_ENABLED=true` (before any request is served).
+- [x] Call `RbacService.bootstrap_admins()` once at app startup when `SECURITY_GOVERNANCE_ENABLED=true` (before any request is served).
 
 ## Testing
 
-- [ ] `PostgresRoleStore`/`RbacService` tests: seed-matrix correctness, implicit-member baseline for a user with zero assignments, permission union across multiple explicit roles, `owner`'s `"*"` wildcard.
-- [ ] Idempotency test: `assign_role()` called twice for the same `(user_id, role_name)` succeeds both times with one resulting row.
-- [ ] Idempotency test: `revoke_role()` called on a non-existent assignment is a no-op, not an error.
-- [ ] Test: `revoke_role(role_name="member")` raises a typed error.
-- [ ] `RbacService.authorize()`/`AuthorizationDecision` tests: allowed path populates `matched_role`; denied path populates `denial_reason`.
-- [ ] Permission cache test: second `authorize()` within TTL hits cache; assign/revoke invalidates cache for affected user.
-- [ ] Bootstrap test: `bootstrap_admins()` run twice grants `owner` exactly once; a non-matching email is untouched; case-insensitive match verified.
-- [ ] Guest permission test: `get_permissions()` for a guest `CallerContext` always returns the empty set regardless of any (impossible, but defensively tested) assignment rows.
-- [ ] Migration upgrade/downgrade test.
+- [x] `PostgresRoleStore`/`RbacService` tests: seed-matrix correctness, implicit-member baseline for a user with zero assignments, permission union across multiple explicit roles, `owner`'s `"*"` wildcard.
+- [x] Idempotency test: `assign_role()` called twice for the same `(user_id, role_name)` succeeds both times with one resulting row.
+- [x] Idempotency test: `revoke_role()` called on a non-existent assignment is a no-op, not an error.
+- [x] Test: `revoke_role(role_name="member")` raises a typed error.
+- [x] `RbacService.authorize()`/`AuthorizationDecision` tests: allowed path populates `matched_role`; denied path populates `denial_reason`.
+- [x] Permission cache test: second `authorize()` within TTL hits cache; assign/revoke invalidates cache for affected user.
+- [x] Bootstrap test: `bootstrap_admins()` run twice grants `owner` exactly once; a non-matching email is untouched; case-insensitive match verified.
+- [x] Guest permission test: `get_permissions()` for a guest `CallerContext` always returns the empty set regardless of any (impossible, but defensively tested) assignment rows.
+- [x] Migration upgrade/downgrade test.
 
 **Verify**
 
@@ -1506,9 +1506,9 @@ Introduce the `app/ai/security/` package (RBAC subpackage only), domain models, 
 
 **Exit criteria**
 
-- [ ] RBAC foundation tests pass.
-- [ ] Public model/service APIs frozen.
-- [ ] User confirmation to proceed to Phase 2.
+- [x] RBAC foundation tests pass.
+- [x] Public model/service APIs frozen.
+- [x] User confirmation to proceed to Phase 2.
 
 **Rollback**
 
@@ -1542,14 +1542,14 @@ Wire `RbacService` into the three named enforcement points: `ToolAuthorizer` (ba
 - [x] Extend `ToolAuthorizer.authorize()` to accept an `RbacService` dependency; when `security_rbac_enforcement_enabled=false` (or master flag off), preserve today's exact "authenticated users only" check byte-for-byte.
 - [x] When enabled: call `RbacService.authorize()` (not `has_permission()` directly) for `tools:execute` and, when applicable, `tools:execute:destructive`; use `AuthorizationDecision.denial_reason` in audit metadata.
 - [x] Denial responses include `request_id` from `LogContext` and `SecurityErrorCode.permission_denied` (see Part I § Security Error Codes). _(Jobs/HITL REST denials get `request_id` for free via the existing `error_response()` envelope; `ToolResult` denials keep the pre-existing `error_code="forbidden"` shape, unchanged, to avoid breaking existing assertions.)_
-- [ ] Emit an audit event stub (via `AuditLogger`, no-op until Phase 3) on every denial, passing `AuthorizationDecision` fields into metadata. _(Deferred to Phase 3 — `AuditLogger` does not exist yet; no dead-code stub added.)_
+- [x] Emit an audit event on every denial, passing `AuthorizationDecision` fields into metadata. _(Completed in Phase 3 when `AuditLogger` became available.)_
 
 ## HITL Stage Enforcement
 
 - [x] In `AgentApprovalService.decide()`, when `required_stages` is non-empty, call `RbacService.authorize(decider, stage_name)` before recording the stage; reject with `SecurityErrorCode.stage_permission_invalid` + `request_id` if denied. _(Also applied to `approve_and_resume()` and `record_stage_approval()`.)_
 - [x] Perform the permission check and the `StageDecision` write inside the same CAS-guarded transaction window (no separate earlier check that can go stale — see Implementation Risks).
 - [x] Apply the same pattern to the workflow approval-node surface if Phase 0's audit confirms `required_stages` is honoured there too; otherwise document as N/A with a `TODO(future):` marker. _(Confirmed N/A — `ApprovalNodeExecutor` has no `required_stages`/multi-stage concept; single owner-scoped approve/reject only.)_
-- [ ] Update `PolicyContext.caller_role` construction to source from `RbacService.get_user_roles()`'s highest-priority role name when enforcement is enabled; fall back to `caller.kind` otherwise. _(Deferred by explicit user decision — `ToolExecutionContext` is constructed independently in ~6 places with no `RbacService` access; threading it through was judged disproportionate risk versus the three named enforcement points. `caller_role` remains `caller.kind`.)_
+- [x] Update `PolicyContext.caller_role` construction to source from `RbacService.get_user_roles()`'s highest-priority role name when enforcement is enabled; fall back to `caller.kind` otherwise. _(Completed in Phase 7 through the unified caller-role resolver.)_
 
 ## Jobs Visibility
 
@@ -1563,7 +1563,7 @@ Wire `RbacService` into the three named enforcement points: `ToolAuthorizer` (ba
 - [x] Test: a `member`-only (non-elevated) user retains access to non-destructive tools (`tools:execute` baseline preserved).
 - [x] Test: flag off — every existing `tests/ai/tools/test_authorizer.py` case passes unchanged. _(New file — no prior `ToolAuthorizer`-specific test file existed; flag-off/no-service parity cases added.)_
 - [x] Test: a HITL approval with a `required_stages` entry cannot be fully decided by a user lacking that permission; a second, permission-holding (non-owner) user can complete the stage. _(`tests/ai/hitl/test_stage_rbac.py`; uses the seeded `jobs:retry` permission as the stage key since arbitrary custom stage strings like `"approvals:decide:finance"` are not grantable under Phase 1's fixed `PermissionKey`/`DEFAULT_ROLE_PERMISSIONS` vocabulary — Part I's documented "fail closed" behaviour for unmapped keys.)_
-- [ ] Test: concurrent stage-decision-vs-role-revocation race resolves deterministically (see Implementation Risks) — covered by a genuine-concurrency test, not sequential calls. _(Not implemented — the permission check immediately precedes the write per-call, closing the staleness window, but a dedicated concurrency test was not added in this phase.)_
+- [x] Test: concurrent stage-decision-vs-role-revocation race resolves deterministically (see Implementation Risks) — covered by a genuine-concurrency test, not sequential calls. _(Completed in Phase 10 adversarial coverage.)_
 - [x] Test: `GET /api/jobs` returns `403` for a `member`-only user and `200` for an `operator`, when enforcement is enabled; returns `200` for any authenticated user when the flag is off.
 - [x] Test: `POST /api/jobs/{id}/retry` returns `403` for a `member`-only user and `200` for an `operator`, when enforcement is enabled. _(Covered by the same parametrized 403 test plus the existing flag-off suite; explicit operator-success retry case not separately added — list_jobs operator-success case covers the RBAC-allowed path.)_
 - [x] Test: denial responses include `request_id` matching the active log context. _(Via the existing `error_response()` envelope, exercised by the jobs 403 tests.)_
@@ -1580,7 +1580,7 @@ Wire `RbacService` into the three named enforcement points: `ToolAuthorizer` (ba
 **Exit criteria**
 
 - [x] RBAC enforcement tests pass.
-- [ ] User confirmation to proceed to Phase 3.
+- [x] User confirmation to proceed to Phase 3.
 
 **Rollback**
 
@@ -1592,7 +1592,7 @@ Wire `RbacService` into the three named enforcement points: `ToolAuthorizer` (ba
 # Phase 3 — Global Audit Log & Retention Cleanup
 
 **Effort:** M
-**Status:** Not Started
+**Status:** Completed
 
 **Objective**
 
@@ -1664,7 +1664,7 @@ Ship the platform-wide `audit_events` table, `AuditLogger` service, wire it into
 **Exit criteria**
 
 - [x] Audit log tests pass.
-- [ ] User confirmation to proceed to Phase 4.
+- [x] User confirmation to proceed to Phase 4.
 
 **Rollback**
 
@@ -1724,7 +1724,7 @@ Introduce `SecretResolver` as the indirection point between code and secret stor
 **Exit criteria**
 
 - [x] Secret resolver and redaction consolidation tests pass.
-- [ ] User confirmation to proceed to Phase 5.
+- [x] User confirmation to proceed to Phase 5.
 
 **Rollback**
 
@@ -1736,7 +1736,7 @@ Introduce `SecretResolver` as the indirection point between code and secret stor
 # Phase 5 — Rate Limiting & Usage Quota Extensions
 
 **Effort:** M
-**Status:** Not Started
+**Status:** Completed (2026-08-17)
 
 **Objective**
 
@@ -1755,29 +1755,29 @@ Extend the existing HTTP rate limiter with per-role multipliers, add new per-min
 
 ## HTTP Rate Limit Role Multipliers
 
-- [ ] In `resolve_rate_limit_identity()`/`rate_limit_middleware`, when `security_rate_limit_extensions_enabled=true`, look up the caller's highest-priority role via `RbacService` and apply `security_role_rate_limit_multipliers[role]` (default `1.0`) to `rate_limit_authenticated_per_minute` before the `SlidingWindowRateLimiter.check()` call.
-- [ ] When the sub-flag (or master flag) is off, preserve today's flat per-tier limit exactly.
+- [x] In `resolve_rate_limit_identity()`/`rate_limit_middleware`, when `security_rate_limit_extensions_enabled=true`, look up the caller's highest-priority role via `RbacService` and apply `security_role_rate_limit_multipliers[role]` (default `1.0`) to `rate_limit_authenticated_per_minute` before the `SlidingWindowRateLimiter.check()` call.
+- [x] When the sub-flag (or master flag) is off, preserve today's flat per-tier limit exactly.
 
 ## New Per-Minute Limits
 
-- [ ] Apply a `tool:{user_id}` bucket check (`tool_invocation_per_minute`) inside `ToolExecutor` before dispatch.
-- [ ] Apply an `mcp:{user_id}` bucket check (`mcp_invocation_per_minute`) inside `McpToolExecutionAdapter` before remote dispatch.
-- [ ] Apply a `job_enqueue:{user_id}` bucket check (`background_jobs_enqueue_per_minute`) inside `QueueIndexingRunner.submit()`/any future user-triggered enqueue path (only meaningful when `BACKGROUND_JOBS_ENABLED=true`).
-- [ ] Apply an `approval_decision:{user_id}` bucket check (`approval_decision_per_minute`) on `AgentApprovalService.decide()` (anti-brute-force).
-- [ ] Each new limit reuses `SlidingWindowRateLimiter`/`WINDOW_SECONDS=60` — no new limiter implementation.
+- [x] Apply a `tool:{user_id}` bucket check (`tool_invocation_per_minute`) inside `ToolExecutor` before dispatch.
+- [x] Apply an `mcp:{user_id}` bucket check (`mcp_invocation_per_minute`) inside `McpToolExecutionAdapter` before remote dispatch.
+- [x] Apply a `job_enqueue:{user_id}` bucket check (`background_jobs_enqueue_per_minute`) inside `QueueIndexingRunner.submit()`/any future user-triggered enqueue path (only meaningful when `BACKGROUND_JOBS_ENABLED=true`).
+- [x] Apply an `approval_decision:{user_id}` bucket check (`approval_decision_per_minute`) on `AgentApprovalService.decide()` (anti-brute-force).
+- [x] Each new limit reuses `SlidingWindowRateLimiter`/`WINDOW_SECONDS=60` — no new limiter implementation.
 
 ## Usage Quota Counters
 
-- [ ] Create `usage_quota_counters(subject_id, quota_type, day, count)` table with a unique `(subject_id, quota_type, day)` constraint.
-- [ ] Implement `check_and_increment(subject_id, quota_type, limit, day) -> bool` (upsert-increment pattern, matching `guest_quota_counters`'s existing per-day counter shape).
+- [x] Create `usage_quota_counters(subject_id, quota_type, day, count)` table with a unique `(subject_id, quota_type, day)` constraint.
+- [x] Implement `check_and_increment(subject_id, quota_type, limit, day) -> bool` (upsert-increment pattern, matching `guest_quota_counters`'s existing per-day counter shape).
 
 ## Testing
 
-- [ ] Test: an `owner` role's HTTP requests tolerate `10×` the base authenticated limit before `429`; a `member` (no multiplier entry) tolerates exactly `1×`.
-- [ ] Test: tool invocation past `tool_invocation_per_minute` returns `429` with `Retry-After`.
-- [ ] Test: MCP invocation, job enqueue, and approval decision rate limits behave symmetrically.
-- [ ] Test: flag off — `tests/test_rate_limit.py`'s existing suite passes unchanged; no new bucket kind is ever checked.
-- [ ] Test: `usage_quota_counters` correctly resets at UTC day boundary (same convention as `guest_quota_counters`).
+- [x] Test: an `owner` role's HTTP requests tolerate `10×` the base authenticated limit before `429`; a `member` (no multiplier entry) tolerates exactly `1×`.
+- [x] Test: tool invocation past `tool_invocation_per_minute` returns `429` with `Retry-After`.
+- [x] Test: MCP invocation, job enqueue, and approval decision rate limits behave symmetrically.
+- [x] Test: flag off — `tests/test_rate_limit.py`'s existing suite passes unchanged; no new bucket kind is ever checked.
+- [x] Test: `usage_quota_counters` correctly resets at UTC day boundary (same convention as `guest_quota_counters`).
 
 **Verify**
 
@@ -1790,8 +1790,8 @@ Extend the existing HTTP rate limiter with per-role multipliers, add new per-min
 
 **Exit criteria**
 
-- [ ] Rate limit and quota extension tests pass.
-- [ ] User confirmation to proceed to Phase 6.
+- [x] Rate limit and quota extension tests pass.
+- [x] User confirmation to proceed to Phase 6.
 
 **Rollback**
 
@@ -1867,7 +1867,7 @@ Relocate `RuleCondition`/`RuleOperator`/`RuleEvaluator` from `app/ai/hitl/rules.
 **Exit criteria**
 
 - [x] Rule engine relocation and guardrail tests pass.
-- [ ] User confirmation to proceed to Phase 7.
+- [x] User confirmation to proceed to Phase 7.
 
 **Rollback**
 
@@ -1879,7 +1879,7 @@ Relocate `RuleCondition`/`RuleOperator`/`RuleEvaluator` from `app/ai/hitl/rules.
 # Phase 7 — Unified Governance Policy Context
 
 **Effort:** S
-**Status:** Not Started
+**Status:** Completed (2026-08-19)
 
 **Objective**
 
@@ -1895,16 +1895,16 @@ Finish wiring `RbacService`-derived roles into every `PolicyContext.caller_role`
 
 ## Caller Role Resolution
 
-- [ ] Implement a single helper (`app/ai/security/rbac/service.py` or a thin adapter) — `resolve_caller_role(caller: CallerContext, rbac: RbacService) -> str | None` — returning the caller's highest-priority explicit role name, `"member"` for an authenticated user with no explicit elevation, or `None` for a guest.
-- [ ] Replace every ad-hoc `caller.kind`-based `caller_role` construction in `app/ai/agent/executor/tool_runner.py` and `app/ai/workflow/nodes/approval_node.py` with this helper.
-- [ ] Preserve exact fallback to `caller.kind` when `security_rbac_enforcement_enabled=false`.
+- [x] Implement a single helper (`app/ai/security/rbac/service.py` or a thin adapter) — `resolve_caller_role(caller: CallerContext, rbac: RbacService) -> str | None` — returning the caller's highest-priority explicit role name, `"member"` for an authenticated user with no explicit elevation, or `None` for a guest.
+- [x] Replace every ad-hoc `caller.kind`-based `caller_role` construction in `app/ai/agent/executor/tool_runner.py` and `app/ai/workflow/nodes/approval_node.py` with this helper.
+- [x] Preserve exact fallback to `caller.kind` when `security_rbac_enforcement_enabled=false`.
 
 ## Testing
 
-- [ ] Test: an existing `hitl_policy_rules` rule written against `caller_role: "user"` continues to match when RBAC enforcement is off (fallback preserved).
-- [ ] Test: a new rule written against `caller_role: "operator"` matches only operator-elevated callers when enforcement is on.
-- [ ] Test: an unauthenticated (guest) `caller_role` resolves to `None` in both modes.
-- [ ] Regression: full `tests/ai/hitl/test_adversarial_scenarios.py` suite passes with enforcement both on and off.
+- [x] Test: an existing `hitl_policy_rules` rule written against `caller_role: "user"` continues to match when RBAC enforcement is off (fallback preserved).
+- [x] Test: a new rule written against `caller_role: "operator"` matches only operator-elevated callers when enforcement is on.
+- [x] Test: an unauthenticated (guest) `caller_role` resolves to `None` in both modes.
+- [x] Regression: full `tests/ai/hitl/test_adversarial_scenarios.py` suite passes with enforcement both on and off.
 
 **Verify**
 
@@ -1916,8 +1916,8 @@ Finish wiring `RbacService`-derived roles into every `PolicyContext.caller_role`
 
 **Exit criteria**
 
-- [ ] Unified policy context tests pass.
-- [ ] User confirmation to proceed to Phase 8.
+- [x] Unified policy context tests pass.
+- [x] User confirmation to proceed to Phase 8.
 
 **Rollback**
 
@@ -1928,7 +1928,7 @@ Finish wiring `RbacService`-derived roles into every `PolicyContext.caller_role`
 # Phase 8 — Security & Governance REST API & Health
 
 **Effort:** S
-**Status:** Not Started
+**Status:** Completed (2026-08-19)
 
 **Objective**
 
@@ -1944,29 +1944,29 @@ Expose role management, audit-log query, and an aggregated read-only policy summ
 
 ## API Implementation
 
-- [ ] `GET /api/security/roles` — list the four system roles + permission keys; requires `rbac:manage`.
-- [ ] `GET /api/security/users/{user_id}/roles` — list explicit assignments plus the always-present implicit `member` entry; requires `rbac:manage` or `user_id == caller.user_id`.
-- [ ] `POST /api/security/users/{user_id}/roles` — assign; requires `rbac:manage`; `404` on unknown user/role.
-- [ ] `DELETE /api/security/users/{user_id}/roles/{role_name}` — revoke; requires `rbac:manage`; `400` if `role_name == "member"`.
-- [ ] `GET /api/security/audit` — filtered/paginated query; requires `audit:view`.
-- [ ] `GET /api/security/audit/{id}` — detail; requires `audit:view`; `404` if not found.
-- [ ] `GET /api/security/policies` — aggregated counts/config summary; requires `policy:view`; never echoes raw regex patterns.
-- [ ] Return `503 feature_disabled` when `SECURITY_GOVERNANCE_ENABLED=false`.
+- [x] `GET /api/security/roles` — list the four system roles + permission keys; requires `rbac:manage`.
+- [x] `GET /api/security/users/{user_id}/roles` — list explicit assignments plus the always-present implicit `member` entry; requires `rbac:manage` or `user_id == caller.user_id`.
+- [x] `POST /api/security/users/{user_id}/roles` — assign; requires `rbac:manage`; `404` on unknown user/role.
+- [x] `DELETE /api/security/users/{user_id}/roles/{role_name}` — revoke; requires `rbac:manage`; `400` if `role_name == "member"`.
+- [x] `GET /api/security/audit` — filtered/paginated query; requires `audit:view`.
+- [x] `GET /api/security/audit/{id}` — detail; requires `audit:view`; `404` if not found.
+- [x] `GET /api/security/policies` — aggregated counts/config summary; requires `policy:view`; never echoes raw regex patterns.
+- [x] Return `503 feature_disabled` when `SECURITY_GOVERNANCE_ENABLED=false`.
 
 ## Health Extension
 
-- [ ] Add `security_governance_enabled`, `rbac_enforcement_enabled`, `guardrails_enabled` to the health payload.
+- [x] Add `security_governance_enabled`, `rbac_enforcement_enabled`, `guardrails_enabled` to the health payload.
 
 ## Mount Router
 
-- [ ] Include router in `app/main.py`.
+- [x] Include router in `app/main.py`.
 
 ## Testing
 
-- [ ] Router tests with flag on/off.
-- [ ] Permission-gate tests: a caller lacking `rbac:manage`/`audit:view`/`policy:view` receives `403` from each respective endpoint group.
-- [ ] Assert `/api/security/policies` never returns raw guardrail regex patterns or the bootstrap admin email list.
-- [ ] Assert pagination/filter params on `/api/security/audit` behave correctly.
+- [x] Router tests with flag on/off.
+- [x] Permission-gate tests: a caller lacking `rbac:manage`/`audit:view`/`policy:view` receives `403` from each respective endpoint group.
+- [x] Assert `/api/security/policies` never returns raw guardrail regex patterns or the bootstrap admin email list.
+- [x] Assert pagination/filter params on `/api/security/audit` behave correctly.
 
 **Verify**
 
@@ -1979,8 +1979,8 @@ Expose role management, audit-log query, and an aggregated read-only policy summ
 
 **Exit criteria**
 
-- [ ] Router tests pass.
-- [ ] User confirmation to proceed to Phase 9.
+- [x] Router tests pass.
+- [x] User confirmation to proceed to Phase 9.
 
 **Rollback**
 
@@ -1991,7 +1991,7 @@ Expose role management, audit-log query, and an aggregated read-only policy summ
 # Phase 9 — Security Observability
 
 **Effort:** S
-**Status:** Not Started
+**Status:** Completed (2026-08-20)
 
 **Objective**
 
@@ -2011,20 +2011,20 @@ Add authorization/guardrail/audit span and metric instrumentation, mirroring Epi
 
 ## Span Helpers
 
-- [ ] Implement `authz_span`/`guardrail_span` with attributes `actor_user_id`, `permission_key`/`matched_rule`, `outcome`/`action` (ids are span attributes only — never metric labels).
-- [ ] Wrap `ToolAuthorizer.authorize()`, `AgentApprovalService.decide()`'s stage check, and `GuardrailEngine.evaluate()` call sites when `OBSERVABILITY_ENABLED=true`.
-- [ ] Complete the `trace_id` correlation into `AuditLogger.record()` (finalize the Phase 3 stub with the real span-context accessor).
+- [x] Implement `authz_span`/`guardrail_span` with attributes `actor_user_id`, `permission_key`/`matched_rule`, `outcome`/`action` (ids are span attributes only — never metric labels).
+- [x] Wrap `ToolAuthorizer.authorize()`, `AgentApprovalService.decide()`'s stage check, and `GuardrailEngine.evaluate()` call sites when `OBSERVABILITY_ENABLED=true`.
+- [x] Complete the `trace_id` correlation into `AuditLogger.record()` (finalize the Phase 3 stub with the real span-context accessor).
 
 ## Metrics
 
-- [ ] Add all five instruments listed above; only bounded-cardinality labels (`permission_key`, `role_name`, `action`, `outcome`, `resource_type`, `source`) — never `actor_user_id`/`audit_event_id`.
-- [ ] Document authorization vs guardrail vs audit metric responsibilities in instrument docstrings.
+- [x] Add all five instruments listed above; only bounded-cardinality labels (`permission_key`, `role_name`, `action`, `outcome`, `resource_type`, `source`) — never `actor_user_id`/`audit_event_id`.
+- [x] Document authorization vs guardrail vs audit metric responsibilities in instrument docstrings.
 
 ## Testing
 
-- [ ] In-memory span exporter tests for authorization allow/deny and guardrail allow/flag/block.
-- [ ] Metric tests for all five instruments.
-- [ ] Verify flag off → no security spans/metrics.
+- [x] In-memory span exporter tests for authorization allow/deny and guardrail allow/flag/block.
+- [x] Metric tests for all five instruments.
+- [x] Verify flag off → no security spans/metrics.
 
 **Verify**
 
@@ -2038,8 +2038,8 @@ Add authorization/guardrail/audit span and metric instrumentation, mirroring Epi
 
 **Exit criteria**
 
-- [ ] Observability tests pass.
-- [ ] User confirmation to proceed to Phase 10.
+- [x] Observability tests pass.
+- [x] User confirmation to proceed to Phase 10.
 
 **Rollback**
 
@@ -2050,7 +2050,7 @@ Add authorization/guardrail/audit span and metric instrumentation, mirroring Epi
 # Phase 10 — Reference Scenarios & Adversarial Eval Cases
 
 **Effort:** M
-**Status:** Not Started
+**Status:** Completed (2026-08-20)
 
 **Objective**
 
@@ -2066,28 +2066,28 @@ Ship reference scenarios and adversarial/edge-case coverage across RBAC, audit, 
 
 ## Reference Scenarios
 
-- [ ] Add `--level security` eval cases gated on `SECURITY_GOVERNANCE_ENABLED`, following Epic 09/10's `--level hitl`/`--level jobs` precedent.
-- [ ] Document skip policy when Security & Governance is disabled.
+- [x] Add `--level security` eval cases gated on `SECURITY_GOVERNANCE_ENABLED`, following Epic 09/10's `--level hitl`/`--level jobs` precedent.
+- [x] Document skip policy when Security & Governance is disabled.
 
 ## Adversarial & Concurrency Scenarios
 
-- [ ] **Privilege escalation attempt** — a `member`-only user attempts `POST /api/security/users/{self}/roles` to self-grant `owner`; assert `403`, no row created, and an `audit_events` denial recorded.
-- [ ] **Concurrent role-revocation vs. stage decision** — a stage decision and a concurrent revocation of the decider's stage permission race; assert exactly one deterministic outcome (decision recorded XOR rejected, never both, never a stuck approval).
-- [ ] **Prompt-injection payload** — a RAG document containing a default-rule pattern is ingested and retrieved; assert the guardrail flags/blocks it and the eval case's answer does not follow the injected instruction.
-- [ ] **Secret-shaped tool argument** — a tool call constructed with an `sk-`-shaped string argument is denied by the guardrail engine, never reaching the tool handler.
-- [ ] **Rate-limit bypass attempt** — a caller alternates between an authenticated bearer token and a guest token across requests attempting to reset the sliding window; assert the bucket-key derivation prevents any effective bypass.
-- [ ] **Guardrail false-positive check** — realistic non-malicious content resembling but not matching each default rule's pattern is not flagged/blocked.
+- [x] **Privilege escalation attempt** — a `member`-only user attempts `POST /api/security/users/{self}/roles` to self-grant `owner`; assert `403`, no row created, and an `audit_events` denial recorded.
+- [x] **Concurrent role-revocation vs. stage decision** — a stage decision and a concurrent revocation of the decider's stage permission race; assert exactly one deterministic outcome (decision recorded XOR rejected, never both, never a stuck approval).
+- [x] **Prompt-injection payload** — a RAG document containing a default-rule pattern is ingested and retrieved; assert the guardrail flags/blocks it and the eval case's answer does not follow the injected instruction.
+- [x] **Secret-shaped tool argument** — a tool call constructed with an `sk-`-shaped string argument is denied by the guardrail engine, never reaching the tool handler.
+- [x] **Rate-limit bypass attempt** — a caller alternates between an authenticated bearer token and a guest token across requests attempting to reset the sliding window; assert the bucket-key derivation prevents any effective bypass.
+- [x] **Guardrail false-positive check** — realistic non-malicious content resembling but not matching each default rule's pattern is not flagged/blocked.
 
 ## Documentation
 
-- [ ] Document operator steps: bootstrap admin, assign roles, review audit log, tune guardrail rules, adjust rate-limit multipliers.
-- [ ] Document the RBAC staged-rollout procedure per Part I § Operational Runbook.
-- [ ] Cross-reference which Epic 01/03/06/07/08/09/10 deferred Epic 11 items this epic closes, and where in code the closure landed.
+- [x] Document operator steps: bootstrap admin, assign roles, review audit log, tune guardrail rules, adjust rate-limit multipliers.
+- [x] Document the RBAC staged-rollout procedure per Part I § Operational Runbook.
+- [x] Cross-reference which Epic 01/03/06/07/08/09/10 deferred Epic 11 items this epic closes, and where in code the closure landed.
 
 ## Testing
 
-- [ ] Integration test exercising each control end-to-end.
-- [ ] Eval cases pass in CI when the flag is enabled.
+- [x] Integration test exercising each control end-to-end.
+- [x] Eval cases pass in CI when the flag is enabled.
 
 **Verify**
 
@@ -2101,9 +2101,9 @@ Ship reference scenarios and adversarial/edge-case coverage across RBAC, audit, 
 
 **Exit criteria**
 
-- [ ] Reference scenario tests pass.
-- [ ] Adversarial scenario tests pass.
-- [ ] User confirmation to proceed to Phase 11.
+- [x] Reference scenario tests pass.
+- [x] Adversarial scenario tests pass.
+- [x] User confirmation to proceed to Phase 11.
 
 **Rollback**
 
@@ -2114,7 +2114,7 @@ Ship reference scenarios and adversarial/edge-case coverage across RBAC, audit, 
 # Phase 11 — Frontend Security & Governance Dashboard
 
 **Effort:** S
-**Status:** Not Started
+**Status:** Completed (2026-08-21)
 
 **Objective**
 
@@ -2132,21 +2132,21 @@ Add a minimal frontend view of role assignments, the audit log, and the aggregat
 
 ## API Client
 
-- [ ] `GET /api/security/roles`, `GET/POST/DELETE /api/security/users/{id}/roles`.
-- [ ] `GET /api/security/audit` (filters), `GET /api/security/audit/{id}`.
-- [ ] `GET /api/security/policies`.
-- [ ] Handle `503 feature_disabled` and `403 forbidden` with friendly empty/permission states.
+- [x] `GET /api/security/roles`, `GET/POST/DELETE /api/security/users/{id}/roles`.
+- [x] `GET /api/security/audit` (filters), `GET /api/security/audit/{id}`.
+- [x] `GET /api/security/policies`.
+- [x] Handle `503 feature_disabled` and `403 forbidden` with friendly empty/permission states.
 
 ## Security Dashboard UI
 
-- [ ] Roles tab: list users with their role badges; assign/revoke controls (disabled/hidden client-side for non-`rbac:manage` callers, but the server remains the authority).
-- [ ] Audit Log tab: filterable table (`actor`, `action`, `resource_type`, `outcome`, date range).
-- [ ] Policies tab: read-only summary counts (rule counts, active rate-limit values) — no raw regex display.
-- [ ] Route + nav entry gated on `security_governance_enabled` (mirroring Epic 09/10's flag-gated nav link pattern).
+- [x] Roles tab: list users with their role badges; assign/revoke controls (disabled/hidden client-side for non-`rbac:manage` callers, but the server remains the authority).
+- [x] Audit Log tab: filterable table (`actor`, `action`, `resource_type`, `outcome`, date range).
+- [x] Policies tab: read-only summary counts (rule counts, active rate-limit values) — no raw regex display.
+- [x] Route + nav entry gated on `security_governance_enabled` (mirroring Epic 09/10's flag-gated nav link pattern).
 
 ## Testing
 
-- [ ] MSW/mock tests for roles list/assign/revoke, audit query, policies summary, and disabled/forbidden states.
+- [x] MSW/mock tests for roles list/assign/revoke, audit query, policies summary, and disabled/forbidden states.
 
 **Verify**
 
@@ -2159,8 +2159,8 @@ Add a minimal frontend view of role assignments, the audit log, and the aggregat
 
 **Exit criteria**
 
-- [ ] Frontend tests pass.
-- [ ] User confirmation to proceed to Phase 12.
+- [x] Frontend tests pass.
+- [x] User confirmation to proceed to Phase 12.
 
 **Rollback**
 
@@ -2171,7 +2171,7 @@ Add a minimal frontend view of role assignments, the audit log, and the aggregat
 # Phase 12 — Validation & Release
 
 **Effort:** M
-**Status:** Not Started
+**Status:** Completed (2026-08-21)
 
 **Objective**
 
@@ -2187,18 +2187,18 @@ Full-platform validation, flag-off regression, release summary, and epic complet
 
 ## Validation
 
-- [ ] Full backend test suite + coverage ≥80% on `app/ai/security/`.
-- [ ] Frontend tests + build.
-- [ ] Integration tests (RBAC, audit, secrets, guardrails, rate limits, security router).
-- [ ] Eval suite + regression check.
-- [ ] Flag-off regression: entire suite with `SECURITY_GOVERNANCE_ENABLED=false`.
-- [ ] Sub-flag regression: entire suite with `SECURITY_GOVERNANCE_ENABLED=true` and each sub-flag independently `false`.
-- [ ] Confirm every named Epic 11 gap identified in Phase 0 (Epics 01/03/06/07/08/09/10) has been closed and evidenced by a passing test.
+- [x] Full backend test suite + coverage ≥80% on `app/ai/security/`.
+- [x] Frontend tests + build.
+- [x] Integration tests (RBAC, audit, secrets, guardrails, rate limits, security router).
+- [x] Eval suite + regression check.
+- [x] Flag-off regression: entire suite with `SECURITY_GOVERNANCE_ENABLED=false`.
+- [x] Sub-flag regression: entire suite with `SECURITY_GOVERNANCE_ENABLED=true` and each sub-flag independently `false`.
+- [x] Confirm every named Epic 11 gap identified in Phase 0 (Epics 01/03/06/07/08/09/10) has been closed and evidenced by a passing test.
 
 ## Documentation
 
-- [ ] Publish release summary.
-- [ ] Update `backend-python/.env.example` with Security & Governance settings (present since earlier phases).
+- [x] Publish release summary.
+- [x] Update `backend-python/.env.example` with Security & Governance settings (present since earlier phases).
 
 **Verify**
 
@@ -2216,7 +2216,7 @@ Full-platform validation, flag-off regression, release summary, and epic complet
 
 **Exit criteria**
 
-- [ ] Release summary published.
+- [x] Release summary published.
 - [ ] User authorizes next epic / V2 program closure.
 
 **Rollback**
@@ -2319,19 +2319,19 @@ metrics  (aggregated by permission_key / action / outcome — never by actor_use
 
 # Definition of Done
 
-- [ ] All Part I architectural invariants preserved (including implicit-member baseline, shared rule engine single-implementation, and audit-write-never-blocks).
-- [ ] Public APIs frozen after Phase 2.
-- [ ] RBAC enforcement operational on tools, HITL stages, and Jobs REST under genuine concurrency (verified, not assumed).
-- [ ] Global audit log records every authorization decision, role change, HITL decision, and job retry with `trace_id` correlation.
-- [ ] Secret resolution rebased onto `SecretResolver` with zero observable behaviour change; redaction consolidated into one shared module.
-- [ ] Rate limiting/usage quotas extended with role multipliers and four new per-minute limits.
-- [ ] Shared rule engine extracted with zero HITL regression; guardrails operational on RAG/tool/MCP surfaces in default `flag` mode.
-- [ ] Security & Governance REST API and frontend dashboard operational, including role assignment/revocation.
-- [ ] Reference scenarios and adversarial/concurrency eval coverage shipped.
-- [ ] Security-scoped tracing attributes present on every authorization/guardrail decision.
-- [ ] `SECURITY_GOVERNANCE_ENABLED=false` preserves Epic 10 behaviour; each sub-flag independently toggleable without regressing the others.
-- [ ] Backend coverage ≥80% on `app/ai/security/`.
-- [ ] Release summary published.
+- [x] All Part I architectural invariants preserved (including implicit-member baseline, shared rule engine single-implementation, and audit-write-never-blocks).
+- [x] Public APIs frozen after Phase 2.
+- [x] RBAC enforcement operational on tools, HITL stages, and Jobs REST under genuine concurrency (verified, not assumed).
+- [x] Global audit log records every authorization decision, role change, HITL decision, and job retry with `trace_id` correlation.
+- [x] Secret resolution rebased onto `SecretResolver` with zero observable behaviour change; redaction consolidated into one shared module.
+- [x] Rate limiting/usage quotas extended with role multipliers and four new per-minute limits.
+- [x] Shared rule engine extracted with zero HITL regression; guardrails operational on RAG/tool/MCP surfaces in default `flag` mode.
+- [x] Security & Governance REST API and frontend dashboard operational, including role assignment/revocation.
+- [x] Reference scenarios and adversarial/concurrency eval coverage shipped.
+- [x] Security-scoped tracing attributes present on every authorization/guardrail decision.
+- [x] `SECURITY_GOVERNANCE_ENABLED=false` preserves Epic 10 behaviour; each sub-flag independently toggleable without regressing the others.
+- [x] Backend coverage ≥80% on `app/ai/security/`.
+- [x] Release summary published.
 - [ ] User authorizes next epic / V2 program closure.
 
 ---
@@ -2396,6 +2396,8 @@ metrics  (aggregated by permission_key / action / outcome — never by actor_use
 
 | Version | Date       | Changes                                                                                                                                                                                                                                                                                                                                                                          |
 | ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.5     | 2026-08-21 | Reconciled the complete Phase 0–12 execution record, including frontmatter, phase checklists, later-phase completion of deferred Phase 2 work, and final README documentation. The reusable permission/guardrail extension checklist and next-epic authorization remain intentionally open.                                                                                         |
+| 2.4     | 2026-08-21 | Part II Phase 12 complete — full backend/frontend validation, flag-off and independent sub-flag regressions, standard and security eval suites, release summary, environment documentation, and test isolation for cached audit sessionmakers.                                                                                                                                   |
 | 2.3     | 2026-08-17 | Part II Phase 6 complete — shared rule engine relocated to `app/ai/security/rules_engine.py` with HITL re-exports and unchanged behavior; versioned heuristic guardrails added for RAG chunks, tool arguments, and MCP results with flag/block handling, audit events, configuration validation, and flag-off parity.                                                            |
 | 2.2     | 2026-08-13 | Part II Phase 2 complete — RBAC enforcement wired into `ToolAuthorizer`, `AgentApprovalService` HITL stage decisions (RBAC-authorized non-owner deciders honoring `approvals:decide_all`/stage permissions), and Jobs REST (`jobs:view_all`/`jobs:retry`); flag-off parity preserved. `PolicyContext.caller_role` RBAC-sourcing deferred by user decision.                       |
 | 2.1     | 2026-08-13 | Part II Phase 1 complete — RBAC domain model, migration `0016_security_rbac`, `RbacService`, admin bootstrap.                                                                                                                                                                                                                                                                    |

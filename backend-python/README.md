@@ -1,6 +1,6 @@
 # Python AI Service
 
-**Production MVP backend** — FastAPI service deployed to Railway.
+**Production AI platform backend** — FastAPI service deployed to Railway.
 
 MVP hardening is complete (2026-07-19): structured logging, correlation IDs, centralized errors, HTTP rate limiting, Pyright standard mode, and CI quality gates. See `docs/plans/mvp-completion-implementation-plan.md` for the validation record.
 
@@ -15,6 +15,30 @@ MVP hardening is complete (2026-07-19): structured logging, correlation IDs, cen
 - Request-size and schema validation; provider timeout normalization
 - Structured JSON logging in production; correlation IDs on every response
 - HTTP rate limiting (per-minute) with `Retry-After` on 429
+- V2 agent runtime, advanced RAG, remote MCP tools, and WebSocket voice interfaces
+- Durable memory, workflow orchestration, observability/evaluation, and trusted plugins
+- Human-in-the-loop approvals plus Postgres-backed jobs, schedules, dead letters, and retries
+- Security & Governance (V2 Epic 11): global RBAC, durable audit events, shared redaction and guardrails, role-aware limits/quotas, REST administration, and security evals
+
+## V2 Program
+
+V2 Epics 01–11 are complete. Each capability is independently deployable behind a master flag that defaults to `false`, so enabling one epic is an explicit operational decision and the V1 chat path remains available.
+
+| Epic | Capability | Master flag | Backend surface | Release |
+| ---- | ---------- | ----------- | --------------- | ------- |
+| 01 | Agent Framework | `AGENT_RUNTIME_ENABLED` | `app/ai/agent/`; agent-backed unified chat | [Summary](../docs/releases/post-mvp-v2-epic1-release-summary.md) |
+| 02 | Advanced RAG | `ADVANCED_RAG_ENABLED` | Advanced retrieval pipeline and citations | [Summary](../docs/releases/post-mvp-v2-epic2-release-summary.md) |
+| 03 | MCP Integration | `MCP_ENABLED` | `app/ai/mcp/`; remote discovery/execution through tools | [Summary](../docs/releases/post-mvp-v2-epic3-release-summary.md) |
+| 04 | Voice Interfaces | `VOICE_ENABLED` | `app/ai/voice/`; `/api/voice/ws` | [Summary](../docs/releases/post-mvp-v2-epic4-release-summary.md) |
+| 05 | Memory System | `MEMORY_ENABLED` | `app/ai/memory/`; `/api/memory/*` | [Summary](../docs/releases/post-mvp-v2-epic5-release-summary.md) |
+| 06 | Workflow Engine | `WORKFLOW_ENGINE_ENABLED` | `app/ai/workflow/`; workflow definitions and runs | [Summary](../docs/releases/post-mvp-v2-epic6-release-summary.md) |
+| 07 | Observability & Evaluation | `OBSERVABILITY_ENABLED` | `app/ai/observability/`; OTel, metrics, costs, eval | [Summary](../docs/releases/post-mvp-v2-epic7-release-summary.md) |
+| 08 | Plugin Architecture | `PLUGINS_ENABLED` | `app/ai/plugins/`; trusted in-process extensions | [Summary](../docs/releases/post-mvp-v2-epic8-release-summary.md) |
+| 09 | Human-in-the-Loop | `HITL_ENABLED` | `app/ai/hitl/`; `/api/approvals` and resume | [Summary](../docs/releases/post-mvp-v2-epic9-release-summary.md) |
+| 10 | Background Jobs | `BACKGROUND_JOBS_ENABLED` | `app/ai/jobs/`; queue, worker, scheduler, REST API | [Summary](../docs/releases/post-mvp-v2-epic10-release-summary.md) |
+| 11 | Security & Governance | `SECURITY_GOVERNANCE_ENABLED` | `app/ai/security/`; RBAC, audit, guardrails, quotas | [Summary](../docs/releases/post-mvp-v2-epic11-release-summary.md) |
+
+Current validated baseline (2026-08-21): **2,287 tests**, **88.84%** coverage on `app/`, 15/15 standard eval cases, and 6/6 security eval cases.
 
 ## Tech Stack
 
@@ -43,9 +67,9 @@ Dev tooling: Ruff (lint and format), Pyright (static type checking, standard mod
 - `app/services/unified_chat_service.py` — V1.1 orchestration for toggled chat (streaming + non-streaming)
 - `app/services/tool_chat_service.py` — tool loop (invoked by orchestrator)
 - `app/providers/` — provider adapters and factory
-- `app/ai/` — reusable AI framework (embeddings, vectorstores, prompts, tools, documents, rag, evaluation)
+- `app/ai/` — reusable AI framework (embeddings, vectorstores, prompts, tools, documents, RAG, evaluation, security)
 - `app/schemas/` — request/response/frame schemas
-- `tests/` — unit and integration tests (**1076** tests, **89.52%** coverage on `app/`, 2026-07-28)
+- `tests/` — unit and integration tests (**2,287** tests, **88.84%** coverage on `app/`, 2026-08-21)
 
 ## AI Module (`app/ai/`)
 
@@ -65,9 +89,17 @@ Routers → Services → AI Framework (`app/ai/`) → Providers → External API
 | `app/ai/embeddings/` | Embedding provider adapters |
 | `app/ai/vectorstores/` | Vector store adapters (V1: pgvector only) |
 | `app/ai/rag/` | Generic RAG framework (retriever, context builder, orchestration) |
-| `app/ai/evaluation/` | Prompt, retrieval, and end-to-end evaluation helpers |
+| `app/ai/evaluation/` | Prompt, retrieval, end-to-end, agent, workflow, plugin, HITL, jobs, and security evaluation helpers |
 | `app/ai/agent/` | Reusable agent runtime (planner, executor, streaming, adapters) |
 | `app/ai/mcp/` | MCP (Model Context Protocol) client integration for remote tools (V2 Epic 03) |
+| `app/ai/voice/` | WebSocket voice sessions, STT/TTS adapters, turn management, and barge-in (V2 Epic 04) |
+| `app/ai/memory/` | Durable semantic memory, preference extraction, summaries, retrieval, and lifecycle (V2 Epic 05) |
+| `app/ai/workflow/` | Versioned workflow definitions, execution, state persistence, recovery, and approvals (V2 Epic 06) |
+| `app/ai/observability/` | OpenTelemetry tracing, metrics, cost accounting, dashboards, and regression checks (V2 Epic 07) |
+| `app/ai/plugins/` | Trusted plugin discovery, validation, lifecycle, contributions, and isolation (V2 Epic 08) |
+| `app/ai/hitl/` | Durable approval requests, revisions, decisions, authorization, and resume (V2 Epic 09) |
+| `app/ai/jobs/` | Postgres queue, worker, scheduler, leases, handlers, dead letters, and retries (V2 Epic 10) |
+| `app/ai/security/` | RBAC, audit logging, secret resolution, redaction, guardrails, quotas, and security observability (V2 Epic 11) |
 | `app/ai/interfaces/` | Protocols added incrementally per phase |
 | `app/ai/deps.py` | FastAPI dependency wiring for AI components |
 
@@ -101,7 +133,7 @@ Registry → Validation → Authorization → Execution → Normalization
 | ----- | --------- | -------------- |
 | Registry | `ToolRegistry` | Register, lookup, list tools; expose OpenAI-compatible schemas |
 | Validation | `ToolValidator` | Validate call args against tool JSON Schema |
-| Authorization | `ToolAuthorizer` | V1: authenticated users only; guests receive `forbidden` |
+| Authorization | `ToolAuthorizer` | Authenticated-only baseline; Epic 11 additionally enforces `tools:execute` and destructive-tool RBAC when enabled |
 | Execution | `ToolExecutor` | Orchestrate lifecycle with timeout, logging, error normalization |
 | Chat orchestration | `ToolChatService` | Composes `ChatService`; capped tool loop for `POST /api/chat` |
 
@@ -492,15 +524,21 @@ curl -X POST http://localhost:8000/api/rag/ask \
   -d '{"question":"Summarize my uploaded documents.","provider":"groq","model":"openai/gpt-oss-20b"}'
 ```
 
-### Evaluation framework (Phase 10)
+### Evaluation framework
 
-Objective quality measurement at three levels — **prompt**, **retrieval**, and **end-to-end** — via a CLI harness. Run eval before API exposure to tune chunk size, overlap, top-K, embedding model, and prompt templates.
+The CLI provides five standard levels plus four explicit opt-in V2 extension suites. `--level all` runs the standard set; plugin, HITL, jobs, and security remain explicit so their feature flags and infrastructure requirements cannot surprise routine CI.
 
-| Level | Runner | Measures |
-| ----- | ------ | -------- |
-| Prompt | `PromptEvalRunner` | Template rendering correctness / regression snapshots |
-| Retrieval | `RetrievalEvalRunner` | Precision and recall vs labeled chunk sets |
-| End-to-end | `EndToEndEvalRunner` | Correctness, faithfulness, hallucination, latency |
+| Level | Included by `all` | Measures / validates |
+| ----- | ----------------- | -------------------- |
+| `prompt` | Yes | Template rendering correctness and regression snapshots |
+| `retrieval` | Yes | Precision and recall against labeled chunk sets |
+| `e2e` | Yes | Correctness, faithfulness, hallucination, and latency |
+| `agent` | Yes | Planning, tool use, streaming, limits, and recovery |
+| `workflow` | Yes | Graph execution, branching, persistence, retry, and recovery |
+| `plugin` | No | Plugin discovery, contributions, isolation, and workflow integration |
+| `hitl` | No | Approval gates, revisions, decisions, authorization, and resume |
+| `jobs` | No | Queue handlers, scheduling, leases, retries, and dead letters |
+| `security` | No | RBAC, audit, guardrails, quotas, redaction, and adversarial scenarios |
 
 **Run evaluation:**
 
@@ -511,6 +549,10 @@ uv run python -m app.ai.evaluation.cli --level all
 uv run python -m app.ai.evaluation.cli --level prompt
 uv run python -m app.ai.evaluation.cli --level retrieval --dataset tests/data/evaluation/sample.yaml
 uv run python -m app.ai.evaluation.cli --level e2e --use-judge
+uv run python -m app.ai.evaluation.cli --level agent
+uv run python -m app.ai.evaluation.cli --level workflow
+# Explicit opt-in suites:
+uv run python -m app.ai.evaluation.cli --level plugin  # or hitl, jobs, security
 ```
 
 - Sample dataset: `tests/data/evaluation/sample.yaml` (3–5 cases covering all levels).
@@ -648,7 +690,9 @@ pytest tests/ai/jobs/test_jobs_reference_scenarios.py tests/ai/jobs/test_jobs_ad
 
 ### Security & Governance operations (V2 Epic 11)
 
-Run `alembic upgrade head` before first enablement so the RBAC, audit, and usage-quota tables exist.
+Run `alembic upgrade head` before first enablement so migrations `0016_security_rbac`, `0017_security_audit_log`, and `0018_usage_quota_counters` are applied.
+
+The master flag defaults off. RBAC enforcement, audit logging, guardrails, and rate-limit extensions are independently configurable; current defaults are `true`, `true`, `true`, and `false`, respectively. See `.env.example` for all limits, quotas, retention, cache, and rule settings.
 
 **Bootstrap and staged rollout:**
 
@@ -660,6 +704,19 @@ Run `alembic upgrade head` before first enablement so the RBAC, audit, and usage
 
 Review security decisions with `GET /api/security/audit?outcome=denied&since=...`; use each row's `trace_id` to correlate traces and logs. Guardrail rules are configured with stable `id` and `version` fields, default to `flag`, and take effect after restart. Keep blocking rules narrow and run the adjacent-safe-content tests before promotion. Role throughput is adjusted with `SECURITY_ROLE_RATE_LIMIT_MULTIPLIERS`; roles absent from the map use `1.0`.
 
+**Security REST API:**
+
+| Method | Path | Permission | Purpose |
+| ------ | ---- | ---------- | ------- |
+| `GET` | `/api/security/roles` | `rbac:manage` | List system roles and permissions |
+| `GET` | `/api/security/users` | `rbac:manage` | List users and role assignments for the dashboard |
+| `GET` / `POST` | `/api/security/users/{user_id}/roles` | self or `rbac:manage` / `rbac:manage` | Read or assign roles |
+| `DELETE` | `/api/security/users/{user_id}/roles/{role_name}` | `rbac:manage` | Revoke an explicit role |
+| `GET` | `/api/security/audit` and `/api/security/audit/{id}` | `audit:view` | Query or inspect audit events |
+| `GET` | `/api/security/policies` | `policy:view` | Read the redacted policy and limits summary |
+
+All `/api/security/*` routes return `503 feature_disabled` while the master flag is off. The frontend dashboard is available at `/security` when health reports the feature enabled.
+
 **Security eval level** (deterministic and provider-free):
 
 ```bash
@@ -668,6 +725,8 @@ pytest tests/ai/security/test_reference_scenarios.py tests/ai/security/test_adve
 ```
 
 Security cases are **skipped** when `SECURITY_GOVERNANCE_ENABLED=false`. `--level all` does not include them; run `--level security` explicitly. Coverage includes destructive-tool RBAC, HITL stage authorization, Jobs visibility, guardrail block/flag behavior, role-scaled limits, self-elevation denial, concurrent role revocation, secret-shaped arguments, and bucket-identity manipulation.
+
+Phase 12 validation completed with 2,287 backend tests, 88.84% overall coverage, 88.68% coverage on `app/ai/security/`, four independent sub-flag full-suite runs, 15/15 standard eval cases, and 6/6 security eval cases. See the [Epic 11 release summary](../docs/releases/post-mvp-v2-epic11-release-summary.md).
 
 **Prior-epic closures:** Epic 11 supplies tool RBAC (Epic 01), MCP secret indirection and guarded results (Epic 03), workflow/HITL policy-role consistency (Epic 06/09), audit-to-trace correlation (Epic 07), reserved plugin-management RBAC framing (Epic 08), and Jobs visibility/retry authorization (Epic 10). Implementations live under `app/ai/security/` and at the existing tool, HITL, MCP, RAG, Jobs, and middleware enforcement points.
 
@@ -697,6 +756,17 @@ V1 uses **pgvector only** for vector storage — no vector-store factory for alt
 | RAG feature flag | `RAG_ENABLED` | `false` |
 | Tools feature flag | `TOOLS_ENABLED` | `false` |
 | Chat streaming flag | `CHAT_STREAMING_ENABLED` | `true` |
+| Agent runtime (V2 Epic 01) | `AGENT_RUNTIME_ENABLED` | `false` |
+| Advanced RAG (V2 Epic 02) | `ADVANCED_RAG_ENABLED` | `false` |
+| MCP integration (V2 Epic 03) | `MCP_ENABLED` | `false` |
+| Voice interfaces (V2 Epic 04) | `VOICE_ENABLED` | `false` |
+| Memory system (V2 Epic 05) | `MEMORY_ENABLED` | `false` |
+| Workflow engine (V2 Epic 06) | `WORKFLOW_ENGINE_ENABLED` | `false` |
+| Observability (V2 Epic 07) | `OBSERVABILITY_ENABLED` | `false` |
+| Plugin architecture (V2 Epic 08) | `PLUGINS_ENABLED` | `false` |
+| Human-in-the-loop (V2 Epic 09) | `HITL_ENABLED` | `false` |
+| Background jobs (V2 Epic 10) | `BACKGROUND_JOBS_ENABLED` | `false` |
+| Security & Governance (V2 Epic 11) | `SECURITY_GOVERNANCE_ENABLED` | `false` |
 | Default temperature | `DEFAULT_TEMPERATURE` | `0.7` |
 | Default max tokens | `DEFAULT_MAX_TOKENS` | provider default (`None`) |
 | Document upload max | `DOCUMENT_UPLOAD_MAX_BYTES` | `10485760` (10 MB) |
@@ -1056,9 +1126,9 @@ CI and local quality gates:
 make lint && make format-check && make typecheck && make test-cov
 ```
 
-Current suite (2026-07-28): **1076 passed**, **89.52%** coverage on `app/` (~2.5 min).
+Current suite (2026-08-21): **2,287 passed**, **88.84%** coverage on `app/`; `app/ai/security/` coverage is **88.68%**.
 
-Coverage includes health, auth, chat (streaming and non-streaming), unified chat toggles, tools, RAG, persistence, logging, correlation IDs, errors, rate limiting, and provider adapters (OpenAI, Gemini, Groq, Anthropic).
+Coverage includes health, auth, chat (streaming and non-streaming), unified chat toggles, tools, RAG, persistence, logging, correlation IDs, errors, rate limiting, Security & Governance, and provider adapters (OpenAI, Gemini, Groq, Anthropic).
 
 ## Manual Smoke Checklist
 
