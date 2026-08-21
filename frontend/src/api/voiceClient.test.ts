@@ -98,13 +98,17 @@ describe('voiceClient codec', () => {
     vi.stubEnv('VITE_API_BASE_URL', '')
     storeSession('voice-jwt', user)
 
-    const url = buildVoiceWebSocketUrl({ sessionId: 'chat-123', useWebSearch: true })
+    const url = buildVoiceWebSocketUrl({
+      sessionId: 'chat-123',
+      useWebSearch: true,
+      authTicket: 'voice-ticket',
+    })
     const parsed = new URL(url.replace(/^ws:/, 'http:'))
 
     expect(parsed.pathname).toBe('/api/voice/ws')
     expect(parsed.searchParams.get('session_id')).toBe('chat-123')
     expect(parsed.searchParams.get('use_web_search')).toBe('true')
-    expect(parsed.searchParams.get('access_token')).toBe('voice-jwt')
+    expect(parsed.searchParams.get('auth_ticket')).toBe('voice-ticket')
   })
 })
 

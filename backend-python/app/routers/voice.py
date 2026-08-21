@@ -7,7 +7,8 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import HTTPException
 from starlette.websockets import WebSocketState
 
 from app.ai.deps import (
@@ -28,7 +29,12 @@ from app.ai.voice.tts import TtsPipeline
 from app.core.caller import CallerContext, extract_bearer_token
 from app.core.config import Settings, get_settings
 from app.core.logging import bind_context, get_logger
-from app.core.security import InvalidAccessTokenError, decode_access_token
+from app.core.security import (
+    InvalidAccessTokenError,
+    create_voice_auth_ticket,
+    decode_access_token,
+    decode_voice_auth_ticket,
+)
 from app.db.session import get_db_session
 from app.routers.chat import get_chat_service, get_unified_chat_service
 from app.schemas.chat import ChatMessageSchema, ChatRequestSchema, ProviderName
@@ -458,6 +464,13 @@ def _resolve_voice_bearer_token(websocket: WebSocket) -> str | None:
     bearer = extract_bearer_token(websocket.headers.get("authorization"))
     if bearer is not None:
         return bearer
+    auth_ticket = websocket.query_params.get("auth_ticket")
+    if auth_ticket:
+        try:
+            decode_voice_auth_ticket(auth_ticket, settings=get_settings())
+            return auth_ticket
+        except InvalidAccessTokenError:
+            pass
     query_token = websocket.query_params.get("access_token")
     if query_token:
         return query_token
@@ -472,6 +485,32 @@ def create_voice_router(
 ) -> APIRouter:
     """Build the voice WebSocket router (mount only when ``VOICE_ENABLED``)."""
     router = APIRouter()
+
+    @router.get("/api/voice/auth-ticket")
+    async def voice_auth_ticket(
+        request: Request,
+        settings: Settings = Depends(get_settings),
+    ) -> dict[str, object]:
+        """Issue a short-lived auth ticket for browser WebSocket connections."""
+        bearer = extract_bearer_token(request.headers.get("authorization"))
+        if bearer is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Voice sessions require an authenticated user",
+            )
+
+        try:
+            user_id = decode_access_token(bearer, settings=settings)
+        except InvalidAccessTokenError as exc:
+            raise HTTPException(
+                status_code=401,
+                detail="Voice sessions require an authenticated user",
+            ) from exc
+
+        return {
+            "ticket": create_voice_auth_ticket(user_id=user_id, settings=settings),
+            "expires_in": settings.voice_ws_auth_ticket_ttl_seconds,
+        }
 
     @router.websocket("/api/voice/ws")
     async def voice_websocket(
@@ -509,7 +548,10 @@ def create_voice_router(
             return
 
         try:
-            user_id = decode_access_token(bearer, settings=settings)
+            try:
+                user_id = decode_voice_auth_ticket(bearer, settings=settings)
+            except InvalidAccessTokenError:
+                user_id = decode_access_token(bearer, settings=settings)
         except InvalidAccessTokenError:
             await _send_error_and_close(
                 websocket,

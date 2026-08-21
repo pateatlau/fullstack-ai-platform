@@ -77,6 +77,47 @@ def create_access_token(*, user_id: uuid.UUID, settings: Settings) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
+def create_voice_auth_ticket(*, user_id: uuid.UUID, settings: Settings) -> str:
+    """Issue a short-lived signed ticket for browser WebSocket auth.
+
+    Browsers cannot attach ``Authorization`` headers to WebSockets, so the client
+    calls a lightweight ticket endpoint and presents only this short-lived signed
+    payload on the socket URL rather than the raw app JWT.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    expires = now + datetime.timedelta(
+        seconds=settings.voice_ws_auth_ticket_ttl_seconds
+    )
+    payload = {
+        "sub": str(user_id),
+        "type": "voice_ws_auth",
+        "iat": int(now.timestamp()),
+        "exp": int(expires.timestamp()),
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def decode_voice_auth_ticket(token: str, *, settings: Settings) -> uuid.UUID:
+    """Decode a signed voice auth ticket and return the caller's user_id."""
+    try:
+        payload = jwt.decode(
+            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+        )
+    except jwt.PyJWTError as exc:
+        raise InvalidAccessTokenError() from exc
+
+    if payload.get("type") != "voice_ws_auth":
+        raise InvalidAccessTokenError()
+
+    sub = payload.get("sub")
+    if not isinstance(sub, str) or not sub:
+        raise InvalidAccessTokenError()
+    try:
+        return uuid.UUID(sub)
+    except ValueError as exc:
+        raise InvalidAccessTokenError() from exc
+
+
 def decode_access_token(token: str, *, settings: Settings) -> uuid.UUID:
     """Decode a valid app JWT and return the caller's ``user_id``.
 

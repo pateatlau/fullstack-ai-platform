@@ -32,6 +32,13 @@ class RoleStore(Protocol):
 
 
 @runtime_checkable
+class FinalOwnerRoleStore(Protocol):
+    """Optional store capability used to protect the last owner assignment."""
+
+    async def list_all_user_role_assignments(self) -> list[UserRoleAssignment]: ...
+
+
+@runtime_checkable
 class BulkRoleStore(Protocol):
     async def get_user_roles_bulk(
         self, user_ids: list[uuid.UUID]
@@ -292,6 +299,37 @@ class PostgresRoleStore:
                         table.join(role_table, table.c.role_id == role_table.c.id)
                     )
                     .where(table.c.user_id == user_id)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [self._assignment_row_to_model(dict(row)) for row in rows]
+
+    async def list_all_user_role_assignments(self) -> list[UserRoleAssignment]:
+        table = sa.table(
+            "user_role_assignments",
+            sa.column("user_id", sa.types.Uuid()),
+            sa.column("role_id", sa.types.Uuid()),
+            sa.column("created_at", sa.DateTime()),
+        )
+        role_table = sa.table(
+            "roles",
+            sa.column("id", sa.types.Uuid()),
+            sa.column("name", sa.Text()),
+        )
+        rows = (
+            (
+                await self.session.execute(
+                    select(
+                        table.c.user_id,
+                        role_table.c.name.label("role_name"),
+                        table.c.created_at,
+                    )
+                    .select_from(
+                        table.join(role_table, table.c.role_id == role_table.c.id)
+                    )
+                    .order_by(table.c.user_id.asc(), role_table.c.name.asc())
                 )
             )
             .mappings()
