@@ -78,7 +78,7 @@ App runs at `http://localhost:5173` by default.
 - Tablet: collapsible sidebar controlled from the header
 - Mobile: off-canvas sidebar drawer with overlay
 - Thread UI: distinct user/assistant bubble styling, streaming placeholder, retry and stop states
-- Operations: health-gated navigation to Documents, Workflows, Observability, Plugins, Approvals, Jobs, and Security
+- Operations: health-gated navigation to Documents, Memory, Workflows, Observability, Plugins, Approvals, Jobs, and Security
 
 ## V2 Program UI
 

@@ -22,21 +22,21 @@ MVP hardening is complete (2026-07-19): structured logging, correlation IDs, cen
 
 ## V2 Program
 
-V2 Epics 01–11 are complete. Each capability is independently deployable behind a master flag that defaults to `false`, so enabling one epic is an explicit operational decision and the V1 chat path remains available.
+V2 Epics 01–11 are complete. Each capability has an independently controlled master flag that defaults to `false`, so enabling one epic is an explicit operational decision and the V1 chat path remains available. Some capabilities still require prerequisite flags or configuration; for example, Advanced RAG also requires `RAG_ENABLED`, and voice requires provider credentials.
 
-| Epic | Capability | Master flag | Backend surface | Release |
-| ---- | ---------- | ----------- | --------------- | ------- |
-| 01 | Agent Framework | `AGENT_RUNTIME_ENABLED` | `app/ai/agent/`; agent-backed unified chat | [Summary](../docs/releases/post-mvp-v2-epic1-release-summary.md) |
-| 02 | Advanced RAG | `ADVANCED_RAG_ENABLED` | Advanced retrieval pipeline and citations | [Summary](../docs/releases/post-mvp-v2-epic2-release-summary.md) |
-| 03 | MCP Integration | `MCP_ENABLED` | `app/ai/mcp/`; remote discovery/execution through tools | [Summary](../docs/releases/post-mvp-v2-epic3-release-summary.md) |
-| 04 | Voice Interfaces | `VOICE_ENABLED` | `app/ai/voice/`; `/api/voice/ws` | [Summary](../docs/releases/post-mvp-v2-epic4-release-summary.md) |
-| 05 | Memory System | `MEMORY_ENABLED` | `app/ai/memory/`; `/api/memory/*` | [Summary](../docs/releases/post-mvp-v2-epic5-release-summary.md) |
-| 06 | Workflow Engine | `WORKFLOW_ENGINE_ENABLED` | `app/ai/workflow/`; workflow definitions and runs | [Summary](../docs/releases/post-mvp-v2-epic6-release-summary.md) |
-| 07 | Observability & Evaluation | `OBSERVABILITY_ENABLED` | `app/ai/observability/`; OTel, metrics, costs, eval | [Summary](../docs/releases/post-mvp-v2-epic7-release-summary.md) |
-| 08 | Plugin Architecture | `PLUGINS_ENABLED` | `app/ai/plugins/`; trusted in-process extensions | [Summary](../docs/releases/post-mvp-v2-epic8-release-summary.md) |
-| 09 | Human-in-the-Loop | `HITL_ENABLED` | `app/ai/hitl/`; `/api/approvals` and resume | [Summary](../docs/releases/post-mvp-v2-epic9-release-summary.md) |
-| 10 | Background Jobs | `BACKGROUND_JOBS_ENABLED` | `app/ai/jobs/`; queue, worker, scheduler, REST API | [Summary](../docs/releases/post-mvp-v2-epic10-release-summary.md) |
-| 11 | Security & Governance | `SECURITY_GOVERNANCE_ENABLED` | `app/ai/security/`; RBAC, audit, guardrails, quotas | [Summary](../docs/releases/post-mvp-v2-epic11-release-summary.md) |
+| Epic | Capability                 | Master flag                   | Backend surface                                         | Release                                                           |
+| ---- | -------------------------- | ----------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------- |
+| 01   | Agent Framework            | `AGENT_RUNTIME_ENABLED`       | `app/ai/agent/`; agent-backed unified chat              | [Summary](../docs/releases/post-mvp-v2-epic1-release-summary.md)  |
+| 02   | Advanced RAG               | `ADVANCED_RAG_ENABLED`        | Advanced retrieval pipeline and citations               | [Summary](../docs/releases/post-mvp-v2-epic2-release-summary.md)  |
+| 03   | MCP Integration            | `MCP_ENABLED`                 | `app/ai/mcp/`; remote discovery/execution through tools | [Summary](../docs/releases/post-mvp-v2-epic3-release-summary.md)  |
+| 04   | Voice Interfaces           | `VOICE_ENABLED`               | `app/ai/voice/`; `/api/voice/ws`                        | [Summary](../docs/releases/post-mvp-v2-epic4-release-summary.md)  |
+| 05   | Memory System              | `MEMORY_ENABLED`              | `app/ai/memory/`; `/api/memory/*`                       | [Summary](../docs/releases/post-mvp-v2-epic5-release-summary.md)  |
+| 06   | Workflow Engine            | `WORKFLOW_ENGINE_ENABLED`     | `app/ai/workflow/`; workflow definitions and runs       | [Summary](../docs/releases/post-mvp-v2-epic6-release-summary.md)  |
+| 07   | Observability & Evaluation | `OBSERVABILITY_ENABLED`       | `app/ai/observability/`; OTel, metrics, costs, eval     | [Summary](../docs/releases/post-mvp-v2-epic7-release-summary.md)  |
+| 08   | Plugin Architecture        | `PLUGINS_ENABLED`             | `app/ai/plugins/`; trusted in-process extensions        | [Summary](../docs/releases/post-mvp-v2-epic8-release-summary.md)  |
+| 09   | Human-in-the-Loop          | `HITL_ENABLED`                | `app/ai/hitl/`; `/api/approvals` and resume             | [Summary](../docs/releases/post-mvp-v2-epic9-release-summary.md)  |
+| 10   | Background Jobs            | `BACKGROUND_JOBS_ENABLED`     | `app/ai/jobs/`; queue, worker, scheduler, REST API      | [Summary](../docs/releases/post-mvp-v2-epic10-release-summary.md) |
+| 11   | Security & Governance      | `SECURITY_GOVERNANCE_ENABLED` | `app/ai/security/`; RBAC, audit, guardrails, quotas     | [Summary](../docs/releases/post-mvp-v2-epic11-release-summary.md) |
 
 Current validated baseline (2026-08-21): **2,287 tests**, **88.84%** coverage on `app/`, 15/15 standard eval cases, and 6/6 security eval cases.
 
@@ -81,27 +81,27 @@ Routers → Services → AI Framework (`app/ai/`) → Providers → External API
 
 ### Folder responsibilities
 
-| Path | Responsibility |
-| ---- | -------------- |
-| `app/ai/prompts/` | Versioned Jinja2 prompt templates by category (`chat/`, `rag/`, `tools/`, etc.) |
-| `app/ai/tools/` | Tool registry, validation, authorization, execution, normalization |
-| `app/ai/documents/` | Upload parsing and chunking (`parsers/`, `chunkers/`) |
-| `app/ai/embeddings/` | Embedding provider adapters |
-| `app/ai/vectorstores/` | Vector store adapters (V1: pgvector only) |
-| `app/ai/rag/` | Generic RAG framework (retriever, context builder, orchestration) |
-| `app/ai/evaluation/` | Prompt, retrieval, end-to-end, agent, workflow, plugin, HITL, jobs, and security evaluation helpers |
-| `app/ai/agent/` | Reusable agent runtime (planner, executor, streaming, adapters) |
-| `app/ai/mcp/` | MCP (Model Context Protocol) client integration for remote tools (V2 Epic 03) |
-| `app/ai/voice/` | WebSocket voice sessions, STT/TTS adapters, turn management, and barge-in (V2 Epic 04) |
-| `app/ai/memory/` | Durable semantic memory, preference extraction, summaries, retrieval, and lifecycle (V2 Epic 05) |
-| `app/ai/workflow/` | Versioned workflow definitions, execution, state persistence, recovery, and approvals (V2 Epic 06) |
-| `app/ai/observability/` | OpenTelemetry tracing, metrics, cost accounting, dashboards, and regression checks (V2 Epic 07) |
-| `app/ai/plugins/` | Trusted plugin discovery, validation, lifecycle, contributions, and isolation (V2 Epic 08) |
-| `app/ai/hitl/` | Durable approval requests, revisions, decisions, authorization, and resume (V2 Epic 09) |
-| `app/ai/jobs/` | Postgres queue, worker, scheduler, leases, handlers, dead letters, and retries (V2 Epic 10) |
-| `app/ai/security/` | RBAC, audit logging, secret resolution, redaction, guardrails, quotas, and security observability (V2 Epic 11) |
-| `app/ai/interfaces/` | Protocols added incrementally per phase |
-| `app/ai/deps.py` | FastAPI dependency wiring for AI components |
+| Path                    | Responsibility                                                                                                 |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `app/ai/prompts/`       | Versioned Jinja2 prompt templates by category (`chat/`, `rag/`, `tools/`, etc.)                                |
+| `app/ai/tools/`         | Tool registry, validation, authorization, execution, normalization                                             |
+| `app/ai/documents/`     | Upload parsing and chunking (`parsers/`, `chunkers/`)                                                          |
+| `app/ai/embeddings/`    | Embedding provider adapters                                                                                    |
+| `app/ai/vectorstores/`  | Vector store adapters (V1: pgvector only)                                                                      |
+| `app/ai/rag/`           | Generic RAG framework (retriever, context builder, orchestration)                                              |
+| `app/ai/evaluation/`    | Prompt, retrieval, end-to-end, agent, workflow, plugin, HITL, jobs, and security evaluation helpers            |
+| `app/ai/agent/`         | Reusable agent runtime (planner, executor, streaming, adapters)                                                |
+| `app/ai/mcp/`           | MCP (Model Context Protocol) client integration for remote tools (V2 Epic 03)                                  |
+| `app/ai/voice/`         | WebSocket voice sessions, STT/TTS adapters, turn management, and barge-in (V2 Epic 04)                         |
+| `app/ai/memory/`        | Durable semantic memory, preference extraction, summaries, retrieval, and lifecycle (V2 Epic 05)               |
+| `app/ai/workflow/`      | Versioned workflow definitions, execution, state persistence, recovery, and approvals (V2 Epic 06)             |
+| `app/ai/observability/` | OpenTelemetry tracing, metrics, cost accounting, dashboards, and regression checks (V2 Epic 07)                |
+| `app/ai/plugins/`       | Trusted plugin discovery, validation, lifecycle, contributions, and isolation (V2 Epic 08)                     |
+| `app/ai/hitl/`          | Durable approval requests, revisions, decisions, authorization, and resume (V2 Epic 09)                        |
+| `app/ai/jobs/`          | Postgres queue, worker, scheduler, leases, handlers, dead letters, and retries (V2 Epic 10)                    |
+| `app/ai/security/`      | RBAC, audit logging, secret resolution, redaction, guardrails, quotas, and security observability (V2 Epic 11) |
+| `app/ai/interfaces/`    | Protocols added incrementally per phase                                                                        |
+| `app/ai/deps.py`        | FastAPI dependency wiring for AI components                                                                    |
 
 ### Prompt Infrastructure (Phase 2)
 
@@ -129,13 +129,13 @@ Registry → Validation → Authorization → Execution → Normalization
 
 **Phase 4** adds **web search** as the first production tool and wires a **non-streaming tool loop** into chat when `TOOLS_ENABLED=true`.
 
-| Stage | Component | Responsibility |
-| ----- | --------- | -------------- |
-| Registry | `ToolRegistry` | Register, lookup, list tools; expose OpenAI-compatible schemas |
-| Validation | `ToolValidator` | Validate call args against tool JSON Schema |
-| Authorization | `ToolAuthorizer` | Authenticated-only baseline; Epic 11 additionally enforces `tools:execute` and destructive-tool RBAC when enabled |
-| Execution | `ToolExecutor` | Orchestrate lifecycle with timeout, logging, error normalization |
-| Chat orchestration | `ToolChatService` | Composes `ChatService`; capped tool loop for `POST /api/chat` |
+| Stage              | Component         | Responsibility                                                                                                    |
+| ------------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Registry           | `ToolRegistry`    | Register, lookup, list tools; expose OpenAI-compatible schemas                                                    |
+| Validation         | `ToolValidator`   | Validate call args against tool JSON Schema                                                                       |
+| Authorization      | `ToolAuthorizer`  | Authenticated-only baseline; Epic 11 additionally enforces `tools:execute` and destructive-tool RBAC when enabled |
+| Execution          | `ToolExecutor`    | Orchestrate lifecycle with timeout, logging, error normalization                                                  |
+| Chat orchestration | `ToolChatService` | Composes `ChatService`; capped tool loop for `POST /api/chat`                                                     |
 
 Wire via DI:
 
@@ -173,14 +173,14 @@ Request → ToolRegistry.get_handler → McpToolExecutionAdapter → McpClient.c
 
 **Components:**
 
-| Component | Responsibility |
-| --------- | -------------- |
-| `McpClient` | Protocol for MCP RPC operations (connect, disconnect, list_tools, call_tool) |
-| `StdioMcpClient` | Concrete stdio transport client; subprocess lifecycle + JSON-RPC over stdin/stdout |
-| `McpServerRegistry` | Process-wide registry for MCP server connections; register/unregister/get by server name |
-| `McpToolDiscovery` | Map MCP `tools/list` response → `ToolDefinition`; prefix tool names with `{server_name}.{tool_name}` |
-| `McpToolExecutionAdapter` | Adapter implementing `ToolHandler` Protocol; delegates to `McpClient.call_tool` |
-| `McpPermissionPolicy` | Per-server/per-tool allowlist; composes with `ToolAuthorizer` (authenticated-only by default) |
+| Component                 | Responsibility                                                                                       |
+| ------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `McpClient`               | Protocol for MCP RPC operations (connect, disconnect, list_tools, call_tool)                         |
+| `StdioMcpClient`          | Concrete stdio transport client; subprocess lifecycle + JSON-RPC over stdin/stdout                   |
+| `McpServerRegistry`       | Process-wide registry for MCP server connections; register/unregister/get by server name             |
+| `McpToolDiscovery`        | Map MCP `tools/list` response → `ToolDefinition`; prefix tool names with `{server_name}.{tool_name}` |
+| `McpToolExecutionAdapter` | Adapter implementing `ToolHandler` Protocol; delegates to `McpClient.call_tool`                      |
+| `McpPermissionPolicy`     | Per-server/per-tool allowlist; composes with `ToolAuthorizer` (authenticated-only by default)        |
 
 **Configuration:**
 
@@ -236,13 +236,13 @@ MCP_PERMISSION_POLICY='{
 
 **Settings:**
 
-| Setting | Env var | Default |
-| ------- | ------- | ------- |
-| MCP feature flag | `MCP_ENABLED` | `false` |
-| MCP servers config | `MCP_SERVERS` | `[]` (empty list) |
-| MCP permission policy | `MCP_PERMISSION_POLICY` | `{}` (empty dict → all configured servers/tools allowed) |
-| MCP connection timeout | `MCP_CONNECTION_TIMEOUT_SECONDS` | `10` |
-| MCP tool timeout | `MCP_TOOL_TIMEOUT_SECONDS` | `30` |
+| Setting                | Env var                          | Default                                                  |
+| ---------------------- | -------------------------------- | -------------------------------------------------------- |
+| MCP feature flag       | `MCP_ENABLED`                    | `false`                                                  |
+| MCP servers config     | `MCP_SERVERS`                    | `[]` (empty list)                                        |
+| MCP permission policy  | `MCP_PERMISSION_POLICY`          | `{}` (empty dict → all configured servers/tools allowed) |
+| MCP connection timeout | `MCP_CONNECTION_TIMEOUT_SECONDS` | `10`                                                     |
+| MCP tool timeout       | `MCP_TOOL_TIMEOUT_SECONDS`       | `30`                                                     |
 
 **MCP spec version:** Targets MCP specification 2024-11-05 (current stable). Version mismatches are logged as warnings but are non-blocking.
 
@@ -266,12 +266,12 @@ from app.ai.deps import get_mcp_server_registry, get_mcp_permission_policy
 
 #### Multi-provider tool calling (V1.1a)
 
-| Provider  | `supports_streaming` | `supports_tool_calling` | Notes |
-| --------- | -------------------- | ----------------------- | ----- |
-| OpenAI    | yes                  | yes                     | Reference adapter; OpenAI-compatible tool schema |
+| Provider  | `supports_streaming` | `supports_tool_calling` | Notes                                                             |
+| --------- | -------------------- | ----------------------- | ----------------------------------------------------------------- |
+| OpenAI    | yes                  | yes                     | Reference adapter; OpenAI-compatible tool schema                  |
 | Gemini    | yes                  | yes                     | `google-genai` function calling; prompt-based streaming unchanged |
-| Groq      | yes                  | yes                     | OpenAI-compatible chat completions API |
-| Anthropic | yes                  | yes                     | Messages API `tool_use` / `tool_result` blocks |
+| Groq      | yes                  | yes                     | OpenAI-compatible chat completions API                            |
+| Anthropic | yes                  | yes                     | Messages API `tool_use` / `tool_result` blocks                    |
 
 Query capabilities via **`GET /api/health`** — response includes `capabilities.by_provider` with all `ProviderCapabilities` fields (`supports_streaming`, `supports_tool_calling`, and deferred V2 flags defaulting to `false`). Option A (extend health) was chosen over a separate config route to keep the contract minimal for Phase 3 frontend gating.
 
@@ -306,20 +306,20 @@ Persist Conversation
 Return Response (+ optional retrieved_chunks, citations, tools_used)
 ```
 
-| Service | Responsibility |
-| ------- | -------------- |
+| Service              | Responsibility                                                        |
+| -------------------- | --------------------------------------------------------------------- |
 | `UnifiedChatService` | Request orchestration; composes chat, tools, and retrieval components |
-| `ChatService` | Provider resolution, plain completion, persistence hooks |
-| `ToolChatService` | Tool loop only (invoked when `use_web_search=true`) |
-| RAG retrieval stack | Generic retrieval/context only — no chat logic in `app/ai/rag/` |
-| `RAGService` | Standalone `/api/rag/ask` unchanged |
+| `ChatService`        | Provider resolution, plain completion, persistence hooks              |
+| `ToolChatService`    | Tool loop only (invoked when `use_web_search=true`)                   |
+| RAG retrieval stack  | Generic retrieval/context only — no chat logic in `app/ai/rag/`       |
+| `RAGService`         | Standalone `/api/rag/ask` unchanged                                   |
 
 **Request fields** on `POST /api/chat` and `POST /api/chat/stream` (optional, default `false`):
 
-| Field | Behavior when `true` (and flag on, authenticated) |
-| ----- | --------------------------------------------------- |
-| `use_web_search` | Per-request Tavily `web_search` tool loop via `ToolChatService` |
-| `use_documents` | Pre-retrieval from caller's corpus; context merged before LLM call |
+| Field            | Behavior when `true` (and flag on, authenticated)                  |
+| ---------------- | ------------------------------------------------------------------ |
+| `use_web_search` | Per-request Tavily `web_search` tool loop via `ToolChatService`    |
+| `use_documents`  | Pre-retrieval from caller's corpus; context merged before LLM call |
 
 **Routing:** `POST /api/chat` delegates to `UnifiedChatService` when either toggle is `true`; otherwise existing plain `ChatService` path (zero regression when toggles off).
 
@@ -349,22 +349,22 @@ curl -sS -X POST http://localhost:8000/api/chat \
 
 Parse, chunk, and persist uploaded documents for authenticated users only (no HTTP upload route until Phase 11).
 
-| Component | Location | Responsibility |
-| --------- | -------- | -------------- |
-| Parsers | `app/ai/documents/parsers/` | PDF (PyMuPDF), DOCX (python-docx), Markdown/plain text |
-| Router | `select_parser(mime_type, filename)` | Simple if/else routing — not a plugin system |
-| Chunker | `app/ai/documents/chunkers/recursive.py` | Character-based chunks with overlap from settings |
-| Pipeline | `app/ai/documents/pipeline.py` | In-memory parse → chunk orchestration |
-| Service | `app/services/document_service.py` | Auth-only ownership, status lifecycle, DB persistence |
+| Component | Location                                 | Responsibility                                         |
+| --------- | ---------------------------------------- | ------------------------------------------------------ |
+| Parsers   | `app/ai/documents/parsers/`              | PDF (PyMuPDF), DOCX (python-docx), Markdown/plain text |
+| Router    | `select_parser(mime_type, filename)`     | Simple if/else routing — not a plugin system           |
+| Chunker   | `app/ai/documents/chunkers/recursive.py` | Character-based chunks with overlap from settings      |
+| Pipeline  | `app/ai/documents/pipeline.py`           | In-memory parse → chunk orchestration                  |
+| Service   | `app/services/document_service.py`       | Auth-only ownership, status lifecycle, DB persistence  |
 
 Supported file types: **PDF**, **DOCX**, **`.md`**, **`.txt`**.
 
 Settings (service-layer validation in Phase 5; HTTP enforcement in Phase 11):
 
-| Setting | Env var | Default |
-| ------- | ------- | ------- |
-| Chunk size | `CHUNK_SIZE` | `1000` |
-| Chunk overlap | `CHUNK_OVERLAP` | `200` |
+| Setting          | Env var                     | Default            |
+| ---------------- | --------------------------- | ------------------ |
+| Chunk size       | `CHUNK_SIZE`                | `1000`             |
+| Chunk overlap    | `CHUNK_OVERLAP`             | `200`              |
 | Upload max bytes | `DOCUMENT_UPLOAD_MAX_BYTES` | `10485760` (10 MB) |
 
 Phase 5 scope: parse + chunk + persist text chunks only. `DocumentService` keeps this text-only path (DB `embedding` column NULL). Full vector ingest uses `KnowledgeService` (Phase 7).
@@ -373,12 +373,12 @@ Phase 5 scope: parse + chunk + persist text chunks only. `DocumentService` keeps
 
 In-memory embedding generation — vectors attach to pipeline `DocumentChunk` instances after chunking. `DocumentService` does not embed; use `KnowledgeService` for parse → chunk → embed → persist (Phase 7).
 
-| Setting | Env var | Default |
-| ------- | ------- | ------- |
-| Embedding provider | `EMBEDDING_PROVIDER` | `openai` |
-| Embedding model | `EMBEDDING_MODEL` | `text-embedding-3-small` |
-| Embedding dimensions | `EMBEDDING_DIMENSIONS` | `1536` |
-| Embedding batch size | `EMBEDDING_BATCH_SIZE` | `100` |
+| Setting              | Env var                | Default                  |
+| -------------------- | ---------------------- | ------------------------ |
+| Embedding provider   | `EMBEDDING_PROVIDER`   | `openai`                 |
+| Embedding model      | `EMBEDDING_MODEL`      | `text-embedding-3-small` |
+| Embedding dimensions | `EMBEDDING_DIMENSIONS` | `1536`                   |
+| Embedding batch size | `EMBEDDING_BATCH_SIZE` | `100`                    |
 
 - `IngestionPipeline.embed()` and `parse_chunk_embed()` require an injected `EmbeddingProvider`; `DocumentService` continues parse + chunk only (DB `embedding` column stays NULL).
 - Structured logs emit `embedding_latency_ms` and batch/text counts — never chunk content or vector values.
@@ -397,11 +397,11 @@ Alembic migration `0003_pgvector_embeddings`:
 
 If migration fails on an old volume from `postgres:16-alpine`, reset with `docker compose --profile python down -v` then bring Postgres back up before `make db-migrate`.
 
-| Component | Scope (Phase 7) |
-| --------- | ---------------- |
-| `PgVectorStore` | `upsert`, `similarity_search` (cosine, `user_id`-scoped), `delete_by_document` |
-| `KnowledgeService` | `ingest_document`, `delete_document` only — **no search** (retrieval is Phase 8 `Retriever`) |
-| `IngestionPipeline.persist` | Writes embeddings after in-memory embed |
+| Component                   | Scope (Phase 7)                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------- |
+| `PgVectorStore`             | `upsert`, `similarity_search` (cosine, `user_id`-scoped), `delete_by_document`               |
+| `KnowledgeService`          | `ingest_document`, `delete_document` only — **no search** (retrieval is Phase 8 `Retriever`) |
+| `IngestionPipeline.persist` | Writes embeddings after in-memory embed                                                      |
 
 Structured logs: `vector_search_latency_ms` (result count only), `documents_ingested_total`, `documents_failed_total`. Never log chunk text or embedding values.
 
@@ -424,18 +424,18 @@ from app.ai.deps import (
 
 Domain-agnostic retrieval-side components in `app/ai/rag/` — no LLM orchestration in this phase (`RAGService` is Phase 9).
 
-| Component | Responsibility |
-| --------- | -------------- |
-| `Retriever` | Embed query → `VectorStore.similarity_search` → ranked `ScoredChunk` list (`user_id`-scoped) |
+| Component        | Responsibility                                                                                            |
+| ---------------- | --------------------------------------------------------------------------------------------------------- |
+| `Retriever`      | Embed query → `VectorStore.similarity_search` → ranked `ScoredChunk` list (`user_id`-scoped)              |
 | `ContextBuilder` | Numbered context blocks with `rag_context_max_chars` budget; drops lowest-scoring chunks when over budget |
-| `PromptBuilder` | Render configurable RAG template via `PromptManager` (default `rag/answer/v1`) |
+| `PromptBuilder`  | Render configurable RAG template via `PromptManager` (default `rag/answer/v1`)                            |
 
 Settings:
 
-| Setting | Env var | Default |
-| ------- | ------- | ------- |
-| Top-K retrieval | `RAG_TOP_K` | `5` |
-| Context char budget | `RAG_CONTEXT_MAX_CHARS` | `8000` |
+| Setting              | Env var                       | Default         |
+| -------------------- | ----------------------------- | --------------- |
+| Top-K retrieval      | `RAG_TOP_K`                   | `5`             |
+| Context char budget  | `RAG_CONTEXT_MAX_CHARS`       | `8000`          |
 | Default RAG template | `RAG_DEFAULT_PROMPT_TEMPLATE` | `rag/answer/v1` |
 
 Structured logs emit `retrieval_latency_ms` and result **count** only — never question text, chunk content, or embedding values.
@@ -462,20 +462,20 @@ from app.ai.deps import (
 [flag on]  Question → AdvancedRetrievalPipeline → PromptBuilder → LLM → RAGResponse
 ```
 
-| Behavior | Detail |
-| -------- | ------ |
-| Empty corpus | Short-circuits without an LLM call; returns a generic framework message |
-| Response | Answer text + `retrieved_chunks` metadata; additive `citations` when `ADVANCED_RAG_ENABLED` |
-| Metrics | `rag_requests_total`, `rag_request_duration_ms`, retrieval/included counts, top score, latency breakdown, `advanced_rag_enabled` / `citation_count` |
-| Streaming | Standalone `/api/rag/ask` streaming **deferred**; chat document grounding streams via `UnifiedChatService` (V1.1) |
+| Behavior     | Detail                                                                                                                                              |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Empty corpus | Short-circuits without an LLM call; returns a generic framework message                                                                             |
+| Response     | Answer text + `retrieved_chunks` metadata; additive `citations` when `ADVANCED_RAG_ENABLED`                                                         |
+| Metrics      | `rag_requests_total`, `rag_request_duration_ms`, retrieval/included counts, top score, latency breakdown, `advanced_rag_enabled` / `citation_count` |
+| Streaming    | Standalone `/api/rag/ask` streaming **deferred**; chat document grounding streams via `UnifiedChatService` (V1.1)                                   |
 
 **Extension philosophy** — domain-specific assistants compose the framework; they do not modify `app/ai/rag/`:
 
-| Future consumer | Corpus | Prompt template | Application service |
-| --------------- | ------ | --------------- | ------------------- |
-| Customer Care RAG | Customer documents | `rag/customer_care.v1.j2` | `CustomerCareRAGService` in `app/services/` |
-| Enterprise Knowledge Assistant | Internal docs | Enterprise prompt template | App service with org scoping |
-| Legal / HR / Community Service | Domain corpus | Domain prompt template | Matching app service |
+| Future consumer                | Corpus             | Prompt template            | Application service                         |
+| ------------------------------ | ------------------ | -------------------------- | ------------------------------------------- |
+| Customer Care RAG              | Customer documents | `rag/customer_care.v1.j2`  | `CustomerCareRAGService` in `app/services/` |
+| Enterprise Knowledge Assistant | Internal docs      | Enterprise prompt template | App service with org scoping                |
+| Legal / HR / Community Service | Domain corpus      | Domain prompt template     | Matching app service                        |
 
 Business knowledge lives in **documents** and **prompt templates**; framework code stays domain-agnostic. HTTP exposure is documented in **Knowledge and RAG API (Phase 11)** below.
 
@@ -483,13 +483,13 @@ Business knowledge lives in **documents** and **prompt templates**; framework co
 
 Auth-only REST endpoints for document management and generic RAG. Guests receive **401** on all routes below.
 
-| Method | Path | Auth | Purpose |
-| ------ | ---- | ---- | ------- |
-| POST | `/api/documents/upload` | Bearer JWT | Upload and synchronously ingest a document |
-| GET | `/api/documents` | Bearer JWT | List caller's documents (newest first) |
-| GET | `/api/documents/{id}` | Bearer JWT | Document metadata and status |
-| DELETE | `/api/documents/{id}` | Bearer JWT | Delete document and vectors |
-| POST | `/api/rag/ask` | Bearer JWT | Generic RAG question → answer |
+| Method | Path                    | Auth       | Purpose                                    |
+| ------ | ----------------------- | ---------- | ------------------------------------------ |
+| POST   | `/api/documents/upload` | Bearer JWT | Upload and synchronously ingest a document |
+| GET    | `/api/documents`        | Bearer JWT | List caller's documents (newest first)     |
+| GET    | `/api/documents/{id}`   | Bearer JWT | Document metadata and status               |
+| DELETE | `/api/documents/{id}`   | Bearer JWT | Delete document and vectors                |
+| POST   | `/api/rag/ask`          | Bearer JWT | Generic RAG question → answer              |
 
 **Upload limits:** `DOCUMENT_UPLOAD_MAX_BYTES` (default 10 MB) applies only to `/api/documents/upload`. Chat and auth routes still use the global `REQUEST_BODY_LIMIT_BYTES` (16 KB).
 
@@ -528,17 +528,17 @@ curl -X POST http://localhost:8000/api/rag/ask \
 
 The CLI provides five standard levels plus four explicit opt-in V2 extension suites. `--level all` runs the standard set; plugin, HITL, jobs, and security remain explicit so their feature flags and infrastructure requirements cannot surprise routine CI.
 
-| Level | Included by `all` | Measures / validates |
-| ----- | ----------------- | -------------------- |
-| `prompt` | Yes | Template rendering correctness and regression snapshots |
-| `retrieval` | Yes | Precision and recall against labeled chunk sets |
-| `e2e` | Yes | Correctness, faithfulness, hallucination, and latency |
-| `agent` | Yes | Planning, tool use, streaming, limits, and recovery |
-| `workflow` | Yes | Graph execution, branching, persistence, retry, and recovery |
-| `plugin` | No | Plugin discovery, contributions, isolation, and workflow integration |
-| `hitl` | No | Approval gates, revisions, decisions, authorization, and resume |
-| `jobs` | No | Queue handlers, scheduling, leases, retries, and dead letters |
-| `security` | No | RBAC, audit, guardrails, quotas, redaction, and adversarial scenarios |
+| Level       | Included by `all` | Measures / validates                                                  |
+| ----------- | ----------------- | --------------------------------------------------------------------- |
+| `prompt`    | Yes               | Template rendering correctness and regression snapshots               |
+| `retrieval` | Yes               | Precision and recall against labeled chunk sets                       |
+| `e2e`       | Yes               | Correctness, faithfulness, hallucination, and latency                 |
+| `agent`     | Yes               | Planning, tool use, streaming, limits, and recovery                   |
+| `workflow`  | Yes               | Graph execution, branching, persistence, retry, and recovery          |
+| `plugin`    | No                | Plugin discovery, contributions, isolation, and workflow integration  |
+| `hitl`      | No                | Approval gates, revisions, decisions, authorization, and resume       |
+| `jobs`      | No                | Queue handlers, scheduling, leases, retries, and dead letters         |
+| `security`  | No                | RBAC, audit, guardrails, quotas, redaction, and adversarial scenarios |
 
 **Run evaluation:**
 
@@ -559,6 +559,7 @@ uv run python -m app.ai.evaluation.cli --level plugin  # or hitl, jobs, security
 - JSON baseline report (for Phase 13 comparison): `.eval/eval-report.json` by default (`--output` to override).
 
 **Phase 13 / V1 validation:** Re-run `make eval` before release and compare against the committed baseline in `.eval/eval-report.json`. Phase 13 verified 5/5 cases pass (prompt=2, retrieval=2, e2e=1) with mean retrieval latency 57.5 ms and e2e latency 49 ms on the sample dataset.
+
 - **Offline mode:** fake embeddings + mocked LLM — no live API key required for prompt-level runs; retrieval/e2e need local Postgres with pgvector.
 - Optional `--use-judge` enables LLM-as-judge faithfulness/hallucination via `app/ai/prompts/evaluation/judge.v1.j2`.
 
@@ -568,10 +569,10 @@ uv run python -m app.ai.evaluation.cli --level plugin  # or hitl, jobs, security
 
 Git-tracked reference plugins under `plugins/` demonstrate tool, prompt, and workflow node contributions:
 
-| Plugin | ID | Contributions |
-| ------ | -- | ------------- |
-| `echo-tool/` | `com.example.echo` | Tool `com.example.echo.ping`, prompt templates under `plugin/com.example.echo` |
-| `echo-workflow-node/` | `com.example.echo.workflow` | Workflow node type `echo` |
+| Plugin                | ID                          | Contributions                                                                  |
+| --------------------- | --------------------------- | ------------------------------------------------------------------------------ |
+| `echo-tool/`          | `com.example.echo`          | Tool `com.example.echo.ping`, prompt templates under `plugin/com.example.echo` |
+| `echo-workflow-node/` | `com.example.echo.workflow` | Workflow node type `echo`                                                      |
 
 **Enable reference plugins (operator steps):**
 
@@ -618,17 +619,17 @@ HITL cases in `tests/data/evaluation/sample.yaml` are **skipped** (not failed) w
 
 **Adversarial coverage (Phase 8):**
 
-| Scenario | Covered by |
-| -------- | ---------- |
-| Duplicate / concurrent decisions (`409`) | `tests/ai/hitl/test_adversarial_scenarios.py` |
-| Invalid edited arguments (`422`, no mutation) | same |
-| Stale / terminal approval ids (`404`/`409`) | same |
-| Plugin / MCP pause → decide → resume | same |
-| Multiple approvals per conversation | same |
-| Nested parallel workflow approvals | same |
-| Streaming disconnect before decide | same |
-| Expired approvals (timeout enforcement) | `tests/ai/jobs/test_jobs_reference_scenarios.py`, `tests/ai/jobs/test_jobs_adversarial_scenarios.py` |
-| Server restart mid-resume | `tests/ai/jobs/handlers/test_hitl_orphan_sweep.py`, `tests/ai/jobs/test_jobs_reference_scenarios.py` |
+| Scenario                                      | Covered by                                                                                           |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Duplicate / concurrent decisions (`409`)      | `tests/ai/hitl/test_adversarial_scenarios.py`                                                        |
+| Invalid edited arguments (`422`, no mutation) | same                                                                                                 |
+| Stale / terminal approval ids (`404`/`409`)   | same                                                                                                 |
+| Plugin / MCP pause → decide → resume          | same                                                                                                 |
+| Multiple approvals per conversation           | same                                                                                                 |
+| Nested parallel workflow approvals            | same                                                                                                 |
+| Streaming disconnect before decide            | same                                                                                                 |
+| Expired approvals (timeout enforcement)       | `tests/ai/jobs/test_jobs_reference_scenarios.py`, `tests/ai/jobs/test_jobs_adversarial_scenarios.py` |
+| Server restart mid-resume                     | `tests/ai/jobs/handlers/test_hitl_orphan_sweep.py`, `tests/ai/jobs/test_jobs_reference_scenarios.py` |
 
 **Verify reference plugins:**
 
@@ -661,14 +662,14 @@ Jobs cases in `tests/data/evaluation/sample.yaml` are **skipped** (not failed) w
 
 **Adversarial coverage (Phase 9):**
 
-| Scenario | Covered by |
-| -------- | ---------- |
-| Retry exhaustion → dead-letter → manual retry succeeds | `tests/ai/jobs/test_jobs_adversarial_scenarios.py` |
-| Worker crash mid-job → lease reclaim → no double-execution | same |
-| Concurrent claim race (N workers) | same |
-| Scheduler double-tick idempotency | same |
-| Expiry sweep vs. live decide race (CAS) | same |
-| Orphan sweep grace period | same |
+| Scenario                                                   | Covered by                                         |
+| ---------------------------------------------------------- | -------------------------------------------------- |
+| Retry exhaustion → dead-letter → manual retry succeeds     | `tests/ai/jobs/test_jobs_adversarial_scenarios.py` |
+| Worker crash mid-job → lease reclaim → no double-execution | same                                               |
+| Concurrent claim race (N workers)                          | same                                               |
+| Scheduler double-tick idempotency                          | same                                               |
+| Expiry sweep vs. live decide race (CAS)                    | same                                               |
+| Orphan sweep grace period                                  | same                                               |
 
 **Dead-letter operational runbook:**
 
@@ -706,14 +707,14 @@ Review security decisions with `GET /api/security/audit?outcome=denied&since=...
 
 **Security REST API:**
 
-| Method | Path | Permission | Purpose |
-| ------ | ---- | ---------- | ------- |
-| `GET` | `/api/security/roles` | `rbac:manage` | List system roles and permissions |
-| `GET` | `/api/security/users` | `rbac:manage` | List users and role assignments for the dashboard |
-| `GET` / `POST` | `/api/security/users/{user_id}/roles` | self or `rbac:manage` / `rbac:manage` | Read or assign roles |
-| `DELETE` | `/api/security/users/{user_id}/roles/{role_name}` | `rbac:manage` | Revoke an explicit role |
-| `GET` | `/api/security/audit` and `/api/security/audit/{id}` | `audit:view` | Query or inspect audit events |
-| `GET` | `/api/security/policies` | `policy:view` | Read the redacted policy and limits summary |
+| Method         | Path                                                 | Permission                            | Purpose                                           |
+| -------------- | ---------------------------------------------------- | ------------------------------------- | ------------------------------------------------- |
+| `GET`          | `/api/security/roles`                                | `rbac:manage`                         | List system roles and permissions                 |
+| `GET`          | `/api/security/users`                                | `rbac:manage`                         | List users and role assignments for the dashboard |
+| `GET` / `POST` | `/api/security/users/{user_id}/roles`                | self or `rbac:manage` / `rbac:manage` | Read or assign roles                              |
+| `DELETE`       | `/api/security/users/{user_id}/roles/{role_name}`    | `rbac:manage`                         | Revoke an explicit role                           |
+| `GET`          | `/api/security/audit` and `/api/security/audit/{id}` | `audit:view`                          | Query or inspect audit events                     |
+| `GET`          | `/api/security/policies`                             | `policy:view`                         | Read the redacted policy and limits summary       |
 
 All `/api/security/*` routes return `503 feature_disabled` while the master flag is off. The frontend dashboard is available at `/security` when health reports the feature enabled.
 
@@ -732,47 +733,47 @@ Phase 12 validation completed with 2,287 backend tests, 88.84% overall coverage,
 
 ### Module boundaries
 
-| Layer | Location | Responsibility |
-| ----- | -------- | -------------- |
-| LLM adapters | `app/providers/` | Existing `LLMProvider` protocol and OpenAI/Gemini/Groq/Anthropic adapters |
-| Embeddings | `app/ai/embeddings/` | Embedding provider protocol + concrete adapters |
-| Vector store | `app/ai/vectorstores/` | Vector store protocol + `PgVectorStore` (V1) |
-| AI framework | `app/ai/` | Domain-agnostic orchestration consumed by `app/services/` |
+| Layer        | Location               | Responsibility                                                            |
+| ------------ | ---------------------- | ------------------------------------------------------------------------- |
+| LLM adapters | `app/providers/`       | Existing `LLMProvider` protocol and OpenAI/Gemini/Groq/Anthropic adapters |
+| Embeddings   | `app/ai/embeddings/`   | Embedding provider protocol + concrete adapters                           |
+| Vector store | `app/ai/vectorstores/` | Vector store protocol + `PgVectorStore` (V1)                              |
+| AI framework | `app/ai/`              | Domain-agnostic orchestration consumed by `app/services/`                 |
 
 V1 uses **pgvector only** for vector storage — no vector-store factory for alternate backends.
 
 ### Configuration matrix (env vars)
 
-| Setting | Env var | Default |
-| ------- | ------- | ------- |
-| Embedding provider | `EMBEDDING_PROVIDER` | `openai` |
-| Embedding model | `EMBEDDING_MODEL` | `text-embedding-3-small` |
-| Embedding dimensions | `EMBEDDING_DIMENSIONS` | `1536` |
-| Chunk size | `CHUNK_SIZE` | `1000` |
-| Chunk overlap | `CHUNK_OVERLAP` | `200` |
-| RAG top-K | `RAG_TOP_K` | `5` |
-| RAG default template | `RAG_DEFAULT_PROMPT_TEMPLATE` | `rag/answer/v1` |
-| RAG context budget | `RAG_CONTEXT_MAX_CHARS` | `8000` |
-| RAG feature flag | `RAG_ENABLED` | `false` |
-| Tools feature flag | `TOOLS_ENABLED` | `false` |
-| Chat streaming flag | `CHAT_STREAMING_ENABLED` | `true` |
-| Agent runtime (V2 Epic 01) | `AGENT_RUNTIME_ENABLED` | `false` |
-| Advanced RAG (V2 Epic 02) | `ADVANCED_RAG_ENABLED` | `false` |
-| MCP integration (V2 Epic 03) | `MCP_ENABLED` | `false` |
-| Voice interfaces (V2 Epic 04) | `VOICE_ENABLED` | `false` |
-| Memory system (V2 Epic 05) | `MEMORY_ENABLED` | `false` |
-| Workflow engine (V2 Epic 06) | `WORKFLOW_ENGINE_ENABLED` | `false` |
-| Observability (V2 Epic 07) | `OBSERVABILITY_ENABLED` | `false` |
-| Plugin architecture (V2 Epic 08) | `PLUGINS_ENABLED` | `false` |
-| Human-in-the-loop (V2 Epic 09) | `HITL_ENABLED` | `false` |
-| Background jobs (V2 Epic 10) | `BACKGROUND_JOBS_ENABLED` | `false` |
-| Security & Governance (V2 Epic 11) | `SECURITY_GOVERNANCE_ENABLED` | `false` |
-| Default temperature | `DEFAULT_TEMPERATURE` | `0.7` |
-| Default max tokens | `DEFAULT_MAX_TOKENS` | provider default (`None`) |
-| Document upload max | `DOCUMENT_UPLOAD_MAX_BYTES` | `10485760` (10 MB) |
-| Web search provider | `WEB_SEARCH_PROVIDER` | `tavily` |
-| Web search API key | `WEB_SEARCH_API_KEY` | unset |
-| Web search max results | `WEB_SEARCH_MAX_RESULTS` | `5` |
+| Setting                            | Env var                       | Default                   |
+| ---------------------------------- | ----------------------------- | ------------------------- |
+| Embedding provider                 | `EMBEDDING_PROVIDER`          | `openai`                  |
+| Embedding model                    | `EMBEDDING_MODEL`             | `text-embedding-3-small`  |
+| Embedding dimensions               | `EMBEDDING_DIMENSIONS`        | `1536`                    |
+| Chunk size                         | `CHUNK_SIZE`                  | `1000`                    |
+| Chunk overlap                      | `CHUNK_OVERLAP`               | `200`                     |
+| RAG top-K                          | `RAG_TOP_K`                   | `5`                       |
+| RAG default template               | `RAG_DEFAULT_PROMPT_TEMPLATE` | `rag/answer/v1`           |
+| RAG context budget                 | `RAG_CONTEXT_MAX_CHARS`       | `8000`                    |
+| RAG feature flag                   | `RAG_ENABLED`                 | `false`                   |
+| Tools feature flag                 | `TOOLS_ENABLED`               | `false`                   |
+| Chat streaming flag                | `CHAT_STREAMING_ENABLED`      | `true`                    |
+| Agent runtime (V2 Epic 01)         | `AGENT_RUNTIME_ENABLED`       | `false`                   |
+| Advanced RAG (V2 Epic 02)          | `ADVANCED_RAG_ENABLED`        | `false`                   |
+| MCP integration (V2 Epic 03)       | `MCP_ENABLED`                 | `false`                   |
+| Voice interfaces (V2 Epic 04)      | `VOICE_ENABLED`               | `false`                   |
+| Memory system (V2 Epic 05)         | `MEMORY_ENABLED`              | `false`                   |
+| Workflow engine (V2 Epic 06)       | `WORKFLOW_ENGINE_ENABLED`     | `false`                   |
+| Observability (V2 Epic 07)         | `OBSERVABILITY_ENABLED`       | `false`                   |
+| Plugin architecture (V2 Epic 08)   | `PLUGINS_ENABLED`             | `false`                   |
+| Human-in-the-loop (V2 Epic 09)     | `HITL_ENABLED`                | `false`                   |
+| Background jobs (V2 Epic 10)       | `BACKGROUND_JOBS_ENABLED`     | `false`                   |
+| Security & Governance (V2 Epic 11) | `SECURITY_GOVERNANCE_ENABLED` | `false`                   |
+| Default temperature                | `DEFAULT_TEMPERATURE`         | `0.7`                     |
+| Default max tokens                 | `DEFAULT_MAX_TOKENS`          | provider default (`None`) |
+| Document upload max                | `DOCUMENT_UPLOAD_MAX_BYTES`   | `10485760` (10 MB)        |
+| Web search provider                | `WEB_SEARCH_PROVIDER`         | `tavily`                  |
+| Web search API key                 | `WEB_SEARCH_API_KEY`          | unset                     |
+| Web search max results             | `WEB_SEARCH_MAX_RESULTS`      | `5`                       |
 
 LLM provider selection remains `LLM_PROVIDER` in `app/core/config.py`.
 
@@ -791,31 +792,31 @@ LLM provider selection remains `LLM_PROVIDER` in `app/core/config.py`.
 
 Documented for later phases — implemented in `app/core/retry.py` and reused from web search (Phase 4+):
 
-| Setting | Value |
-| ------- | ----- |
-| Retry on | HTTP 429, HTTP 503, network timeout, temporary connection failures |
-| Max attempts | 3 |
-| Backoff | Exponential (e.g. 1s → 2s → 4s with jitter) |
-| Do not retry | HTTP 4xx (except 429), validation errors, auth failures |
+| Setting      | Value                                                              |
+| ------------ | ------------------------------------------------------------------ |
+| Retry on     | HTTP 429, HTTP 503, network timeout, temporary connection failures |
+| Max attempts | 3                                                                  |
+| Backoff      | Exponential (e.g. 1s → 2s → 4s with jitter)                        |
+| Do not retry | HTTP 4xx (except 429), validation errors, auth failures            |
 
 ### Observability metrics (V1 + V1.1)
 
 Structured log counters and fields:
 
-| Metric | Purpose |
-| ------ | ------- |
-| `rag_requests_total` | RAG ask volume |
-| `rag_request_duration_ms` | End-to-end RAG latency |
-| `retrieval_latency_ms` | Retriever stage latency (standalone RAG + unified streaming) |
-| `time_to_first_delta_ms` | Unified streaming UX latency (V1.1) |
-| `stream_tool_rounds` | Tool iterations per unified streaming request (V1.1) |
-| `embedding_latency_ms` | Embedding batch latency |
-| `vector_search_latency_ms` | pgvector query latency |
-| `tool_calls_total` | Tool invocations by name |
-| `tool_errors_total` | Tool failures by name |
-| `search_latency_ms` | Web search provider latency |
-| `documents_ingested_total` | Successful ingestions |
-| `documents_failed_total` | Failed ingestions |
+| Metric                     | Purpose                                                      |
+| -------------------------- | ------------------------------------------------------------ |
+| `rag_requests_total`       | RAG ask volume                                               |
+| `rag_request_duration_ms`  | End-to-end RAG latency                                       |
+| `retrieval_latency_ms`     | Retriever stage latency (standalone RAG + unified streaming) |
+| `time_to_first_delta_ms`   | Unified streaming UX latency (V1.1)                          |
+| `stream_tool_rounds`       | Tool iterations per unified streaming request (V1.1)         |
+| `embedding_latency_ms`     | Embedding batch latency                                      |
+| `vector_search_latency_ms` | pgvector query latency                                       |
+| `tool_calls_total`         | Tool invocations by name                                     |
+| `tool_errors_total`        | Tool failures by name                                        |
+| `search_latency_ms`        | Web search provider latency                                  |
+| `documents_ingested_total` | Successful ingestions                                        |
+| `documents_failed_total`   | Failed ingestions                                            |
 
 ## Setup
 
@@ -971,11 +972,11 @@ Additional behavior tied to these settings:
 
 Requires `CHAT_PERSISTENCE_ENABLED=true`. Session list/create/resume unchanged from V1.1; V1.1.1 adds delete and auto-title behavior.
 
-| Method | Path | Auth | Purpose |
-| ------ | ---- | ---- | ------- |
-| GET | `/api/chat/sessions` | Bearer JWT | List caller's sessions (newest activity first) |
-| POST | `/api/chat/sessions` | Bearer JWT | Create empty session (`title: null` until first chat turn) |
-| GET | `/api/chat/sessions/{id}` | Bearer JWT | Session metadata + messages |
+| Method | Path                      | Auth       | Purpose                                                                                 |
+| ------ | ------------------------- | ---------- | --------------------------------------------------------------------------------------- |
+| GET    | `/api/chat/sessions`      | Bearer JWT | List caller's sessions (newest activity first)                                          |
+| POST   | `/api/chat/sessions`      | Bearer JWT | Create empty session (`title: null` until first chat turn)                              |
+| GET    | `/api/chat/sessions/{id}` | Bearer JWT | Session metadata + messages                                                             |
 | DELETE | `/api/chat/sessions/{id}` | Bearer JWT | Delete session and cascade children (**204**); **403** for guests; **404** if not owned |
 
 **Delete cascade:** DB foreign keys remove `chat_messages`, `session_summaries`, and `usage_events` for the session. Frontend confirms deletion and selects the most recent remaining session, or creates a new empty session when the list is empty.
@@ -986,14 +987,14 @@ Requires `CHAT_PERSISTENCE_ENABLED=true`. Session list/create/resume unchanged f
 
 Config-driven caps for public deployments. See [docs/ops/public-demo-protection.md](../docs/ops/public-demo-protection.md) for the operator checklist (rate limits, token caps, upload quotas, provider spending alerts).
 
-| Setting | Dev default | Public demo note |
-| ------- | ----------- | ---------------- |
-| `GUEST_MAX_OUTPUT_TOKENS` | `4096` | Lower to `512` (or use `DEMO_MODE_STRICT=true`) |
-| `AUTHENTICATED_DAILY_UPLOAD_QUOTA` | unset (unlimited) | e.g. `20` uploads per UTC day |
-| `GUEST_DAILY_UPLOAD_QUOTA` | `5` | Future-proof if guest upload is enabled |
-| `DEMO_MODE_STRICT` | `false` | `true` tightens guest tokens and upload quota defaults |
-| `RATE_LIMIT_ANONYMOUS_PER_MINUTE` | `30` | Review for production demo profile |
-| `RATE_LIMIT_AUTHENTICATED_PER_MINUTE` | `120` | Review for production demo profile |
+| Setting                               | Dev default       | Public demo note                                       |
+| ------------------------------------- | ----------------- | ------------------------------------------------------ |
+| `GUEST_MAX_OUTPUT_TOKENS`             | `4096`            | Lower to `512` (or use `DEMO_MODE_STRICT=true`)        |
+| `AUTHENTICATED_DAILY_UPLOAD_QUOTA`    | unset (unlimited) | e.g. `20` uploads per UTC day                          |
+| `GUEST_DAILY_UPLOAD_QUOTA`            | `5`               | Future-proof if guest upload is enabled                |
+| `DEMO_MODE_STRICT`                    | `false`           | `true` tightens guest tokens and upload quota defaults |
+| `RATE_LIMIT_ANONYMOUS_PER_MINUTE`     | `30`              | Review for production demo profile                     |
+| `RATE_LIMIT_AUTHENTICATED_PER_MINUTE` | `120`             | Review for production demo profile                     |
 
 Guests remain denied `use_web_search` and `use_documents` (V1.1 policy unchanged).
 
@@ -1001,15 +1002,15 @@ Guests remain denied `use_web_search` and `use_documents` (V1.1 policy unchanged
 
 Frames are Server-Sent Events: `event: <name>` plus a JSON `data:` line. Additive events — older clients may ignore unknown types.
 
-| Event                | When emitted | Payload fields |
-| -------------------- | ------------ | -------------- |
-| `retrieval_complete` | After document retrieval, before tool loop or final stream | `type`, `id`, `chunk_count`, `timestamp` |
-| `start`              | Final answer streaming begins | `type`, `id`, `session_id?`, `timestamp` |
-| `delta`              | Token/chunk of assistant text | `type`, `id`, `content`, `timestamp` |
-| `end`                | Stream complete | `type`, `id`, `finish_reason`, `timestamp` |
-| `error`              | Provider, retrieval, or server failure after stream started | `type`, `id`, `code`, `message`, `timestamp` |
-| `tool_start`         | Before a tool handler runs (streaming web search) | `type`, `id`, `tool_name`, `call_id`, `timestamp` |
-| `tool_end`           | After tool handler completes (no result body) | `type`, `id`, `tool_name`, `call_id`, `success`, `timestamp` |
+| Event                | When emitted                                                | Payload fields                                               |
+| -------------------- | ----------------------------------------------------------- | ------------------------------------------------------------ |
+| `retrieval_complete` | After document retrieval, before tool loop or final stream  | `type`, `id`, `chunk_count`, `timestamp`                     |
+| `start`              | Final answer streaming begins                               | `type`, `id`, `session_id?`, `timestamp`                     |
+| `delta`              | Token/chunk of assistant text                               | `type`, `id`, `content`, `timestamp`                         |
+| `end`                | Stream complete                                             | `type`, `id`, `finish_reason`, `timestamp`                   |
+| `error`              | Provider, retrieval, or server failure after stream started | `type`, `id`, `code`, `message`, `timestamp`                 |
+| `tool_start`         | Before a tool handler runs (streaming web search)           | `type`, `id`, `tool_name`, `call_id`, `timestamp`            |
+| `tool_end`           | After tool handler completes (no result body)               | `type`, `id`, `tool_name`, `call_id`, `success`, `timestamp` |
 
 Example (document retrieval then streamed answer):
 

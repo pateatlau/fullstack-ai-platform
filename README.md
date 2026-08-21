@@ -36,19 +36,19 @@ Production-grade full-stack AI platform with chat, RAG, agents, MCP, voice, memo
 
 ## V2 Program
 
-| Epic | Capability | Master flag | Primary API / UI | Released |
-| ---- | ---------- | ----------- | ---------------- | -------- |
-| 01 | [Agent Framework](docs/releases/post-mvp-v2-epic1-release-summary.md) | `AGENT_RUNTIME_ENABLED` | Agent-backed web-search chat on `/` | 2026-07-24 |
-| 02 | [Advanced RAG](docs/releases/post-mvp-v2-epic2-release-summary.md) | `ADVANCED_RAG_ENABLED` | Hybrid retrieval and citations on `/` and `/documents` | 2026-07-25 |
-| 03 | [MCP Integration](docs/releases/post-mvp-v2-epic3-release-summary.md) | `MCP_ENABLED` | Remote tools through the existing agent/tool pipeline | 2026-07-28 |
-| 04 | [Voice Interfaces](docs/releases/post-mvp-v2-epic4-release-summary.md) | `VOICE_ENABLED` | `/api/voice/ws` and voice controls on `/` | 2026-07-29 |
-| 05 | [Memory System](docs/releases/post-mvp-v2-epic5-release-summary.md) | `MEMORY_ENABLED` | `/api/memory/*` and `/settings/memory` | 2026-08-04 |
-| 06 | [Workflow Engine](docs/releases/post-mvp-v2-epic6-release-summary.md) | `WORKFLOW_ENGINE_ENABLED` | `/api/workflows*` and `/workflows` | 2026-08-05 |
-| 07 | [Observability & Evaluation](docs/releases/post-mvp-v2-epic7-release-summary.md) | `OBSERVABILITY_ENABLED` | `/api/observability/usage`, `/metrics`, and `/observability` | 2026-08-10 |
-| 08 | [Plugin Architecture](docs/releases/post-mvp-v2-epic8-release-summary.md) | `PLUGINS_ENABLED` | `/api/plugins` and `/plugins` | 2026-08-11 |
-| 09 | [Human-in-the-Loop](docs/releases/post-mvp-v2-epic9-release-summary.md) | `HITL_ENABLED` | `/api/approvals` and `/approvals` | 2026-08-12 |
-| 10 | [Background Jobs](docs/releases/post-mvp-v2-epic10-release-summary.md) | `BACKGROUND_JOBS_ENABLED` | `/api/jobs` and `/jobs` | 2026-08-13 |
-| 11 | [Security & Governance](docs/releases/post-mvp-v2-epic11-release-summary.md) | `SECURITY_GOVERNANCE_ENABLED` | `/api/security/*` and `/security` | 2026-08-21 |
+| Epic | Capability                                                                       | Master flag                   | Primary API / UI                                             | Released   |
+| ---- | -------------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------------------ | ---------- |
+| 01   | [Agent Framework](docs/releases/post-mvp-v2-epic1-release-summary.md)            | `AGENT_RUNTIME_ENABLED`       | Agent-backed web-search chat on `/`                          | 2026-07-24 |
+| 02   | [Advanced RAG](docs/releases/post-mvp-v2-epic2-release-summary.md)               | `ADVANCED_RAG_ENABLED`        | Hybrid retrieval and citations on `/` and `/documents`       | 2026-07-25 |
+| 03   | [MCP Integration](docs/releases/post-mvp-v2-epic3-release-summary.md)            | `MCP_ENABLED`                 | Remote tools through the existing agent/tool pipeline        | 2026-07-28 |
+| 04   | [Voice Interfaces](docs/releases/post-mvp-v2-epic4-release-summary.md)           | `VOICE_ENABLED`               | `/api/voice/ws` and voice controls on `/`                    | 2026-07-29 |
+| 05   | [Memory System](docs/releases/post-mvp-v2-epic5-release-summary.md)              | `MEMORY_ENABLED`              | `/api/memory/*` and `/settings/memory`                       | 2026-08-04 |
+| 06   | [Workflow Engine](docs/releases/post-mvp-v2-epic6-release-summary.md)            | `WORKFLOW_ENGINE_ENABLED`     | `/api/workflows*` and `/workflows`                           | 2026-08-05 |
+| 07   | [Observability & Evaluation](docs/releases/post-mvp-v2-epic7-release-summary.md) | `OBSERVABILITY_ENABLED`       | `/api/observability/usage`, `/metrics`, and `/observability` | 2026-08-10 |
+| 08   | [Plugin Architecture](docs/releases/post-mvp-v2-epic8-release-summary.md)        | `PLUGINS_ENABLED`             | `/api/plugins` and `/plugins`                                | 2026-08-11 |
+| 09   | [Human-in-the-Loop](docs/releases/post-mvp-v2-epic9-release-summary.md)          | `HITL_ENABLED`                | `/api/approvals` and `/approvals`                            | 2026-08-12 |
+| 10   | [Background Jobs](docs/releases/post-mvp-v2-epic10-release-summary.md)           | `BACKGROUND_JOBS_ENABLED`     | `/api/jobs` and `/jobs`                                      | 2026-08-13 |
+| 11   | [Security & Governance](docs/releases/post-mvp-v2-epic11-release-summary.md)     | `SECURITY_GOVERNANCE_ENABLED` | `/api/security/*` and `/security`                            | 2026-08-21 |
 
 Each release summary records migrations, rollout/rollback behavior, validation evidence, and known limitations. See [CHANGELOG.md](CHANGELOG.md) for the cumulative release history.
 
@@ -119,6 +119,7 @@ flowchart TB
   UCS --> Tools
   UCS --> LLM
   UCS --> Memory
+  OpsAPI --> Memory
   OpsAPI --> Workflow
   OpsAPI --> Extensions
   OpsAPI --> Governance
@@ -187,23 +188,23 @@ Open the app, send a chat message, and confirm `GET /api/health` returns `status
 
 Full flags matrix, API routes, and eval CLI: [backend-python/README.md](backend-python/README.md).
 
-| Flag                     | Default | Enables                                                              |
-| ------------------------ | ------- | -------------------------------------------------------------------- |
-| `RAG_ENABLED`            | `false` | Document upload grounding and `/api/rag/ask`                         |
-| `TOOLS_ENABLED`          | `false` | Web search tool execution in chat                                    |
-| `ADVANCED_RAG_ENABLED`   | `false` | Hybrid retrieval, rerank, citations (requires `RAG_ENABLED`)         |
-| `AGENT_RUNTIME_ENABLED`  | `false` | Agent-based web-search orchestration                                 |
-| `MCP_ENABLED`            | `false` | Remote MCP tool discovery and execution                              |
-| `VOICE_ENABLED`          | `false` | WebSocket voice mode (requires `OPENAI_API_KEY` for default STT/TTS) |
-| `MEMORY_ENABLED`         | `false` | Semantic memories, preferences, summaries, and `/settings/memory`    |
-| `WORKFLOW_ENGINE_ENABLED` | `false` | Durable workflow definitions, runs, approvals, and `/workflows`     |
-| `OBSERVABILITY_ENABLED`  | `false` | OTel tracing, metrics, cost accounting, eval extensions, dashboard   |
-| `PLUGINS_ENABLED`        | `false` | Trusted in-process tool, prompt, workflow-node, and MCP plugins       |
-| `HITL_ENABLED`           | `false` | Agent/workflow approval gates, inbox, revisions, and resume           |
-| `BACKGROUND_JOBS_ENABLED` | `false` | Queue, worker, scheduler, maintenance handlers, and `/jobs`          |
+| Flag                          | Default | Enables                                                              |
+| ----------------------------- | ------- | -------------------------------------------------------------------- |
+| `RAG_ENABLED`                 | `false` | Document upload grounding and `/api/rag/ask`                         |
+| `TOOLS_ENABLED`               | `false` | Web search tool execution in chat                                    |
+| `ADVANCED_RAG_ENABLED`        | `false` | Hybrid retrieval, rerank, citations (requires `RAG_ENABLED`)         |
+| `AGENT_RUNTIME_ENABLED`       | `false` | Agent-based web-search orchestration                                 |
+| `MCP_ENABLED`                 | `false` | Remote MCP tool discovery and execution                              |
+| `VOICE_ENABLED`               | `false` | WebSocket voice mode (requires `OPENAI_API_KEY` for default STT/TTS) |
+| `MEMORY_ENABLED`              | `false` | Semantic memories, preferences, summaries, and `/settings/memory`    |
+| `WORKFLOW_ENGINE_ENABLED`     | `false` | Durable workflow definitions, runs, approvals, and `/workflows`      |
+| `OBSERVABILITY_ENABLED`       | `false` | OTel tracing, metrics, cost accounting, eval extensions, dashboard   |
+| `PLUGINS_ENABLED`             | `false` | Trusted in-process tool, prompt, workflow-node, and MCP plugins      |
+| `HITL_ENABLED`                | `false` | Agent/workflow approval gates, inbox, revisions, and resume          |
+| `BACKGROUND_JOBS_ENABLED`     | `false` | Queue, worker, scheduler, maintenance handlers, and `/jobs`          |
 | `SECURITY_GOVERNANCE_ENABLED` | `false` | RBAC, audit, guardrails, role-aware limits, and `/security` admin UI |
-| `CHAT_STREAMING_ENABLED` | `true`  | SSE streaming via `POST /api/chat/stream`                            |
-| `DEMO_MODE_STRICT`       | `false` | Tighter guest token and upload caps for public demos                 |
+| `CHAT_STREAMING_ENABLED`      | `true`  | SSE streaming via `POST /api/chat/stream`                            |
+| `DEMO_MODE_STRICT`            | `false` | Tighter guest token and upload caps for public demos                 |
 
 Set `LLM_PROVIDER` to `openai`, `gemini`, `groq`, or `anthropic` and the matching API key in `backend-python/.env`.
 
