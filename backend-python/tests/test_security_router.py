@@ -142,6 +142,69 @@ async def test_security_roles_endpoint_requires_rbac_manage(
 
 
 @pytest.mark.anyio
+async def test_security_users_endpoint_lists_assignments_for_managers(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SECURITY_GOVERNANCE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    member_id = await _make_user(db_session)
+    admin_id = await _make_user(db_session)
+    await _grant_role(db_session, admin_id, "admin")
+    await _grant_role(db_session, member_id, "operator")
+
+    app = _build_test_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        forbidden_response = await client.get(
+            "/api/security/users",
+            headers=_auth_headers(member_id),
+        )
+        response = await client.get(
+            "/api/security/users?limit=100&offset=0",
+            headers=_auth_headers(admin_id),
+        )
+        page_responses = [response]
+        for offset in range(100, response.json()["total"], 100):
+            page_responses.append(
+                await client.get(
+                    f"/api/security/users?limit=100&offset={offset}",
+                    headers=_auth_headers(admin_id),
+                )
+            )
+
+    assert forbidden_response.status_code == 403
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["limit"] == 100
+    assert payload["offset"] == 0
+    assert payload["total"] >= 2
+    assert all(page_response.status_code == 200 for page_response in page_responses)
+    users = {
+        item["id"]: item
+        for page_response in page_responses
+        for item in page_response.json()["items"]
+    }
+    assert users[str(member_id)]["roles"] == [
+        {
+            "user_id": str(member_id),
+            "role_name": "member",
+            "implicit": True,
+            "created_at": None,
+        },
+        {
+            "user_id": str(member_id),
+            "role_name": "operator",
+            "implicit": False,
+            "created_at": None,
+        },
+    ]
+
+
+@pytest.mark.anyio
 async def test_security_mutation_remains_protected_when_rbac_enforcement_is_off(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -343,6 +406,13 @@ async def test_security_policy_summary_and_audit_routes_work_for_operator(
     assert policy_response.status_code == 200
     payload = policy_response.json()
     assert payload["security_governance_enabled"] is True
+    assert payload["guardrail_rule_count"] >= 5
+    assert payload["rate_limits_per_minute"] == {
+        "tool_invocation": 60,
+        "mcp_invocation": 60,
+        "background_job_enqueue": 30,
+        "approval_decision": 30,
+    }
     assert "regex" not in str(payload)
     assert audit_response.status_code == 200
     assert isinstance(audit_response.json().get("items", []), list)

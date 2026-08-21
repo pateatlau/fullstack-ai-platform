@@ -42,6 +42,20 @@ class SecurityUserRoleResponse(BaseModel):
     created_at: datetime | None = None
 
 
+class SecurityUserSummaryResponse(BaseModel):
+    id: uuid.UUID
+    email: str | None = None
+    display_name: str | None = None
+    roles: list[SecurityUserRoleResponse] = Field(default_factory=list)
+
+
+class SecurityUserListResponse(BaseModel):
+    items: list[SecurityUserSummaryResponse] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 50
+    offset: int = 0
+
+
 class SecurityAuditEntryResponse(BaseModel):
     id: uuid.UUID
     occurred_at: datetime
@@ -81,6 +95,7 @@ class SecurityPolicySummaryResponse(BaseModel):
     audit_retention_days: int
     security_guardrails_mode: str
     feature_flags: dict[str, bool] = Field(default_factory=dict)
+    rate_limits_per_minute: dict[str, int] = Field(default_factory=dict)
 
 
 class SecurityRoleAssignmentRequest(BaseModel):

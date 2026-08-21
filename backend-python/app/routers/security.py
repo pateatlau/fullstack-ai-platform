@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.deps import get_audit_logger, get_rbac_service
@@ -13,6 +13,7 @@ from app.ai.security.audit.logger import AuditLogger
 from app.ai.security.audit.models import AuditOutcome
 from app.ai.security.errors import SecurityErrorCode
 from app.ai.security.exceptions import RoleNotFoundError
+from app.ai.security.guardrails.rules import DEFAULT_GUARDRAIL_RULES
 from app.ai.security.rbac.permissions import DEFAULT_ROLE_PERMISSIONS, PermissionKey
 from app.ai.security.rbac.service import RbacService
 from app.core.caller import CallerContext, require_authenticated_caller
@@ -26,7 +27,9 @@ from app.schemas.security import (
     SecurityPolicySummaryResponse,
     SecurityRoleAssignmentRequest,
     SecurityRoleResponse,
+    SecurityUserListResponse,
     SecurityUserRoleResponse,
+    SecurityUserSummaryResponse,
 )
 
 router = APIRouter()
@@ -144,6 +147,68 @@ async def list_security_roles(
         )
         responses.append(response)
     return responses
+
+
+@router.get("/api/security/users", response_model=SecurityUserListResponse)
+async def list_security_users(
+    caller: CallerContext = Depends(require_authenticated_caller),
+    settings: Settings = Depends(get_settings),
+    rbac_service: RbacService = Depends(get_rbac_service),
+    session: AsyncSession = Depends(get_db_session),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> SecurityUserListResponse:
+    _require_security_enabled(settings)
+    await _require_permission(
+        settings=settings,
+        rbac_service=rbac_service,
+        caller=caller,
+        permission=PermissionKey.RBAC_MANAGE,
+    )
+
+    total = await session.scalar(select(func.count()).select_from(User)) or 0
+    users = list(
+        await session.scalars(
+            select(User)
+            .order_by(User.display_name.asc().nulls_last(), User.id.asc())
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    roles_by_user = await rbac_service.get_user_roles_bulk([user.id for user in users])
+    responses: list[SecurityUserSummaryResponse] = []
+    for user in users:
+        explicit_roles = roles_by_user.get(user.id, [])
+        roles = [
+            SecurityUserRoleResponse(
+                user_id=user.id,
+                role_name="member",
+                implicit=True,
+            )
+        ]
+        roles.extend(
+            SecurityUserRoleResponse(
+                user_id=user.id,
+                role_name=role_name,
+                implicit=False,
+            )
+            for role_name in explicit_roles
+            if role_name != "member"
+        )
+        responses.append(
+            SecurityUserSummaryResponse(
+                id=user.id,
+                email=user.email,
+                display_name=user.display_name,
+                roles=roles,
+            )
+        )
+    return SecurityUserListResponse(
+        items=responses,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get(
@@ -378,7 +443,9 @@ async def policy_summary(
         guardrails_enabled=settings.security_guardrails_enabled,
         role_count=len(roles),
         permission_count=len(perm_registry),
-        guardrail_rule_count=len(settings.security_guardrail_rules),
+        guardrail_rule_count=(
+            len(DEFAULT_GUARDRAIL_RULES) + len(settings.security_guardrail_rules)
+        ),
         audit_retention_days=settings.security_audit_retention_days,
         security_guardrails_mode=settings.security_guardrails_mode,
         feature_flags={
@@ -386,5 +453,11 @@ async def policy_summary(
             "security_rbac_enforcement_enabled": settings.security_rbac_enforcement_enabled,
             "security_audit_log_enabled": settings.security_audit_log_enabled,
             "security_guardrails_enabled": settings.security_guardrails_enabled,
+        },
+        rate_limits_per_minute={
+            "tool_invocation": settings.tool_invocation_per_minute,
+            "mcp_invocation": settings.mcp_invocation_per_minute,
+            "background_job_enqueue": settings.background_jobs_enqueue_per_minute,
+            "approval_decision": settings.approval_decision_per_minute,
         },
     )

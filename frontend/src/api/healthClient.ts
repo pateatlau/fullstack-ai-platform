@@ -15,6 +15,7 @@ export interface HealthResponse {
   hitl_enabled: boolean
   hitl_pending_approvals_count?: number
   background_jobs_enabled?: boolean
+  security_governance_enabled?: boolean
   background_jobs_pending_count?: number
   background_jobs_dead_letter_count?: number
   capabilities?: {

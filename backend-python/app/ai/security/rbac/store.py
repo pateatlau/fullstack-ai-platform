@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import sqlalchemy as sa
 from sqlalchemy import select
@@ -29,6 +29,13 @@ class RoleStore(Protocol):
     async def get_user_role_assignments(
         self, user_id: uuid.UUID
     ) -> list[UserRoleAssignment]: ...
+
+
+@runtime_checkable
+class BulkRoleStore(Protocol):
+    async def get_user_roles_bulk(
+        self, user_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[str]]: ...
 
 
 class PostgresRoleStore:
@@ -164,6 +171,36 @@ class PostgresRoleStore:
             .all()
         )
         return sorted({str(name) for name in rows})
+
+    async def get_user_roles_bulk(
+        self, user_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[str]]:
+        if not user_ids:
+            return {}
+        assignments = sa.table(
+            "user_role_assignments",
+            sa.column("user_id", sa.types.Uuid()),
+            sa.column("role_id", sa.types.Uuid()),
+        )
+        roles = sa.table(
+            "roles",
+            sa.column("id", sa.types.Uuid()),
+            sa.column("name", sa.Text()),
+        )
+        rows = (
+            await self.session.execute(
+                select(assignments.c.user_id, roles.c.name)
+                .select_from(
+                    assignments.join(roles, assignments.c.role_id == roles.c.id)
+                )
+                .where(assignments.c.user_id.in_(user_ids))
+                .order_by(roles.c.name.asc())
+            )
+        ).all()
+        result: dict[uuid.UUID, list[str]] = {user_id: [] for user_id in user_ids}
+        for user_id, role_name in rows:
+            result[self._coerce_uuid(user_id)].append(str(role_name))
+        return result
 
     async def assign_role(self, user_id: uuid.UUID, role_name: str) -> bool:
         normalized = role_name.lower()
