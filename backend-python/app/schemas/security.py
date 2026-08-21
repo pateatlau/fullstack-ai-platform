@@ -49,6 +49,13 @@ class SecurityUserSummaryResponse(BaseModel):
     roles: list[SecurityUserRoleResponse] = Field(default_factory=list)
 
 
+class SecurityUserListResponse(BaseModel):
+    items: list[SecurityUserSummaryResponse] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 50
+    offset: int = 0
+
+
 class SecurityAuditEntryResponse(BaseModel):
     id: uuid.UUID
     occurred_at: datetime

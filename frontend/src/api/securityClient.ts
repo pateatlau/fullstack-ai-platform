@@ -6,7 +6,7 @@ import type {
   SecurityRole,
   SecurityRoleName,
   SecurityUserRole,
-  SecurityUserSummary,
+  SecurityUserListResponse,
 } from '../types/security'
 import { API_BASE_URL, buildAuthHeaders, captureRequestId, parseErrorEnvelope } from './request'
 
@@ -40,9 +40,15 @@ export async function fetchSecurityRoles(): Promise<SecurityRole[]> {
   )
 }
 
-export async function fetchSecurityUsers(): Promise<SecurityUserSummary[]> {
+export async function fetchSecurityUsers(
+  params: { limit?: number; offset?: number } = {},
+): Promise<SecurityUserListResponse> {
+  const search = new URLSearchParams()
+  if (params.limit !== undefined) search.set('limit', String(params.limit))
+  if (params.offset !== undefined) search.set('offset', String(params.offset))
+  const query = search.toString()
   return requestSecurity(
-    '/api/security/users',
+    `/api/security/users${query ? `?${query}` : ''}`,
     { method: 'GET', headers: buildAuthHeaders({ json: false }) },
     'Failed to load users and roles.',
   )
@@ -73,7 +79,7 @@ export async function assignUserRole(
 
 export async function revokeUserRole(
   userId: string,
-  roleName: SecurityRoleName,
+  roleName: string,
 ): Promise<{ user_id: string; role_name: string }> {
   return requestSecurity(
     `/api/security/users/${encodeURIComponent(userId)}/roles/${encodeURIComponent(roleName)}`,

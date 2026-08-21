@@ -31,6 +31,7 @@ function response(body: unknown, status = 200): Response {
 
 afterEach(() => {
   window.localStorage.clear()
+  vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
@@ -39,21 +40,21 @@ it('calls all role endpoints with auth and encoded paths', async () => {
   const fetchMock = vi
     .fn()
     .mockResolvedValueOnce(response([]))
-    .mockResolvedValueOnce(response([]))
+    .mockResolvedValueOnce(response({ items: [], total: 0, limit: 25, offset: 25 }))
     .mockResolvedValueOnce(response([]))
     .mockResolvedValueOnce(response({ user_id: 'user/2', role_name: 'operator', implicit: false }))
     .mockResolvedValueOnce(response({ user_id: 'user/2', role_name: 'operator' }))
   vi.stubGlobal('fetch', fetchMock)
 
   await fetchSecurityRoles()
-  await fetchSecurityUsers()
+  await fetchSecurityUsers({ limit: 25, offset: 25 })
   await fetchUserRoles('user/2')
   await assignUserRole('user/2', 'operator')
   await revokeUserRole('user/2', 'operator')
 
   expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
     ['/api/security/roles', 'GET'],
-    ['/api/security/users', 'GET'],
+    ['/api/security/users?limit=25&offset=25', 'GET'],
     ['/api/security/users/user%2F2/roles', 'GET'],
     ['/api/security/users/user%2F2/roles', 'POST'],
     ['/api/security/users/user%2F2/roles/operator', 'DELETE'],

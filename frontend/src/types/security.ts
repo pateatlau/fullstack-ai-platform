@@ -10,7 +10,7 @@ export interface SecurityRole {
 
 export interface SecurityUserRole {
   user_id: string
-  role_name: SecurityRoleName
+  role_name: string
   implicit: boolean
   created_at: string | null
 }
@@ -20,6 +20,13 @@ export interface SecurityUserSummary {
   email: string | null
   display_name: string | null
   roles: SecurityUserRole[]
+}
+
+export interface SecurityUserListResponse {
+  items: SecurityUserSummary[]
+  total: number
+  limit: number
+  offset: number
 }
 
 export interface SecurityAuditEntry {

@@ -18,7 +18,7 @@ from app.ai.security.rbac.permissions import (
     PERMISSION_REGISTRY,
     PermissionKey,
 )
-from app.ai.security.rbac.store import RoleStore
+from app.ai.security.rbac.store import BulkRoleStore, RoleStore
 
 if TYPE_CHECKING:
     from app.ai.security.audit.logger import AuditLogger
@@ -196,6 +196,17 @@ class RbacService:
         if self.store is None:
             raise RuntimeError("RbacService requires a RoleStore")
         return await self.store.get_user_roles(user_id)
+
+    async def get_user_roles_bulk(
+        self, user_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[str]]:
+        if self.store is None:
+            raise RuntimeError("RbacService requires a RoleStore")
+        if isinstance(self.store, BulkRoleStore):
+            return await self.store.get_user_roles_bulk(user_ids)
+        return {
+            user_id: await self.store.get_user_roles(user_id) for user_id in user_ids
+        }
 
     async def get_highest_priority_role(self, user_id: uuid.UUID) -> str:
         roles = set(await self.get_user_roles(user_id))

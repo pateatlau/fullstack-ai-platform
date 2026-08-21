@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type KeyboardEvent } from 'react'
 import {
   assignUserRole,
   fetchSecurityAudit,
@@ -26,8 +26,10 @@ import type {
 import { formatSecurityLabel, formatSecurityTimestamp } from '../types/security'
 
 type SecurityTab = 'roles' | 'audit' | 'policies'
+const SECURITY_TABS: SecurityTab[] = ['roles', 'audit', 'policies']
 const ASSIGNABLE_ROLES: SecurityRoleName[] = ['operator', 'admin', 'owner']
 const AUDIT_PAGE_SIZE = 25
+const USER_PAGE_SIZE = 25
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof SecurityApiError ? error.message : fallback
@@ -98,14 +100,21 @@ function RolesTab({ onGlobalError }: TabProps) {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [pending, setPending] = useState<string | null>(null)
+  const [selectedRoles, setSelectedRoles] = useState<Record<string, SecurityRoleName>>({})
+  const [total, setTotal] = useState(0)
+  const [offset, setOffset] = useState(0)
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [roleRows, userRows] = await Promise.all([fetchSecurityRoles(), fetchSecurityUsers()])
+      const [roleRows, userPage] = await Promise.all([
+        fetchSecurityRoles(),
+        fetchSecurityUsers({ limit: USER_PAGE_SIZE, offset }),
+      ])
       setRoles(roleRows)
-      setUsers(userRows)
+      setUsers(userPage.items)
+      setTotal(userPage.total)
       setForbidden(false)
     } catch (apiError) {
       if (!onGlobalError(apiError)) {
@@ -118,15 +127,16 @@ function RolesTab({ onGlobalError }: TabProps) {
     } finally {
       setLoading(false)
     }
-  }, [onGlobalError])
+  }, [offset, onGlobalError])
 
   useEffect(() => {
     let cancelled = false
-    void Promise.all([fetchSecurityRoles(), fetchSecurityUsers()])
-      .then(([roleRows, userRows]) => {
+    void Promise.all([fetchSecurityRoles(), fetchSecurityUsers({ limit: USER_PAGE_SIZE, offset })])
+      .then(([roleRows, userPage]) => {
         if (!cancelled) {
           setRoles(roleRows)
-          setUsers(userRows)
+          setUsers(userPage.items)
+          setTotal(userPage.total)
           setForbidden(false)
         }
       })
@@ -144,11 +154,11 @@ function RolesTab({ onGlobalError }: TabProps) {
     return () => {
       cancelled = true
     }
-  }, [onGlobalError])
+  }, [offset, onGlobalError])
 
   const mutateRole = async (
     user: SecurityUserSummary,
-    roleName: SecurityRoleName,
+    roleName: string,
     action: 'assign' | 'revoke',
   ) => {
     const key = `${user.id}:${roleName}`
@@ -156,7 +166,7 @@ function RolesTab({ onGlobalError }: TabProps) {
     setError(null)
     setSuccess(null)
     try {
-      if (action === 'assign') await assignUserRole(user.id, roleName)
+      if (action === 'assign') await assignUserRole(user.id, roleName as SecurityRoleName)
       else await revokeUserRole(user.id, roleName)
       setSuccess(
         `${formatSecurityLabel(roleName)} role ${action === 'assign' ? 'assigned' : 'revoked'}.`,
@@ -225,7 +235,8 @@ function RolesTab({ onGlobalError }: TabProps) {
               <tbody className="divide-y divide-shell-800/10">
                 {users.map((user) => {
                   const heldRoles = new Set(user.roles.map((role) => role.role_name))
-                  const nextRole = ASSIGNABLE_ROLES.find((role) => !heldRoles.has(role))
+                  const availableRoles = ASSIGNABLE_ROLES.filter((role) => !heldRoles.has(role))
+                  const selectedRole = selectedRoles[user.id] ?? availableRoles[0]
                   return (
                     <tr key={user.id}>
                       <td className="px-2 py-3 align-top">
@@ -249,15 +260,38 @@ function RolesTab({ onGlobalError }: TabProps) {
                       </td>
                       <td className="px-2 py-3 align-top">
                         <div className="flex flex-wrap gap-2">
-                          {nextRole ? (
-                            <button
-                              type="button"
-                              disabled={pending !== null}
-                              onClick={() => void mutateRole(user, nextRole, 'assign')}
-                              className="rounded-lg border border-brand-500/40 bg-brand-500/10 px-2 py-1 text-xs font-semibold text-brand-800 disabled:opacity-50"
-                            >
-                              Assign {formatSecurityLabel(nextRole)}
-                            </button>
+                          {selectedRole ? (
+                            <>
+                              <label className="sr-only" htmlFor={`role-${user.id}`}>
+                                Role to assign to {user.display_name || user.email || user.id}
+                              </label>
+                              <select
+                                id={`role-${user.id}`}
+                                value={selectedRole}
+                                disabled={pending !== null}
+                                onChange={(event) =>
+                                  setSelectedRoles((current) => ({
+                                    ...current,
+                                    [user.id]: event.target.value as SecurityRoleName,
+                                  }))
+                                }
+                                className="rounded-lg border border-shell-800/20 bg-white px-2 py-1 text-xs"
+                              >
+                                {availableRoles.map((role) => (
+                                  <option key={role} value={role}>
+                                    {formatSecurityLabel(role)}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                disabled={pending !== null}
+                                onClick={() => void mutateRole(user, selectedRole, 'assign')}
+                                className="rounded-lg border border-brand-500/40 bg-brand-500/10 px-2 py-1 text-xs font-semibold text-brand-800 disabled:opacity-50"
+                              >
+                                Assign role
+                              </button>
+                            </>
                           ) : null}
                           {user.roles
                             .filter((role) => !role.implicit)
@@ -281,6 +315,29 @@ function RolesTab({ onGlobalError }: TabProps) {
             </table>
           </div>
         )}
+        <div className="mt-4 flex items-center justify-between text-sm text-shell-700">
+          <span>
+            {total} user{total === 1 ? '' : 's'}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - USER_PAGE_SIZE))}
+              className="rounded-lg border px-2 py-1 disabled:opacity-40"
+            >
+              Previous users
+            </button>
+            <button
+              type="button"
+              disabled={offset + USER_PAGE_SIZE >= total}
+              onClick={() => setOffset(offset + USER_PAGE_SIZE)}
+              className="rounded-lg border px-2 py-1 disabled:opacity-40"
+            >
+              Next users
+            </button>
+          </div>
+        </div>
       </section>
     </div>
   )
@@ -311,9 +368,15 @@ function AuditTab({ onGlobalError }: TabProps) {
 
   useEffect(() => {
     let cancelled = false
-    void fetchSecurityAudit({ ...filters, limit: AUDIT_PAGE_SIZE, offset })
+    void (async () => {
+      await Promise.resolve()
+      if (cancelled) return
+      setLoading(true)
+      setError(null)
+      return await fetchSecurityAudit({ ...filters, limit: AUDIT_PAGE_SIZE, offset })
+    })()
       .then((result) => {
-        if (!cancelled) {
+        if (!cancelled && result) {
           setEvents(result.items)
           setTotal(result.total)
           setForbidden(false)
@@ -573,6 +636,22 @@ function SecurityContent() {
   const { handleInvalidAccessToken } = useAuthContext()
   const [activeTab, setActiveTab] = useState<SecurityTab>('roles')
   const [disabled, setDisabled] = useState(false)
+  const activateTabFromKeyboard = (event: KeyboardEvent<HTMLButtonElement>, tab: SecurityTab) => {
+    const currentIndex = SECURITY_TABS.indexOf(tab)
+    let nextIndex: number | undefined
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % SECURITY_TABS.length
+    if (event.key === 'ArrowLeft') {
+      nextIndex = (currentIndex - 1 + SECURITY_TABS.length) % SECURITY_TABS.length
+    }
+    if (event.key === 'Home') nextIndex = 0
+    if (event.key === 'End') nextIndex = SECURITY_TABS.length - 1
+    if (nextIndex === undefined) return
+
+    event.preventDefault()
+    const nextTab = SECURITY_TABS[nextIndex]
+    setActiveTab(nextTab)
+    document.getElementById(`security-tab-${nextTab}`)?.focus()
+  }
   const handleGlobalError = useCallback(
     (error: unknown): boolean => {
       if (isInvalidToken(error)) {
@@ -594,13 +673,17 @@ function SecurityContent() {
       <section className="border-b border-shell-800/15 pb-4">
         <h2 className="text-lg font-semibold text-shell-950">Security dashboard</h2>
         <div className="mt-4 flex gap-2" role="tablist" aria-label="Security dashboard views">
-          {(['roles', 'audit', 'policies'] as SecurityTab[]).map((tab) => (
+          {SECURITY_TABS.map((tab) => (
             <button
               key={tab}
+              id={`security-tab-${tab}`}
               type="button"
               role="tab"
               aria-selected={activeTab === tab}
+              aria-controls={`security-panel-${tab}`}
+              tabIndex={activeTab === tab ? 0 : -1}
               onClick={() => setActiveTab(tab)}
+              onKeyDown={(event) => activateTabFromKeyboard(event, tab)}
               className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${activeTab === tab ? 'border-brand-500 bg-brand-500/10 text-brand-800' : 'border-shell-800/20 bg-white text-shell-800'}`}
             >
               {tab === 'audit' ? 'Audit Log' : formatSecurityLabel(tab)}
@@ -608,7 +691,12 @@ function SecurityContent() {
           ))}
         </div>
       </section>
-      <section className="rounded-chat border border-shell-800/15 bg-white p-4 shadow-chat-card sm:p-5">
+      <section
+        id={`security-panel-${activeTab}`}
+        role="tabpanel"
+        aria-labelledby={`security-tab-${activeTab}`}
+        className="rounded-chat border border-shell-800/15 bg-white p-4 shadow-chat-card sm:p-5"
+      >
         {activeTab === 'roles' ? (
           <RolesTab onGlobalError={handleGlobalError} />
         ) : activeTab === 'audit' ? (

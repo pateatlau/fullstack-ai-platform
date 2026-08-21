@@ -4,7 +4,7 @@ import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Route, Routes } from 'react-router-dom'
 import { afterEach, expect, it, vi } from 'vitest'
-import { storeSession } from '../auth/tokenStorage'
+import { getStoredAccessToken, storeSession } from '../auth/tokenStorage'
 import { AppNav } from '../components/AppNav'
 import { ProtectedRoute } from '../components/ProtectedRoute'
 import { renderWithProviders } from '../test/renderWithProviders'
@@ -32,7 +32,9 @@ function json(body: unknown, status = 200): Response {
   })
 }
 
-function securityFetch(options: { enabled?: boolean; roleForbidden?: boolean } = {}) {
+function securityFetch(
+  options: { enabled?: boolean; roleForbidden?: boolean; tokenInvalid?: boolean } = {},
+) {
   let targetRoles = ['member']
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
@@ -56,6 +58,9 @@ function securityFetch(options: { enabled?: boolean; roleForbidden?: boolean } =
       })
     }
     if (url.endsWith('/api/security/roles') && method === 'GET') {
+      if (options.tokenInvalid) {
+        return json({ error: { code: 'invalid_access_token', message: 'Session expired.' } }, 401)
+      }
       if (options.roleForbidden) {
         return json({ error: { code: 'permission_denied', message: 'Forbidden' } }, 403)
       }
@@ -74,20 +79,25 @@ function securityFetch(options: { enabled?: boolean; roleForbidden?: boolean } =
         },
       ])
     }
-    if (url.endsWith('/api/security/users') && method === 'GET') {
-      return json([
-        {
-          id: targetId,
-          email: 'person@example.com',
-          display_name: 'Target Person',
-          roles: targetRoles.map((role) => ({
-            user_id: targetId,
-            role_name: role,
-            implicit: role === 'member',
-            created_at: null,
-          })),
-        },
-      ])
+    if (url.includes('/api/security/users?') && method === 'GET') {
+      return json({
+        items: [
+          {
+            id: targetId,
+            email: 'person@example.com',
+            display_name: 'Target Person',
+            roles: targetRoles.map((role) => ({
+              user_id: targetId,
+              role_name: role,
+              implicit: role === 'member',
+              created_at: null,
+            })),
+          },
+        ],
+        total: 1,
+        limit: 25,
+        offset: 0,
+      })
     }
     if (url.endsWith(`/api/security/users/${targetId}/roles`) && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as { role_name: string }
@@ -100,10 +110,11 @@ function securityFetch(options: { enabled?: boolean; roleForbidden?: boolean } =
       return json({ user_id: targetId, role_name: role })
     }
     if (url.includes('/api/security/audit') && method === 'GET') {
+      const offset = Number(new URL(url, 'http://test').searchParams.get('offset') ?? 0)
       return json({
         items: [
           {
-            id: 'audit-1',
+            id: `audit-${offset}`,
             occurred_at: '2026-08-20T10:00:00.000Z',
             actor_user_id: targetId,
             actor_kind: 'user',
@@ -118,9 +129,9 @@ function securityFetch(options: { enabled?: boolean; roleForbidden?: boolean } =
             created_at: null,
           },
         ],
-        total: 1,
+        total: 30,
         limit: 25,
-        offset: 0,
+        offset,
       })
     }
     if (url.endsWith('/api/security/policies')) {
@@ -144,6 +155,7 @@ function securityFetch(options: { enabled?: boolean; roleForbidden?: boolean } =
 function renderSecurity() {
   return renderWithProviders(
     <Routes>
+      <Route path="/" element={<div>Signed out</div>} />
       <Route
         path="/security"
         element={
@@ -160,6 +172,7 @@ function renderSecurity() {
 afterEach(() => {
   cleanup()
   window.localStorage.clear()
+  vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
@@ -171,13 +184,17 @@ it('lists users and supports role assign and revoke actions', async () => {
 
   const userName = await screen.findByText('Target Person')
   const row = userName.closest('tr') as HTMLElement
-  await userEvent.click(within(row).getByRole('button', { name: 'Assign Operator' }))
-  expect(await screen.findByText('Operator role assigned.')).toBeTruthy()
-  await waitFor(() =>
-    expect(within(row).getByRole('button', { name: 'Revoke Operator' })).toBeTruthy(),
+  await userEvent.selectOptions(
+    within(row).getByLabelText('Role to assign to Target Person'),
+    'admin',
   )
-  await userEvent.click(within(row).getByRole('button', { name: 'Revoke Operator' }))
-  expect(await screen.findByText('Operator role revoked.')).toBeTruthy()
+  await userEvent.click(within(row).getByRole('button', { name: 'Assign role' }))
+  expect(await screen.findByText('Admin role assigned.')).toBeTruthy()
+  await waitFor(() =>
+    expect(within(row).getByRole('button', { name: 'Revoke Admin' })).toBeTruthy(),
+  )
+  await userEvent.click(within(row).getByRole('button', { name: 'Revoke Admin' }))
+  expect(await screen.findByText('Admin role revoked.')).toBeTruthy()
   expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true)
   expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true)
 })
@@ -207,7 +224,30 @@ it('filters the audit log and renders non-sensitive policy aggregates', async ()
 
   await screen.findByText('Target Person')
   await userEvent.click(screen.getByRole('tab', { name: 'Audit Log' }))
+  expect(screen.getByRole('tab', { name: 'Audit Log' }).getAttribute('aria-controls')).toBe(
+    'security-panel-audit',
+  )
+  expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('security-tab-audit')
   expect(await screen.findByText('role.assigned')).toBeTruthy()
+  await userEvent.keyboard('{ArrowRight}')
+  const policiesTab = screen.getByRole('tab', { name: 'Policies' })
+  expect(policiesTab.getAttribute('aria-selected')).toBe('true')
+  expect(document.activeElement).toBe(policiesTab)
+  await userEvent.keyboard('{Home}')
+  const rolesTab = screen.getByRole('tab', { name: 'Roles' })
+  expect(rolesTab.getAttribute('aria-selected')).toBe('true')
+  expect(document.activeElement).toBe(rolesTab)
+  await userEvent.click(screen.getByRole('tab', { name: 'Audit Log' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+  await waitFor(() =>
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('offset=25'))).toBe(true),
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Previous' }))
+  await waitFor(() =>
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).includes('offset=0')).length,
+    ).toBeGreaterThan(1),
+  )
   await userEvent.type(screen.getByLabelText('Actor user ID'), targetId)
   await userEvent.selectOptions(screen.getByLabelText('Outcome'), 'denied')
   await userEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
@@ -226,6 +266,16 @@ it('filters the audit log and renders non-sensitive policy aggregates', async ()
   expect(screen.getByText('Tool Invocation')).toBeTruthy()
   expect(screen.queryByText(/regex/i)).toBeNull()
   expect(screen.queryByText(/bootstrap/i)).toBeNull()
+})
+
+it('clears an invalid token and redirects to the public route', async () => {
+  storeSession(jwt(), currentUser)
+  vi.stubGlobal('fetch', securityFetch({ tokenInvalid: true }))
+
+  renderSecurity()
+
+  expect(await screen.findByText('Signed out')).toBeTruthy()
+  expect(getStoredAccessToken()).toBeNull()
 })
 
 it('shows the Security nav link only when the health flag is enabled', async () => {

@@ -164,13 +164,30 @@ async def test_security_users_endpoint_lists_assignments_for_managers(
             headers=_auth_headers(member_id),
         )
         response = await client.get(
-            "/api/security/users",
+            "/api/security/users?limit=100&offset=0",
             headers=_auth_headers(admin_id),
         )
+        page_responses = [response]
+        for offset in range(100, response.json()["total"], 100):
+            page_responses.append(
+                await client.get(
+                    f"/api/security/users?limit=100&offset={offset}",
+                    headers=_auth_headers(admin_id),
+                )
+            )
 
     assert forbidden_response.status_code == 403
     assert response.status_code == 200
-    users = {item["id"]: item for item in response.json()}
+    payload = response.json()
+    assert payload["limit"] == 100
+    assert payload["offset"] == 0
+    assert payload["total"] >= 2
+    assert all(page_response.status_code == 200 for page_response in page_responses)
+    users = {
+        item["id"]: item
+        for page_response in page_responses
+        for item in page_response.json()["items"]
+    }
     assert users[str(member_id)]["roles"] == [
         {
             "user_id": str(member_id),

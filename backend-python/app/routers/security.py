@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.deps import get_audit_logger, get_rbac_service
@@ -27,6 +27,7 @@ from app.schemas.security import (
     SecurityPolicySummaryResponse,
     SecurityRoleAssignmentRequest,
     SecurityRoleResponse,
+    SecurityUserListResponse,
     SecurityUserRoleResponse,
     SecurityUserSummaryResponse,
 )
@@ -148,13 +149,15 @@ async def list_security_roles(
     return responses
 
 
-@router.get("/api/security/users", response_model=list[SecurityUserSummaryResponse])
+@router.get("/api/security/users", response_model=SecurityUserListResponse)
 async def list_security_users(
     caller: CallerContext = Depends(require_authenticated_caller),
     settings: Settings = Depends(get_settings),
     rbac_service: RbacService = Depends(get_rbac_service),
     session: AsyncSession = Depends(get_db_session),
-) -> list[SecurityUserSummaryResponse]:
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> SecurityUserListResponse:
     _require_security_enabled(settings)
     await _require_permission(
         settings=settings,
@@ -163,14 +166,19 @@ async def list_security_users(
         permission=PermissionKey.RBAC_MANAGE,
     )
 
+    total = await session.scalar(select(func.count()).select_from(User)) or 0
     users = list(
         await session.scalars(
-            select(User).order_by(User.display_name.asc().nulls_last(), User.id.asc())
+            select(User)
+            .order_by(User.display_name.asc().nulls_last(), User.id.asc())
+            .limit(limit)
+            .offset(offset)
         )
     )
+    roles_by_user = await rbac_service.get_user_roles_bulk([user.id for user in users])
     responses: list[SecurityUserSummaryResponse] = []
     for user in users:
-        explicit_roles = await rbac_service.get_user_roles(user.id)
+        explicit_roles = roles_by_user.get(user.id, [])
         roles = [
             SecurityUserRoleResponse(
                 user_id=user.id,
@@ -195,7 +203,12 @@ async def list_security_users(
                 roles=roles,
             )
         )
-    return responses
+    return SecurityUserListResponse(
+        items=responses,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get(
