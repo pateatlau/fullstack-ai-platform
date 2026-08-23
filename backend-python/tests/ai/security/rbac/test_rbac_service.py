@@ -80,6 +80,13 @@ class FakeRoleStore:
             for role_name in sorted(self._user_assignments.get(user_id, set()))
         ]
 
+    async def list_all_user_role_assignments(self) -> list[UserRoleAssignment]:
+        return [
+            UserRoleAssignment(user_id=user_id, role_name=role_name)
+            for user_id, roles in self._user_assignments.items()
+            for role_name in sorted(roles)
+        ]
+
 
 @pytest.mark.anyio
 async def test_resolve_caller_role_preserves_flag_off_identity() -> None:
@@ -93,7 +100,8 @@ async def test_resolve_caller_role_uses_rbac_baseline_and_priority() -> None:
     member_id = uuid.uuid4()
     operator_id = uuid.uuid4()
     store = FakeRoleStore()
-    store._user_assignments[operator_id] = {"operator", "admin"}
+    await store.assign_role(operator_id, "operator")
+    await store.assign_role(operator_id, "admin")
     service = RbacService(store)
 
     assert (
@@ -213,6 +221,21 @@ async def test_role_management_respects_hierarchy_and_final_owner_protection() -
 
 
 @pytest.mark.anyio
+async def test_final_owner_protection_uses_store_wide_assignments() -> None:
+    store = FakeRoleStore()
+    service = RbacService(store)
+    first_owner_id = uuid.uuid4()
+    second_owner_id = uuid.uuid4()
+
+    await service.assign_role(first_owner_id, "owner")
+    with pytest.raises(PermissionDeniedError):
+        await service.revoke_role(first_owner_id, "owner")
+
+    await service.assign_role(second_owner_id, "owner")
+    assert await service.revoke_role(first_owner_id, "owner") is True
+
+
+@pytest.mark.anyio
 async def test_lower_roles_cannot_manage_roles() -> None:
     store = FakeRoleStore()
     service = RbacService(store)
@@ -266,10 +289,9 @@ async def test_permission_cache_invalidates_on_assign_and_revoke() -> None:
 @pytest.mark.anyio
 async def test_permission_resolution_race_does_not_cache_stale_after_revoke() -> None:
     store = FakeRoleStore()
-    service = RbacService(store, cache_ttl_seconds=60)
     user_id = uuid.uuid4()
-    await service.assign_role(user_id, "admin")
-    service._permission_cache.pop(user_id, None)
+    await store.assign_role(user_id, "admin")
+    service = RbacService(store, cache_ttl_seconds=60)
 
     real_get_user_roles = store.get_user_roles
     entered = asyncio.Event()

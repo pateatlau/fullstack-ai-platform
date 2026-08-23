@@ -138,12 +138,15 @@ async def test_guest_tool_denial_emits_tool_execution_denied_event() -> None:
 async def test_assign_and_revoke_role_emit_audit_events() -> None:
     audit_store = FakeAuditStore()
     settings = _settings()
+    role_store = FakeRoleStore()
     service = RbacService(
-        FakeRoleStore(),
+        role_store,
         audit_logger=AuditLogger(audit_store, settings=settings),
     )
     user_id = uuid.uuid4()
-    actor = CallerContext.for_user(uuid.uuid4())
+    actor_id = uuid.uuid4()
+    actor = CallerContext.for_user(actor_id)
+    await role_store.assign_role(actor_id, "owner")
 
     assigned = await service.assign_role(user_id, "admin", actor=actor)
     revoked = await service.revoke_role(user_id, "admin", actor=actor)

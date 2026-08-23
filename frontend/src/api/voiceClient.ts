@@ -61,41 +61,35 @@ export function buildVoiceWebSocketUrl(options: VoiceConnectOptions): string {
   const ticket = options.authTicket ?? null
   if (ticket) {
     params.set('auth_ticket', ticket)
-  } else {
-    const token = options.accessToken ?? getStoredAccessToken()
-    if (token) {
-      params.set('access_token', token)
-    }
   }
 
   return `${resolveWebSocketOrigin()}/api/voice/ws?${params.toString()}`
 }
 
-export async function requestVoiceAuthTicket(accessToken?: string | null): Promise<string | null> {
+export async function requestVoiceAuthTicket(accessToken?: string | null): Promise<string> {
   const token = accessToken ?? getStoredAccessToken()
   if (!token) {
-    return null
+    throw new Error('Voice sessions require authentication')
   }
 
   const baseUrl =
     API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost')
 
-  try {
-    const response = await fetch(`${baseUrl}/api/voice/auth-ticket`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
+  const response = await fetch(`${baseUrl}/api/voice/auth-ticket`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
 
-    if (!response.ok) {
-      return null
-    }
-
-    const payload = (await response.json()) as { ticket?: string | null }
-    return payload.ticket ?? null
-  } catch {
-    return null
+  if (!response.ok) {
+    throw new Error('Could not authenticate the voice session')
   }
+
+  const payload = (await response.json()) as { ticket?: string | null }
+  if (!payload.ticket) {
+    throw new Error('Could not authenticate the voice session')
+  }
+  return payload.ticket
 }
 
 /** Serializes an outbound voice frame. */

@@ -93,7 +93,7 @@ class VoiceTurnOptions:
 class _UtteranceState:
     """Buffered inbound audio for one user utterance."""
 
-    chunks: list[bytes] = field(default_factory=list)
+    chunks: list[bytes] = field(default_factory=list[bytes])
 
 
 async def _send_error_and_close(
@@ -254,13 +254,12 @@ class VoiceWebSocketHandler:
                 if isinstance(message, InterruptMessage):
                     continue
 
-                if isinstance(message, AudioInMessage):
-                    await self._handle_audio_in(message, voice_session_id)
+                await self._handle_audio_in(message, voice_session_id)
         finally:
             await self._cancel_pending_turn()
             expire_task.cancel()
             await asyncio.gather(expire_task, return_exceptions=True)
-            if self._managed is not None and self._managed.is_active:
+            if self._managed.is_active:
                 await self._session_manager.teardown(
                     self._managed.voice_session_id, reason="disconnect"
                 )
@@ -459,22 +458,14 @@ class VoiceWebSocketHandler:
                 self._running = False
 
 
-def _resolve_voice_bearer_token(websocket: WebSocket) -> str | None:
-    """Resolve JWT from Authorization header, or ``access_token`` query param for browsers."""
+def _resolve_voice_user_id(websocket: WebSocket, settings: Settings) -> uuid.UUID:
     bearer = extract_bearer_token(websocket.headers.get("authorization"))
     if bearer is not None:
-        return bearer
+        return decode_access_token(bearer, settings=settings)
     auth_ticket = websocket.query_params.get("auth_ticket")
     if auth_ticket:
-        try:
-            decode_voice_auth_ticket(auth_ticket, settings=get_settings())
-            return auth_ticket
-        except InvalidAccessTokenError:
-            pass
-    query_token = websocket.query_params.get("access_token")
-    if query_token:
-        return query_token
-    return None
+        return decode_voice_auth_ticket(auth_ticket, settings=settings)
+    raise InvalidAccessTokenError()
 
 
 def create_voice_router(
@@ -537,21 +528,8 @@ def create_voice_router(
         voice_config = VoiceConfig.from_settings(settings)
         bridge = VoiceStreamBridge(voice_config, interrupt_controller=interrupt)
 
-        bearer = _resolve_voice_bearer_token(websocket)
-        if bearer is None:
-            await _send_error_and_close(
-                websocket,
-                bridge=bridge,
-                code="voice_auth_required",
-                message="Voice sessions require an authenticated user",
-            )
-            return
-
         try:
-            try:
-                user_id = decode_voice_auth_ticket(bearer, settings=settings)
-            except InvalidAccessTokenError:
-                user_id = decode_access_token(bearer, settings=settings)
+            user_id = _resolve_voice_user_id(websocket, settings)
         except InvalidAccessTokenError:
             await _send_error_and_close(
                 websocket,

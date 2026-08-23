@@ -116,6 +116,15 @@ describe('VoiceClient', () => {
   beforeEach(() => {
     MockWebSocket.instances = []
     vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ ticket: 'voice-ticket', expires_in: 30 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    )
   })
 
   afterEach(() => {
@@ -137,6 +146,8 @@ describe('VoiceClient', () => {
 
     expect(client.isConnected).toBe(true)
     expect(MockWebSocket.instances[0]?.url).toContain('session_id=chat-1')
+    expect(MockWebSocket.instances[0]?.url).toContain('auth_ticket=voice-ticket')
+    expect(MockWebSocket.instances[0]?.url).not.toContain('access_token=')
 
     vi.advanceTimersByTime(1000)
     const heartbeat = JSON.parse(MockWebSocket.instances[0]?.sent[0] ?? '{}') as {
@@ -162,6 +173,16 @@ describe('VoiceClient', () => {
 
     client.disconnect()
     vi.useRealTimers()
+  })
+
+  it('does not open a WebSocket when auth ticket acquisition fails', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 401 }))
+    const client = new VoiceClient((url) => new MockWebSocket(url) as unknown as WebSocket)
+
+    await expect(client.connect({ sessionId: 'chat-1', accessToken: 'expired' })).rejects.toThrow(
+      'Could not authenticate the voice session',
+    )
+    expect(MockWebSocket.instances).toHaveLength(0)
   })
 })
 

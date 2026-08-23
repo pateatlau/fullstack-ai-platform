@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.security.rbac.models import Role, UserRoleAssignment
 
+_OWNER_MUTATION_LOCK_ID = 7_241_316_739_421_009_153
+
 
 class RoleStore(Protocol):
     async def list_roles(self) -> list[Role]: ...
@@ -307,6 +309,10 @@ class PostgresRoleStore:
         return [self._assignment_row_to_model(dict(row)) for row in rows]
 
     async def list_all_user_role_assignments(self) -> list[UserRoleAssignment]:
+        await self.session.execute(
+            sa.text("SELECT pg_advisory_xact_lock(:lock_id)"),
+            {"lock_id": _OWNER_MUTATION_LOCK_ID},
+        )
         table = sa.table(
             "user_role_assignments",
             sa.column("user_id", sa.types.Uuid()),
