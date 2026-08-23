@@ -16,7 +16,11 @@ from app.ai.voice.config import VoiceConfig
 from app.ai.voice.interrupt import InterruptController
 from app.ai.voice.session import VoiceSessionManager
 from app.core.config import Settings, get_settings
-from app.core.security import create_access_token
+from app.core.security import (
+    create_access_token,
+    create_voice_auth_ticket,
+    decode_voice_auth_ticket,
+)
 from app.main import app as main_app
 from app.providers.capabilities import capabilities_by_provider
 from app.routers.voice import VoiceConnectionServices, create_voice_router
@@ -414,10 +418,9 @@ async def test_new_final_utterance_cancels_an_in_flight_turn(
         get_settings.cache_clear()
 
 
-async def test_handshake_accepts_access_token_query_param(
+async def test_handshake_rejects_access_token_query_param(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Browser WebSocket clients cannot set Authorization headers; use query fallback."""
     monkeypatch.setenv("VOICE_ENABLED", "true")
     get_settings.cache_clear()
 
@@ -432,6 +435,32 @@ async def test_handshake_accepts_access_token_query_param(
             with client.websocket_connect(
                 f"/api/voice/ws?session_id={chat_session.id}&access_token={token}"
             ) as ws:
+                payload = json.loads(ws.receive_text())
+    finally:
+        get_settings.cache_clear()
+
+    assert payload["type"] == "error"
+    assert payload["code"] == "voice_auth_required"
+
+
+async def test_handshake_accepts_short_lived_auth_ticket_query_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Browser WebSocket clients use a short-lived signed ticket instead of raw JWTs."""
+    monkeypatch.setenv("VOICE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    user_id = uuid.uuid4()
+    chat_store = FakeChatStore()
+    chat_session = await chat_store.create_session(user_id=user_id, title="Voice")
+    test_app = _build_voice_test_app(chat_store)
+    ticket = create_voice_auth_ticket(user_id=user_id, settings=get_settings())
+
+    try:
+        with TestClient(test_app) as client:
+            with client.websocket_connect(
+                f"/api/voice/ws?session_id={chat_session.id}&auth_ticket={ticket}"
+            ) as ws:
                 started = json.loads(ws.receive_text())
                 assert started["type"] == "session_started"
                 assert started["audio_format"] == "pcm16_24k_mono"
@@ -440,6 +469,54 @@ async def test_handshake_accepts_access_token_query_param(
                 assert closed["type"] == "session_closed"
     finally:
         get_settings.cache_clear()
+
+
+async def test_auth_ticket_endpoint_exchanges_access_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VOICE_ENABLED", "true")
+    get_settings.cache_clear()
+    user_id = uuid.uuid4()
+    test_app = _build_voice_test_app(FakeChatStore())
+
+    try:
+        with TestClient(test_app) as client:
+            response = client.get(
+                "/api/voice/auth-ticket",
+                headers=_auth_header(user_id),
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 200
+    assert response.json()["expires_in"] == 30
+    assert (
+        decode_voice_auth_ticket(response.json()["ticket"], settings=get_settings())
+        == user_id
+    )
+
+
+async def test_invalid_auth_ticket_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VOICE_ENABLED", "true")
+    get_settings.cache_clear()
+    user_id = uuid.uuid4()
+    chat_store = FakeChatStore()
+    chat_session = await chat_store.create_session(user_id=user_id, title="Voice")
+    test_app = _build_voice_test_app(chat_store)
+
+    try:
+        with TestClient(test_app) as client:
+            with client.websocket_connect(
+                f"/api/voice/ws?session_id={chat_session.id}&auth_ticket=invalid"
+            ) as ws:
+                payload = json.loads(ws.receive_text())
+    finally:
+        get_settings.cache_clear()
+
+    assert payload["type"] == "error"
+    assert payload["code"] == "voice_auth_required"
 
 
 async def test_heartbeat_round_trip(

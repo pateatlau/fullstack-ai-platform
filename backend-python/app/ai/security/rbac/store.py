@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.security.rbac.models import Role, UserRoleAssignment
 
+_OWNER_MUTATION_LOCK_ID = 7_241_316_739_421_009_153
+
 
 class RoleStore(Protocol):
     async def list_roles(self) -> list[Role]: ...
@@ -29,6 +31,13 @@ class RoleStore(Protocol):
     async def get_user_role_assignments(
         self, user_id: uuid.UUID
     ) -> list[UserRoleAssignment]: ...
+
+
+@runtime_checkable
+class FinalOwnerRoleStore(Protocol):
+    """Optional store capability used to protect the last owner assignment."""
+
+    async def list_all_user_role_assignments(self) -> list[UserRoleAssignment]: ...
 
 
 @runtime_checkable
@@ -292,6 +301,41 @@ class PostgresRoleStore:
                         table.join(role_table, table.c.role_id == role_table.c.id)
                     )
                     .where(table.c.user_id == user_id)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [self._assignment_row_to_model(dict(row)) for row in rows]
+
+    async def list_all_user_role_assignments(self) -> list[UserRoleAssignment]:
+        await self.session.execute(
+            sa.text("SELECT pg_advisory_xact_lock(:lock_id)"),
+            {"lock_id": _OWNER_MUTATION_LOCK_ID},
+        )
+        table = sa.table(
+            "user_role_assignments",
+            sa.column("user_id", sa.types.Uuid()),
+            sa.column("role_id", sa.types.Uuid()),
+            sa.column("created_at", sa.DateTime()),
+        )
+        role_table = sa.table(
+            "roles",
+            sa.column("id", sa.types.Uuid()),
+            sa.column("name", sa.Text()),
+        )
+        rows = (
+            (
+                await self.session.execute(
+                    select(
+                        table.c.user_id,
+                        role_table.c.name.label("role_name"),
+                        table.c.created_at,
+                    )
+                    .select_from(
+                        table.join(role_table, table.c.role_id == role_table.c.id)
+                    )
+                    .order_by(table.c.user_id.asc(), role_table.c.name.asc())
                 )
             )
             .mappings()

@@ -18,7 +18,7 @@ from app.ai.security.rbac.permissions import (
     PERMISSION_REGISTRY,
     PermissionKey,
 )
-from app.ai.security.rbac.store import BulkRoleStore, RoleStore
+from app.ai.security.rbac.store import BulkRoleStore, FinalOwnerRoleStore, RoleStore
 
 if TYPE_CHECKING:
     from app.ai.security.audit.logger import AuditLogger
@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 
 class RbacService:
+    _ROLE_PRIORITY = {"member": 0, "operator": 1, "admin": 2, "owner": 3}
+
     def __init__(
         self,
         store: RoleStore | None = None,
@@ -38,6 +40,72 @@ class RbacService:
         self._audit_logger = audit_logger
         self._permission_cache: dict[uuid.UUID, tuple[float, set[str]]] = {}
         self._cache_generation: dict[uuid.UUID, int] = {}
+
+    async def _list_role_names_for_user(self, user_id: uuid.UUID) -> set[str]:
+        if self.store is None:
+            return set()
+        return {
+            role_name.lower() for role_name in await self.store.get_user_roles(user_id)
+        }
+
+    async def _is_final_owner(self, user_id: uuid.UUID) -> bool:
+        if self.store is None:
+            return False
+        if not isinstance(self.store, FinalOwnerRoleStore):
+            return False
+        assignments = await self.store.list_all_user_role_assignments()
+        owners = {
+            assignment.user_id
+            for assignment in assignments
+            if assignment.role_name.lower() == "owner"
+        }
+        return user_id in owners and len(owners) == 1
+
+    async def _ensure_role_management_is_allowed(
+        self,
+        *,
+        actor: "CallerContext | None",
+        target_user_id: uuid.UUID,
+        role_name: str,
+        operation: str,
+    ) -> None:
+        if actor is None or actor.user_id is None:
+            return
+
+        normalized = role_name.lower()
+        actor_roles = await self._list_role_names_for_user(actor.user_id)
+        target_roles = await self._list_role_names_for_user(target_user_id)
+        actor_level = max(
+            (self._ROLE_PRIORITY.get(role_name, 0) for role_name in actor_roles),
+            default=0,
+        )
+
+        if actor.user_id == target_user_id:
+            if (
+                operation == "assign"
+                and self._ROLE_PRIORITY.get(normalized, 0) > actor_level
+            ):
+                raise PermissionDeniedError(f"Cannot elevate self to '{role_name}'.")
+            if operation == "revoke" and actor_level > 0:
+                raise PermissionDeniedError(
+                    f"Cannot revoke your own '{role_name}' role."
+                )
+
+        if "owner" in actor_roles:
+            if (
+                operation == "revoke"
+                and normalized == "owner"
+                and await self._is_final_owner(target_user_id)
+            ):
+                raise PermissionDeniedError("owner")
+            return
+
+        if "admin" in actor_roles:
+            if normalized == "owner" or "owner" in target_roles:
+                raise PermissionDeniedError("owner")
+            return
+
+        raise PermissionDeniedError("rbac:manage")
 
     async def get_permissions(self, user_id: uuid.UUID | None) -> set[str]:
         if user_id is None:
@@ -140,10 +208,17 @@ class RbacService:
     ) -> bool:
         if self.store is None:
             raise RuntimeError("RbacService requires a RoleStore")
-        role = await self.store.get_role_by_name(role_name)
+        normalized = role_name.strip().lower()
+        await self._ensure_role_management_is_allowed(
+            actor=actor,
+            target_user_id=user_id,
+            role_name=normalized,
+            operation="assign",
+        )
+        role = await self.store.get_role_by_name(normalized)
         if role is None:
             raise RoleNotFoundError(role_name)
-        assigned = await self.store.assign_role(user_id, role_name)
+        assigned = await self.store.assign_role(user_id, normalized)
         if assigned:
             self._cache_generation[user_id] = self._cache_generation.get(user_id, 0) + 1
             self._permission_cache.pop(user_id, None)
@@ -167,12 +242,21 @@ class RbacService:
     ) -> bool:
         if self.store is None:
             raise RuntimeError("RbacService requires a RoleStore")
-        if role_name.lower() == "member":
+        normalized = role_name.strip().lower()
+        if normalized == "member":
             raise PermissionDeniedError("member")
-        role = await self.store.get_role_by_name(role_name)
+        await self._ensure_role_management_is_allowed(
+            actor=actor,
+            target_user_id=user_id,
+            role_name=normalized,
+            operation="revoke",
+        )
+        role = await self.store.get_role_by_name(normalized)
         if role is None:
             raise RoleNotFoundError(role_name)
-        revoked = await self.store.revoke_role(user_id, role_name)
+        if normalized == "owner" and await self._is_final_owner(user_id):
+            raise PermissionDeniedError("owner")
+        revoked = await self.store.revoke_role(user_id, normalized)
         if revoked:
             self._cache_generation[user_id] = self._cache_generation.get(user_id, 0) + 1
             self._permission_cache.pop(user_id, None)
