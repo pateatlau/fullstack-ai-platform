@@ -30,7 +30,7 @@ from app.schemas.chat import (
 from app.services.chat_service import (
     ChatService,
     EmptyProviderResponseError,
-    _StreamPrep,
+    StreamPrep,
     format_sse,
     normalize_chat_error,
 )
@@ -46,7 +46,7 @@ async def stream_agent_chat(
     request: ChatRequestSchema,
     http_request: Request,
     caller: CallerContext | None,
-    prep: _StreamPrep | None,
+    prep: StreamPrep | None,
     response_id: str,
     session_id: uuid.UUID | None,
     provider: LLMProvider,

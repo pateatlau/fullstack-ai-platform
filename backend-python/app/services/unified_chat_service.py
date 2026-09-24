@@ -59,7 +59,7 @@ from app.services.chat_service import (
     ClosableAsyncIterator,
     DbUnavailableError,
     EmptyProviderResponseError,
-    _StreamPrep,
+    StreamPrep,
     format_sse,
     normalize_chat_error,
 )
@@ -67,9 +67,9 @@ from app.services.max_tokens import resolve_max_tokens
 from app.services.tool_chat_service import (
     ChatActivityCallback,
     ToolChatService,
-    _GUEST_TOOL_DENIED_MESSAGE,
-    _TOOL_ITERATION_LIMIT_MESSAGE,
-    _assistant_tool_call_message,
+    GUEST_TOOL_DENIED_MESSAGE,
+    TOOL_ITERATION_LIMIT_MESSAGE,
+    assistant_tool_call_message,
 )
 
 logger = get_logger(__name__)
@@ -142,7 +142,7 @@ class UnifiedChatService:
         ) and self._is_guest_or_anonymous(caller):
             return await self._guest_denial_response(request, caller)
 
-        provider, model, provider_name = self._chat_service._resolve_provider(request)
+        provider, model, provider_name = self._chat_service.resolve_provider(request)
 
         if (
             effective_web_search
@@ -163,7 +163,7 @@ class UnifiedChatService:
 
         if effective_documents:
             assert caller is not None and caller.user_id is not None
-            question = self._chat_service._last_user_content(request)
+            question = self._chat_service.last_user_content(request)
             if on_activity is not None:
                 await on_activity("document_retrieval")
             try:
@@ -213,13 +213,13 @@ class UnifiedChatService:
                     on_activity=on_activity,
                     allowed_tool_names=frozenset({WEB_SEARCH_TOOL_NAME}),
                 )
-            self._chat_service._maybe_extract_memory(
+            self._chat_service.maybe_extract_memory(
                 caller=caller,
                 session_id=response.session_id,
                 provider=provider,
                 provider_name=provider_name,
                 model=model,
-                user_content=self._chat_service._last_user_content(request),
+                user_content=self._chat_service.last_user_content(request),
                 assistant_content=response.content,
             )
         else:
@@ -247,13 +247,13 @@ class UnifiedChatService:
         request: ChatRequestSchema,
         http_request: Request,
         caller: CallerContext | None = None,
-        prep: _StreamPrep | None = None,
+        prep: StreamPrep | None = None,
     ) -> AsyncIterator[str]:
         """SSE generator for streaming chat with document grounding and/or web search."""
         effective_web_search = request.use_web_search and self._settings.tools_enabled
         effective_documents = request.use_documents and self._settings.rag_enabled
 
-        provider, model, provider_name = self._chat_service._resolve_provider(request)
+        provider, model, provider_name = self._chat_service.resolve_provider(request)
         response_id = f"resp_{uuid.uuid4().hex[:12]}"
         session_id = prep.session_id if prep is not None else None
         request_start_time = time.perf_counter()
@@ -298,7 +298,7 @@ class UnifiedChatService:
         try:
             if effective_documents:
                 assert caller is not None and caller.user_id is not None
-                question = self._chat_service._last_user_content(request)
+                question = self._chat_service.last_user_content(request)
                 retrieval_start = time.perf_counter()
                 try:
                     doc_result = await self._retrieve_document_context(
@@ -311,7 +311,7 @@ class UnifiedChatService:
                         response_id=response_id,
                     )
                     try:
-                        await self._chat_service._persist_stream_result(
+                        await self._chat_service.persist_stream_result(
                             caller=caller,
                             prep=prep,
                             provider=provider,
@@ -426,7 +426,7 @@ class UnifiedChatService:
                         async for frame in self._stream_static_content(
                             response_id=response_id,
                             session_id=session_id,
-                            content=_GUEST_TOOL_DENIED_MESSAGE,
+                            content=GUEST_TOOL_DENIED_MESSAGE,
                             finish_reason="stop",
                             caller=caller,
                             prep=prep,
@@ -503,7 +503,7 @@ class UnifiedChatService:
         response_id: str,
         http_request: Request,
     ) -> _StreamToolLoopResult:
-        tools = self._tool_chat_service._tool_registry.get_schemas_for_llm()
+        tools = self._tool_chat_service.tool_schemas_for_llm()
         tools = [
             schema
             for schema in tools
@@ -518,8 +518,8 @@ class UnifiedChatService:
                 tool_rounds=0,
             )
 
-        loop_messages = self._tool_chat_service._build_loop_messages(request.messages)
-        max_iterations = self._tool_chat_service._max_tool_iterations
+        loop_messages = self._tool_chat_service.build_loop_messages(request.messages)
+        max_iterations = self._tool_chat_service.max_tool_iterations
         tool_rounds = 0
         last_completion_content: str | None = None
         frames: list[str] = []
@@ -559,7 +559,7 @@ class UnifiedChatService:
                     tool_rounds=tool_rounds,
                 )
 
-            assistant_message = _assistant_tool_call_message(completion)
+            assistant_message = assistant_tool_call_message(completion)
             loop_messages.append(assistant_message)
             tool_rounds += 1
 
@@ -624,7 +624,7 @@ class UnifiedChatService:
         fallback_content = (
             last_completion_content
             if last_completion_content
-            else _TOOL_ITERATION_LIMIT_MESSAGE
+            else TOOL_ITERATION_LIMIT_MESSAGE
         )
         return _StreamToolLoopResult(
             frames=frames,
@@ -644,7 +644,7 @@ class UnifiedChatService:
         if await http_request.is_disconnected():
             return '{"success": false, "error": "Client disconnected."}', False, False
 
-        result_content, denied = await self._tool_chat_service._execute_tool_call(
+        result_content, denied = await self._tool_chat_service.execute_tool_call(
             tool_call=tool_call,
             caller=caller,
             on_activity=None,
@@ -667,7 +667,7 @@ class UnifiedChatService:
         response_id: str,
         session_id: uuid.UUID | None,
         caller: CallerContext | None,
-        prep: _StreamPrep | None,
+        prep: StreamPrep | None,
         http_request: Request,
         tool_rounds: int,
         request_start_time: float | None = None,
@@ -703,7 +703,7 @@ class UnifiedChatService:
                         "Client disconnected, stopping unified stream",
                         response_id=response_id,
                     )
-                    await self._chat_service._persist_stream_result(
+                    await self._chat_service.persist_stream_result(
                         caller=caller,
                         prep=prep,
                         provider=provider,
@@ -751,7 +751,7 @@ class UnifiedChatService:
                     response_id=response_id,
                     finish_reason=finish_reason,
                 )
-                await self._chat_service._persist_stream_result(
+                await self._chat_service.persist_stream_result(
                     caller=caller,
                     prep=prep,
                     provider=provider,
@@ -771,7 +771,7 @@ class UnifiedChatService:
                 )
                 return
 
-            await self._chat_service._persist_stream_result(
+            await self._chat_service.persist_stream_result(
                 caller=caller,
                 prep=prep,
                 provider=provider,
@@ -803,7 +803,7 @@ class UnifiedChatService:
                 model=model,
             )
             try:
-                await self._chat_service._persist_stream_result(
+                await self._chat_service.persist_stream_result(
                     caller=caller,
                     prep=prep,
                     provider=provider,
@@ -843,7 +843,7 @@ class UnifiedChatService:
         content: str,
         finish_reason: str,
         caller: CallerContext | None,
-        prep: _StreamPrep | None,
+        prep: StreamPrep | None,
         provider: LLMProvider,
         provider_name: ProviderName,
         model: str,
@@ -851,7 +851,7 @@ class UnifiedChatService:
         yield format_sse("start", StartFrame(id=response_id, session_id=session_id))
         if content:
             yield format_sse("delta", DeltaFrame(id=response_id, content=content))
-        await self._chat_service._persist_stream_result(
+        await self._chat_service.persist_stream_result(
             caller=caller,
             prep=prep,
             provider=provider,
@@ -870,16 +870,16 @@ class UnifiedChatService:
         caller: CallerContext | None,
         response_id: str,
         session_id: uuid.UUID | None,
-        prep: _StreamPrep | None,
+        prep: StreamPrep | None,
         provider: LLMProvider,
         provider_name: ProviderName,
         model: str,
     ) -> AsyncIterator[str]:
-        if not self._chat_service._persistence_active(caller):
+        if not self._chat_service.persistence_active(caller):
             async for frame in self._stream_static_content(
                 response_id=response_id,
                 session_id=session_id,
-                content=_GUEST_TOOL_DENIED_MESSAGE,
+                content=GUEST_TOOL_DENIED_MESSAGE,
                 finish_reason="stop",
                 caller=caller,
                 prep=prep,
@@ -891,14 +891,14 @@ class UnifiedChatService:
             return
 
         assert caller is not None
-        chat_store = self._chat_service._chat_store
+        chat_store = self._chat_service.chat_store
         assert chat_store is not None
-        self._chat_service._enforce_guest_provider_gating(caller, provider_name, model)
-        prompt_text = self._chat_service._last_user_content(request)
+        self._chat_service.enforce_guest_provider_gating(caller, provider_name, model)
+        prompt_text = self._chat_service.last_user_content(request)
 
         try:
-            await self._chat_service._maybe_check_quota(caller)
-            chat_session = await self._chat_service._resolve_session(request, caller)
+            await self._chat_service.check_quota(caller)
+            chat_session = await self._chat_service.resolve_session(request, caller)
             if prep is None:
                 user_seq = await chat_store.allocate_seq(chat_session.id)
                 await chat_store.add_message(
@@ -908,22 +908,20 @@ class UnifiedChatService:
                     content=prompt_text,
                     client_message_id=request.client_message_id,
                 )
-                await self._chat_service._maybe_set_session_title(
-                    chat_session, prompt_text
-                )
+                await self._chat_service.set_session_title(chat_session, prompt_text)
             assistant_seq = await chat_store.allocate_seq(chat_session.id)
             await chat_store.add_message(
                 session_id=chat_session.id,
                 seq=assistant_seq,
                 role="assistant",
-                content=_GUEST_TOOL_DENIED_MESSAGE,
+                content=GUEST_TOOL_DENIED_MESSAGE,
                 provider=provider_name,
                 model=model,
                 status="complete",
                 finish_reason="stop",
             )
             await chat_store.mark_last_message_at(chat_session.id)
-            await self._chat_service._commit()
+            await self._chat_service.commit()
         except ChatServiceError:
             raise
         except (OperationalError, InterfaceError, DBAPIError) as exc:
@@ -932,7 +930,7 @@ class UnifiedChatService:
         async for frame in self._stream_static_content(
             response_id=response_id,
             session_id=chat_session.id,
-            content=_GUEST_TOOL_DENIED_MESSAGE,
+            content=GUEST_TOOL_DENIED_MESSAGE,
             finish_reason="stop",
             caller=caller,
             prep=prep,
@@ -943,7 +941,7 @@ class UnifiedChatService:
             yield frame
 
     def _resolve_provider_name(self, request: ChatRequestSchema) -> ProviderName:
-        _, _, provider_name = self._chat_service._resolve_provider(request)
+        _, _, provider_name = self._chat_service.resolve_provider(request)
         return provider_name
 
     def _use_agent_runtime(self) -> bool:
@@ -1005,24 +1003,24 @@ class UnifiedChatService:
         request: ChatRequestSchema,
         caller: CallerContext | None,
     ) -> ChatResponseSchema:
-        _, model, provider_name = self._chat_service._resolve_provider(request)
-        if not self._chat_service._persistence_active(caller):
+        _, model, provider_name = self._chat_service.resolve_provider(request)
+        if not self._chat_service.persistence_active(caller):
             return ChatResponseSchema(
                 id=f"resp_{uuid.uuid4().hex[:12]}",
-                content=_GUEST_TOOL_DENIED_MESSAGE,
+                content=GUEST_TOOL_DENIED_MESSAGE,
                 model=model,
                 provider=provider_name,
             )
 
         assert caller is not None
-        chat_store = self._chat_service._chat_store
+        chat_store = self._chat_service.chat_store
         assert chat_store is not None
-        self._chat_service._enforce_guest_provider_gating(caller, provider_name, model)
-        prompt_text = self._chat_service._last_user_content(request)
+        self._chat_service.enforce_guest_provider_gating(caller, provider_name, model)
+        prompt_text = self._chat_service.last_user_content(request)
 
         try:
-            await self._chat_service._maybe_check_quota(caller)
-            chat_session = await self._chat_service._resolve_session(request, caller)
+            await self._chat_service.check_quota(caller)
+            chat_session = await self._chat_service.resolve_session(request, caller)
             user_seq = await chat_store.allocate_seq(chat_session.id)
             await chat_store.add_message(
                 session_id=chat_session.id,
@@ -1031,20 +1029,20 @@ class UnifiedChatService:
                 content=prompt_text,
                 client_message_id=request.client_message_id,
             )
-            await self._chat_service._maybe_set_session_title(chat_session, prompt_text)
+            await self._chat_service.set_session_title(chat_session, prompt_text)
             assistant_seq = await chat_store.allocate_seq(chat_session.id)
             await chat_store.add_message(
                 session_id=chat_session.id,
                 seq=assistant_seq,
                 role="assistant",
-                content=_GUEST_TOOL_DENIED_MESSAGE,
+                content=GUEST_TOOL_DENIED_MESSAGE,
                 provider=provider_name,
                 model=model,
                 status="complete",
                 finish_reason="stop",
             )
             await chat_store.mark_last_message_at(chat_session.id)
-            await self._chat_service._commit()
+            await self._chat_service.commit()
         except ChatServiceError:
             raise
         except (OperationalError, InterfaceError, DBAPIError) as exc:
@@ -1052,7 +1050,7 @@ class UnifiedChatService:
 
         return ChatResponseSchema(
             id=f"resp_{uuid.uuid4().hex[:12]}",
-            content=_GUEST_TOOL_DENIED_MESSAGE,
+            content=GUEST_TOOL_DENIED_MESSAGE,
             model=model,
             provider=provider_name,
             session_id=chat_session.id,
@@ -1067,7 +1065,7 @@ class UnifiedChatService:
         provider_name: ProviderName,
         citations: list[CitationSchema] | None = None,
     ) -> ChatResponseSchema:
-        if not self._chat_service._persistence_active(caller):
+        if not self._chat_service.persistence_active(caller):
             return ChatResponseSchema(
                 id=f"resp_{uuid.uuid4().hex[:12]}",
                 content=EMPTY_CORPUS_MESSAGE,
@@ -1078,14 +1076,14 @@ class UnifiedChatService:
             )
 
         assert caller is not None
-        chat_store = self._chat_service._chat_store
+        chat_store = self._chat_service.chat_store
         assert chat_store is not None
-        self._chat_service._enforce_guest_provider_gating(caller, provider_name, model)
-        prompt_text = self._chat_service._last_user_content(request)
+        self._chat_service.enforce_guest_provider_gating(caller, provider_name, model)
+        prompt_text = self._chat_service.last_user_content(request)
 
         try:
-            await self._chat_service._maybe_check_quota(caller)
-            chat_session = await self._chat_service._resolve_session(request, caller)
+            await self._chat_service.check_quota(caller)
+            chat_session = await self._chat_service.resolve_session(request, caller)
             user_seq = await chat_store.allocate_seq(chat_session.id)
             await chat_store.add_message(
                 session_id=chat_session.id,
@@ -1094,7 +1092,7 @@ class UnifiedChatService:
                 content=prompt_text,
                 client_message_id=request.client_message_id,
             )
-            await self._chat_service._maybe_set_session_title(chat_session, prompt_text)
+            await self._chat_service.set_session_title(chat_session, prompt_text)
             assistant_seq = await chat_store.allocate_seq(chat_session.id)
             await chat_store.add_message(
                 session_id=chat_session.id,
@@ -1107,7 +1105,7 @@ class UnifiedChatService:
                 finish_reason="stop",
             )
             await chat_store.mark_last_message_at(chat_session.id)
-            await self._chat_service._commit()
+            await self._chat_service.commit()
         except ChatServiceError:
             raise
         except (OperationalError, InterfaceError, DBAPIError) as exc:
@@ -1137,7 +1135,7 @@ class UnifiedChatService:
         so Memory retrieve/inject still runs — orchestrated from this class per
         Part I's architectural boundary.
         """
-        messages = await self._chat_service._apply_memory_context(
+        messages = await self._chat_service.apply_memory_context(
             session_id=session_id,
             caller=caller,
             messages=request.messages,
@@ -1243,11 +1241,7 @@ def _document_result_from_advanced(
             retrieval_latency_ms=result.retrieval_latency_ms,
         )
 
-    by_id = {
-        candidate.chunk.chunk_id: candidate
-        for candidate in result.candidates
-        if candidate.chunk.chunk_id is not None
-    }
+    by_id = {candidate.chunk.chunk_id: candidate for candidate in result.candidates}
     retrieved_chunks: list[RetrievedChunkMetaSchema] = []
     for citation in result.citations:
         candidate = by_id.get(citation.chunk_id)

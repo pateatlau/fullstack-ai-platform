@@ -25,7 +25,7 @@ from app.schemas.voice import (
     ToolStartMessage,
     TurnCompleteMessage,
 )
-from app.services.chat_service import ChatService, _StreamPrep
+from app.services.chat_service import ChatService, StreamPrep
 from app.services.unified_chat_service import UnifiedChatService
 
 logger = get_logger(__name__)
@@ -101,7 +101,7 @@ class VoiceChatBridge:
         request: ChatRequestSchema,
         http_request: DisconnectCheck,
         caller: CallerContext,
-        prep: _StreamPrep | None,
+        prep: StreamPrep | None,
     ) -> None:
         """Run one assistant turn: SSE consumption, WS text events, and TTS audio."""
         metadata = VoiceTurnMetadata()
