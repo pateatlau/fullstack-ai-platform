@@ -7,7 +7,7 @@ import json
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 
@@ -45,14 +45,15 @@ from app.services.chat_service import (
 
 logger = get_logger(__name__)
 
-_TOOL_ITERATION_LIMIT_MESSAGE = (
+TOOL_ITERATION_LIMIT_MESSAGE = (
     "I reached the tool-use limit for this request. "
     "Please try a simpler question or ask again."
 )
-_GUEST_TOOL_DENIED_MESSAGE = (
+GUEST_TOOL_DENIED_MESSAGE = (
     "Tool use requires a signed-in account. "
     "Please sign in to search the web or ask a question I can answer directly."
 )
+_GUEST_TOOL_DENIED_MESSAGE = GUEST_TOOL_DENIED_MESSAGE
 
 ChatActivityCallback = Callable[[str], Awaitable[None]]
 
@@ -83,6 +84,31 @@ class ToolChatService:
         self._prompt_manager = prompt_manager
         self._settings = settings
         self._max_tool_iterations = max_tool_iterations
+
+    @property
+    def max_tool_iterations(self) -> int:
+        return self._max_tool_iterations
+
+    def tool_schemas_for_llm(self) -> list[dict[str, Any]]:
+        return self._tool_registry.get_schemas_for_llm()
+
+    def build_loop_messages(
+        self, request_messages: list[ChatMessageSchema]
+    ) -> list[ChatMessageInput]:
+        return self._build_loop_messages(request_messages)
+
+    async def execute_tool_call(
+        self,
+        *,
+        tool_call: ProviderToolCall,
+        caller: CallerContext | None,
+        on_activity: ChatActivityCallback | None = None,
+    ) -> tuple[str, bool]:
+        return await self._execute_tool_call(
+            tool_call=tool_call,
+            caller=caller,
+            on_activity=on_activity,
+        )
 
     async def complete_chat(
         self,
@@ -322,7 +348,7 @@ class ToolChatService:
                     tools_used=tools_used,
                 )
 
-            assistant_message = _assistant_tool_call_message(completion)
+            assistant_message = assistant_tool_call_message(completion)
             loop_messages.append(assistant_message)
 
             guest_denied = False
@@ -346,7 +372,7 @@ class ToolChatService:
 
             if guest_denied and (caller is None or caller.kind == "guest"):
                 return _ToolLoopResult(
-                    content=_GUEST_TOOL_DENIED_MESSAGE,
+                    content=GUEST_TOOL_DENIED_MESSAGE,
                     finish_reason="stop",
                     usage=completion.usage,
                     tools_used=tools_used,
@@ -361,7 +387,7 @@ class ToolChatService:
         fallback_content = (
             last_completion.content
             if last_completion is not None and last_completion.content
-            else _TOOL_ITERATION_LIMIT_MESSAGE
+            else TOOL_ITERATION_LIMIT_MESSAGE
         )
         return _ToolLoopResult(
             content=fallback_content,
@@ -394,7 +420,7 @@ class ToolChatService:
         if caller is None or caller.kind == "guest":
             payload = {
                 "success": False,
-                "error": _GUEST_TOOL_DENIED_MESSAGE,
+                "error": GUEST_TOOL_DENIED_MESSAGE,
                 "error_code": "forbidden",
             }
             return json.dumps(payload), True
@@ -426,7 +452,7 @@ class ToolChatService:
         return json.dumps(payload), denied
 
 
-def _assistant_tool_call_message(
+def assistant_tool_call_message(
     completion: ProviderToolCompletion,
 ) -> dict[str, object]:
     return {

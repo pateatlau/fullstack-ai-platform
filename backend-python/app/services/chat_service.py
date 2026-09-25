@@ -206,7 +206,7 @@ class MemoryOrchestrator(Protocol):
 
 
 @dataclass(frozen=True)
-class _StreamPrep:
+class StreamPrep:
     """Pre-flight state for a persisted stream (user message already appended)."""
 
     session_id: uuid.UUID
@@ -381,6 +381,107 @@ class ChatService:
         self._prompt_manager = prompt_manager or get_prompt_manager()
         self._conversation_summary_service = conversation_summary_service
         self._memory_manager = memory_manager
+
+    @property
+    def chat_store(self) -> ChatStore | None:
+        return self._chat_store
+
+    def resolve_provider(
+        self, request: ChatRequestSchema
+    ) -> tuple[LLMProvider, str, ProviderName]:
+        return self._resolve_provider(request)
+
+    def persistence_active(self, caller: CallerContext | None) -> bool:
+        return self._persistence_active(caller)
+
+    async def apply_memory_context(
+        self,
+        *,
+        session_id: uuid.UUID | None,
+        caller: CallerContext | None,
+        messages: list[ChatMessageSchema],
+        conversation_summary: str | None = None,
+        fetch_conversation_summary: bool = True,
+    ) -> list[ChatMessageSchema]:
+        return await self._apply_memory_context(
+            session_id=session_id,
+            caller=caller,
+            messages=messages,
+            conversation_summary=conversation_summary,
+            fetch_conversation_summary=fetch_conversation_summary,
+        )
+
+    def maybe_extract_memory(
+        self,
+        *,
+        caller: CallerContext | None,
+        session_id: uuid.UUID | None,
+        provider: LLMProvider,
+        provider_name: ProviderName,
+        model: str,
+        user_content: str,
+        assistant_content: str,
+    ) -> None:
+        self._maybe_extract_memory(
+            caller=caller,
+            session_id=session_id,
+            provider=provider,
+            provider_name=provider_name,
+            model=model,
+            user_content=user_content,
+            assistant_content=assistant_content,
+        )
+
+    @staticmethod
+    def last_user_content(request: ChatRequestSchema) -> str:
+        return ChatService._last_user_content(request)
+
+    async def set_session_title(
+        self, chat_session: ChatSession, user_content: str
+    ) -> None:
+        await self._maybe_set_session_title(chat_session, user_content)
+
+    async def commit(self) -> None:
+        await self._commit()
+
+    def enforce_guest_provider_gating(
+        self,
+        caller: CallerContext,
+        provider_name: ProviderName,
+        model: str,
+    ) -> None:
+        self._enforce_guest_provider_gating(caller, provider_name, model)
+
+    async def resolve_session(
+        self, request: ChatRequestSchema, caller: CallerContext
+    ) -> ChatSession:
+        return await self._resolve_session(request, caller)
+
+    async def check_quota(self, caller: CallerContext) -> None:
+        await self._maybe_check_quota(caller)
+
+    async def persist_stream_result(
+        self,
+        *,
+        caller: CallerContext | None,
+        prep: StreamPrep | None,
+        provider: LLMProvider,
+        provider_name: ProviderName,
+        model: str,
+        content: str,
+        finish_reason: str | None,
+        status: str,
+    ) -> None:
+        await self._persist_stream_result(
+            caller=caller,
+            prep=prep,
+            provider=provider,
+            provider_name=provider_name,
+            model=model,
+            content=content,
+            finish_reason=finish_reason,
+            status=status,
+        )
 
     def _resolve_provider(
         self, request: ChatRequestSchema
@@ -1268,7 +1369,7 @@ class ChatService:
 
     async def prepare_stream(
         self, request: ChatRequestSchema, caller: CallerContext | None
-    ) -> _StreamPrep | None:
+    ) -> StreamPrep | None:
         """Pre-flight for a persisted stream (runs before the SSE response starts).
 
         Performs the quota check, session resolution, and user-message append so
@@ -1296,7 +1397,7 @@ class ChatService:
                     reply = await self._chat_store.get_message_by_seq(
                         chat_session.id, prior.seq + 1
                     )
-                    return _StreamPrep(
+                    return StreamPrep(
                         session_id=chat_session.id,
                         prompt_text=prompt_text,
                         idempotent_reply=reply.content if reply else "",
@@ -1317,14 +1418,14 @@ class ChatService:
         except (OperationalError, InterfaceError, DBAPIError) as exc:
             raise DbUnavailableError() from exc
 
-        return _StreamPrep(session_id=chat_session.id, prompt_text=prompt_text)
+        return StreamPrep(session_id=chat_session.id, prompt_text=prompt_text)
 
     async def stream_chat(
         self,
         request: ChatRequestSchema,
         http_request: Request,
         caller: CallerContext | None = None,
-        prep: _StreamPrep | None = None,
+        prep: StreamPrep | None = None,
     ) -> AsyncIterator[str]:
         """SSE event generator: yields start -> delta* -> end (or error).
 
@@ -1505,7 +1606,7 @@ class ChatService:
         self,
         *,
         caller: CallerContext | None,
-        prep: _StreamPrep | None,
+        prep: StreamPrep | None,
         provider: LLMProvider,
         provider_name: ProviderName,
         model: str,
